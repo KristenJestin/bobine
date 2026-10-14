@@ -3,3 +3,16 @@ name = "bobine"
 version = "0.0.0"
 edition = "2024"
 publish = false
+
+[dependencies]
+futures = "0.3"
+gpui = "0.2.2"
+image = { version = "0.25", default-features = false }
+khronos-egl = { version = "6", features = ["dynamic"] }
+libmpv2-sys = "4.0.1"
+raw-window-handle = "0.6"
+smallvec = "1"
+wayland-backend = { version = "0.3", features = ["client_system"] }
+wayland-client = "0.31"
+wayland-egl = "0.32"
+wayland-protocols = { version = "0.32", features = ["client"] }
