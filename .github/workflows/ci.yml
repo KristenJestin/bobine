@@ -38,7 +38,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       # No GPU, no display and no server here: the suites run against fakes (see AGENTS.md, Testing).
-      - run: sudo apt-get update && sudo apt-get install -y libmpv-dev
+      # libmpv for the player; xkbcommon, xcb, fontconfig, freetype and Wayland for GPUI.
+      - run: >-
+          sudo apt-get update && sudo apt-get install -y libmpv-dev
+          libxkbcommon-x11-dev libxcb1-dev libfontconfig-dev libfreetype-dev libwayland-dev
       - run: rustup component add rustfmt clippy
       - run: cargo fmt --check
       - run: cargo clippy --all-targets --locked -- -D warnings
