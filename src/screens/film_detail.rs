@@ -4,18 +4,26 @@
 //! edges: its first item lines up with the text, and it scrolls under the edges. The page
 //! scrolls.
 
+use std::cell::Cell;
+use std::rc::Rc;
+
 use bobine::provider::{CastMember, Film, FilmDetail};
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    AnyElement, Context, Div, FontWeight, IntoElement, ScrollHandle, SharedString, Stateful,
-    Window, anchored, deferred, div, linear_color_stop, linear_gradient, px, rgba,
+    AnyElement, Bounds, Context, Div, FontWeight, IntoElement, MouseDownEvent, Pixels,
+    ScrollHandle, SharedString, Stateful, Window, anchored, canvas, deferred, div,
+    linear_color_stop, linear_gradient, px, rgba,
 };
 
 use super::{centered, note, picture, poster, progress_bar, row_heading};
 use crate::film_page::{self, Choices, From};
 use crate::images;
+use crate::menu;
 use crate::shell::{Chip, Loadable, Shell};
 use crate::theme;
+
+/// Where a chip was last drawn, shared with the shell.
+type ChipBounds = Rc<Cell<Option<Bounds<Pixels>>>>;
 
 /// The left of the text and the rows, after the design.
 const EDGE: f32 = 40.;
@@ -32,13 +40,16 @@ pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -
         (Loadable::Failed(why), _) => return centered().child(note(*why)).into_any_element(),
         _ => return centered().child(note("Chargement…")).into_any_element(),
     };
-    let (menu, error, busy) = (page.menu, page.error, page.busy);
+    let (menu, error, busy) = (page.menus.open(), page.error, page.busy);
+    let chips = page.chips.clone();
     let collection = page.collection.clone();
     let scroll = page.scroll.clone();
     let [cast_scroll, collection_scroll, similar_scroll] = page.rows.clone();
     let height = f32::from(window.viewport_size().height);
 
-    let hero = hero(shell, &detail, &choices, menu, error, busy, height, cx);
+    let hero = hero(
+        shell, &detail, &choices, menu, &chips, error, busy, height, cx,
+    );
     let mut rows: Vec<AnyElement> = Vec::new();
     if !detail.cast.is_empty() {
         rows.push(cast_row(shell, &detail.cast, &cast_scroll, cx).into_any_element());
@@ -108,6 +119,7 @@ fn hero(
     detail: &FilmDetail,
     choices: &Choices,
     menu: Option<Chip>,
+    chips: &[ChipBounds; 3],
     error: Option<&'static str>,
     busy: bool,
     window_height: f32,
@@ -170,6 +182,7 @@ fn hero(
                 source.map(film_page::version_label),
                 options,
                 menu,
+                &chips[Chip::Version as usize],
                 cx,
             )
         }))
@@ -192,6 +205,7 @@ fn hero(
                 current.map(film_page::audio_label),
                 options,
                 menu,
+                &chips[Chip::Audio as usize],
                 cx,
             )
         }))
@@ -219,6 +233,7 @@ fn hero(
                 Some(film_page::subtitle_label(current)),
                 options,
                 menu,
+                &chips[Chip::Subtitle as usize],
                 cx,
             )
         }));
@@ -316,8 +331,10 @@ fn chip(
     value: Option<String>,
     options: Vec<(Option<i32>, String, bool)>,
     open: Option<Chip>,
+    bounds: &ChipBounds,
     cx: &mut Context<Shell>,
 ) -> Div {
+    let drawn = bounds.clone();
     let button = div()
         .id(("chip", kind as usize))
         .flex()
@@ -355,16 +372,22 @@ fn chip(
                 .text_color(theme::muted())
                 .child("▾"),
         );
+    let under = bounds.get().filter(|_| open == Some(kind));
     div()
         .relative()
         .child(button)
-        .when(open == Some(kind), |chip| {
-            chip.child(menu(kind, options, cx))
-        })
+        // Where the chip is drawn, for its menu.
+        .child(
+            canvas(move |at, _, _| drawn.set(Some(at)), |_, _, _, _| {})
+                .absolute()
+                .inset_0(),
+        )
+        .children(under.map(|chip| menu(chip, kind, options, cx)))
 }
 
 /// The choices of a chip, over the rest of the page.
 fn menu(
+    chip: Bounds<Pixels>,
     kind: Chip,
     options: Vec<(Option<i32>, String, bool)>,
     cx: &mut Context<Shell>,
@@ -394,30 +417,26 @@ fn menu(
                 .child(label)
         });
     deferred(
-        anchored().snap_to_window().child(
-            div()
-                .id("chip-menu")
-                .mt(px(40.))
-                .min_w(px(240.))
-                .p(px(6.))
-                .flex()
-                .flex_col()
-                .rounded(px(theme::RADIUS_LARGE))
-                .border_1()
-                .border_color(theme::line())
-                .bg(theme::panel())
-                .occlude()
-                .on_mouse_down_out(cx.listener(move |shell, _, _, cx| {
-                    if shell
-                        .details
-                        .last()
-                        .is_some_and(|page| page.menu == Some(kind))
-                    {
-                        shell.toggle_menu(kind, cx);
-                    }
-                }))
-                .children(lines),
-        ),
+        anchored()
+            .position(menu::position(chip))
+            .snap_to_window_with_margin(px(8.))
+            .child(
+                div()
+                    .id("chip-menu")
+                    .min_w(px(240.))
+                    .p(px(6.))
+                    .flex()
+                    .flex_col()
+                    .rounded(px(theme::RADIUS_LARGE))
+                    .border_1()
+                    .border_color(theme::line())
+                    .bg(theme::panel())
+                    .occlude()
+                    .on_mouse_down_out(cx.listener(|shell, event: &MouseDownEvent, _, cx| {
+                        shell.pressed_outside_menu(event.position, cx);
+                    }))
+                    .children(lines),
+            ),
     )
 }
 

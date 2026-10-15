@@ -297,7 +297,7 @@ impl Render for Shell {
                     let with_modifier = held.control || held.alt || held.platform || held.function;
                     app.player_key(key, with_modifier, window, cx);
                 } else if key == "escape" {
-                    app.go_back(cx);
+                    app.escape(cx);
                 }
             }))
             // The player leaves the root transparent: the video is under the window.

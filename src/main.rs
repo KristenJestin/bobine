@@ -10,6 +10,7 @@ mod grid;
 mod harness;
 mod images;
 mod input;
+mod menu;
 mod navigation;
 mod player;
 mod reports;

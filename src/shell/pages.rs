@@ -1,6 +1,8 @@
 //! What the screens show and how it comes from the server. Every call to the server runs on the
 //! background executor; its answer comes back to the window's thread, which updates the page.
 
+use std::cell::Cell;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -11,8 +13,8 @@ use bobine::provider::{
 };
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    Context, Entity, Image, RenderImage, ScrollHandle, ScrollWheelEvent, Subscription, Task,
-    TouchPhase, UniformListScrollHandle, Window, point, px,
+    Bounds, Context, Entity, Image, Pixels, Point, RenderImage, ScrollHandle, ScrollWheelEvent,
+    Subscription, Task, TouchPhase, UniformListScrollHandle, Window, point, px,
 };
 
 use super::{Film as Playing, Shell};
@@ -20,6 +22,7 @@ use crate::film_page::{self, Choices, From, Plan};
 use crate::grid::{self, Grid};
 use crate::images::{self, Key};
 use crate::input::TextInput;
+use crate::menu::Menus;
 use crate::navigation::{NavEntry, Screen};
 use crate::player::libmpv::Libmpv;
 use crate::reports::Reporting;
@@ -68,13 +71,19 @@ pub enum Chip {
     Subtitle,
 }
 
+impl Chip {
+    pub const ALL: [Chip; 3] = [Chip::Version, Chip::Audio, Chip::Subtitle];
+}
+
 pub struct DetailPage {
     pub id: ItemId,
     pub detail: Loadable<FilmDetail>,
     pub choices: Option<Choices>,
     /// Hidden while unknown, when the film is in none, or when the lookup failed.
     pub collection: Option<Collection>,
-    pub menu: Option<Chip>,
+    pub menus: Menus<Chip>,
+    /// Where each chip was last drawn, so its menu opens under it.
+    pub chips: [Rc<Cell<Option<Bounds<Pixels>>>>; 3],
     pub scroll: ScrollHandle,
     /// The rows that scroll sideways: the cast, the collection, similar titles.
     pub rows: [ScrollHandle; 3],
@@ -372,7 +381,8 @@ impl Shell {
             detail: Loadable::Loading,
             choices: None,
             collection: None,
-            menu: None,
+            menus: Menus::default(),
+            chips: Default::default(),
             scroll: ScrollHandle::new(),
             rows: Default::default(),
             gesture: Default::default(),
@@ -445,7 +455,7 @@ impl Shell {
         let Some(page) = self.details.last_mut() else {
             return;
         };
-        page.menu = None;
+        page.menus.close();
         let (Loadable::Ready(detail), Some(choices)) = (&page.detail, &mut page.choices) else {
             return;
         };
@@ -496,15 +506,42 @@ impl Shell {
         );
         if to != offset {
             handle.set_offset(to);
+            // A menu stays under its chip only while the page stands still.
+            page.menus.close();
             cx.notify();
         }
     }
 
     pub fn toggle_menu(&mut self, chip: Chip, cx: &mut Context<Self>) {
         if let Some(page) = self.details.last_mut() {
-            page.menu = (page.menu != Some(chip)).then_some(chip);
+            page.menus.toggle(chip);
             cx.notify();
         }
+    }
+
+    /// The mouse went down outside the open menu, maybe on a chip.
+    pub fn pressed_outside_menu(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
+        if let Some(page) = self.details.last_mut() {
+            let on = Chip::ALL.into_iter().find(|chip| {
+                page.chips[*chip as usize]
+                    .get()
+                    .is_some_and(|bounds| bounds.contains(&position))
+            });
+            page.menus.pressed_outside(on);
+            cx.notify();
+        }
+    }
+
+    /// Escape closes the open menu, else goes back.
+    pub fn escape(&mut self, cx: &mut Context<Self>) {
+        if let Some(page) = self.details.last_mut()
+            && self.navigator.current() == Screen::FilmDetail
+            && page.menus.escape()
+        {
+            cx.notify();
+            return;
+        }
+        self.go_back(cx);
     }
 
     pub fn toggle_watched(&mut self, cx: &mut Context<Self>) {
