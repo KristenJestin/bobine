@@ -1,8 +1,16 @@
 //! The look of Bobine, in one place: screens ask for names, never for colours. The values come
 //! from the design the maintainer validated (after nabby.pro).
 
+use std::time::Instant;
+
 use gpui_kit::prelude::*;
-use gpui_kit::{App, Div, ElementId, FontWeight, Rgba, SharedString, Stateful, div, px, rgb, rgba};
+use gpui_kit::{
+    App, Div, ElementId, FontWeight, MouseButton, Rgba, SharedString, Stateful, Window, div, px,
+    rgb, rgba,
+};
+
+use crate::icons::{IconName, icon};
+use crate::motion::{self, Fade};
 
 pub fn background() -> Rgba {
     rgb(0x09090a)
@@ -51,36 +59,148 @@ pub fn font_family(cx: &App) -> Option<SharedString> {
         .then(|| "Inter".into())
 }
 
-/// White, black text: the one thing to do on a screen.
-pub fn primary_button(id: impl Into<ElementId>, label: impl Into<SharedString>) -> Stateful<Div> {
+/// The size of an icon beside the text of a button.
+const BUTTON_ICON: f32 = 16.;
+
+/// The background of something that answers the pointer: at rest, under it, pressed.
+#[derive(Clone, Copy)]
+pub struct Shades {
+    pub rest: Rgba,
+    pub hover: Rgba,
+    pub press: Rgba,
+}
+
+impl Shades {
+    /// Clear at rest, a light veil under the pointer: over a picture.
+    pub fn veil() -> Self {
+        Self {
+            rest: rgba(0xffffff00),
+            hover: rgba(0xffffff1f),
+            press: rgba(0xffffff33),
+        }
+    }
+
+    /// Clear at rest, the line colour under the pointer: a line of a menu.
+    pub fn line() -> Self {
+        Self {
+            rest: rgba(0x23232700),
+            hover: line(),
+            press: rgb(0x2e2e33),
+        }
+    }
+}
+
+/// How the pointer over one element stands, eased.
+struct Pointer {
+    hover: Fade,
+    press: Fade,
+}
+
+/// An element whose background eases between its `shades` as the pointer comes, goes and
+/// presses, instead of jumping. Asks for frames only while it moves.
+pub fn eased(
+    id: impl Into<ElementId>,
+    shades: Shades,
+    window: &mut Window,
+    cx: &mut App,
+) -> Stateful<Div> {
+    let id = id.into();
+    let state = window.use_keyed_state(id.clone(), cx, |_, _| Pointer {
+        hover: Fade::new(motion::quick()),
+        press: Fade::new(motion::quick()),
+    });
+    let now = Instant::now();
+    let pointer = state.read(cx);
+    let bg = motion::mix(
+        motion::mix(shades.rest, shades.hover, pointer.hover.level(now)),
+        shades.press,
+        pointer.press.level(now),
+    );
+    if pointer.hover.moving(now) || pointer.press.moving(now) {
+        window.request_animation_frame();
+    }
+    let (hovered, pressed, released, released_out) =
+        (state.clone(), state.clone(), state.clone(), state);
+    let press = |state: &gpui_kit::Entity<Pointer>, down: bool, cx: &mut App| {
+        state.update(cx, |pointer, cx| {
+            pointer.press.set(down, Instant::now());
+            cx.notify();
+        });
+    };
     div()
         .id(id)
+        .bg(bg)
+        .on_hover(move |hover, _, cx| {
+            hovered.update(cx, |pointer, cx| {
+                pointer.hover.set(*hover, Instant::now());
+                cx.notify();
+            });
+        })
+        .on_mouse_down(MouseButton::Left, move |_, _, cx| press(&pressed, true, cx))
+        .on_mouse_up(MouseButton::Left, move |_, _, cx| {
+            press(&released, false, cx)
+        })
+        .on_mouse_up_out(MouseButton::Left, move |_, _, cx| {
+            press(&released_out, false, cx)
+        })
+}
+
+/// White, black text: the one thing to do on a screen.
+pub fn primary_button(
+    id: impl Into<ElementId>,
+    leading: Option<IconName>,
+    label: impl Into<SharedString>,
+    window: &mut Window,
+    cx: &mut App,
+) -> Stateful<Div> {
+    let shades = Shades {
+        rest: rgb(0xffffff),
+        hover: rgb(0xe4e4e7),
+        press: rgb(0xd4d4d8),
+    };
+    eased(id, shades, window, cx)
+        .flex()
+        .items_center()
+        .justify_center()
+        .gap(px(8.))
         .px(px(20.))
         .py(px(12.))
         .rounded(px(RADIUS))
-        .bg(rgb(0xffffff))
         .text_color(rgb(0x000000))
         .text_size(px(14.))
         .font_weight(FontWeight::SEMIBOLD)
         .cursor_pointer()
-        .hover(|style| style.bg(rgb(0xe4e4e7)))
+        .children(leading.map(|name| icon(name, BUTTON_ICON)))
         .child(label.into())
 }
 
 /// Outlined, for what comes second.
-pub fn ghost_button(id: impl Into<ElementId>, label: impl Into<SharedString>) -> Stateful<Div> {
-    div()
-        .id(id)
+pub fn ghost_button(
+    id: impl Into<ElementId>,
+    leading: Option<IconName>,
+    label: impl Into<SharedString>,
+    window: &mut Window,
+    cx: &mut App,
+) -> Stateful<Div> {
+    let shades = Shades {
+        rest: rgba(0x14141680),
+        hover: line(),
+        press: rgb(0x2e2e33),
+    };
+    eased(id, shades, window, cx)
+        .flex()
+        .items_center()
+        .justify_center()
+        .gap(px(8.))
         .px(px(20.))
         .py(px(12.))
         .rounded(px(RADIUS))
         .border_1()
         .border_color(rgb(0x3a3a40))
-        .bg(rgba(0x14141680))
         .text_color(text())
         .text_size(px(14.))
         .font_weight(FontWeight::SEMIBOLD)
         .cursor_pointer()
-        .hover(|style| style.bg(line()))
+        .children(leading.map(|name| icon(name, BUTTON_ICON)))
         .child(label.into())
 }

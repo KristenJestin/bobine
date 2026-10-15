@@ -201,11 +201,11 @@ pub fn short_duration(duration: Duration) -> String {
     }
 }
 
-/// `▶ Reprendre à 1 h 12` once started, else `▶ Lecture`.
+/// `Reprendre à 1 h 12` once started, else `Lecture`, after a play icon.
 pub fn play_label(film: &Film) -> String {
     match film.resume {
-        Some(resume) => format!("▶ Reprendre à {}", short_duration(resume)),
-        None => "▶ Lecture".to_string(),
+        Some(resume) => format!("Reprendre à {}", short_duration(resume)),
+        None => "Lecture".to_string(),
     }
 }
 
@@ -296,6 +296,20 @@ pub fn subtitle_label(track: Option<&SubtitleTrack>) -> String {
         external: track.external,
         selected: false,
     })
+}
+
+/// What a person's disc shows without a photo: the first letter of the first and the last
+/// word of the name, `PM` for Paul Mercier.
+pub fn initials(name: &str) -> String {
+    let mut words = name.split_whitespace();
+    let first = words.next();
+    let last = words.next_back();
+    first
+        .into_iter()
+        .chain(last)
+        .filter_map(|word| word.chars().next())
+        .flat_map(char::to_uppercase)
+        .collect()
 }
 
 #[cfg(test)]
@@ -434,7 +448,7 @@ mod tests {
         let watched = toggle_watched(&server, &film).unwrap();
         assert!(watched.watched);
         assert_eq!(watched.resume, None);
-        assert_eq!(play_label(&watched), "▶ Lecture");
+        assert_eq!(play_label(&watched), "Lecture");
         let unwatched = toggle_watched(&server, &watched).unwrap();
         assert!(!unwatched.watched);
         assert_eq!(
@@ -446,12 +460,12 @@ mod tests {
     #[test]
     fn the_play_button_says_where_it_resumes() {
         let detail = detail();
-        assert_eq!(play_label(&detail.film), "▶ Reprendre à 1 h 12");
+        assert_eq!(play_label(&detail.film), "Reprendre à 1 h 12");
         let mut film = detail.film.clone();
         film.resume = None;
-        assert_eq!(play_label(&film), "▶ Lecture");
+        assert_eq!(play_label(&film), "Lecture");
         film.resume = Some(Duration::from_secs(42));
-        assert_eq!(play_label(&film), "▶ Reprendre à 42 s");
+        assert_eq!(play_label(&film), "Reprendre à 42 s");
     }
 
     #[test]
@@ -481,5 +495,13 @@ mod tests {
         assert_eq!(time_left(&film).as_deref(), Some("reste 59 min"));
         let progress = progress(&film).unwrap();
         assert!((progress - 72. / 131.).abs() < 1e-4, "{progress}");
+    }
+
+    #[test]
+    fn a_person_without_a_photo_shows_their_initials() {
+        assert_eq!(initials("Paul Mercier"), "PM");
+        assert_eq!(initials("Zoé"), "Z");
+        assert_eq!(initials("élise de la Fabre"), "ÉF");
+        assert_eq!(initials("  "), "");
     }
 }

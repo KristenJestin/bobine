@@ -71,6 +71,8 @@ pub struct State {
     pub forbidden: bool,
     /// The account is disabled: the login answers 403.
     pub account_disabled: bool,
+    /// How long an image takes to be answered (a server converting a person's photo).
+    pub image_delay: std::time::Duration,
 }
 
 pub struct FakeServer {
@@ -236,10 +238,10 @@ impl FakeServer {
                         authorization,
                         body,
                     };
-                    let answer = {
+                    let (answer, delay) = {
                         let mut state = state.lock().unwrap();
                         state.seen.push(seen.clone());
-                        answer(&state, &seen)
+                        (answer(&state, &seen), state.image_delay)
                     };
                     let json = Header::from_bytes("Content-Type", "application/json").unwrap();
                     let _ = match answer {
@@ -248,7 +250,10 @@ impl FakeServer {
                                 .with_status_code(code)
                                 .with_header(json),
                         ),
-                        Answer::Bytes(bytes) => request.respond(Response::from_data(bytes)),
+                        Answer::Bytes(bytes) => {
+                            std::thread::sleep(delay);
+                            request.respond(Response::from_data(bytes))
+                        }
                         Answer::Empty(code) => request.respond(Response::empty(code)),
                     };
                 }

@@ -9,18 +9,28 @@
 //! [--fullscreen-at S] [--windowed-at S] [--next FILE --next-at S] [--leave-at S]
 //! [--measure-from S] --quit-at S`
 //!
-//! `bobine --screen login|home|library|detail|detail-rows|playing [--films N] [--media FILE]
-//! --quit-at S`
+//! `bobine --screen login|home|library|detail|detail-rows|detail-cast|playing [--films N]
+//! [--media FILE] [--image-delay-ms N] [--photos-fail-once] [--scenario menu|scroll|select|panel]
+//! [--slower N] --quit-at S`
+//!
+//! A scenario sends clicks, keys and scroll events to the window as the compositor would, at set
+//! times, and prints what they did (`MENU`, `SCROLL`, `SELECT`, `PANEL` lines) and the frame times
+//! that followed each (`FRAMES`). `--slower N` makes every move N times slower, to photograph it.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use bobine::provider::{Connector, ItemId};
-use gpui_kit::{App, Context, Entity, Window, point, px};
+use gpui_kit::{
+    App, Bounds, Context, Entity, KeyDownEvent, Keystroke, Modifiers, MouseButton, MouseDownEvent,
+    MouseMoveEvent, MouseUpEvent, Pixels, PlatformInput, Point, ScrollDelta, ScrollWheelEvent,
+    TouchPhase, WeakEntity, Window, point, px,
+};
 
 use crate::fake::{FILM, FakeServer};
 use crate::film_page::From;
-use crate::navigation::NavEntry;
+use crate::navigation::{NavEntry, Screen};
+use crate::shell::Chip;
 
 use crate::player::libmpv::Libmpv;
 use crate::player::mpv::MpvClient;
@@ -51,6 +61,12 @@ struct Args {
     films: usize,
     /// What the fake server's films play.
     media: Option<String>,
+    /// How long each image of the fake server takes, in milliseconds.
+    image_delay: u64,
+    /// The fake server fails the first time it is asked each person's photo.
+    photos_fail_once: bool,
+    /// Input sent to the window as a user would give it, once the screen shows.
+    scenario: Option<String>,
 }
 
 fn parse(mut args: impl Iterator<Item = String>) -> Result<Option<Args>, String> {
@@ -105,6 +121,21 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Option<Args>, String>
                     .ok_or("--films needs a number")?;
             }
             "--media" => parsed.media = Some(args.next().ok_or("--media needs a file")?),
+            "--photos-fail-once" => parsed.photos_fail_once = true,
+            "--scenario" => parsed.scenario = args.next(),
+            "--slower" => {
+                let times: u32 = args
+                    .next()
+                    .and_then(|n| n.parse().ok())
+                    .ok_or("--slower needs a number")?;
+                crate::motion::SLOWER.store(times, std::sync::atomic::Ordering::Relaxed);
+            }
+            "--image-delay-ms" => {
+                parsed.image_delay = args
+                    .next()
+                    .and_then(|n| n.parse().ok())
+                    .ok_or("--image-delay-ms needs a number")?;
+            }
             other => return Err(format!("unknown argument {other}")),
         }
     }
@@ -150,9 +181,13 @@ impl Harness {
         };
         let fake = args.as_ref().map(|args| {
             let fake = FakeServer::new(args.films, args.screen.as_deref() != Some("login"));
+            let mut state = fake.state.lock().unwrap();
             if let Some(media) = &args.media {
-                fake.state.lock().unwrap().stream = media.clone();
+                state.stream = media.clone();
             }
+            state.image_delay = Duration::from_millis(args.image_delay);
+            state.photos_fail_once = args.photos_fail_once;
+            drop(state);
             fake
         });
         Self { args, fake }
@@ -173,7 +208,10 @@ impl Harness {
         };
         shell.update(cx, |shell, _| shell.mpv_options = vec![("ao", "null")]);
         match args.screen.clone() {
-            Some(screen) => show_screen(screen, args.quit_at, shell, window, cx),
+            Some(screen) => {
+                let fake = self.fake.expect("the harness always has its fake server");
+                show_screen(screen, args.scenario, args.quit_at, fake, shell, window, cx)
+            }
             None => play(args, shell, window, cx),
         }
     }
@@ -182,7 +220,9 @@ impl Harness {
 /// Reaches `screen` as a user would, by the shell's own steps, then waits to be photographed.
 fn show_screen(
     screen: String,
+    scenario: Option<String>,
     quit_at: f64,
+    fake: FakeServer,
     shell: &Entity<Shell>,
     window: &mut Window,
     cx: &mut App,
@@ -191,10 +231,15 @@ fn show_screen(
     let handle = window.window_handle();
     let begun = Instant::now();
     let wants = |names: &[&str]| names.contains(&screen.as_str());
-    let to_library = wants(&["library", "detail", "detail-rows", "playing"]);
-    let to_film = wants(&["detail", "detail-rows", "playing"]);
+    let to_library = wants(&["library", "detail", "detail-rows", "detail-cast", "playing"]);
+    let to_film = wants(&["detail", "detail-rows", "detail-cast", "playing"]);
     let (scroll, play) = (wants(&["detail-rows"]), wants(&["playing"]));
+    let to_cast = wants(&["detail-cast"]);
     let mut done_steps = 0;
+    // A scenario starts once the screen is reached: the login at once, a film page after it opened.
+    let ready_after = if to_film { 3 } else { 1 };
+    let mut ready_at: Option<f64> = None;
+    let mut acts = scenario.map(|name| Acts::new(&name));
     cx.spawn(async move |cx| {
         loop {
             cx.background_executor()
@@ -202,6 +247,12 @@ fn show_screen(
                 .await;
             let elapsed = begun.elapsed().as_secs_f64();
             let quit = handle.update(cx, |_, window, cx| {
+                if let Some(acts) = &mut acts
+                    && done_steps >= ready_after
+                {
+                    let since = elapsed - *ready_at.get_or_insert(elapsed);
+                    acts.run(since, &shell, window, cx);
+                }
                 shell
                     .update(cx, |shell, cx| {
                         let step = match done_steps {
@@ -234,6 +285,9 @@ fn show_screen(
                                     let bottom = page.scroll.max_offset().y;
                                     page.scroll.set_offset(point(px(0.), -bottom));
                                 }
+                                if to_cast && let Some(page) = shell.details.last() {
+                                    page.scroll.set_offset(point(px(0.), px(-420.)));
+                                }
                                 if play {
                                     // The local file is shorter than the fake film's resume point.
                                     shell.play_film(From::Beginning, window, cx);
@@ -255,7 +309,16 @@ fn show_screen(
                 if elapsed < quit_at {
                     return false;
                 }
+                if let Some(acts) = &acts {
+                    shell.update(cx, |shell, _| acts.report(&shell.frames)).ok();
+                }
                 shell.update(cx, |shell, _| shell.close_video()).ok();
+                let images = fake.state.lock().unwrap().record.images.clone();
+                let persons = images
+                    .iter()
+                    .filter(|(image, _)| image.item.0.starts_with("person-"))
+                    .count();
+                println!("IMAGES asked={} persons={persons}", images.len());
                 cx.quit();
                 true
             });
@@ -265,6 +328,322 @@ fn show_screen(
         }
     })
     .detach();
+}
+
+/// Where a scenario points the mouse.
+#[derive(Clone, Copy, Debug)]
+enum Target {
+    Chip(Chip),
+    /// The middle of the cast row.
+    CastRow,
+    /// The empty right of the film page's hero.
+    Blank,
+    /// The left of the player's picture, clear of its track panel.
+    Picture,
+    /// The player's "Audio et sous-titres" button, top right.
+    TracksButton,
+    /// The top of the window, right of the back link: the page, never a row.
+    Top,
+    /// The login's address field, this many pixels into its text.
+    Address(f32),
+}
+
+#[derive(Clone, Debug)]
+enum Act {
+    Click(Target),
+    /// The left button pressed on one target, dragged to the other, released there.
+    Drag(Target, Target),
+    Key(&'static str),
+    /// A mouse wheel turned, in lines; with Shift held when `shift`.
+    Wheel {
+        over: Target,
+        lines: f32,
+        shift: bool,
+    },
+    /// A touchpad gesture: its moves in pixels, from start to end.
+    Swipe {
+        over: Target,
+        moves: Vec<(f32, f32)>,
+    },
+}
+
+/// A scenario: what is done when (seconds after the screen is reached), and when it was done.
+struct Acts {
+    steps: Vec<(f64, &'static str, Act)>,
+    next: usize,
+    done: Vec<(&'static str, Instant)>,
+    /// When the harness started, to tell when each act was done.
+    begun: Instant,
+}
+
+impl Acts {
+    fn new(name: &str) -> Self {
+        use Act::*;
+        use Target::*;
+        let wheel = |shift| Wheel {
+            over: CastRow,
+            lines: -3.,
+            shift,
+        };
+        let swipe = |over, moves: &[(f32, f32)]| Swipe {
+            over,
+            moves: moves.to_vec(),
+        };
+        let steps = match name {
+            "menu" => vec![
+                (0.5, "open audio", Click(Chip(crate::shell::Chip::Audio))),
+                (
+                    1.5,
+                    "click audio again",
+                    Click(Chip(crate::shell::Chip::Audio)),
+                ),
+                (
+                    2.5,
+                    "open subtitles",
+                    Click(Chip(crate::shell::Chip::Subtitle)),
+                ),
+                (3.5, "escape", Key("escape")),
+                (4.5, "open audio", Click(Chip(crate::shell::Chip::Audio))),
+                (5.5, "click outside", Click(Blank)),
+                (6.5, "escape goes back", Key("escape")),
+            ],
+            "scroll" => vec![
+                (0.5, "wheel down over the cast", wheel(false)),
+                (1.0, "shift+wheel over the cast", wheel(true)),
+                (
+                    1.5,
+                    "swipe sideways over the cast",
+                    swipe(CastRow, &[(-24., 3.), (-30., 6.), (-20., 8.)]),
+                ),
+                (
+                    2.0,
+                    "swipe down drifting sideways over the cast",
+                    swipe(CastRow, &[(2., -12.), (9., -3.), (9., 0.), (1., -10.)]),
+                ),
+                (
+                    2.5,
+                    "swipe sideways off the rows",
+                    swipe(Top, &[(-30., 2.), (-30., 2.)]),
+                ),
+            ],
+            "select" => vec![
+                (0.2, "click into the address", Click(Address(60.))),
+                (0.5, "ctrl-a", Key("ctrl-a")),
+                (1.0, "", Key("end")),
+                (1.0, "", Key("shift-left")),
+                (1.0, "", Key("shift-left")),
+                (1.0, "end then shift-left three times", Key("shift-left")),
+                (1.5, "shift-home", Key("shift-home")),
+                (
+                    2.0,
+                    "drag across the address",
+                    Drag(Address(10.), Address(90.)),
+                ),
+            ],
+            // The player shows its controls once the mouse moves, a moment after it starts.
+            "panel" => vec![
+                (1.5, "click the tracks button", Click(TracksButton)),
+                (2.5, "click outside the panel", Click(Picture)),
+                (3.5, "click the tracks button", Click(TracksButton)),
+                (4.5, "click the tracks button again", Click(TracksButton)),
+                (5.5, "click the tracks button", Click(TracksButton)),
+                (6.5, "escape", Key("escape")),
+            ],
+            other => {
+                eprintln!("bobine harness: unknown scenario {other}");
+                std::process::exit(2);
+            }
+        };
+        Self {
+            steps,
+            next: 0,
+            done: Vec::new(),
+            begun: Instant::now(),
+        }
+    }
+
+    /// Does what is due `elapsed` seconds after the screen was reached.
+    fn run(&mut self, elapsed: f64, shell: &WeakEntity<Shell>, window: &mut Window, cx: &mut App) {
+        while let Some((at, label, act)) = self.steps.get(self.next).cloned() {
+            if elapsed < at {
+                break;
+            }
+            self.next += 1;
+            let Some(shell) = shell.upgrade() else {
+                return;
+            };
+            self.done.push((label, Instant::now()));
+            send(&act, &shell, window, cx);
+            if !label.is_empty() {
+                let at = self.begun.elapsed().as_secs_f64();
+                println!("{} (at {at:.2} s)", state(label, shell.read(cx), cx));
+            }
+        }
+    }
+
+    /// The frame times after each act: the draws of the half second that followed it.
+    fn report(&self, frames: &[Instant]) {
+        let slower = crate::motion::SLOWER.load(std::sync::atomic::Ordering::Relaxed);
+        let span = Duration::from_millis(500) * slower;
+        for (label, at) in self.done.iter().filter(|(label, _)| !label.is_empty()) {
+            let after: Vec<Instant> = frames
+                .iter()
+                .copied()
+                .filter(|frame| *frame >= *at && *frame <= *at + span)
+                .collect();
+            let gaps: Vec<u128> = after
+                .windows(2)
+                .map(|pair| pair[1].duration_since(pair[0]).as_millis())
+                .collect();
+            println!(
+                "FRAMES {label}: draws={} first_after_ms={} longest_gap_ms={} gaps_ms={gaps:?}",
+                after.len(),
+                after
+                    .first()
+                    .map_or(-1, |f| f.duration_since(*at).as_millis() as i64),
+                gaps.iter().max().copied().unwrap_or(0),
+            );
+        }
+    }
+}
+
+/// Where `target` is in the window now.
+fn position(target: Target, shell: &Shell, window: &Window) -> Point<Pixels> {
+    let size = window.viewport_size();
+    let page = shell.details.last();
+    let center = |bounds: Option<Bounds<Pixels>>| bounds.map(|b| b.center());
+    match target {
+        Target::Chip(chip) => center(page.and_then(|p| p.chips[chip as usize].get())),
+        Target::CastRow => center(page.map(|p| p.rows[0].bounds())),
+        Target::Blank => Some(point(size.width * 0.75, size.height * 0.3)),
+        Target::TracksButton => Some(point(size.width - px(127.), px(48.))),
+        Target::Picture => Some(point(size.width * 0.3, size.height * 0.5)),
+        Target::Top => Some(point(size.width * 0.75, px(24.))),
+        // The login card is centred; its address field's text starts 152 pixels left of the
+        // middle, 38 pixels above it.
+        Target::Address(x) => Some(point(
+            size.width / 2. - px(152. - x),
+            size.height / 2. - px(38.),
+        )),
+    }
+    .unwrap_or_default()
+}
+
+/// Sends `act` to the window as the compositor would.
+fn send(act: &Act, shell: &Entity<Shell>, window: &mut Window, cx: &mut App) {
+    let at = |target, cx: &App, window: &Window| position(target, shell.read(cx), window);
+    let events = match act {
+        Act::Click(target) => {
+            let position = at(*target, cx, window);
+            vec![
+                PlatformInput::MouseMove(MouseMoveEvent {
+                    position,
+                    pressed_button: None,
+                    modifiers: Modifiers::default(),
+                }),
+                PlatformInput::MouseDown(MouseDownEvent {
+                    button: MouseButton::Left,
+                    position,
+                    modifiers: Modifiers::default(),
+                    click_count: 1,
+                    first_mouse: false,
+                }),
+                PlatformInput::MouseUp(MouseUpEvent {
+                    button: MouseButton::Left,
+                    position,
+                    modifiers: Modifiers::default(),
+                    click_count: 1,
+                }),
+            ]
+        }
+        Act::Drag(from, to) => {
+            let (from, to) = (at(*from, cx, window), at(*to, cx, window));
+            vec![
+                PlatformInput::MouseDown(MouseDownEvent {
+                    button: MouseButton::Left,
+                    position: from,
+                    modifiers: Modifiers::default(),
+                    click_count: 1,
+                    first_mouse: false,
+                }),
+                PlatformInput::MouseMove(MouseMoveEvent {
+                    position: to,
+                    pressed_button: Some(MouseButton::Left),
+                    modifiers: Modifiers::default(),
+                }),
+                PlatformInput::MouseUp(MouseUpEvent {
+                    button: MouseButton::Left,
+                    position: to,
+                    modifiers: Modifiers::default(),
+                    click_count: 1,
+                }),
+            ]
+        }
+        Act::Key(key) => vec![PlatformInput::KeyDown(KeyDownEvent {
+            keystroke: Keystroke::parse(key).expect("a key the harness knows"),
+            is_held: false,
+            prefer_character_input: false,
+        })],
+        Act::Wheel { over, lines, shift } => {
+            vec![PlatformInput::ScrollWheel(ScrollWheelEvent {
+                position: at(*over, cx, window),
+                delta: ScrollDelta::Lines(point(0., *lines)),
+                modifiers: Modifiers {
+                    shift: *shift,
+                    ..Modifiers::default()
+                },
+                touch_phase: TouchPhase::Moved,
+            })]
+        }
+        Act::Swipe { over, moves } => {
+            let position = at(*over, cx, window);
+            let last = moves.len() - 1;
+            moves
+                .iter()
+                .enumerate()
+                .map(|(n, (dx, dy))| {
+                    PlatformInput::ScrollWheel(ScrollWheelEvent {
+                        position,
+                        delta: ScrollDelta::Pixels(point(px(*dx), px(*dy))),
+                        modifiers: Modifiers::default(),
+                        touch_phase: match n {
+                            0 => TouchPhase::Started,
+                            n if n == last => TouchPhase::Ended,
+                            _ => TouchPhase::Moved,
+                        },
+                    })
+                })
+                .collect()
+        }
+    };
+    for event in events {
+        window.dispatch_event(event, cx);
+    }
+}
+
+/// What the act changed, in one line.
+fn state(label: &str, shell: &Shell, cx: &App) -> String {
+    let screen = shell.navigator.current();
+    if let Some(form) = &shell.login
+        && screen == Screen::Login
+    {
+        return format!("SELECT {label}: {:?}", form.address.read(cx).selected());
+    }
+    if let Some(playback) = &shell.playback {
+        return format!(
+            "PANEL {label}: panel_open={} screen={screen:?}",
+            playback.session.panel_open()
+        );
+    }
+    match shell.details.last() {
+        Some(page) if screen == Screen::FilmDetail => format!(
+            "PAGE {label}: menu={:?} page_y={} cast_x={}",
+            page.menus.open(),
+            f32::from(page.scroll.offset().y),
+            f32::from(page.rows[0].offset().x),
+        ),
+        _ => format!("PAGE {label}: screen={screen:?}"),
+    }
 }
 
 /// Plays the file of `--play` and measures it.

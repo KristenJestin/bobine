@@ -3,15 +3,14 @@
 //! the video at the right. GPUI paints nothing else: the video shows through, from under the
 //! window.
 
-use std::time::Instant;
-
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    Context, Div, FontWeight, IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent, Stateful,
-    Window, div, linear_color_stop, linear_gradient, px, rgb, rgba,
+    App, ClickEvent, Context, Div, FontWeight, IntoElement, MouseButton, MouseDownEvent,
+    MouseMoveEvent, Stateful, Window, div, linear_color_stop, linear_gradient, px, rgb, rgba,
 };
 
 use super::empty_screen;
+use crate::icons::{IconName, icon};
 use crate::player::controls::SKIP_SECONDS;
 use crate::player::session::{Choice, Session};
 use crate::player::time;
@@ -26,9 +25,31 @@ pub fn empty(_cx: &mut Context<Shell>) -> impl IntoElement {
     empty_screen("Lecteur")
 }
 
-pub fn render(session: &Session, window: &Window, cx: &mut Context<Shell>) -> impl IntoElement {
-    let now = Instant::now();
-    let shown = session.controls_visible(now);
+/// How much of the controls and of the panel shows, from 0 to 1: they fade in and out.
+pub struct Shown {
+    pub controls: f32,
+    pub panel: f32,
+}
+
+pub fn render(
+    session: &Session,
+    shown: Shown,
+    window: &mut Window,
+    cx: &mut Context<Shell>,
+) -> impl IntoElement {
+    let controls = (shown.controls > 0.).then(|| {
+        div()
+            .absolute()
+            .inset_0()
+            .opacity(shown.controls)
+            .child(shade(true))
+            .child(shade(false))
+            .child(title_bar(session, window, cx))
+            .child(bottom_bar(session, window, cx))
+    });
+    // Only an open panel closes on a click outside; one fading out is just drawn.
+    let outside = session.panel_open().then(|| outside_panel(cx));
+    let panel = (shown.panel > 0.).then(|| panel(session, shown.panel, window, cx));
     div()
         .id("player")
         .size_full()
@@ -36,13 +57,9 @@ pub fn render(session: &Session, window: &Window, cx: &mut Context<Shell>) -> im
         .on_mouse_move(cx.listener(|shell, _: &MouseMoveEvent, _, cx| {
             shell.player_mouse_moved(cx);
         }))
-        .when(shown, |root| {
-            root.child(shade(true))
-                .child(shade(false))
-                .child(title_bar(session, cx))
-                .child(bottom_bar(session, window, cx))
-        })
-        .when(session.panel_open(), |root| root.child(panel(session, cx)))
+        .children(controls)
+        .children(outside)
+        .children(panel)
         .when_some(session.error(), |root, error| {
             root.child(
                 div()
@@ -82,7 +99,20 @@ fn shade(top: bool) -> Div {
     }
 }
 
-fn title_bar(session: &Session, cx: &mut Context<Shell>) -> impl IntoElement {
+fn title_bar(session: &Session, window: &mut Window, cx: &mut Context<Shell>) -> Div {
+    let back = round_button("player-back", 36., window, cx)
+        .child(icon(IconName::ArrowLeft, 20.))
+        .on_click(cx.listener(|shell, _, window, cx| {
+            shell.player_back(window, cx);
+        }));
+    let tracks = text_button("player-tracks", "Audio et sous-titres", window, cx)
+        .when(session.panel_open(), |button| button.bg(theme::line()))
+        .on_click(cx.listener(|shell, _, _, cx| {
+            if let Some(playback) = &mut shell.playback {
+                playback.session.toggle_panel();
+            }
+            cx.notify();
+        }));
     div()
         .absolute()
         .top(px(30.))
@@ -92,50 +122,30 @@ fn title_bar(session: &Session, cx: &mut Context<Shell>) -> impl IntoElement {
         .items_center()
         .justify_between()
         .child(
-            div()
-                .flex()
-                .items_center()
-                .gap(px(16.))
-                .child(
-                    round_button("player-back", "←", 36.)
-                        .text_size(px(20.))
-                        .on_click(cx.listener(|shell, _, window, cx| {
-                            shell.player_back(window, cx);
-                        })),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .child(
+            div().flex().items_center().gap(px(16.)).child(back).child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .child(
+                        div()
+                            .text_size(px(17.))
+                            .font_weight(FontWeight::BOLD)
+                            .child(session.title.clone()),
+                    )
+                    .when_some(session.subtitle.clone(), |column, subtitle| {
+                        column.child(
                             div()
-                                .text_size(px(17.))
-                                .font_weight(FontWeight::BOLD)
-                                .child(session.title.clone()),
+                                .text_size(px(12.))
+                                .text_color(theme::muted())
+                                .child(subtitle),
                         )
-                        .when_some(session.subtitle.clone(), |column, subtitle| {
-                            column.child(
-                                div()
-                                    .text_size(px(12.))
-                                    .text_color(theme::muted())
-                                    .child(subtitle),
-                            )
-                        }),
-                ),
+                    }),
+            ),
         )
-        .child(
-            text_button("player-tracks", "Audio et sous-titres")
-                .when(session.panel_open(), |button| button.bg(theme::line()))
-                .on_click(cx.listener(|shell, _, _, cx| {
-                    if let Some(playback) = &mut shell.playback {
-                        playback.session.toggle_panel();
-                    }
-                    cx.notify();
-                })),
-        )
+        .child(tracks)
 }
 
-fn bottom_bar(session: &Session, window: &Window, cx: &mut Context<Shell>) -> impl IntoElement {
+fn bottom_bar(session: &Session, window: &mut Window, cx: &mut Context<Shell>) -> Div {
     let played = if session.duration > 0. {
         (session.position / session.duration).clamp(0., 1.) as f32
     } else {
@@ -143,6 +153,24 @@ fn bottom_bar(session: &Session, window: &Window, cx: &mut Context<Shell>) -> im
     };
     let left = (session.duration - session.position).max(0.);
     let bar_width = f32::from(window.viewport_size().width) - 2. * EDGE;
+    let skip = |seconds: f64| {
+        move |shell: &mut Shell, _: &ClickEvent, _: &mut Window, cx: &mut Context<Shell>| {
+            if let Some(playback) = &mut shell.playback {
+                playback.session.skip(seconds);
+            }
+            cx.notify();
+        }
+    };
+    let back_10 = text_button("player-back-10", "−10 s", window, cx)
+        .on_click(cx.listener(skip(-SKIP_SECONDS)));
+    let play = play_pause(session.paused, window, cx).on_click(cx.listener(|shell, _, _, cx| {
+        if let Some(playback) = &mut shell.playback {
+            playback.session.toggle_pause();
+        }
+        cx.notify();
+    }));
+    let forward_10 = text_button("player-forward-10", "+10 s", window, cx)
+        .on_click(cx.listener(skip(SKIP_SECONDS)));
 
     div()
         .absolute()
@@ -201,38 +229,15 @@ fn bottom_bar(session: &Session, window: &Window, cx: &mut Context<Shell>) -> im
                 .items_center()
                 .justify_between()
                 .text_size(px(13.))
-                .child(div().w(px(220.)).child(time::duration(session.position)))
+                .child(div().w(px(220.)).child(time::clock(session.position)))
                 .child(
                     div()
                         .flex()
                         .items_center()
                         .gap(px(28.))
-                        .child(text_button("player-back-10", "−10 s").on_click(cx.listener(
-                            |shell, _, _, cx| {
-                                if let Some(playback) = &mut shell.playback {
-                                    playback.session.skip(-SKIP_SECONDS);
-                                }
-                                cx.notify();
-                            },
-                        )))
-                        .child(play_pause(session.paused).on_click(cx.listener(
-                            |shell, _, _, cx| {
-                                if let Some(playback) = &mut shell.playback {
-                                    playback.session.toggle_pause();
-                                }
-                                cx.notify();
-                            },
-                        )))
-                        .child(
-                            text_button("player-forward-10", "+10 s").on_click(cx.listener(
-                                |shell, _, _, cx| {
-                                    if let Some(playback) = &mut shell.playback {
-                                        playback.session.skip(SKIP_SECONDS);
-                                    }
-                                    cx.notify();
-                                },
-                            )),
-                        ),
+                        .child(back_10)
+                        .child(play)
+                        .child(forward_10),
                 )
                 .child(
                     div()
@@ -249,53 +254,111 @@ fn bottom_bar(session: &Session, window: &Window, cx: &mut Context<Shell>) -> im
         )
 }
 
-/// White, round: the pause bars while the film plays, the play triangle when it is paused.
-fn play_pause(paused: bool) -> Stateful<Div> {
-    let button = round_button("player-play-pause", "", 52.)
-        .bg(rgb(0xffffff))
+/// White, round: the pause icon while the film plays, the play icon when it is paused.
+fn play_pause(paused: bool, window: &mut Window, cx: &mut App) -> Stateful<Div> {
+    let shades = theme::Shades {
+        rest: rgb(0xffffff),
+        hover: rgb(0xe4e4e7),
+        press: rgb(0xd4d4d8),
+    };
+    round(theme::eased("player-play-pause", shades, window, cx), 52.)
         .text_color(rgb(0x000000))
-        .hover(|style| style.bg(rgb(0xe4e4e7)));
-    if paused {
-        button.text_size(px(18.)).child("▶")
-    } else {
-        let bar = || div().w(px(5.)).h(px(17.)).rounded(px(1.)).bg(rgb(0x000000));
-        button.gap(px(5.)).child(bar()).child(bar())
-    }
+        .child(icon(
+            if paused {
+                IconName::Play
+            } else {
+                IconName::Pause
+            },
+            22.,
+        ))
 }
 
-fn round_button(id: &'static str, label: &'static str, side: f32) -> Stateful<Div> {
-    div()
-        .id(id)
+fn round_button(id: &'static str, side: f32, window: &mut Window, cx: &mut App) -> Stateful<Div> {
+    round(theme::eased(id, theme::Shades::veil(), window, cx), side)
+}
+
+fn round(button: Stateful<Div>, side: f32) -> Stateful<Div> {
+    button
         .size(px(side))
         .flex()
         .items_center()
         .justify_center()
         .rounded_full()
         .cursor_pointer()
-        .hover(|style| style.bg(rgba(0xffffff1f)))
-        .child(label)
 }
 
-fn text_button(id: &'static str, label: &'static str) -> Stateful<Div> {
-    div()
-        .id(id)
+fn text_button(
+    id: &'static str,
+    label: &'static str,
+    window: &mut Window,
+    cx: &mut App,
+) -> Stateful<Div> {
+    theme::eased(id, theme::Shades::veil(), window, cx)
         .px(px(12.))
         .py(px(8.))
         .rounded(px(theme::RADIUS))
         .text_size(px(14.))
         .font_weight(FontWeight::SEMIBOLD)
         .cursor_pointer()
-        .hover(|style| style.bg(rgba(0xffffff1f)))
         .child(label)
 }
 
-/// Over the video at the right: the picture keeps its whole size under it.
-fn panel(session: &Session, cx: &mut Context<Shell>) -> impl IntoElement {
+/// Under the open panel, over everything else: a click there closes the panel and does nothing
+/// more, even on the button that opened it.
+fn outside_panel(cx: &mut Context<Shell>) -> Stateful<Div> {
+    div()
+        .id("player-outside-panel")
+        .absolute()
+        .inset_0()
+        .on_any_mouse_down(cx.listener(|shell, _: &MouseDownEvent, _, cx| {
+            if let Some(playback) = &mut shell.playback {
+                playback.session.clicked_outside_panel();
+            }
+            cx.stop_propagation();
+            cx.notify();
+        }))
+}
+
+/// Over the video at the right: the picture keeps its whole size under it. It slides in a little
+/// from the right as it fades in, `shown` of the way.
+fn panel(
+    session: &Session,
+    shown: f32,
+    window: &mut Window,
+    cx: &mut Context<Shell>,
+) -> Stateful<Div> {
+    // Fading out, the panel is only drawn: it catches no click.
+    let open = session.panel_open();
+    let audio = choices(
+        "audio",
+        session.audio_choices(),
+        open,
+        window,
+        cx,
+        |shell, id| {
+            if let (Some(playback), Some(id)) = (&mut shell.playback, id) {
+                playback.session.select_audio(id);
+            }
+        },
+    );
+    let subtitles = choices(
+        "subtitle",
+        session.subtitle_choices(),
+        open,
+        window,
+        cx,
+        |shell, id| {
+            if let Some(playback) = &mut shell.playback {
+                playback.session.select_subtitle(id);
+            }
+        },
+    );
     div()
         .id("player-panel")
         .absolute()
         .top(px(96.))
-        .right(px(EDGE))
+        .right(px(EDGE - 16. * (1. - shown)))
+        .opacity(shown)
         .w(px(340.))
         .pt(px(22.))
         .px(px(20.))
@@ -306,27 +369,11 @@ fn panel(session: &Session, cx: &mut Context<Shell>) -> impl IntoElement {
         // No blur behind it in GPUI: opaque enough to read over any picture.
         .bg(rgba(0x0e0e10e0))
         // A click in the panel never reaches the video's area.
-        .occlude()
+        .when(open, |panel| panel.occlude())
         .child(section_title("AUDIO"))
-        .child(
-            choices("audio", session.audio_choices(), cx, |shell, id| {
-                if let (Some(playback), Some(id)) = (&mut shell.playback, id) {
-                    playback.session.select_audio(id);
-                }
-            })
-            .mb(px(26.)),
-        )
+        .child(audio.mb(px(26.)))
         .child(section_title("SOUS-TITRES"))
-        .child(choices(
-            "subtitle",
-            session.subtitle_choices(),
-            cx,
-            |shell, id| {
-                if let Some(playback) = &mut shell.playback {
-                    playback.session.select_subtitle(id);
-                }
-            },
-        ))
+        .child(subtitles)
 }
 
 fn section_title(label: &'static str) -> Div {
@@ -340,29 +387,40 @@ fn section_title(label: &'static str) -> Div {
 fn choices(
     group: &'static str,
     choices: Vec<Choice>,
+    open: bool,
+    window: &mut Window,
     cx: &mut Context<Shell>,
     select: fn(&mut Shell, Option<i64>),
 ) -> Div {
-    let lines = choices.into_iter().enumerate().map(|(index, choice)| {
-        let id = choice.id;
-        div()
-            .id((group, index))
-            .px(px(12.))
-            .py(px(9.))
-            .rounded(px(8.))
-            .cursor_pointer()
-            .when(choice.current, |line| line.bg(theme::line()))
-            .hover(|style| style.bg(theme::line()))
-            .on_click(cx.listener(move |shell, _, _, cx| {
-                select(shell, id);
-                cx.notify();
-            }))
-            .child(if choice.current {
-                format!("✓ {}", choice.label)
-            } else {
-                choice.label
-            })
-    });
+    let lines: Vec<Stateful<Div>> = choices
+        .into_iter()
+        .enumerate()
+        .map(|(index, choice)| {
+            let id = choice.id;
+            let mut shades = theme::Shades::line();
+            if choice.current {
+                shades.rest = theme::line();
+            }
+            theme::eased((group, index), shades, window, cx)
+                .px(px(12.))
+                .py(px(9.))
+                .rounded(px(8.))
+                .when(open, |line| {
+                    line.cursor_pointer()
+                        .on_click(cx.listener(move |shell, _, _, cx| {
+                            select(shell, id);
+                            cx.notify();
+                        }))
+                })
+                .flex()
+                .items_center()
+                .gap(px(8.))
+                .child(div().size(px(14.)).when(choice.current, |mark| {
+                    mark.child(icon(IconName::Check, 14.))
+                }))
+                .child(choice.label)
+        })
+        .collect();
     div()
         .mt(px(12.))
         .flex()

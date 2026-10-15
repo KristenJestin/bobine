@@ -1,19 +1,38 @@
 //! A film's page, after Infuse: the backdrop fills the top; on the left the title, the facts, the
 //! synopsis, the play buttons and the chips that choose the version and the tracks. Below, rows
-//! aligned with the text: the cast, the collection, similar titles. The page scrolls.
+//! aligned with the text: the cast, the collection, similar titles. A row reaches the window's
+//! edges: its first item lines up with the text, and it scrolls under the edges. The page
+//! scrolls.
+
+use std::cell::Cell;
+use std::rc::Rc;
+use std::time::Instant;
 
 use bobine::provider::{CastMember, Film, FilmDetail};
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    AnyElement, Context, Div, FontWeight, IntoElement, SharedString, Stateful, Window, anchored,
-    deferred, div, linear_color_stop, linear_gradient, px, rgba,
+    AnyElement, Bounds, Context, Div, FontWeight, IntoElement, MouseDownEvent, Pixels,
+    ScrollHandle, SharedString, Stateful, Window, anchored, canvas, deferred, div,
+    linear_color_stop, linear_gradient, point, px, rgb, rgba,
 };
 
 use super::{centered, note, picture, poster, progress_bar, row_heading};
 use crate::film_page::{self, Choices, From};
+use crate::icons::{IconName, icon};
 use crate::images;
+use crate::menu;
 use crate::shell::{Chip, Loadable, Shell};
 use crate::theme;
+
+/// The menu open, and the one drawn with how much of it shows (it may be fading out).
+#[derive(Clone, Copy)]
+struct MenuState {
+    open: Option<Chip>,
+    drawn: Option<(Chip, f32)>,
+}
+
+/// Where a chip was last drawn, shared with the shell.
+type ChipBounds = Rc<Cell<Option<Bounds<Pixels>>>>;
 
 /// The left of the text and the rows, after the design.
 const EDGE: f32 = 40.;
@@ -30,15 +49,29 @@ pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -
         (Loadable::Failed(why), _) => return centered().child(note(*why)).into_any_element(),
         _ => return centered().child(note("Chargement…")).into_any_element(),
     };
-    let (menu, error, busy) = (page.menu, page.error, page.busy);
+    let now = Instant::now();
+    let page = shell.details.last_mut().expect("the page read above");
+    let open = page.menus.open();
+    let menu = MenuState {
+        open,
+        drawn: page.menu_fade.follow(open, now),
+    };
+    if page.menu_fade.moving(now) {
+        window.request_animation_frame();
+    }
+    let (error, busy) = (page.error, page.busy);
+    let chips = page.chips.clone();
     let collection = page.collection.clone();
     let scroll = page.scroll.clone();
+    let [cast_scroll, collection_scroll, similar_scroll] = page.rows.clone();
     let height = f32::from(window.viewport_size().height);
 
-    let hero = hero(shell, &detail, &choices, menu, error, busy, height, cx);
+    let hero = hero(
+        shell, &detail, &choices, menu, &chips, error, busy, height, window, cx,
+    );
     let mut rows: Vec<AnyElement> = Vec::new();
     if !detail.cast.is_empty() {
-        rows.push(cast_row(shell, &detail.cast, cx).into_any_element());
+        rows.push(cast_row(shell, &detail.cast, &cast_scroll, cx).into_any_element());
     }
     if let Some(collection) = collection {
         let mut films = collection.others.clone();
@@ -52,6 +85,7 @@ pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -
                 Some(caption),
                 &films,
                 Some(&detail.film),
+                &collection_scroll,
                 cx,
             )
             .into_any_element(),
@@ -59,22 +93,35 @@ pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -
     }
     if !detail.similar.is_empty() {
         rows.push(
-            poster_row(shell, "Titres proches", None, &detail.similar, None, cx).into_any_element(),
+            poster_row(
+                shell,
+                "Titres proches",
+                None,
+                &detail.similar,
+                None,
+                &similar_scroll,
+                cx,
+            )
+            .into_any_element(),
         );
     }
 
+    // The page scrolls itself and its rows by hand (`Shell::scroll_film_page`): GPUI's own
+    // scrolling moves every container under the pointer on both axes at once.
     div()
         .id("film-page")
         .size_full()
-        .overflow_y_scroll()
+        .overflow_hidden()
         .track_scroll(&scroll)
+        .on_scroll_wheel(
+            cx.listener(|shell, event, window, cx| shell.scroll_film_page(event, window, cx)),
+        )
         .child(hero)
         .child(
             div()
                 .flex()
                 .flex_col()
                 .gap(px(40.))
-                .px(px(EDGE))
                 .pt(px(12.))
                 .pb(px(64.))
                 .children(rows),
@@ -90,10 +137,12 @@ fn hero(
     shell: &mut Shell,
     detail: &FilmDetail,
     choices: &Choices,
-    menu: Option<Chip>,
+    menu: MenuState,
+    chips: &[ChipBounds; 3],
     error: Option<&'static str>,
     busy: bool,
     window_height: f32,
+    window: &mut Window,
     cx: &mut Context<Shell>,
 ) -> Div {
     let film = &detail.film;
@@ -103,33 +152,38 @@ fn hero(
     let bg = theme::background();
     let clear = rgba(0x09090a00);
 
+    let play = theme::primary_button(
+        "film-play",
+        Some(IconName::Play),
+        film_page::play_label(film),
+        window,
+        cx,
+    )
+    .on_click(cx.listener(|shell, _, window, cx| shell.play_film(From::Resume, window, cx)));
+    let from_start = film.resume.is_some().then(|| {
+        theme::ghost_button(
+            "film-from-start",
+            Some(IconName::RotateCcw),
+            "Depuis le début",
+            window,
+            cx,
+        )
+        .on_click(cx.listener(|shell, _, window, cx| shell.play_film(From::Beginning, window, cx)))
+    });
+    let watched = theme::ghost_button("film-watched", Some(IconName::Check), "Vu", window, cx)
+        .when(film.watched, |button| {
+            button
+                .text_color(theme::accent())
+                .border_color(theme::accent())
+        })
+        .on_click(cx.listener(|shell, _, _, cx| shell.toggle_watched(cx)));
     let buttons = div()
         .flex()
         .gap(px(10.))
         .when(busy, |row| row.opacity(0.6))
-        .child(
-            theme::primary_button("film-play", film_page::play_label(film)).on_click(
-                cx.listener(|shell, _, window, cx| shell.play_film(From::Resume, window, cx)),
-            ),
-        )
-        .when(film.resume.is_some(), |row| {
-            row.child(
-                theme::ghost_button("film-from-start", "↺ Depuis le début").on_click(
-                    cx.listener(|shell, _, window, cx| {
-                        shell.play_film(From::Beginning, window, cx)
-                    }),
-                ),
-            )
-        })
-        .child(
-            theme::ghost_button("film-watched", "✓ Vu")
-                .when(film.watched, |button| {
-                    button
-                        .text_color(theme::accent())
-                        .border_color(theme::accent())
-                })
-                .on_click(cx.listener(|shell, _, _, cx| shell.toggle_watched(cx))),
-        );
+        .child(play)
+        .children(from_start)
+        .child(watched);
 
     let chips = div()
         .flex()
@@ -153,6 +207,8 @@ fn hero(
                 source.map(film_page::version_label),
                 options,
                 menu,
+                &chips[Chip::Version as usize],
+                window,
                 cx,
             )
         }))
@@ -175,6 +231,8 @@ fn hero(
                 current.map(film_page::audio_label),
                 options,
                 menu,
+                &chips[Chip::Audio as usize],
+                window,
                 cx,
             )
         }))
@@ -202,6 +260,8 @@ fn hero(
                 Some(film_page::subtitle_label(current)),
                 options,
                 menu,
+                &chips[Chip::Subtitle as usize],
+                window,
                 cx,
             )
         }));
@@ -292,17 +352,29 @@ fn hero(
         )
 }
 
-/// `AUDIO  Français · E-AC-3 5.1 ▾`; a click opens the choices under it.
+/// `AUDIO  Français · E-AC-3 5.1 ⌄`; a click opens the choices under it.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one chip's state, read once per frame"
+)]
 fn chip(
     kind: Chip,
     label: &'static str,
     value: Option<String>,
     options: Vec<(Option<i32>, String, bool)>,
-    open: Option<Chip>,
+    menu: MenuState,
+    bounds: &ChipBounds,
+    window: &mut Window,
     cx: &mut Context<Shell>,
 ) -> Div {
-    let button = div()
-        .id(("chip", kind as usize))
+    let drawn = bounds.clone();
+    let open = menu.open == Some(kind);
+    let shades = theme::Shades {
+        rest: rgba(0x141416cc),
+        hover: theme::line(),
+        press: rgb(0x2e2e33),
+    };
+    let button = theme::eased(("chip", kind as usize), shades, window, cx)
         .flex()
         .items_center()
         .gap(px(8.))
@@ -310,14 +382,8 @@ fn chip(
         .py(px(7.))
         .rounded_full()
         .border_1()
-        .border_color(if open == Some(kind) {
-            theme::muted()
-        } else {
-            theme::line()
-        })
-        .bg(rgba(0x141416cc))
+        .border_color(if open { theme::muted() } else { theme::line() })
         .cursor_pointer()
-        .hover(|style| style.bg(theme::line()))
         .on_click(cx.listener(move |shell, _, _, cx| shell.toggle_menu(kind, cx)))
         .child(
             div()
@@ -332,80 +398,105 @@ fn chip(
                 .font_weight(FontWeight::SEMIBOLD)
                 .child(value.unwrap_or_else(|| "—".into())),
         )
-        .child(
-            div()
-                .text_size(px(13.))
-                .text_color(theme::muted())
-                .child("▾"),
-        );
+        .child(icon(IconName::ChevronDown, 14.).text_color(theme::muted()));
+    let under = bounds
+        .get()
+        .zip(menu.drawn.filter(|(drawn, _)| *drawn == kind));
     div()
         .relative()
         .child(button)
-        .when(open == Some(kind), |chip| {
-            chip.child(menu(kind, options, cx))
-        })
+        // Where the chip is drawn, for its menu.
+        .child(
+            canvas(move |at, _, _| drawn.set(Some(at)), |_, _, _, _| {})
+                .absolute()
+                .inset_0(),
+        )
+        .children(
+            under
+                .map(|(chip, (_, shown))| self::menu(chip, shown, open, kind, options, window, cx)),
+        )
 }
 
-/// The choices of a chip, over the rest of the page.
+/// The choices of a chip, over the rest of the page, `shown` of the way in. Only an open menu
+/// answers the mouse: one fading out lets clicks through.
 fn menu(
+    chip: Bounds<Pixels>,
+    shown: f32,
+    open: bool,
     kind: Chip,
     options: Vec<(Option<i32>, String, bool)>,
+    window: &mut Window,
     cx: &mut Context<Shell>,
 ) -> impl IntoElement {
-    let lines = options
+    let lines: Vec<Stateful<Div>> = options
         .into_iter()
         .enumerate()
         .map(|(index, (value, label, current))| {
-            div()
-                .id(("choice", index))
+            theme::eased(("choice", index), theme::Shades::line(), window, cx)
                 .flex()
                 .items_center()
                 .gap(px(10.))
+                .flex_none()
+                .h(px(menu::LINE))
                 .px(px(12.))
-                .py(px(8.))
                 .rounded(px(7.))
                 .text_size(px(13.))
                 .cursor_pointer()
-                .hover(|style| style.bg(theme::line()))
-                .on_click(cx.listener(move |shell, _, _, cx| shell.choose(kind, value, cx)))
+                .when(open, |line| {
+                    line.on_click(cx.listener(move |shell, _, _, cx| shell.choose(kind, value, cx)))
+                })
                 .child(
                     div()
-                        .w(px(14.))
+                        .size(px(14.))
                         .text_color(theme::accent())
-                        .child(if current { "✓" } else { "" }),
+                        .when(current, |mark| mark.child(icon(IconName::Check, 14.))),
                 )
                 .child(label)
-        });
+        })
+        .collect();
+    let wanted = menu::height(lines.len());
+    let window_height = f32::from(window.viewport_size().height);
+    let (at, height) = menu::place(chip, wanted, window_height);
+    // It comes into place from a little nearer its chip.
+    let toward_chip = if at.y > chip.top() { -8. } else { 8. };
+    let rise = point(px(0.), px(toward_chip * (1. - shown)));
     deferred(
-        anchored().snap_to_window().child(
-            div()
-                .id("chip-menu")
-                .mt(px(40.))
-                .min_w(px(240.))
-                .p(px(6.))
-                .flex()
-                .flex_col()
-                .rounded(px(theme::RADIUS_LARGE))
-                .border_1()
-                .border_color(theme::line())
-                .bg(theme::panel())
-                .occlude()
-                .on_mouse_down_out(cx.listener(move |shell, _, _, cx| {
-                    if shell
-                        .details
-                        .last()
-                        .is_some_and(|page| page.menu == Some(kind))
-                    {
-                        shell.toggle_menu(kind, cx);
-                    }
-                }))
-                .children(lines),
-        ),
+        anchored()
+            .position(at + rise)
+            .snap_to_window_with_margin(px(menu::MARGIN))
+            .child(
+                div()
+                    .id("chip-menu")
+                    .opacity(shown)
+                    .h(px(height))
+                    .overflow_y_scroll()
+                    .min_w(px(240.))
+                    .p(px(6.))
+                    .flex()
+                    .flex_col()
+                    .rounded(px(theme::RADIUS_LARGE))
+                    .border_1()
+                    .border_color(theme::line())
+                    .bg(theme::panel())
+                    .when(open, |menu| {
+                        menu.occlude().on_mouse_down_out(cx.listener(
+                            |shell, event: &MouseDownEvent, _, cx| {
+                                shell.pressed_outside_menu(event.position, cx);
+                            },
+                        ))
+                    })
+                    .children(lines),
+            ),
     )
 }
 
 /// Round photos, the name and the role.
-fn cast_row(shell: &mut Shell, cast: &[CastMember], cx: &mut Context<Shell>) -> Div {
+fn cast_row(
+    shell: &mut Shell,
+    cast: &[CastMember],
+    scroll: &ScrollHandle,
+    cx: &mut Context<Shell>,
+) -> Div {
     let people: Vec<Stateful<Div>> = cast
         .iter()
         .enumerate()
@@ -425,7 +516,15 @@ fn cast_row(shell: &mut Shell, cast: &[CastMember], cx: &mut Context<Shell>) -> 
                         .size(px(PHOTO))
                         .rounded_full()
                         .overflow_hidden()
-                        .bg(theme::panel())
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .bg(theme::line())
+                        .text_size(px(26.))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(theme::muted())
+                        // Under the photo while it comes, alone when there is none.
+                        .child(film_page::initials(&person.name))
                         .children(picture(photo, PHOTO / 2.)),
                 )
                 .child(
@@ -454,13 +553,15 @@ fn cast_row(shell: &mut Shell, cast: &[CastMember], cx: &mut Context<Shell>) -> 
         .flex()
         .flex_col()
         .gap(px(16.))
-        .child(row_heading("Distribution"))
+        .child(row_heading("Distribution").px(px(EDGE)))
         .child(
             div()
                 .id("cast-row")
                 .flex()
                 .gap(px(12.))
-                .overflow_x_scroll()
+                .px(px(EDGE))
+                .overflow_hidden()
+                .track_scroll(scroll)
                 .children(people),
         )
 }
@@ -472,6 +573,7 @@ fn poster_row(
     caption: Option<String>,
     films: &[Film],
     current: Option<&Film>,
+    scroll: &ScrollHandle,
     cx: &mut Context<Shell>,
 ) -> Div {
     let posters: Vec<Stateful<Div>> = films
@@ -492,6 +594,7 @@ fn poster_row(
                 .flex()
                 .items_baseline()
                 .gap(px(12.))
+                .px(px(EDGE))
                 .child(row_heading(title.to_string()))
                 .children(caption.map(|caption| {
                     div()
@@ -505,7 +608,9 @@ fn poster_row(
                 .id(format!("{title}-row"))
                 .flex()
                 .gap(px(GAP))
-                .overflow_x_scroll()
+                .px(px(EDGE))
+                .overflow_hidden()
+                .track_scroll(scroll)
                 .children(posters),
         )
 }

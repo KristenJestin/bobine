@@ -2,14 +2,14 @@
 //! version), the user, the password. Enter signs in; Tab goes to the next field.
 
 use gpui_kit::prelude::*;
-use gpui_kit::{Context, Div, Focusable, FontWeight, IntoElement, KeyDownEvent, div, px};
+use gpui_kit::{Context, Div, Focusable, FontWeight, IntoElement, KeyDownEvent, Window, div, px};
 
 use super::centered;
 use crate::chrome::logo;
 use crate::shell::Shell;
 use crate::theme;
 
-pub fn render(shell: &mut Shell, cx: &mut Context<Shell>) -> impl IntoElement {
+pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -> impl IntoElement {
     let Some(form) = &shell.login else {
         return centered();
     };
@@ -101,7 +101,7 @@ pub fn render(shell: &mut Shell, cx: &mut Context<Shell>) -> impl IntoElement {
                     .child(why)
             }))
             .child(
-                theme::primary_button("login-submit", label)
+                theme::primary_button("login-submit", None, label, window, cx)
                     .flex()
                     .justify_center()
                     .when(form.busy, |button| button.opacity(0.6))

@@ -1,6 +1,8 @@
 //! What the screens show and how it comes from the server. Every call to the server runs on the
 //! background executor; its answer comes back to the window's thread, which updates the page.
 
+use std::cell::Cell;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -11,8 +13,8 @@ use bobine::provider::{
 };
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    Context, Entity, Image, RenderImage, ScrollHandle, Subscription, Task, UniformListScrollHandle,
-    Window,
+    Bounds, Context, Entity, Image, Pixels, Point, RenderImage, ScrollHandle, ScrollWheelEvent,
+    Subscription, Task, TouchPhase, UniformListScrollHandle, Window, point, px,
 };
 
 use super::{Film as Playing, Shell};
@@ -20,9 +22,12 @@ use crate::film_page::{self, Choices, From, Plan};
 use crate::grid::{self, Grid};
 use crate::images::{self, Key};
 use crate::input::TextInput;
+use crate::menu::Menus;
+use crate::motion::{self, Presence};
 use crate::navigation::{NavEntry, Screen};
 use crate::player::libmpv::Libmpv;
 use crate::reports::Reporting;
+use crate::scroll::{self, Move, Phase, Wheel};
 use crate::start::{self, Start};
 
 /// How long the address must stay unchanged before the server is asked who it is.
@@ -67,14 +72,25 @@ pub enum Chip {
     Subtitle,
 }
 
+impl Chip {
+    pub const ALL: [Chip; 3] = [Chip::Version, Chip::Audio, Chip::Subtitle];
+}
+
 pub struct DetailPage {
     pub id: ItemId,
     pub detail: Loadable<FilmDetail>,
     pub choices: Option<Choices>,
     /// Hidden while unknown, when the film is in none, or when the lookup failed.
     pub collection: Option<Collection>,
-    pub menu: Option<Chip>,
+    pub menus: Menus<Chip>,
+    /// The menu drawn, kept while it fades out.
+    pub menu_fade: Presence<Chip>,
+    /// Where each chip was last drawn, so its menu opens under it.
+    pub chips: [Rc<Cell<Option<Bounds<Pixels>>>>; 3],
     pub scroll: ScrollHandle,
+    /// The rows that scroll sideways: the cast, the collection, similar titles.
+    pub rows: [ScrollHandle; 3],
+    gesture: scroll::Gesture,
     /// What went wrong with the last button.
     pub error: Option<&'static str>,
     pub busy: bool,
@@ -368,8 +384,12 @@ impl Shell {
             detail: Loadable::Loading,
             choices: None,
             collection: None,
-            menu: None,
+            menus: Menus::default(),
+            menu_fade: Presence::new(motion::quick()),
+            chips: Default::default(),
             scroll: ScrollHandle::new(),
+            rows: Default::default(),
+            gesture: Default::default(),
             error: None,
             busy: false,
         });
@@ -439,7 +459,7 @@ impl Shell {
         let Some(page) = self.details.last_mut() else {
             return;
         };
-        page.menu = None;
+        page.menus.close();
         let (Loadable::Ready(detail), Some(choices)) = (&page.detail, &mut page.choices) else {
             return;
         };
@@ -451,11 +471,81 @@ impl Shell {
         cx.notify();
     }
 
-    pub fn toggle_menu(&mut self, chip: Chip, cx: &mut Context<Self>) {
-        if let Some(page) = self.details.last_mut() {
-            page.menu = (page.menu != Some(chip)).then_some(chip);
+    /// The wheel or the touchpad over the film page: the page goes up and down, the row under
+    /// the pointer sideways, never both.
+    pub fn scroll_film_page(
+        &mut self,
+        event: &ScrollWheelEvent,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(page) = self.details.last_mut() else {
+            return;
+        };
+        let delta = event.delta.pixel_delta(window.line_height());
+        let wheel = Wheel {
+            dx: delta.x.into(),
+            dy: delta.y.into(),
+            precise: event.delta.precise(),
+            shift: event.modifiers.shift,
+            phase: match event.touch_phase {
+                TouchPhase::Started => Phase::Started,
+                TouchPhase::Moved => Phase::Moved,
+                TouchPhase::Ended | TouchPhase::Cancelled => Phase::Ended,
+            },
+        };
+        let row = page
+            .rows
+            .iter()
+            .position(|row| row.bounds().contains(&event.position));
+        let (handle, delta) = match page.gesture.route(wheel, row, Instant::now()) {
+            Some(Move::Page(dy)) => (&page.scroll, point(px(0.), px(dy))),
+            Some(Move::Row(row, dx)) => (&page.rows[row], point(px(dx), px(0.))),
+            None => return,
+        };
+        let (offset, max) = (handle.offset(), handle.max_offset());
+        let to = point(
+            px(scroll::moved(offset.x.into(), delta.x.into(), max.x.into())),
+            px(scroll::moved(offset.y.into(), delta.y.into(), max.y.into())),
+        );
+        if to != offset {
+            handle.set_offset(to);
+            // A menu stays under its chip only while the page stands still.
+            page.menus.close();
             cx.notify();
         }
+    }
+
+    pub fn toggle_menu(&mut self, chip: Chip, cx: &mut Context<Self>) {
+        if let Some(page) = self.details.last_mut() {
+            page.menus.toggle(chip);
+            cx.notify();
+        }
+    }
+
+    /// The mouse went down outside the open menu, maybe on a chip.
+    pub fn pressed_outside_menu(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
+        if let Some(page) = self.details.last_mut() {
+            let on = Chip::ALL.into_iter().find(|chip| {
+                page.chips[*chip as usize]
+                    .get()
+                    .is_some_and(|bounds| bounds.contains(&position))
+            });
+            page.menus.pressed_outside(on);
+            cx.notify();
+        }
+    }
+
+    /// Escape closes the open menu, else goes back.
+    pub fn escape(&mut self, cx: &mut Context<Self>) {
+        if let Some(page) = self.details.last_mut()
+            && self.navigator.current() == Screen::FilmDetail
+            && page.menus.escape()
+        {
+            cx.notify();
+            return;
+        }
+        self.go_back(cx);
     }
 
     pub fn toggle_watched(&mut self, cx: &mut Context<Self>) {
@@ -643,7 +733,34 @@ impl Shell {
         }
         self.images.want(&key, image, Instant::now());
         self.fetch_images(cx);
+        // A failed image waiting for its retry is drawn here, with nothing else to end a fetch.
+        self.wake_for_image_retries(cx);
         None
+    }
+
+    /// A failed image still on screen is asked again once its wait is over: the window is woken
+    /// then, since an idle window does not redraw by itself.
+    fn wake_for_image_retries(&mut self, cx: &mut Context<Self>) {
+        let Some(at) = self.images.next_retry() else {
+            return;
+        };
+        if self
+            .image_wake
+            .as_ref()
+            .is_some_and(|(planned, _)| *planned <= at && *planned > Instant::now())
+        {
+            return;
+        }
+        let wait = at.saturating_duration_since(Instant::now());
+        let task = cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(wait).await;
+            this.update(cx, |shell, cx| {
+                shell.image_wake = None;
+                cx.notify();
+            })
+            .ok();
+        });
+        self.image_wake = Some((at, task));
     }
 
     /// Starts the fetches that may, up to the cap; each one that ends starts the next.
@@ -672,6 +789,7 @@ impl Shell {
                         }
                     }
                     shell.fetch_images(cx);
+                    shell.wake_for_image_retries(cx);
                 },
             );
         }

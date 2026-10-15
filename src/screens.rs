@@ -15,6 +15,7 @@ use gpui_kit::{
 };
 
 use crate::film_page;
+use crate::icons::{IconName, icon};
 use crate::images;
 use crate::navigation::Screen;
 use crate::shell::Shell;
@@ -27,7 +28,7 @@ pub fn render(
     cx: &mut Context<Shell>,
 ) -> AnyElement {
     match screen {
-        Screen::Login => login::render(shell, cx).into_any_element(),
+        Screen::Login => login::render(shell, window, cx).into_any_element(),
         Screen::Home => home::render(shell, cx).into_any_element(),
         Screen::Library => library::render(shell, window, cx).into_any_element(),
         Screen::FilmDetail => film_detail::render(shell, window, cx).into_any_element(),
@@ -166,9 +167,7 @@ fn poster(
                             .justify_center()
                             .bg(theme::accent())
                             .text_color(theme::background())
-                            .text_size(px(12.))
-                            .font_weight(FontWeight::BOLD)
-                            .child("✓"),
+                            .child(icon(IconName::Check, 13.)),
                     )
                 }),
         )

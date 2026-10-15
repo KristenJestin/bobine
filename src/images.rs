@@ -15,8 +15,13 @@ const BUDGET: usize = 256 << 20;
 /// At most this many images are fetched at once: fast scrolling must not queue hundreds of
 /// blocking requests on the background pool ahead of a click on a film.
 const MAX_FETCHES: usize = 6;
-/// An image that failed is not asked again before this.
-const RETRY_AFTER: Duration = Duration::from_secs(30);
+/// An image that failed is asked again after this, then after twice as long each time it fails
+/// again, up to `LONGEST_WAIT`.
+const RETRY_AFTER: Duration = Duration::from_secs(5);
+const LONGEST_WAIT: Duration = Duration::from_secs(60);
+/// A failure not drawn for this long is forgotten, so the map follows what is browsed, not
+/// everything ever browsed.
+const FORGET_AFTER: Duration = Duration::from_secs(300);
 
 /// The widths images are asked at, whatever the window's size, so one image serves every size.
 pub const POSTER: u32 = 300;
@@ -106,6 +111,15 @@ impl Key {
     }
 }
 
+struct Failure {
+    at: Instant,
+    wait: Duration,
+    /// The last draw that wanted it.
+    drawn: u64,
+    /// When that draw was.
+    seen: Instant,
+}
+
 pub struct Images {
     pub cache: Lru<Key, Arc<RenderImage>>,
     /// Which draw of the window it is: an image not drawn since the last one is out of view.
@@ -115,8 +129,8 @@ pub struct Images {
     /// Drawn and waiting for a free fetch, oldest first, with the draw that last wanted them.
     waiting: VecDeque<Key>,
     wanted: HashMap<Key, (ImageRef, u64)>,
-    /// When the server could not give them: not asked again before `RETRY_AFTER`.
-    failed: HashMap<Key, Instant>,
+    /// What the server could not give: asked again once their wait is over.
+    failed: HashMap<Key, Failure>,
 }
 
 impl Default for Images {
@@ -143,11 +157,12 @@ impl Images {
         if self.in_flight.contains(key) {
             return;
         }
-        if let Some(&at) = self.failed.get(key) {
-            if now < at + RETRY_AFTER {
+        if let Some(failure) = self.failed.get_mut(key) {
+            failure.drawn = self.frame;
+            failure.seen = now;
+            if now < failure.at + failure.wait {
                 return;
             }
-            self.failed.remove(key);
         }
         match self.wanted.get_mut(key) {
             Some(wanted) => wanted.1 = self.frame,
@@ -174,12 +189,44 @@ impl Images {
         None
     }
 
+    /// When a failed image drawn at the last draw may be asked again. Nothing else redraws an
+    /// idle window: the caller wakes it then, or the image would never come.
+    pub fn next_retry(&self) -> Option<Instant> {
+        self.failed
+            .iter()
+            .filter(|(key, failure)| {
+                failure.drawn == self.frame
+                    && !self.in_flight.contains(*key)
+                    && !self.wanted.contains_key(*key)
+            })
+            .map(|(_, failure)| failure.at + failure.wait)
+            .min()
+    }
+
     /// The fetch of `key` ended, with an image or not.
     pub fn fetched(&mut self, key: &Key, found: bool, now: Instant) {
         self.in_flight.remove(key);
-        if !found {
-            self.failed.insert(key.clone(), now);
+        if found {
+            self.failed.remove(key);
+            return;
         }
+        let frame = self.frame;
+        self.failed
+            .retain(|_, failure| now < failure.seen + FORGET_AFTER);
+        self.failed
+            .entry(key.clone())
+            .and_modify(|failure| {
+                failure.wait = (failure.wait * 2).min(LONGEST_WAIT);
+                failure.at = now;
+                failure.drawn = frame;
+                failure.seen = now;
+            })
+            .or_insert(Failure {
+                at: now,
+                wait: RETRY_AFTER,
+                drawn: frame,
+                seen: now,
+            });
     }
 }
 
@@ -302,17 +349,86 @@ mod tests {
     }
 
     #[test]
-    fn an_image_that_failed_is_asked_again_only_after_thirty_seconds() {
+    fn an_image_that_failed_is_not_asked_again_before_its_delay() {
         let mut images = Images::default();
         let now = Instant::now();
         assert_eq!(draw(&mut images, &["a"], now), ["a"]);
         images.fetched(&image("a").0, false, now);
-        // The renders that follow, for half a minute.
-        for second in 1..30 {
-            let later = now + Duration::from_secs(second);
+        // The renders that follow, until the delay is over.
+        for tenth in 1..50 {
+            let later = now + Duration::from_millis(100 * tenth);
             assert_eq!(draw(&mut images, &["a"], later), Vec::<String>::new());
         }
         assert_eq!(draw(&mut images, &["a"], now + RETRY_AFTER), ["a"]);
+    }
+
+    #[test]
+    fn a_failed_image_still_drawn_says_when_to_ask_it_again() {
+        let mut images = Images::default();
+        let now = Instant::now();
+        draw(&mut images, &["a", "b"], now);
+        images.fetched(&image("a").0, false, now);
+        // Nothing redraws the window by itself: it must be woken up for the retry.
+        draw(&mut images, &["a", "b"], now);
+        assert_eq!(images.next_retry(), Some(now + RETRY_AFTER));
+        assert_eq!(draw(&mut images, &["a", "b"], now + RETRY_AFTER), ["a"]);
+    }
+
+    #[test]
+    fn a_failed_image_no_longer_drawn_wakes_nothing() {
+        let mut images = Images::default();
+        let now = Instant::now();
+        draw(&mut images, &["a"], now);
+        images.fetched(&image("a").0, false, now);
+        // The page was left.
+        draw(&mut images, &["b"], now);
+        assert_eq!(images.next_retry(), None);
+    }
+
+    #[test]
+    fn coming_back_to_a_page_of_cached_images_still_wakes_for_its_failed_one() {
+        let mut images = Images::default();
+        let now = Instant::now();
+        draw(&mut images, &["a"], now);
+        images.fetched(&image("a").0, false, now);
+        // The page was left, then comes back: "a" is the only image that is not cached, so it
+        // is the only one to want anything, and it must say when to be asked again.
+        draw(&mut images, &["b"], now + Duration::from_secs(1));
+        draw(&mut images, &[], now + Duration::from_secs(2));
+        draw(&mut images, &["a"], now + Duration::from_secs(3));
+        assert_eq!(images.next_retry(), Some(now + RETRY_AFTER));
+    }
+
+    #[test]
+    fn a_failure_not_drawn_for_a_long_while_is_forgotten() {
+        let mut images = Images::default();
+        let now = Instant::now();
+        draw(&mut images, &["a", "b"], now);
+        images.fetched(&image("a").0, false, now);
+        images.fetched(&image("b").0, false, now);
+        // "b" stays on screen; "a" is long gone when another image fails.
+        let later = now + FORGET_AFTER + Duration::from_secs(1);
+        draw(&mut images, &["b", "c"], later);
+        images.fetched(&image("c").0, false, later);
+        assert_eq!(images.failed.len(), 2);
+        assert!(!images.failed.contains_key(&image("a").0));
+    }
+
+    #[test]
+    fn an_image_failing_again_waits_longer_each_time() {
+        let mut images = Images::default();
+        let mut now = Instant::now();
+        draw(&mut images, &["a"], now);
+        let mut waits = Vec::new();
+        for _ in 0..6 {
+            images.fetched(&image("a").0, false, now);
+            draw(&mut images, &["a"], now);
+            let next = images.next_retry().unwrap();
+            waits.push(next.duration_since(now).as_secs());
+            now = next;
+            assert_eq!(draw(&mut images, &["a"], now), ["a"]);
+        }
+        assert_eq!(waits, [5, 10, 20, 40, 60, 60]);
     }
 
     #[test]
