@@ -164,6 +164,8 @@ impl Session {
                 PlayerEvent::Tracks(tracks) => self.tracks = tracks,
                 PlayerEvent::EndOfFile => self.ended = true,
                 PlayerEvent::Error(error) => self.error = Some(error),
+                // The film plays; a refused subtitle is simply not in the panel.
+                PlayerEvent::Loaded | PlayerEvent::SubtitleFailed(_) => {}
             }
         }
         // Told every time: the display can only act once the pointer is over the window.

@@ -2,7 +2,7 @@
 //! implements (`super::libmpv`) and the tests fake: the mapping from the port to mpv's commands
 //! and properties is tested without mpv.
 
-use super::{Player, PlayerError, PlayerEvent, Seek, Stream, TrackKind, tracks};
+use super::{FirstSubtitle, Media, Player, PlayerError, PlayerEvent, Seek, TrackKind, tracks};
 
 /// The properties the player follows; mpv says when one changes.
 pub const OBSERVED: [&str; 6] = ["time-pos", "duration", "pause", "track-list", "aid", "sid"];
@@ -11,6 +11,8 @@ pub const OBSERVED: [&str; 6] = ["time-pos", "duration", "pause", "track-list", 
 pub enum MpvEvent {
     /// One of `OBSERVED` changed: its value is read again.
     Changed(String),
+    /// The file is open: its tracks exist.
+    FileLoaded,
     EndFile(EndReason),
 }
 
@@ -50,11 +52,55 @@ impl<C: MpvClient> MpvClient for std::sync::Arc<C> {
 
 pub struct MpvPlayer<C: MpvClient> {
     client: C,
+    /// What `load` asked that mpv only takes once the file is open.
+    on_loaded: Option<OnLoaded>,
+}
+
+/// Owned, as it waits for mpv: the addresses may carry a token, so nothing here is printed.
+struct OnLoaded {
+    subtitles: Vec<(String, String, Option<String>)>,
+    audio: Option<i64>,
+    subtitle: FirstSubtitle,
 }
 
 impl<C: MpvClient> MpvPlayer<C> {
     pub fn new(client: C) -> Self {
-        Self { client }
+        Self {
+            client,
+            on_loaded: None,
+        }
+    }
+
+    /// The film is open: its external subtitles go in, then the chosen tracks. Returns what
+    /// mpv refused.
+    fn apply_on_loaded(&mut self) -> Vec<PlayerEvent> {
+        let Some(on_loaded) = self.on_loaded.take() else {
+            return Vec::new();
+        };
+        let mut failed = Vec::new();
+        for (index, (url, title, language)) in on_loaded.subtitles.iter().enumerate() {
+            let flag = if on_loaded.subtitle == FirstSubtitle::External(index) {
+                "select"
+            } else {
+                "auto"
+            };
+            let language = language.as_deref().unwrap_or_default();
+            if let Err(error) = self
+                .client
+                .command(&["sub-add", url, flag, title, language])
+            {
+                failed.push(PlayerEvent::SubtitleFailed(error));
+            }
+        }
+        if let Some(id) = on_loaded.audio {
+            self.select_audio(Some(id));
+        }
+        match on_loaded.subtitle {
+            FirstSubtitle::Off => self.select_subtitle(None),
+            FirstSubtitle::Track(id) => self.select_subtitle(Some(id)),
+            FirstSubtitle::Default | FirstSubtitle::External(_) => {}
+        }
+        failed
     }
 
     #[cfg(test)]
@@ -68,7 +114,28 @@ impl<C: MpvClient> MpvPlayer<C> {
 }
 
 impl<C: MpvClient> Player for MpvPlayer<C> {
-    fn load(&mut self, stream: Stream<'_>, start: f64) -> Result<(), PlayerError> {
+    fn load(&mut self, media: Media<'_>) -> Result<(), PlayerError> {
+        let Media {
+            stream,
+            start,
+            audio,
+            subtitle,
+            external_subtitles,
+        } = media;
+        self.on_loaded = Some(OnLoaded {
+            subtitles: external_subtitles
+                .iter()
+                .map(|sub| {
+                    (
+                        sub.url.to_string(),
+                        sub.title.to_string(),
+                        sub.language.map(str::to_string),
+                    )
+                })
+                .collect(),
+            audio,
+            subtitle,
+        });
         self.client
             .command(&["change-list", "http-header-fields", "clr", ""])?;
         for (name, value) in stream.headers {
@@ -144,6 +211,10 @@ impl<C: MpvClient> Player for MpvPlayer<C> {
                             .collect(),
                     )),
                 },
+                MpvEvent::FileLoaded => {
+                    events.extend(self.apply_on_loaded());
+                    Some(PlayerEvent::Loaded)
+                }
                 MpvEvent::EndFile(EndReason::Eof) => Some(PlayerEvent::EndOfFile),
                 MpvEvent::EndFile(EndReason::Error(reason)) => {
                     Some(PlayerEvent::Error(PlayerError(reason)))
@@ -170,6 +241,7 @@ mod tests {
     use std::collections::{HashMap, VecDeque};
 
     use super::*;
+    use crate::player::{ExternalSubtitle, Stream};
 
     /// An mpv that plays nothing: it keeps what it is told, answers from a table and hands out
     /// queued events.
@@ -178,6 +250,8 @@ mod tests {
         log: RefCell<Vec<Vec<String>>>,
         properties: RefCell<HashMap<String, String>>,
         events: RefCell<VecDeque<MpvEvent>>,
+        /// Commands it refuses, by name.
+        refused: RefCell<Vec<String>>,
     }
 
     impl FakeMpv {
@@ -204,6 +278,9 @@ mod tests {
             self.log
                 .borrow_mut()
                 .push(args.iter().map(|arg| arg.to_string()).collect());
+            if self.refused.borrow().iter().any(|name| name == args[0]) {
+                return Err(PlayerError("error running command".into()));
+            }
             Ok(())
         }
         fn get(&self, name: &str) -> Option<String> {
@@ -226,6 +303,153 @@ mod tests {
         MpvEvent::Changed(name.into())
     }
 
+    fn media<'a>(stream: Stream<'a>, start: f64) -> Media<'a> {
+        Media {
+            stream,
+            start,
+            audio: None,
+            subtitle: FirstSubtitle::Default,
+            external_subtitles: &[],
+        }
+    }
+
+    const FILM: Stream<'static> = Stream {
+        url: "http://media.example/v.mkv",
+        headers: &[],
+    };
+
+    const SUBTITLES: [ExternalSubtitle<'static>; 2] = [
+        ExternalSubtitle {
+            url: "http://media.example/fr.srt?ApiKey=k",
+            title: "Français",
+            language: Some("fre"),
+        },
+        ExternalSubtitle {
+            url: "http://media.example/en.srt?ApiKey=k",
+            title: "English",
+            language: Some("eng"),
+        },
+    ];
+
+    #[test]
+    fn the_loaded_file_is_reported() {
+        let mpv = FakeMpv::with(&[], &[MpvEvent::FileLoaded]);
+        let mut player = MpvPlayer::new(mpv);
+        player.load(media(FILM, 0.)).unwrap();
+        assert_eq!(player.events(), [PlayerEvent::Loaded]);
+    }
+
+    #[test]
+    fn the_external_subtitles_and_the_chosen_tracks_wait_for_the_file_to_be_loaded() {
+        let mut player = MpvPlayer::new(FakeMpv::default());
+        player
+            .load(Media {
+                audio: Some(2),
+                subtitle: FirstSubtitle::External(1),
+                external_subtitles: &SUBTITLES,
+                ..media(FILM, 0.)
+            })
+            .unwrap();
+        let loaded = log(&player).len();
+        // mpv refuses `sub-add` before the file is open.
+        assert_eq!(player.events(), []);
+        assert_eq!(log(&player).len(), loaded);
+
+        player
+            .client()
+            .events
+            .borrow_mut()
+            .push_back(MpvEvent::FileLoaded);
+        assert_eq!(player.events(), [PlayerEvent::Loaded]);
+        assert_eq!(
+            log(&player)[loaded..],
+            [
+                line(&[
+                    "sub-add",
+                    "http://media.example/fr.srt?ApiKey=k",
+                    "auto",
+                    "Français",
+                    "fre"
+                ]),
+                line(&[
+                    "sub-add",
+                    "http://media.example/en.srt?ApiKey=k",
+                    "select",
+                    "English",
+                    "eng"
+                ]),
+                line(&["set", "aid", "2"]),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_chosen_embedded_subtitle_or_none_is_set_once_the_file_is_loaded() {
+        for (subtitle, sid) in [(FirstSubtitle::Track(3), "3"), (FirstSubtitle::Off, "no")] {
+            let mpv = FakeMpv::with(&[], &[MpvEvent::FileLoaded]);
+            let mut player = MpvPlayer::new(mpv);
+            player
+                .load(Media {
+                    subtitle,
+                    external_subtitles: &SUBTITLES[..1],
+                    ..media(FILM, 0.)
+                })
+                .unwrap();
+            player.events();
+            assert_eq!(log(&player).last(), Some(&line(&["set", "sid", sid])));
+        }
+    }
+
+    #[test]
+    fn what_is_applied_once_loaded_is_not_applied_again_on_the_next_file() {
+        let mpv = FakeMpv::with(&[], &[MpvEvent::FileLoaded, MpvEvent::FileLoaded]);
+        let mut player = MpvPlayer::new(mpv);
+        player
+            .load(Media {
+                external_subtitles: &SUBTITLES[..1],
+                ..media(FILM, 0.)
+            })
+            .unwrap();
+        player.events();
+        let added = log(&player)
+            .iter()
+            .filter(|line| line[0] == "sub-add")
+            .count();
+        assert_eq!(added, 1);
+    }
+
+    #[test]
+    fn a_refused_external_subtitle_is_reported_and_the_film_goes_on() {
+        let mpv = FakeMpv::with(&[], &[MpvEvent::FileLoaded]);
+        mpv.refused.borrow_mut().push("sub-add".into());
+        let mut player = MpvPlayer::new(mpv);
+        player
+            .load(Media {
+                external_subtitles: &SUBTITLES[..1],
+                ..media(FILM, 0.)
+            })
+            .unwrap();
+        assert_eq!(
+            player.events(),
+            [
+                PlayerEvent::SubtitleFailed(PlayerError("error running command".into())),
+                PlayerEvent::Loaded,
+            ]
+        );
+    }
+
+    #[test]
+    fn adding_a_subtitle_says_when_mpv_refuses_it() {
+        let mpv = FakeMpv::default();
+        mpv.refused.borrow_mut().push("sub-add".into());
+        let mut player = MpvPlayer::new(mpv);
+        assert!(
+            player
+                .add_subtitle("http://media.example/s.srt", "Français", None)
+                .is_err()
+        );
+    }
+
     #[test]
     fn loading_a_stream_sends_its_headers_and_starts_at_the_position() {
         let mut player = MpvPlayer::new(FakeMpv::default());
@@ -236,7 +460,7 @@ mod tests {
                 "MediaBrowser Client=\"Bobine\", Token=\"t\"",
             )],
         };
-        player.load(stream, 754.5).unwrap();
+        player.load(media(stream, 754.5)).unwrap();
         assert_eq!(
             log(&player),
             [

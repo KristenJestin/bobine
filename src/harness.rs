@@ -11,9 +11,9 @@ use std::time::{Duration, Instant};
 
 use gpui_kit::{App, Entity, Window};
 
-use crate::player::Stream;
 use crate::player::libmpv::Libmpv;
 use crate::player::mpv::MpvClient;
+use crate::player::{ExternalSubtitle, FirstSubtitle, Media, Stream};
 use crate::shell::{Film, Shell};
 
 /// `/proc` counts CPU time in USER_HZ ticks, 100 a second on every Linux architecture.
@@ -98,7 +98,7 @@ impl Snapshot {
 
 /// Starts the harness when the command line asks for it; else the application starts as usual.
 pub fn start(shell: &Entity<Shell>, window: &mut Window, cx: &mut App) {
-    let mut args = match parse(std::env::args().skip(1)) {
+    let args = match parse(std::env::args().skip(1)) {
         Ok(Some(args)) => args,
         Ok(None) => return,
         Err(error) => {
@@ -120,21 +120,31 @@ pub fn start(shell: &Entity<Shell>, window: &mut Window, cx: &mut App) {
             .unwrap_or_else(|| "Film de test".to_string()),
         subtitle: Some("fichier local · lecture directe".to_string()),
     };
-    let stream = Stream {
-        url: &args.file,
-        headers: &[],
+    let external = args.sub.as_deref().map(|url| ExternalSubtitle {
+        url,
+        title: "Sous-titres externes",
+        language: None,
+    });
+    let media = Media {
+        stream: Stream {
+            url: &args.file,
+            headers: &[],
+        },
+        start: 0.,
+        audio: None,
+        subtitle: match (args.subtitle_track, &external) {
+            (Some(id), _) => FirstSubtitle::Track(id),
+            (None, Some(_)) => FirstSubtitle::External(0),
+            (None, None) => FirstSubtitle::Default,
+        },
+        external_subtitles: external.as_slice(),
     };
     let started = shell.update(cx, |shell, cx| {
-        shell.play(mpv.clone(), stream, 0., film, window, cx)
+        shell.play(mpv.clone(), media, film, window, cx)
     });
     if let Err(error) = started {
         eprintln!("bobine harness: {error}");
         std::process::exit(1);
-    }
-    if let Some(sub) = &args.sub
-        && mpv.command(&["sub-add", sub, "select"]).is_err()
-    {
-        eprintln!("bobine harness: mpv refused the subtitle file");
     }
 
     let shell = shell.downgrade();
@@ -152,11 +162,6 @@ pub fn start(shell: &Entity<Shell>, window: &mut Window, cx: &mut App) {
             let done = handle.update(cx, |_, window, cx| {
                 shell
                     .update(cx, |shell, cx| {
-                        if let (Some(id), Some(playback)) =
-                            (args.subtitle_track.take(), &mut shell.playback)
-                        {
-                            playback.session.select_subtitle(Some(id));
-                        }
                         if args.controls {
                             shell.player_mouse_moved(cx);
                         }

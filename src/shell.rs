@@ -14,7 +14,7 @@ use crate::navigation::{Navigator, Screen};
 use crate::player::libmpv::Libmpv;
 use crate::player::mpv::MpvPlayer;
 use crate::player::session::{Session, WindowRequest};
-use crate::player::{Player, Stream};
+use crate::player::{Media, Player};
 use crate::screens;
 use crate::theme;
 use crate::video::Rect;
@@ -55,8 +55,8 @@ impl Shell {
         }
     }
 
-    /// Opens the player on `stream`, from `start` seconds. The stream goes straight to mpv:
-    /// nothing here keeps or prints it.
+    /// Opens the player on `media`. Its addresses go straight to mpv: nothing here keeps or
+    /// prints them.
     #[allow(
         dead_code,
         reason = "the film page calls it once the server's streams reach it; the headless \
@@ -65,15 +65,14 @@ impl Shell {
     pub fn play(
         &mut self,
         mpv: Arc<Libmpv>,
-        stream: Stream<'_>,
-        start: f64,
+        media: Media<'_>,
         film: Film,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
         let display = VideoSurface::new(window, mpv.clone())?;
         let mut player = MpvPlayer::new(mpv);
-        player.load(stream, start).map_err(|e| e.to_string())?;
+        player.load(media).map_err(|e| e.to_string())?;
         let session = Session::new(
             Box::new(player),
             Box::new(display),

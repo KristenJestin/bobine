@@ -116,6 +116,7 @@ impl MpvClient for Libmpv {
                         return Some(MpvEvent::Changed(name.to_string()));
                     }
                 }
+                sys::mpv_event_id_MPV_EVENT_FILE_LOADED => return Some(MpvEvent::FileLoaded),
                 sys::mpv_event_id_MPV_EVENT_END_FILE if !event.data.is_null() => {
                     // SAFETY: an END_FILE event's data is an `mpv_event_end_file`.
                     let end = unsafe { &*(event.data as *const sys::mpv_event_end_file) };

@@ -29,6 +29,45 @@ impl fmt::Debug for Stream<'_> {
     }
 }
 
+/// A subtitle file beside the film. Its address may carry a token: it has no `Debug`.
+#[derive(Clone, Copy)]
+pub struct ExternalSubtitle<'a> {
+    pub url: &'a str,
+    /// What the panel may call it; never the address.
+    pub title: &'a str,
+    /// `fre`, `eng`…
+    pub language: Option<&'a str>,
+}
+
+/// The subtitle shown when the film starts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(
+    dead_code,
+    reason = "chosen by the film page once the server's streams reach it"
+)]
+pub enum FirstSubtitle {
+    /// The file's own choice.
+    Default,
+    Off,
+    /// An embedded track, by its id.
+    Track(i64),
+    /// One of the media's external subtitles, by its index.
+    External(usize),
+}
+
+/// A film to play and how it starts: where, with which audio and subtitles. mpv only takes the
+/// tracks once the file is open, so the player applies them then, and says `Loaded`.
+#[derive(Clone, Copy)]
+pub struct Media<'a> {
+    pub stream: Stream<'a>,
+    /// Seconds from the start.
+    pub start: f64,
+    /// An audio track by its id; `None` keeps the file's default.
+    pub audio: Option<i64>,
+    pub subtitle: FirstSubtitle,
+    pub external_subtitles: &'a [ExternalSubtitle<'a>],
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Seek {
     /// Seconds from where the film is, forward or back.
@@ -72,6 +111,8 @@ impl fmt::Display for PlayerError {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum PlayerEvent {
+    /// The file is open and what `load` chose is applied: the film is playing.
+    Loaded,
     /// Seconds from the start.
     Position(f64),
     Duration(f64),
@@ -80,11 +121,13 @@ pub enum PlayerEvent {
     Tracks(Vec<Track>),
     EndOfFile,
     Error(PlayerError),
+    /// An external subtitle of the media was refused; the film plays on without it.
+    SubtitleFailed(PlayerError),
 }
 
 pub trait Player {
-    /// Starts `stream` at `start` seconds, replacing what was playing.
-    fn load(&mut self, stream: Stream<'_>, start: f64) -> Result<(), PlayerError>;
+    /// Starts `media`, replacing what was playing.
+    fn load(&mut self, media: Media<'_>) -> Result<(), PlayerError>;
     fn set_paused(&mut self, paused: bool);
     fn seek(&mut self, seek: Seek);
     /// 0 to 100.
@@ -151,10 +194,10 @@ pub mod fake {
     }
 
     impl Player for FakePlayer {
-        fn load(&mut self, stream: Stream<'_>, start: f64) -> Result<(), PlayerError> {
+        fn load(&mut self, media: Media<'_>) -> Result<(), PlayerError> {
             self.record(Call::Load {
-                url: stream.url.to_string(),
-                start,
+                url: media.stream.url.to_string(),
+                start: media.start,
             });
             Ok(())
         }
