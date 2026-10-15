@@ -18,6 +18,7 @@ mod player;
 mod reports;
 mod screens;
 mod scroll;
+mod search;
 mod shell;
 mod start;
 mod theme;
