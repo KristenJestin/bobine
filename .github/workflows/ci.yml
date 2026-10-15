@@ -38,8 +38,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       # No GPU, no display and no server here: the suites run against fakes (see AGENTS.md, Testing).
-      - run: sudo apt-get update && sudo apt-get install -y libmpv-dev
+      # GPUI (the window) builds against the system's fonts, Wayland and X11 libraries; it opens no
+      # window here, and Vulkan is only loaded at run time.
+      - run: |
+          sudo apt-get update
+          sudo apt-get install -y libmpv-dev pkg-config libfontconfig-dev libfreetype-dev \
+            libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libx11-xcb-dev libxcb1-dev libvulkan-dev
+      # GPUI takes about ten minutes to build from nothing: keep its build between runs.
+      - uses: Swatinem/rust-cache@v2
       - run: rustup component add rustfmt clippy
       - run: cargo fmt --check
       - run: cargo clippy --all-targets --locked -- -D warnings
       - run: cargo test --locked
+      # The rollback to plain GPUI must keep building (see `fast` in Cargo.toml).
+      - run: cargo check --no-default-features --locked
