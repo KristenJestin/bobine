@@ -11,8 +11,8 @@ use std::time::{Duration, Instant};
 
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    Animation, AnimationExt, Context, FocusHandle, Focusable, IntoElement, KeyDownEvent, Render,
-    SharedString, Subscription, Task, Window, div, px,
+    Animation, AnimationExt, Context, FocusHandle, Focusable, IntoElement, KeyDownEvent, Pixels,
+    Render, SharedString, Size, Subscription, Task, Window, div, px,
 };
 
 use bobine::provider::{Connector, MediaServer};
@@ -61,6 +61,8 @@ pub struct Shell {
     page: (Screen, usize),
     page_turns: u64,
     turned_forward: bool,
+    /// The window's size at the last draw: a chip menu does not follow its chip when it changes.
+    viewport: Size<Pixels>,
     /// When each draw started: the harness reads the frame times of a move from it.
     #[cfg(feature = "harness")]
     pub frames: Vec<Instant>,
@@ -108,6 +110,7 @@ impl Shell {
             page: (Screen::Login, 0),
             page_turns: 0,
             turned_forward: true,
+            viewport: Size::default(),
             #[cfg(feature = "harness")]
             frames: Vec::new(),
             mpv_options: Vec::new(),
@@ -294,6 +297,12 @@ impl Shell {
 impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.images.new_frame();
+        if window.viewport_size() != self.viewport {
+            self.viewport = window.viewport_size();
+            for page in &mut self.details {
+                page.menus.close();
+            }
+        }
         #[cfg(feature = "harness")]
         self.frames.push(Instant::now());
         // Escape needs the focus; a click on a button must not lose it for good. A text field
