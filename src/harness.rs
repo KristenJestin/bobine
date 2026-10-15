@@ -9,7 +9,8 @@
 //! [--fullscreen-at S] [--windowed-at S] [--next FILE --next-at S] [--leave-at S]
 //! [--measure-from S] --quit-at S`
 //!
-//! `bobine --screen login|home|library|detail|detail-rows|detail-cast|playing [--films N]
+//! `bobine --screen login|home|library|detail|detail-rows|detail-cast|playing|series|series-page|
+//! series-rows|up-next [--films N]
 //! [--media FILE] [--image-delay-ms N] [--photos-fail-once] [--scenario menu|scroll|select|panel]
 //! [--slower N] --quit-at S`
 //!
@@ -27,7 +28,7 @@ use gpui_kit::{
     TouchPhase, WeakEntity, Window, point, px,
 };
 
-use crate::fake::{FILM, FakeServer};
+use crate::fake::{FILM, FakeServer, SERIES};
 use crate::film_page::From;
 use crate::navigation::{NavEntry, Screen};
 use crate::shell::Chip;
@@ -235,9 +236,12 @@ fn show_screen(
     let to_film = wants(&["detail", "detail-rows", "detail-cast", "playing"]);
     let (scroll, play) = (wants(&["detail-rows"]), wants(&["playing"]));
     let to_cast = wants(&["detail-cast"]);
+    let to_series = wants(&["series", "series-page", "series-rows", "up-next"]);
+    let to_series_page = wants(&["series-page", "series-rows", "up-next"]);
+    let (series_rows, up_next) = (wants(&["series-rows"]), wants(&["up-next"]));
     let mut done_steps = 0;
     // A scenario starts once the screen is reached: the login at once, a film page after it opened.
-    let ready_after = if to_film { 3 } else { 1 };
+    let ready_after = if to_film || to_series_page { 3 } else { 1 };
     let mut ready_at: Option<f64> = None;
     let mut acts = scenario.map(|name| Acts::new(&name));
     cx.spawn(async move |cx| {
@@ -272,11 +276,17 @@ fn show_screen(
                                 if to_library {
                                     shell.select(NavEntry::Films, cx);
                                 }
+                                if to_series {
+                                    shell.select(NavEntry::Series, cx);
+                                }
                                 true
                             }
                             1 if elapsed >= 1.5 => {
                                 if to_film {
                                     shell.open_film(ItemId(FILM.into()), cx);
+                                }
+                                if to_series_page {
+                                    shell.open_series(ItemId(SERIES.into()), cx);
                                 }
                                 true
                             }
@@ -291,6 +301,22 @@ fn show_screen(
                                 if play {
                                     // The local file is shorter than the fake film's resume point.
                                     shell.play_film(From::Beginning, window, cx);
+                                }
+                                if series_rows && let Some(page) = shell.series_pages.last() {
+                                    let bottom = page.scroll.max_offset().y;
+                                    page.scroll.set_offset(point(px(0.), -bottom));
+                                }
+                                // An episode never started: it plays to the end of the file.
+                                let fifth = shell.series_pages.last().and_then(|page| {
+                                    match page.shown_episodes()? {
+                                        crate::shell::Loadable::Ready(episodes) => {
+                                            episodes.iter().find(|e| e.number == Some(5)).cloned()
+                                        }
+                                        _ => None,
+                                    }
+                                });
+                                if up_next && let Some(episode) = fifth {
+                                    shell.play_episode(episode, window, cx);
                                 }
                                 true
                             }
