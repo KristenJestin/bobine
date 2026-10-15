@@ -1,0 +1,267 @@
+//! A fake Jellyfin server for the tests, on a local port: it answers the routes Bobine uses with
+//! the fixtures beside this file (written from the API description, every name in them invented)
+//! and keeps every request it gets.
+
+use serde_json::{Value, json};
+use std::sync::{Arc, Mutex};
+use std::thread::JoinHandle;
+use tiny_http::{Header, Response, Server};
+
+pub const USER: &str = "ada";
+pub const PASSWORD: &str = "correct horse battery staple";
+pub const USER_ID: &str = "0f1e2d3c4b5a69788796a5b4c3d2e1f0";
+pub const SERVER_ID: &str = "a1b2c3d4e5f60718293a4b5c6d7e8f90";
+pub const TOKEN: &str = "fa4e70ce0b5e4f2c9d1a7b3e8c6d2f10";
+pub const FILMS_LIBRARY: &str = "11111111111111111111111111111111";
+pub const FILM: &str = "f0000000000000000000000000000001";
+pub const SOURCE: &str = "5a000000000000000000000000000001";
+pub const PLAY_SESSION: &str = "9c0ffee09c0ffee09c0ffee09c0ffee0";
+pub const IMAGE: &[u8] = b"\x89PNG fake image";
+
+fn fixture(name: &str) -> Value {
+    let text = match name {
+        "system_info_public" => include_str!("fixtures/system_info_public.json"),
+        "authenticate_by_name" => include_str!("fixtures/authenticate_by_name.json"),
+        "user_views" => include_str!("fixtures/user_views.json"),
+        "films" => include_str!("fixtures/films.json"),
+        "film_detail" => include_str!("fixtures/film_detail.json"),
+        "boxsets" => include_str!("fixtures/boxsets.json"),
+        "boxset_sea_stories" => include_str!("fixtures/boxset_sea_stories.json"),
+        "boxset_harbour_trilogy" => include_str!("fixtures/boxset_harbour_trilogy.json"),
+        "similar" => include_str!("fixtures/similar.json"),
+        "resume" => include_str!("fixtures/resume.json"),
+        "playback_info" => include_str!("fixtures/playback_info.json"),
+        _ => panic!("no fixture {name}"),
+    };
+    serde_json::from_str(text).unwrap()
+}
+
+/// A request as the fake server got it.
+#[derive(Debug, Clone)]
+pub struct Seen {
+    pub method: String,
+    pub path: String,
+    pub query: Vec<(String, String)>,
+    pub authorization: Option<String>,
+    pub body: String,
+}
+
+impl Seen {
+    pub fn param(&self, key: &str) -> Option<&str> {
+        self.query
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(key))
+            .map(|(_, v)| v.as_str())
+    }
+
+    pub fn json(&self) -> Value {
+        serde_json::from_str(&self.body).unwrap()
+    }
+}
+
+#[derive(Default)]
+pub struct State {
+    pub seen: Vec<Seen>,
+    /// Answers every route like a web server that is not Jellyfin.
+    pub not_jellyfin: bool,
+    /// The token was revoked: every authenticated route answers 401.
+    pub revoked: bool,
+}
+
+pub struct FakeServer {
+    pub url: String,
+    pub state: Arc<Mutex<State>>,
+    server: Arc<Server>,
+    thread: Option<JoinHandle<()>>,
+}
+
+impl Drop for FakeServer {
+    fn drop(&mut self) {
+        self.server.unblock();
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+fn decode(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'+' => out.push(b' '),
+            b'%' if i + 2 < bytes.len() => {
+                out.push(u8::from_str_radix(&value[i + 1..i + 3], 16).unwrap());
+                i += 2;
+            }
+            b => out.push(b),
+        }
+        i += 1;
+    }
+    String::from_utf8(out).unwrap()
+}
+
+fn split(url: &str) -> (String, Vec<(String, String)>) {
+    let (path, query) = url.split_once('?').unwrap_or((url, ""));
+    let query = query
+        .split('&')
+        .filter(|p| !p.is_empty())
+        .map(|p| {
+            let (k, v) = p.split_once('=').unwrap_or((p, ""));
+            (decode(k), decode(v))
+        })
+        .collect();
+    (path.to_string(), query)
+}
+
+enum Answer {
+    Json(u16, Value),
+    Bytes(Vec<u8>),
+    Empty(u16),
+}
+
+/// The films of the library in the order asked, one page of them.
+fn films(seen: &Seen) -> Value {
+    let mut films = fixture("films").as_array().unwrap().clone();
+    let by = seen.param("SortBy").unwrap_or("SortName");
+    let first = by.split(',').next().unwrap();
+    films.sort_by_key(|f| f[first].to_string());
+    if seen.param("SortOrder") == Some("Descending") {
+        films.reverse();
+    }
+    let total = films.len();
+    let start: usize = seen.param("StartIndex").map_or(0, |s| s.parse().unwrap());
+    let limit: usize = seen.param("Limit").map_or(total, |s| s.parse().unwrap());
+    let page: Vec<Value> = films.into_iter().skip(start).take(limit).collect();
+    json!({ "Items": page, "TotalRecordCount": total, "StartIndex": start })
+}
+
+fn answer(state: &State, seen: &Seen) -> Answer {
+    if state.not_jellyfin {
+        return Answer::Json(404, json!({ "error": "not here" }));
+    }
+    let route = (seen.method.as_str(), seen.path.as_str());
+    match route {
+        ("GET", "/System/Info/Public") => return Answer::Json(200, fixture("system_info_public")),
+        ("POST", "/Users/AuthenticateByName") => {
+            let body = seen.json();
+            return if body["Username"] == USER && body["Pw"] == PASSWORD {
+                Answer::Json(200, fixture("authenticate_by_name"))
+            } else {
+                Answer::Json(401, json!("Error processing request."))
+            };
+        }
+        _ => {}
+    }
+    let token = format!("Token=\"{TOKEN}\"");
+    let signed_in = seen
+        .authorization
+        .as_deref()
+        .is_some_and(|a| a.starts_with("MediaBrowser ") && a.contains(&token));
+    if !signed_in || state.revoked {
+        return Answer::Empty(401);
+    }
+    let images = format!("/Items/{FILM}/Images/");
+    match route {
+        ("POST", "/Sessions/Logout") => Answer::Empty(204),
+        ("GET", "/UserViews") => Answer::Json(200, fixture("user_views")),
+        ("GET", "/UserItems/Resume") => Answer::Json(200, fixture("resume")),
+        ("GET", "/Items") => match (seen.param("ParentId"), seen.param("IncludeItemTypes")) {
+            (Some(FILMS_LIBRARY), _) => Answer::Json(200, films(seen)),
+            (None, Some("BoxSet")) => Answer::Json(200, fixture("boxsets")),
+            (Some("b0000000000000000000000000000001"), _) => {
+                Answer::Json(200, fixture("boxset_sea_stories"))
+            }
+            (Some("b0000000000000000000000000000002"), _) => {
+                Answer::Json(200, fixture("boxset_harbour_trilogy"))
+            }
+            _ => Answer::Json(200, json!({ "Items": [], "TotalRecordCount": 0 })),
+        },
+        ("GET", path) if path == format!("/Items/{FILM}") => {
+            Answer::Json(200, fixture("film_detail"))
+        }
+        ("GET", path) if path == format!("/Items/{FILM}/Similar") => {
+            Answer::Json(200, fixture("similar"))
+        }
+        ("POST", path) if path == format!("/Items/{FILM}/PlaybackInfo") => {
+            Answer::Json(200, fixture("playback_info"))
+        }
+        (
+            "POST",
+            "/Sessions/Playing" | "/Sessions/Playing/Progress" | "/Sessions/Playing/Stopped",
+        ) => Answer::Empty(204),
+        ("POST" | "DELETE", path) if path == format!("/UserPlayedItems/{FILM}") => Answer::Json(
+            200,
+            json!({ "Played": seen.method == "POST", "PlaybackPositionTicks": 0, "Key": FILM }),
+        ),
+        ("GET", path) if path.starts_with(&images) => Answer::Bytes(IMAGE.to_vec()),
+        _ => Answer::Empty(404),
+    }
+}
+
+impl FakeServer {
+    pub fn start() -> Self {
+        let server = Arc::new(Server::http("127.0.0.1:0").unwrap());
+        let port = server.server_addr().to_ip().unwrap().port();
+        let state = Arc::new(Mutex::new(State::default()));
+        let thread = {
+            let server = Arc::clone(&server);
+            let state = Arc::clone(&state);
+            std::thread::spawn(move || {
+                for mut request in server.incoming_requests() {
+                    let (path, query) = split(request.url());
+                    let mut body = String::new();
+                    request.as_reader().read_to_string(&mut body).unwrap();
+                    let authorization = request
+                        .headers()
+                        .iter()
+                        .find(|h| h.field.equiv("Authorization"))
+                        .map(|h| h.value.as_str().to_string());
+                    let seen = Seen {
+                        method: request.method().as_str().to_string(),
+                        path,
+                        query,
+                        authorization,
+                        body,
+                    };
+                    let answer = {
+                        let mut state = state.lock().unwrap();
+                        state.seen.push(seen.clone());
+                        answer(&state, &seen)
+                    };
+                    let json = Header::from_bytes("Content-Type", "application/json").unwrap();
+                    let _ = match answer {
+                        Answer::Json(code, value) => request.respond(
+                            Response::from_string(value.to_string())
+                                .with_status_code(code)
+                                .with_header(json),
+                        ),
+                        Answer::Bytes(bytes) => request.respond(Response::from_data(bytes)),
+                        Answer::Empty(code) => request.respond(Response::empty(code)),
+                    };
+                }
+            })
+        };
+        Self {
+            url: format!("http://127.0.0.1:{port}"),
+            state,
+            server,
+            thread: Some(thread),
+        }
+    }
+
+    /// The requests so far, oldest first.
+    pub fn seen(&self) -> Vec<Seen> {
+        self.state.lock().unwrap().seen.clone()
+    }
+
+    /// The last request to this path.
+    pub fn last(&self, method: &str, path: &str) -> Seen {
+        self.seen()
+            .into_iter()
+            .rev()
+            .find(|s| s.method == method && s.path == path)
+            .unwrap_or_else(|| panic!("no {method} {path}"))
+    }
+}

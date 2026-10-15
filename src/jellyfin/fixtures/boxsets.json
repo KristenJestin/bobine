@@ -1,0 +1,8 @@
+{
+  "Items": [
+    { "Name": "Sea Stories", "Id": "b0000000000000000000000000000001", "Type": "BoxSet", "IsFolder": true },
+    { "Name": "Harbour Trilogy", "Id": "b0000000000000000000000000000002", "Type": "BoxSet", "IsFolder": true }
+  ],
+  "TotalRecordCount": 2,
+  "StartIndex": 0
+}
