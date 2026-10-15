@@ -119,6 +119,8 @@ impl TextInput {
 
     /// Edits the text or moves the cursor, then redraws.
     fn edit(&mut self, cx: &mut Context<Self>, change: impl FnOnce(&mut Editor)) {
+        // Whatever the edit, the composed range no longer matches the text.
+        self.marked = None;
         change(&mut self.editor);
         cx.notify();
     }
@@ -176,6 +178,7 @@ impl TextInput {
     fn cut(&mut self, _: &Cut, _: &mut Window, cx: &mut Context<Self>) {
         if let Some(text) = self.editor.cut(self.masked) {
             cx.write_to_clipboard(ClipboardItem::new_string(text));
+            self.marked = None;
             cx.notify();
         }
     }
@@ -315,8 +318,9 @@ impl EntityInputHandler for TextInput {
             .map(|range| self.range_offset_from_utf16(&range))
             .or(self.marked.take())
             .unwrap_or(self.editor.selection());
-        self.marked = (!text.is_empty()).then(|| range.start..range.start + text.len());
+        let marked = (!text.is_empty()).then(|| range.start..range.start + text.len());
         self.edit(cx, |e| e.replace(range, text));
+        self.marked = marked;
     }
 
     fn bounds_for_range(
@@ -414,28 +418,28 @@ impl Element for TextLine {
             strikethrough: None,
         };
         let runs = match input.marked.as_ref().filter(|_| !input.masked) {
-            Some(marked) => [
-                TextRun {
-                    len: marked.start,
-                    ..run.clone()
-                },
-                TextRun {
-                    len: marked.end - marked.start,
-                    underline: Some(UnderlineStyle {
-                        color: Some(run.color),
-                        thickness: px(1.),
-                        wavy: false,
-                    }),
-                    ..run.clone()
-                },
-                TextRun {
-                    len: text.len() - marked.end,
-                    ..run
-                },
-            ]
-            .into_iter()
-            .filter(|run| run.len > 0)
-            .collect(),
+            Some(marked) => {
+                let [before, composed, after] = marked_lengths(marked, text.len());
+                [
+                    TextRun {
+                        len: before,
+                        ..run.clone()
+                    },
+                    TextRun {
+                        len: composed,
+                        underline: Some(UnderlineStyle {
+                            color: Some(run.color),
+                            thickness: px(1.),
+                            wavy: false,
+                        }),
+                        ..run.clone()
+                    },
+                    TextRun { len: after, ..run },
+                ]
+                .into_iter()
+                .filter(|run| run.len > 0)
+                .collect()
+            }
             None => vec![run],
         };
         let font_size = style.font_size.to_pixels(window.rem_size());
@@ -593,6 +597,14 @@ fn shown_offset(content: &str, masked: bool, offset: usize) -> usize {
     }
 }
 
+/// The lengths of the text before, inside and after the composed range, which an edit may have
+/// left past the end of the text.
+fn marked_lengths(marked: &Range<usize>, len: usize) -> [usize; 3] {
+    let start = marked.start.min(len);
+    let end = marked.end.min(len);
+    [start, end - start, len - end]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -603,6 +615,14 @@ mod tests {
         assert_eq!(shown_offset("marée", true, "marée".len()), 15);
         assert_eq!(shown("marée", false), "marée");
         assert_eq!(shown_offset("marée", false, "marée".len()), 6);
+    }
+
+    #[test]
+    fn a_composition_left_past_the_end_by_a_cut_never_underflows() {
+        assert_eq!(marked_lengths(&(2..5), 8), [2, 3, 3]);
+        // Ctrl+X while composing left `marked` past the end of the text.
+        assert_eq!(marked_lengths(&(2..5), 3), [2, 1, 0]);
+        assert_eq!(marked_lengths(&(4..6), 3), [3, 0, 0]);
     }
 
     #[test]
