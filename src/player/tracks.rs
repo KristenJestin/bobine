@@ -46,7 +46,9 @@ pub fn label(track: &Track) -> String {
             None => codec,
         });
     }
-    if let Some(title) = &track.title {
+    // An external track's title may be mpv's own, made from the end of its address: that can
+    // hold an access token.
+    if let Some(title) = track.title.as_ref().filter(|_| !track.external) {
         parts.push(title.clone());
     }
     if track.forced {
@@ -263,6 +265,23 @@ mod tests {
         let tracks = tracks();
         assert_eq!(label(&tracks[3]), "Français · ASS · forcés");
         assert_eq!(label(&tracks[4]), "Anglais · SRT · fichier externe");
+    }
+
+    #[test]
+    fn an_external_subtitle_added_from_a_url_with_a_query_shows_neither_in_its_label() {
+        // mpv names a track added without a title after the end of its address.
+        let mut properties = mpv_properties();
+        properties.insert(
+            "track-list/4/title".into(),
+            "Stream.srt?ApiKey=0123456789abcdef".into(),
+        );
+        properties.remove("track-list/4/lang");
+        let tracks = from_mpv(|name| properties.get(name).cloned());
+        let label = label(&tracks[4]);
+        assert!(!label.contains("Stream.srt"), "{label}");
+        assert!(!label.contains("ApiKey"), "{label}");
+        assert!(!label.contains("0123456789abcdef"), "{label}");
+        assert_eq!(label, "SRT · fichier externe");
     }
 
     #[test]

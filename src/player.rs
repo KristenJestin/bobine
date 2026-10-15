@@ -102,12 +102,19 @@ pub trait Player {
     fn select_audio(&mut self, id: Option<i64>);
     /// `None` hides the subtitles.
     fn select_subtitle(&mut self, id: Option<i64>);
-    /// Adds a subtitle file by its address (the stream's headers go with it) and shows it.
+    /// Adds a subtitle file by its address (the stream's headers go with it) and shows it, named
+    /// `title` in `language` (`fre`, `eng`…): the address, which may carry a token, never names
+    /// it.
     #[allow(
         dead_code,
         reason = "part of the port; the server's external subtitles come later"
     )]
-    fn add_subtitle(&mut self, url: &str);
+    fn add_subtitle(
+        &mut self,
+        url: &str,
+        title: &str,
+        language: Option<&str>,
+    ) -> Result<(), PlayerError>;
     /// What happened since the last call, oldest first. Never waits.
     fn events(&mut self) -> Vec<PlayerEvent>;
 }
@@ -169,8 +176,9 @@ pub mod fake {
         fn select_subtitle(&mut self, id: Option<i64>) {
             self.record(Call::Subtitle(id));
         }
-        fn add_subtitle(&mut self, url: &str) {
+        fn add_subtitle(&mut self, url: &str, _: &str, _: Option<&str>) -> Result<(), PlayerError> {
             self.record(Call::AddSubtitle(url.to_string()));
+            Ok(())
         }
         fn events(&mut self) -> Vec<PlayerEvent> {
             std::mem::take(&mut *self.queued.borrow_mut())

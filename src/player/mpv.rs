@@ -111,8 +111,19 @@ impl<C: MpvClient> Player for MpvPlayer<C> {
         let _ = self.client.set("sid", &track_id(id));
     }
 
-    fn add_subtitle(&mut self, url: &str) {
-        let _ = self.client.command(&["sub-add", url, "select"]);
+    fn add_subtitle(
+        &mut self,
+        url: &str,
+        title: &str,
+        language: Option<&str>,
+    ) -> Result<(), PlayerError> {
+        self.client.command(&[
+            "sub-add",
+            url,
+            "select",
+            title,
+            language.unwrap_or_default(),
+        ])
     }
 
     fn events(&mut self) -> Vec<PlayerEvent> {
@@ -306,10 +317,35 @@ mod tests {
     #[test]
     fn an_external_subtitle_is_added_by_url_and_shown() {
         let mut player = MpvPlayer::new(FakeMpv::default());
-        player.add_subtitle("http://media.example/s.srt");
+        player
+            .add_subtitle(
+                "http://media.example/s.srt?ApiKey=k",
+                "Français",
+                Some("fre"),
+            )
+            .unwrap();
+        player
+            .add_subtitle("http://media.example/t.srt", "Sous-titres", None)
+            .unwrap();
+        // Always a title: else mpv names the track after the end of its address.
         assert_eq!(
             log(&player),
-            [line(&["sub-add", "http://media.example/s.srt", "select"])]
+            [
+                line(&[
+                    "sub-add",
+                    "http://media.example/s.srt?ApiKey=k",
+                    "select",
+                    "Français",
+                    "fre"
+                ]),
+                line(&[
+                    "sub-add",
+                    "http://media.example/t.srt",
+                    "select",
+                    "Sous-titres",
+                    ""
+                ]),
+            ]
         );
     }
 
