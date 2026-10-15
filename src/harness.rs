@@ -1,16 +1,26 @@
 //! A startup path for the headless checks, built only with the `harness` feature: it plays a
 //! local file at once and reaches, without input, the states a nested compositor with no seat
 //! cannot reach by hand (controls shown, panel open, fullscreen), then prints one `RESULT` line
-//! with the numbers the pull request reports. Never part of the application a user runs.
+//! with the numbers the pull request reports. Or it shows a screen with invented films from the
+//! fake server. Never part of the application a user runs; it never touches the account file,
+//! the keyring or a real server.
 //!
 //! `bobine --play FILE [--title T] [--sub URL] [--subtitle-track ID] [--controls] [--panel]
 //! [--fullscreen-at S] [--windowed-at S] [--next FILE --next-at S] [--leave-at S]
 //! [--measure-from S] --quit-at S`
+//!
+//! `bobine --screen login|home|library|detail|detail-rows|playing [--films N] [--media FILE]
+//! --quit-at S`
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use gpui_kit::{App, Entity, Window};
+use bobine::provider::{Connector, ItemId};
+use gpui_kit::{App, Context, Entity, Window, point, px};
+
+use crate::fake::{FILM, FakeServer};
+use crate::film_page::From;
+use crate::navigation::NavEntry;
 
 use crate::player::libmpv::Libmpv;
 use crate::player::mpv::MpvClient;
@@ -35,12 +45,19 @@ struct Args {
     leave_at: Option<f64>,
     measure_from: f64,
     quit_at: f64,
+    /// A screen to show with the fake server instead of a file to play.
+    screen: Option<String>,
+    /// How many films the fake server holds.
+    films: usize,
+    /// What the fake server's films play.
+    media: Option<String>,
 }
 
 fn parse(mut args: impl Iterator<Item = String>) -> Result<Option<Args>, String> {
     let mut parsed = Args {
         measure_from: 3.,
         quit_at: f64::INFINITY,
+        films: 1284,
         ..Args::default()
     };
     let mut playing = false;
@@ -80,10 +97,18 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Option<Args>, String>
             "--leave-at" => parsed.leave_at = Some(seconds(args.next())?),
             "--measure-from" => parsed.measure_from = seconds(args.next())?,
             "--quit-at" => parsed.quit_at = seconds(args.next())?,
+            "--screen" => parsed.screen = Some(args.next().ok_or("--screen needs a name")?),
+            "--films" => {
+                parsed.films = args
+                    .next()
+                    .and_then(|n| n.parse().ok())
+                    .ok_or("--films needs a number")?;
+            }
+            "--media" => parsed.media = Some(args.next().ok_or("--media needs a file")?),
             other => return Err(format!("unknown argument {other}")),
         }
     }
-    Ok(playing.then_some(parsed))
+    Ok((playing || parsed.screen.is_some()).then_some(parsed))
 }
 
 struct Snapshot {
@@ -108,16 +133,142 @@ impl Snapshot {
     }
 }
 
-/// Starts the harness when the command line asks for it; else the application starts as usual.
-pub fn start(shell: &Entity<Shell>, window: &mut Window, cx: &mut App) {
-    let mut args = match parse(std::env::args().skip(1)) {
-        Ok(Some(args)) => args,
-        Ok(None) => return,
-        Err(error) => {
-            eprintln!("bobine harness: {error}");
-            std::process::exit(2);
+/// What the command line asked of the harness, if anything.
+pub struct Harness {
+    args: Option<Args>,
+    fake: Option<FakeServer>,
+}
+
+impl Harness {
+    pub fn from_args() -> Self {
+        let args = match parse(std::env::args().skip(1)) {
+            Ok(args) => args,
+            Err(error) => {
+                eprintln!("bobine harness: {error}");
+                std::process::exit(2);
+            }
+        };
+        let fake = args.as_ref().map(|args| {
+            let fake = FakeServer::new(args.films, args.screen.as_deref() != Some("login"));
+            if let Some(media) = &args.media {
+                fake.state.lock().unwrap().stream = media.clone();
+            }
+            fake
+        });
+        Self { args, fake }
+    }
+
+    /// The fake server, whenever the harness runs.
+    pub fn connector(&self) -> Option<std::sync::Arc<dyn Connector>> {
+        self.fake
+            .clone()
+            .map(|fake| Arc::new(fake) as Arc<dyn Connector>)
+    }
+
+    /// Starts the harness when the command line asks for it; else the application starts as
+    /// usual.
+    pub fn start(self, shell: &Entity<Shell>, window: &mut Window, cx: &mut App) {
+        let Some(args) = self.args else {
+            return;
+        };
+        shell.update(cx, |shell, _| shell.mpv_options = vec![("ao", "null")]);
+        match args.screen.clone() {
+            Some(screen) => show_screen(screen, args.quit_at, shell, window, cx),
+            None => play(args, shell, window, cx),
         }
-    };
+    }
+}
+
+/// Reaches `screen` as a user would, by the shell's own steps, then waits to be photographed.
+fn show_screen(
+    screen: String,
+    quit_at: f64,
+    shell: &Entity<Shell>,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let shell = shell.downgrade();
+    let handle = window.window_handle();
+    let begun = Instant::now();
+    let wants = |names: &[&str]| names.contains(&screen.as_str());
+    let to_library = wants(&["library", "detail", "detail-rows", "playing"]);
+    let to_film = wants(&["detail", "detail-rows", "playing"]);
+    let (scroll, play) = (wants(&["detail-rows"]), wants(&["playing"]));
+    let mut done_steps = 0;
+    cx.spawn(async move |cx| {
+        loop {
+            cx.background_executor()
+                .timer(Duration::from_millis(250))
+                .await;
+            let elapsed = begun.elapsed().as_secs_f64();
+            let quit = handle.update(cx, |_, window, cx| {
+                shell
+                    .update(cx, |shell, cx| {
+                        let step = match done_steps {
+                            0 if elapsed >= 0.5 => {
+                                if let Some(form) = &shell.login {
+                                    let (address, user, password) = (
+                                        form.address.clone(),
+                                        form.user.clone(),
+                                        form.password.clone(),
+                                    );
+                                    address.update(cx, |f, cx| {
+                                        f.set_text("https://media.exemple.org", cx)
+                                    });
+                                    user.update(cx, |f, cx| f.set_text("camille", cx));
+                                    password.update(cx, |f, cx| f.set_text("invented", cx));
+                                }
+                                if to_library {
+                                    shell.select(NavEntry::Films, cx);
+                                }
+                                true
+                            }
+                            1 if elapsed >= 1.5 => {
+                                if to_film {
+                                    shell.open_film(ItemId(FILM.into()), cx);
+                                }
+                                true
+                            }
+                            2 if elapsed >= 3. => {
+                                if scroll && let Some(page) = shell.details.last() {
+                                    let bottom = page.scroll.max_offset().y;
+                                    page.scroll.set_offset(point(px(0.), -bottom));
+                                }
+                                if play {
+                                    // The local file is shorter than the fake film's resume point.
+                                    shell.play_film(From::Beginning, window, cx);
+                                }
+                                true
+                            }
+                            3.. if play && elapsed >= 4. => {
+                                shell.player_mouse_moved(cx);
+                                false
+                            }
+                            _ => false,
+                        };
+                        if step {
+                            done_steps += 1;
+                            cx.notify();
+                        }
+                    })
+                    .ok();
+                if elapsed < quit_at {
+                    return false;
+                }
+                shell.update(cx, |shell, _| shell.close_video()).ok();
+                cx.quit();
+                true
+            });
+            if !matches!(quit, Ok(false)) {
+                break;
+            }
+        }
+    })
+    .detach();
+}
+
+/// Plays the file of `--play` and measures it.
+fn play(mut args: Args, shell: &Entity<Shell>, window: &mut Window, cx: &mut App) {
     let mpv = match Libmpv::new(&[("ao", "null")]) {
         Ok(mpv) => Arc::new(mpv),
         Err(error) => {
@@ -125,40 +276,6 @@ pub fn start(shell: &Entity<Shell>, window: &mut Window, cx: &mut App) {
             std::process::exit(1);
         }
     };
-    let film = Film {
-        title: args
-            .title
-            .clone()
-            .unwrap_or_else(|| "Film de test".to_string()),
-        subtitle: Some("fichier local · lecture directe".to_string()),
-    };
-    let external = args.sub.as_deref().map(|url| ExternalSubtitle {
-        url,
-        title: "Sous-titres externes",
-        language: None,
-    });
-    let media = Media {
-        stream: Stream {
-            url: &args.file,
-            headers: &[],
-        },
-        start: 0.,
-        audio: None,
-        subtitle: match (args.subtitle_track, &external) {
-            (Some(id), _) => FirstSubtitle::Track(id),
-            (None, Some(_)) => FirstSubtitle::External(0),
-            (None, None) => FirstSubtitle::Default,
-        },
-        external_subtitles: external.as_slice(),
-    };
-    let started = shell.update(cx, |shell, cx| {
-        shell.play(mpv.clone(), media, film, window, cx)
-    });
-    if let Err(error) = started {
-        eprintln!("bobine harness: {error}");
-        std::process::exit(1);
-    }
-
     let shell = shell.downgrade();
     let handle = window.window_handle();
     let begun = Instant::now();
@@ -167,12 +284,27 @@ pub fn start(shell: &Entity<Shell>, window: &mut Window, cx: &mut App) {
         let mut panel_opened = false;
         let (mut went_fullscreen, mut went_windowed, mut left) = (false, false, false);
         let mut next = args.next.take();
+        let mut played = false;
         loop {
             cx.background_executor()
                 .timer(Duration::from_millis(250))
                 .await;
             let elapsed = begun.elapsed().as_secs_f64();
             let done = handle.update(cx, |_, window, cx| {
+                // The film starts once the start of the application is over: it would otherwise
+                // put its first screen over the player.
+                if !played {
+                    if shell.update(cx, |shell, _| shell.starting).unwrap_or(true) {
+                        return false;
+                    }
+                    played = true;
+                    let started =
+                        shell.update(cx, |shell, cx| play_file(&args, &mpv, shell, window, cx));
+                    if let Ok(Err(error)) = started {
+                        eprintln!("bobine harness: {error}");
+                        std::process::exit(1);
+                    }
+                }
                 shell
                     .update(cx, |shell, cx| {
                         if args.controls {
@@ -222,7 +354,9 @@ pub fn start(shell: &Entity<Shell>, window: &mut Window, cx: &mut App) {
                             };
                             let played = Libmpv::new(&[("ao", "null")])
                                 .map_err(|e| e.to_string())
-                                .and_then(|mpv| shell.play(Arc::new(mpv), media, film, window, cx));
+                                .and_then(|mpv| {
+                                    shell.play(Arc::new(mpv), media, film, None, window, cx)
+                                });
                             if let Err(error) = played {
                                 eprintln!("bobine harness: the second film: {error}");
                             }
@@ -255,6 +389,43 @@ pub fn start(shell: &Entity<Shell>, window: &mut Window, cx: &mut App) {
         }
     })
     .detach();
+}
+
+/// The file of `--play`, with its subtitles, from the start.
+fn play_file(
+    args: &Args,
+    mpv: &Arc<Libmpv>,
+    shell: &mut Shell,
+    window: &mut Window,
+    cx: &mut Context<Shell>,
+) -> Result<(), String> {
+    let film = Film {
+        title: args
+            .title
+            .clone()
+            .unwrap_or_else(|| "Film de test".to_string()),
+        subtitle: Some("fichier local · lecture directe".to_string()),
+    };
+    let external = args.sub.as_deref().map(|url| ExternalSubtitle {
+        url,
+        title: "Sous-titres externes",
+        language: None,
+    });
+    let media = Media {
+        stream: Stream {
+            url: &args.file,
+            headers: &[],
+        },
+        start: 0.,
+        audio: None,
+        subtitle: match (args.subtitle_track, &external) {
+            (Some(id), _) => FirstSubtitle::Track(id),
+            (None, Some(_)) => FirstSubtitle::External(0),
+            (None, None) => FirstSubtitle::Default,
+        },
+        external_subtitles: external.as_slice(),
+    };
+    shell.play(mpv.clone(), media, film, None, window, cx)
 }
 
 fn report(mpv: &Libmpv, start: &Snapshot, window: &Window) {
