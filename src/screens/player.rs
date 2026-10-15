@@ -327,14 +327,24 @@ fn panel(
     window: &mut Window,
     cx: &mut Context<Shell>,
 ) -> Stateful<Div> {
-    let audio = choices("audio", session.audio_choices(), window, cx, |shell, id| {
-        if let (Some(playback), Some(id)) = (&mut shell.playback, id) {
-            playback.session.select_audio(id);
-        }
-    });
+    // Fading out, the panel is only drawn: it catches no click.
+    let open = session.panel_open();
+    let audio = choices(
+        "audio",
+        session.audio_choices(),
+        open,
+        window,
+        cx,
+        |shell, id| {
+            if let (Some(playback), Some(id)) = (&mut shell.playback, id) {
+                playback.session.select_audio(id);
+            }
+        },
+    );
     let subtitles = choices(
         "subtitle",
         session.subtitle_choices(),
+        open,
         window,
         cx,
         |shell, id| {
@@ -359,7 +369,7 @@ fn panel(
         // No blur behind it in GPUI: opaque enough to read over any picture.
         .bg(rgba(0x0e0e10e0))
         // A click in the panel never reaches the video's area.
-        .occlude()
+        .when(open, |panel| panel.occlude())
         .child(section_title("AUDIO"))
         .child(audio.mb(px(26.)))
         .child(section_title("SOUS-TITRES"))
@@ -377,6 +387,7 @@ fn section_title(label: &'static str) -> Div {
 fn choices(
     group: &'static str,
     choices: Vec<Choice>,
+    open: bool,
     window: &mut Window,
     cx: &mut Context<Shell>,
     select: fn(&mut Shell, Option<i64>),
@@ -394,11 +405,13 @@ fn choices(
                 .px(px(12.))
                 .py(px(9.))
                 .rounded(px(8.))
-                .cursor_pointer()
-                .on_click(cx.listener(move |shell, _, _, cx| {
-                    select(shell, id);
-                    cx.notify();
-                }))
+                .when(open, |line| {
+                    line.cursor_pointer()
+                        .on_click(cx.listener(move |shell, _, _, cx| {
+                            select(shell, id);
+                            cx.notify();
+                        }))
+                })
                 .flex()
                 .items_center()
                 .gap(px(8.))
