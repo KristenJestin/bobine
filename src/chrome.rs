@@ -29,11 +29,7 @@ pub fn pill_bar(current: Screen, cx: &mut Context<Shell>) -> impl IntoElement {
             .child(entry.label());
         if live {
             item.cursor_pointer()
-                .on_click(cx.listener(move |app, _, _, cx| {
-                    if app.navigator.select(entry) {
-                        cx.notify();
-                    }
-                }))
+                .on_click(cx.listener(move |app, _, _, cx| app.select(entry, cx)))
         } else {
             item
         }
@@ -122,12 +118,12 @@ pub fn back_link(label: &'static str, cx: &mut Context<Shell>) -> Stateful<Div> 
         .rounded(px(theme::RADIUS))
         .text_size(px(14.))
         .text_color(theme::muted())
+        // Readable over a page scrolled under it.
+        .bg(rgba(0x09090acc))
         .cursor_pointer()
         .hover(|style| style.text_color(theme::text()).bg(theme::line()))
         .on_click(cx.listener(|app, _, _, cx| {
-            if app.navigator.back() {
-                cx.notify();
-            }
+            app.go_back(cx);
         }))
         .child(format!("← {label}"))
 }

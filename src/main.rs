@@ -1,20 +1,47 @@
 //! `bobine`: a native client for films and series, Jellyfin first.
 
 mod chrome;
+mod config;
+#[cfg(any(test, feature = "harness"))]
+mod fake;
+mod film_page;
+mod grid;
 #[cfg(feature = "harness")]
 mod harness;
+mod images;
+mod input;
 mod navigation;
 mod player;
+mod reports;
 mod screens;
 mod shell;
+mod start;
 mod theme;
 mod video;
 
+use std::sync::Arc;
+
+use bobine::jellyfin::JellyfinConnector;
+use bobine::provider::{Connector, ProviderError, SecretServiceStore};
 use gpui_kit::prelude::*;
 use gpui_kit::{App, Bounds, WindowBackgroundAppearance, WindowBounds, WindowOptions, px, size};
 
+/// The Jellyfin connector over the account file and the system keyring.
+fn open_jellyfin() -> Result<Arc<dyn Connector>, ProviderError> {
+    let path = config::account_path(
+        std::env::var_os("XDG_CONFIG_HOME"),
+        std::env::var_os("HOME"),
+    )
+    .ok_or_else(|| ProviderError::Storage("no home directory".into()))?;
+    let connector = JellyfinConnector::open(path, Arc::new(SecretServiceStore))?;
+    Ok(Arc::new(connector))
+}
+
 fn main() {
-    gpui_kit::application().run(|cx: &mut App| {
+    #[cfg(feature = "harness")]
+    let harness = harness::Harness::from_args();
+    gpui_kit::application().run(move |cx: &mut App| {
+        input::bind_keys(cx);
         let bounds = Bounds::centered(None, size(px(1440.), px(810.)), cx);
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
@@ -27,8 +54,16 @@ fn main() {
             ..Default::default()
         };
         let font = theme::font_family(cx);
-        let opened = cx.open_window(options, |window, cx| {
-            let shell = cx.new(|cx| shell::Shell::new(font, cx));
+        // The headless harness never touches the real account file nor the keyring.
+        #[cfg(feature = "harness")]
+        let open: shell::OpenConnector = match harness.connector() {
+            Some(fake) => Box::new(move || Ok(fake)),
+            None => Box::new(open_jellyfin),
+        };
+        #[cfg(not(feature = "harness"))]
+        let open: shell::OpenConnector = Box::new(open_jellyfin);
+        let opened = cx.open_window(options, move |window, cx| {
+            let shell = cx.new(|cx| shell::Shell::new(font, open, cx));
             // The video surface and mpv go before the window's surface does.
             let closing = shell.downgrade();
             window.on_window_should_close(cx, move |_, cx| {
@@ -36,7 +71,7 @@ fn main() {
                 true
             });
             #[cfg(feature = "harness")]
-            harness::start(&shell, window, cx);
+            harness.start(&shell, window, cx);
             shell
         });
         if let Err(error) = opened {

@@ -1,5 +1,9 @@
 //! The root view: the screen the navigator points at, framed by the pill bar or the back link.
 
+mod pages;
+
+pub use pages::{Chip, DetailPage, Loadable, LoginForm, OpenConnector};
+
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -7,16 +11,20 @@ use std::time::{Duration, Instant};
 
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    Context, FocusHandle, IntoElement, KeyDownEvent, Render, SharedString, Subscription, Task,
-    Window, div, px,
+    Context, FocusHandle, Focusable, IntoElement, KeyDownEvent, Render, SharedString, Subscription,
+    Task, Window, div, px,
 };
 
+use bobine::provider::{Connector, MediaServer};
+
 use crate::chrome::{back_link, pill_bar};
+use crate::images::Images;
 use crate::navigation::{Navigator, Screen};
 use crate::player::libmpv::Libmpv;
 use crate::player::mpv::MpvPlayer;
 use crate::player::session::{Session, WindowRequest};
 use crate::player::{Media, Player};
+use crate::reports::{self, Reporting};
 use crate::screens;
 use crate::theme;
 use crate::video::Rect;
@@ -25,6 +33,9 @@ use crate::video::subsurface::{VideoSurface, Wayland};
 /// How often the player is asked what changed, and the controls checked for hiding.
 const PLAYER_TICK: Duration = Duration::from_millis(100);
 
+/// How long closing the window waits for "stopped" to reach the server.
+const CLOSE_WAITS_FOR_REPORTS: Duration = Duration::from_secs(2);
+
 pub struct Shell {
     pub navigator: Navigator,
     focus: FocusHandle,
@@ -32,6 +43,18 @@ pub struct Shell {
     pub playback: Option<Playback>,
     /// What the video binds of the compositor, once for this window: films reuse it.
     wayland: Option<Rc<RefCell<Wayland>>>,
+    /// The kept session is being looked for: nothing to show yet.
+    pub starting: bool,
+    connector: Option<Arc<dyn Connector>>,
+    server: Option<Arc<dyn MediaServer>>,
+    pub login: Option<LoginForm>,
+    pub home: pages::HomePage,
+    pub library: pages::LibraryPage,
+    /// The film pages open, the last one on top: one per `Screen::FilmDetail` of the navigator.
+    pub details: Vec<DetailPage>,
+    pub images: Images,
+    /// Given to every mpv: the headless harness silences the sound.
+    pub mpv_options: Vec<(&'static str, &'static str)>,
 }
 
 /// The film being played and what keeps it in step with the window.
@@ -39,6 +62,8 @@ pub struct Playback {
     pub session: Session,
     controls_shown: bool,
     had_error: bool,
+    /// What the server is told; `None` for a local file.
+    reporting: Option<Reporting>,
     _ticker: Task<()>,
     _bounds: Subscription,
 }
@@ -50,28 +75,35 @@ pub struct Film {
 }
 
 impl Shell {
-    pub fn new(font: Option<SharedString>, cx: &mut Context<Self>) -> Self {
-        Self {
+    pub fn new(font: Option<SharedString>, open: OpenConnector, cx: &mut Context<Self>) -> Self {
+        let mut shell = Self {
             navigator: Navigator::new(),
             focus: cx.focus_handle(),
             font,
             playback: None,
             wayland: None,
-        }
+            starting: true,
+            connector: None,
+            server: None,
+            login: None,
+            home: Default::default(),
+            library: Default::default(),
+            details: Vec::new(),
+            images: Images::default(),
+            mpv_options: Vec::new(),
+        };
+        shell.begin(open, cx);
+        shell
     }
 
     /// Opens the player on `media`. Its addresses go straight to mpv: nothing here keeps or
     /// prints them.
-    #[allow(
-        dead_code,
-        reason = "the film page calls it once the server's streams reach it; the headless \
-                  harness calls it today"
-    )]
     pub fn play(
         &mut self,
         mpv: Arc<Libmpv>,
         media: Media<'_>,
         film: Film,
+        reporting: Option<Reporting>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
@@ -110,6 +142,7 @@ impl Shell {
             session,
             controls_shown: false,
             had_error: false,
+            reporting,
             _ticker: ticker,
             _bounds: bounds,
         });
@@ -119,15 +152,24 @@ impl Shell {
         Ok(())
     }
 
-    /// Closes the player: the video surface and mpv go before anything else does.
-    pub fn stop_playback(&mut self) {
-        self.playback = None;
+    /// Closes the player: the video surface and mpv go before anything else does. The server is
+    /// told the playback stopped; the handle ends once it has been.
+    pub fn stop_playback(&mut self) -> Option<std::thread::JoinHandle<()>> {
+        let Playback {
+            session, reporting, ..
+        } = self.playback.take()?;
+        let reports = reporting.map(|reporting| reporting.finish(&session));
+        drop(session);
+        reports
     }
 
-    /// The window is closing: the film goes, then what the video bound of the compositor,
-    /// while GPUI's display is still connected.
+    /// The window is closing: the film goes, the server is told where it stopped (a moment
+    /// is waited for it, no more), then what the video bound of the compositor goes, while
+    /// GPUI's display is still connected.
     pub fn close_video(&mut self) {
-        self.stop_playback();
+        if let Some(reports) = self.stop_playback() {
+            reports::wait(reports, CLOSE_WAITS_FOR_REPORTS);
+        }
         self.wayland = None;
     }
 
@@ -135,8 +177,11 @@ impl Shell {
         if window.is_fullscreen() {
             window.toggle_fullscreen();
         }
-        self.stop_playback();
+        let reports = self.stop_playback();
         self.navigator.back();
+        if let Some(reports) = reports {
+            self.after_playback(reports, cx);
+        }
         cx.notify();
     }
 
@@ -163,7 +208,11 @@ impl Shell {
             return;
         };
         let now = Instant::now();
-        if playback.session.update(now) {
+        let ended = playback.session.update(now);
+        if let Some(reporting) = &mut playback.reporting {
+            reporting.tick(now, &playback.session, ended);
+        }
+        if ended {
             // The end of the film: back to where it was started from.
             self.leave_player(window, cx);
             return;
@@ -222,9 +271,16 @@ impl Shell {
 
 impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // Escape needs the focus; a click on a button must not lose it for good.
-        if !self.focus.is_focused(window) {
-            window.focus(&self.focus, cx);
+        self.images.new_frame();
+        // Escape needs the focus; a click on a button must not lose it for good. A text field
+        // keeps it while it has it; the login's first field takes it when nothing has.
+        if window.focused(cx).is_none() {
+            match &self.login {
+                Some(form) if self.navigator.current() == Screen::Login => {
+                    window.focus(&form.address.focus_handle(cx), cx)
+                }
+                _ => window.focus(&self.focus, cx),
+            }
         }
         let screen = self.navigator.current();
         let back_label = self.navigator.back_label();
@@ -240,8 +296,8 @@ impl Render for Shell {
                     let held = &event.keystroke.modifiers;
                     let with_modifier = held.control || held.alt || held.platform || held.function;
                     app.player_key(key, with_modifier, window, cx);
-                } else if key == "escape" && app.navigator.back() {
-                    cx.notify();
+                } else if key == "escape" {
+                    app.go_back(cx);
                 }
             }))
             // The player leaves the root transparent: the video is under the window.
@@ -253,7 +309,8 @@ impl Render for Shell {
                 Some(playback) if playing => {
                     screens::player::render(&playback.session, window, cx).into_any_element()
                 }
-                _ => screens::render(screen, cx),
+                _ if self.starting => div().into_any_element(),
+                _ => screens::render(self, screen, window, cx),
             })
             .when(screen.shows_pill_bar(), |root| {
                 root.child(pill_bar(screen, cx))

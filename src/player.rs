@@ -174,7 +174,14 @@ pub mod fake {
 
     #[derive(Clone, Debug, PartialEq)]
     pub enum Call {
-        Load { url: String, start: f64 },
+        Load {
+            url: String,
+            start: f64,
+            audio: Option<i64>,
+            subtitle: FirstSubtitle,
+            /// Title and language of each external subtitle.
+            externals: Vec<(String, Option<String>)>,
+        },
         Paused(bool),
         Seek(Seek),
         Volume(f64),
@@ -202,6 +209,13 @@ pub mod fake {
             self.record(Call::Load {
                 url: media.stream.url.to_string(),
                 start: media.start,
+                audio: media.audio,
+                subtitle: media.subtitle,
+                externals: media
+                    .external_subtitles
+                    .iter()
+                    .map(|s| (s.title.to_string(), s.language.map(str::to_string)))
+                    .collect(),
             });
             Ok(())
         }
