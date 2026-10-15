@@ -66,8 +66,13 @@ impl Session {
     }
 
     /// A key pressed in the player; what the window must do, if anything.
-    pub fn key(&mut self, key: &str, fullscreen: bool) -> Option<WindowRequest> {
-        match key_action(key, fullscreen)? {
+    pub fn key(
+        &mut self,
+        key: &str,
+        with_modifier: bool,
+        fullscreen: bool,
+    ) -> Option<WindowRequest> {
+        match key_action(key, with_modifier, fullscreen)? {
             KeyAction::TogglePause => self.toggle_pause(),
             KeyAction::SeekBy(seconds) => self.skip(seconds),
             KeyAction::ToggleFullscreen => return Some(WindowRequest::ToggleFullscreen),
@@ -271,9 +276,9 @@ mod tests {
     #[test]
     fn space_pauses_a_playing_film_and_plays_it_again() {
         let mut f = fixture();
-        assert_eq!(f.session.key("space", false), None);
+        assert_eq!(f.session.key("space", false, false), None);
         assert!(f.session.paused);
-        f.session.key("space", false);
+        f.session.key("space", false, false);
         assert!(!f.session.paused);
         assert_eq!(f.calls(), [Call::Paused(true), Call::Paused(false)]);
     }
@@ -281,8 +286,8 @@ mod tests {
     #[test]
     fn the_arrows_skip_ten_seconds() {
         let mut f = fixture();
-        f.session.key("left", false);
-        f.session.key("right", false);
+        f.session.key("left", false, false);
+        f.session.key("right", false, false);
         assert_eq!(
             f.calls(),
             [Call::Seek(Seek::By(-10.)), Call::Seek(Seek::By(10.))]
@@ -293,7 +298,7 @@ mod tests {
     fn f_asks_the_window_for_fullscreen() {
         let mut f = fixture();
         assert_eq!(
-            f.session.key("f", false),
+            f.session.key("f", false, false),
             Some(WindowRequest::ToggleFullscreen)
         );
     }
@@ -302,10 +307,13 @@ mod tests {
     fn escape_leaves_fullscreen_then_the_player() {
         let mut f = fixture();
         assert_eq!(
-            f.session.key("escape", true),
+            f.session.key("escape", false, true),
             Some(WindowRequest::ExitFullscreen)
         );
-        assert_eq!(f.session.key("escape", false), Some(WindowRequest::Leave));
+        assert_eq!(
+            f.session.key("escape", false, false),
+            Some(WindowRequest::Leave)
+        );
     }
 
     #[test]

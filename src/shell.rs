@@ -174,11 +174,20 @@ impl Shell {
         }
     }
 
-    fn player_key(&mut self, key: &str, window: &mut Window, cx: &mut Context<Self>) {
+    fn player_key(
+        &mut self,
+        key: &str,
+        with_modifier: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(playback) = &mut self.playback else {
             return;
         };
-        match playback.session.key(key, window.is_fullscreen()) {
+        match playback
+            .session
+            .key(key, with_modifier, window.is_fullscreen())
+        {
             Some(WindowRequest::ToggleFullscreen | WindowRequest::ExitFullscreen) => {
                 window.toggle_fullscreen();
             }
@@ -210,7 +219,9 @@ impl Render for Shell {
             .on_key_down(cx.listener(|app, event: &KeyDownEvent, window, cx| {
                 let key = event.keystroke.key.as_str();
                 if app.navigator.current() == Screen::Player && app.playback.is_some() {
-                    app.player_key(key, window, cx);
+                    let held = &event.keystroke.modifiers;
+                    let with_modifier = held.control || held.alt || held.platform || held.function;
+                    app.player_key(key, with_modifier, window, cx);
                 } else if key == "escape" && app.navigator.back() {
                     cx.notify();
                 }

@@ -35,7 +35,12 @@ pub enum KeyAction {
 }
 
 /// The action of a key, by GPUI's name for it. Escape leaves fullscreen first, then the player.
-pub fn key_action(key: &str, fullscreen: bool) -> Option<KeyAction> {
+/// `with_modifier` says Ctrl, Alt or Super is held (Shift does not count).
+pub fn key_action(key: &str, with_modifier: bool, fullscreen: bool) -> Option<KeyAction> {
+    // Ctrl+F or Super+Left belong to the window manager or to nobody, not to the player.
+    if with_modifier {
+        return None;
+    }
     match key {
         "space" => Some(KeyAction::TogglePause),
         "left" => Some(KeyAction::SeekBy(-SKIP_SECONDS)),
@@ -92,30 +97,56 @@ mod tests {
 
     #[test]
     fn space_plays_and_pauses() {
-        assert_eq!(key_action("space", false), Some(KeyAction::TogglePause));
+        assert_eq!(
+            key_action("space", false, false),
+            Some(KeyAction::TogglePause)
+        );
     }
 
     #[test]
     fn left_and_right_skip_ten_seconds() {
-        assert_eq!(key_action("left", false), Some(KeyAction::SeekBy(-10.)));
-        assert_eq!(key_action("right", true), Some(KeyAction::SeekBy(10.)));
+        assert_eq!(
+            key_action("left", false, false),
+            Some(KeyAction::SeekBy(-10.))
+        );
+        assert_eq!(
+            key_action("right", false, true),
+            Some(KeyAction::SeekBy(10.))
+        );
     }
 
     #[test]
     fn f_toggles_fullscreen() {
-        assert_eq!(key_action("f", false), Some(KeyAction::ToggleFullscreen));
-        assert_eq!(key_action("f", true), Some(KeyAction::ToggleFullscreen));
+        assert_eq!(
+            key_action("f", false, false),
+            Some(KeyAction::ToggleFullscreen)
+        );
+        assert_eq!(
+            key_action("f", false, true),
+            Some(KeyAction::ToggleFullscreen)
+        );
     }
 
     #[test]
     fn escape_leaves_fullscreen_first_then_the_player() {
-        assert_eq!(key_action("escape", true), Some(KeyAction::ExitFullscreen));
-        assert_eq!(key_action("escape", false), Some(KeyAction::Leave));
+        assert_eq!(
+            key_action("escape", false, true),
+            Some(KeyAction::ExitFullscreen)
+        );
+        assert_eq!(key_action("escape", false, false), Some(KeyAction::Leave));
     }
 
     #[test]
     fn other_keys_do_nothing() {
-        assert_eq!(key_action("a", false), None);
-        assert_eq!(key_action("enter", false), None);
+        assert_eq!(key_action("a", false, false), None);
+        assert_eq!(key_action("enter", false, false), None);
+    }
+
+    #[test]
+    fn keys_held_with_ctrl_alt_or_super_do_nothing() {
+        for key in ["space", "left", "right", "f", "escape"] {
+            assert_eq!(key_action(key, true, false), None, "{key}");
+            assert_eq!(key_action(key, true, true), None, "{key}");
+        }
     }
 }
