@@ -144,8 +144,11 @@ impl Gl {
         .map_err(|e| format!("eglCreateWindowSurface: {e}"))?;
         egl.make_current(display, Some(surface), Some(surface), Some(context))
             .map_err(|e| format!("eglMakeCurrent: {e}"))?;
-        // Paced by the compositor's frame callbacks, like any Wayland client.
-        egl.swap_interval(display, 1)
+        // Never paced by the compositor's frame callbacks: a hidden window (another workspace)
+        // gets none, and a swap waiting for one would never return, nor the thread, nor the app
+        // that waits for it to leave the player. mpv paces the frames: its update callback says
+        // when one is due, and rendering waits for the frame's time.
+        egl.swap_interval(display, 0)
             .map_err(|e| format!("eglSwapInterval: {e}"))?;
 
         let init = sys::mpv_opengl_init_params {
