@@ -6,8 +6,11 @@ mod home;
 mod library;
 mod login;
 pub mod player;
+mod series_detail;
 
-use bobine::provider::Film;
+pub use series_detail::up_next_card;
+
+use bobine::provider::{Film, Series};
 use gpui_kit::prelude::*;
 use gpui_kit::{
     AnyElement, Context, Div, ElementId, FontWeight, IntoElement, ObjectFit, Stateful, Window, div,
@@ -18,6 +21,7 @@ use crate::film_page;
 use crate::icons::{IconName, icon};
 use crate::images;
 use crate::navigation::Screen;
+use crate::series_page;
 use crate::shell::Shell;
 use crate::theme;
 
@@ -33,6 +37,8 @@ pub fn render(
         Screen::Library => library::render(shell, window, cx).into_any_element(),
         Screen::FilmDetail => film_detail::render(shell, window, cx).into_any_element(),
         Screen::Player => player::empty(cx).into_any_element(),
+        Screen::Series => library::render_series(shell, window, cx).into_any_element(),
+        Screen::SeriesDetail => series_detail::render(shell, window, cx).into_any_element(),
     }
 }
 
@@ -106,6 +112,15 @@ fn badge(text: impl Into<gpui_kit::SharedString>) -> Div {
         .child(text.into())
 }
 
+/// What a poster shows top right.
+enum Corner {
+    Nothing,
+    /// A check: the film is watched.
+    Watched,
+    /// How many episodes are left to watch.
+    Count(String),
+}
+
 /// A film as the grid and the rows show it: the poster, its rating top left, a check when
 /// watched, the title and the year below. `outlined`: the film of the page, in its collection.
 fn poster(
@@ -122,6 +137,11 @@ fn poster(
     if outlined {
         caption.push("ce film".into());
     }
+    let corner = if film.watched {
+        Corner::Watched
+    } else {
+        Corner::Nothing
+    };
     div()
         .id(id)
         .w(px(width))
@@ -135,60 +155,115 @@ fn poster(
                 shell.open_film(opened.clone(), cx);
             }))
         })
+        .child(poster_image(
+            image,
+            film_page::rating(film),
+            corner,
+            width,
+            outlined,
+        ))
+        .child(poster_caption(film.title.clone(), caption.join(" · ")))
+}
+
+/// A series as its grid and rows show it: like a film, with the episodes left to watch top
+/// right and its years below.
+fn series_poster(
+    shell: &mut Shell,
+    series: &Series,
+    width: f32,
+    id: impl Into<ElementId>,
+    cx: &mut Context<Shell>,
+) -> Stateful<Div> {
+    let image = shell.image(series.poster.as_ref(), images::POSTER, cx);
+    let opened = series.id.clone();
+    let corner = series_page::badge(series).map_or(Corner::Nothing, Corner::Count);
+    let rating = series
+        .community_rating
+        .map(|rating| format!("★ {rating:.1}"));
+    div()
+        .id(id)
+        .w(px(width))
+        .flex_none()
+        .flex()
+        .flex_col()
+        .gap(px(8.))
+        .cursor_pointer()
+        .on_click(cx.listener(move |shell, _, _, cx| {
+            shell.open_series(opened.clone(), cx);
+        }))
+        .child(poster_image(image, rating, corner, width, false))
+        .child(poster_caption(
+            series.title.clone(),
+            series_page::years(series).unwrap_or_default(),
+        ))
+}
+
+fn poster_image(
+    image: Option<std::sync::Arc<gpui_kit::RenderImage>>,
+    rating: Option<String>,
+    corner: Corner,
+    width: f32,
+    outlined: bool,
+) -> Div {
+    let round = |child: Div| {
+        child
+            .absolute()
+            .top(px(8.))
+            .right(px(8.))
+            .h(px(22.))
+            .min_w(px(22.))
+            .rounded_full()
+            .flex()
+            .items_center()
+            .justify_center()
+            .bg(theme::accent())
+            .text_color(theme::background())
+    };
+    div()
+        .relative()
+        .w(px(width))
+        .h(px(width * 1.5))
+        .rounded(px(theme::RADIUS))
+        .overflow_hidden()
+        .bg(theme::panel())
+        .border_2()
+        .border_color(if outlined {
+            theme::text()
+        } else {
+            rgba(0x00000000)
+        })
+        .children(picture(image, theme::RADIUS))
+        .children(rating.map(|rating| badge(rating).absolute().top(px(8.)).left(px(8.))))
+        .children(match corner {
+            Corner::Nothing => None,
+            Corner::Watched => Some(round(div()).child(icon(IconName::Check, 13.))),
+            Corner::Count(count) => Some(
+                round(div())
+                    .px(px(7.))
+                    .text_size(px(12.))
+                    .font_weight(FontWeight::BOLD)
+                    .child(count),
+            ),
+        })
+}
+
+fn poster_caption(title: String, caption: String) -> Div {
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(2.))
         .child(
             div()
-                .relative()
-                .w(px(width))
-                .h(px(width * 1.5))
-                .rounded(px(theme::RADIUS))
-                .overflow_hidden()
-                .bg(theme::panel())
-                .border_2()
-                .border_color(if outlined {
-                    theme::text()
-                } else {
-                    rgba(0x00000000)
-                })
-                .children(picture(image, theme::RADIUS))
-                .children(
-                    film_page::rating(film)
-                        .map(|rating| badge(rating).absolute().top(px(8.)).left(px(8.))),
-                )
-                .when(film.watched, |poster| {
-                    poster.child(
-                        div()
-                            .absolute()
-                            .top(px(8.))
-                            .right(px(8.))
-                            .size(px(22.))
-                            .rounded_full()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .bg(theme::accent())
-                            .text_color(theme::background())
-                            .child(icon(IconName::Check, 13.)),
-                    )
-                }),
+                .text_size(px(13.))
+                .font_weight(FontWeight::SEMIBOLD)
+                .truncate()
+                .child(title),
         )
         .child(
             div()
-                .flex()
-                .flex_col()
-                .gap(px(2.))
-                .child(
-                    div()
-                        .text_size(px(13.))
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .truncate()
-                        .child(film.title.clone()),
-                )
-                .child(
-                    div()
-                        .text_size(px(12.))
-                        .text_color(theme::dim())
-                        .child(caption.join(" · ")),
-                ),
+                .text_size(px(12.))
+                .text_color(theme::dim())
+                .child(caption),
         )
 }
 

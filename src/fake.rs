@@ -18,6 +18,9 @@ pub const FILMS_LIBRARY: &str = "films";
 /// The film every page of the tests opens: started, with two versions and three subtitles.
 pub const FILM: &str = "film-0";
 pub const PLAY_SESSION: &str = "session-1";
+/// The series every series page of the tests opens: three seasons, the first watched, the second
+/// stopped in its fourth episode.
+pub const SERIES: &str = "series-0";
 
 /// A report as the server got it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -257,7 +260,8 @@ pub fn episodes() -> Vec<Episode> {
                     (n == 0 && season == 2 && number == 4).then(|| Duration::from_secs(30 * 60));
                 all.push(Episode {
                     item: Film {
-                        title: EPISODE_TITLES[(number as usize + s) % EPISODE_TITLES.len()].into(),
+                        title: EPISODE_TITLES[(number as usize + 3 * s) % EPISODE_TITLES.len()]
+                            .into(),
                         year: None,
                         community_rating: None,
                         runtime: Some(Duration::from_secs(48 * 60)),

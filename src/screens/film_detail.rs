@@ -8,7 +8,7 @@ use std::cell::Cell;
 use std::rc::Rc;
 use std::time::Instant;
 
-use bobine::provider::{CastMember, Film, FilmDetail};
+use bobine::provider::{CastMember, Film, FilmDetail, MediaSource};
 use gpui_kit::prelude::*;
 use gpui_kit::{
     AnyElement, Bounds, Context, Div, FontWeight, IntoElement, MouseDownEvent, Pixels,
@@ -26,18 +26,18 @@ use crate::theme;
 
 /// The menu open, and the one drawn with how much of it shows (it may be fading out).
 #[derive(Clone, Copy)]
-struct MenuState {
-    open: Option<Chip>,
-    drawn: Option<(Chip, f32)>,
+pub(super) struct MenuState {
+    pub open: Option<Chip>,
+    pub drawn: Option<(Chip, f32)>,
 }
 
 /// Where a chip was last drawn, shared with the shell.
-type ChipBounds = Rc<Cell<Option<Bounds<Pixels>>>>;
+pub(super) type ChipBounds = Rc<Cell<Option<Bounds<Pixels>>>>;
 
 /// The left of the text and the rows, after the design.
-const EDGE: f32 = 40.;
-const TEXT_WIDTH: f32 = 620.;
-const ROW_POSTER: f32 = 150.;
+pub(super) const EDGE: f32 = 40.;
+pub(super) const TEXT_WIDTH: f32 = 620.;
+pub(super) const ROW_POSTER: f32 = 150.;
 const PHOTO: f32 = 96.;
 
 pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -> impl IntoElement {
@@ -148,9 +148,6 @@ fn hero(
     let film = &detail.film;
     let backdrop = shell.image(film.backdrop.as_ref(), images::BACKDROP, cx);
     let height = (window_height * 0.86).clamp(560., 900.);
-    let source = choices.source(detail);
-    let bg = theme::background();
-    let clear = rgba(0x09090a00);
 
     let play = theme::primary_button(
         "film-play",
@@ -185,12 +182,128 @@ fn hero(
         .children(from_start)
         .child(watched);
 
-    let chips = div()
+    let chips = chips_row(&detail.versions, choices, menu, chips, window, cx);
+
+    let meta_line = meta_line(film_page::meta(detail));
+
+    hero_frame(backdrop, height).child(
+        hero_text(film.title.clone())
+            .child(meta_line)
+            .children((!detail.directors.is_empty()).then(|| {
+                div()
+                    .text_size(px(13.))
+                    .text_color(theme::muted())
+                    .child(format!("Réalisé par {}", detail.directors.join(", ")))
+            }))
+            .children(detail.overview.clone().map(|overview| {
+                div()
+                    .text_size(px(15.))
+                    .line_height(px(23.))
+                    .text_color(rgba(0xf4f4f5d9))
+                    .child(overview)
+            }))
+            .child(div().pt(px(6.)).child(buttons))
+            .children(film_page::progress(film).map(|fraction| {
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(12.))
+                    .child(progress_bar(fraction, 300.))
+                    .children(film_page::time_left(film).map(|left| {
+                        div()
+                            .text_size(px(12.))
+                            .text_color(theme::muted())
+                            .child(left)
+                    }))
+            }))
+            .children(error.map(|why| {
+                div()
+                    .text_size(px(13.))
+                    .text_color(theme::danger())
+                    .child(why)
+            }))
+            .child(chips),
+    )
+}
+
+/// The backdrop over the whole width, darkened towards the text and the page below.
+pub(super) fn hero_frame(
+    backdrop: Option<std::sync::Arc<gpui_kit::RenderImage>>,
+    height: f32,
+) -> Div {
+    let bg = theme::background();
+    let clear = rgba(0x09090a00);
+    div()
+        .relative()
+        .w_full()
+        .h(px(height))
+        .children(picture(backdrop, 0.))
+        .child(div().absolute().inset_0().bg(linear_gradient(
+            90.,
+            linear_color_stop(bg, 0.),
+            linear_color_stop(clear, 0.75),
+        )))
+        .child(div().absolute().inset_0().bg(linear_gradient(
+            0.,
+            linear_color_stop(bg, 0.),
+            linear_color_stop(clear, 0.45),
+        )))
+}
+
+/// The column of text at the bottom left of the hero, under its title.
+pub(super) fn hero_text(title: String) -> Div {
+    div()
+        .absolute()
+        .left(px(EDGE))
+        .bottom(px(28.))
+        .w(px(TEXT_WIDTH))
+        .flex()
+        .flex_col()
+        .gap(px(14.))
+        .child(
+            div()
+                .text_size(px(44.))
+                .line_height(px(50.))
+                .font_weight(FontWeight::BOLD)
+                .child(title),
+        )
+}
+
+/// `2025 | ★ 6.0 | 2 h 11`: the facts under a title, apart.
+pub(super) fn meta_line(parts: Vec<String>) -> Div {
+    let mut meta = parts.into_iter();
+    div()
+        .flex()
+        .items_center()
+        .gap(px(10.))
+        .text_size(px(14.))
+        .text_color(theme::muted())
+        .children(meta.next())
+        .children(meta.map(|part| {
+            div()
+                .flex()
+                .items_center()
+                .gap(px(10.))
+                .child(div().w(px(1.)).h(px(12.)).bg(theme::line()))
+                .child(part)
+        }))
+}
+
+/// The version, audio and subtitle chips of what the play button starts.
+pub(super) fn chips_row(
+    versions: &[MediaSource],
+    choices: &Choices,
+    menu: MenuState,
+    chips: &[ChipBounds; 3],
+    window: &mut Window,
+    cx: &mut Context<Shell>,
+) -> Div {
+    let source = choices.source(versions);
+    div()
         .flex()
         .gap(px(8.))
-        .children(source.filter(|_| detail.versions.len() > 1).map(|_| {
-            let options = detail
-                .versions
+        .children(source.filter(|_| versions.len() > 1).map(|_| {
+            let options = versions
                 .iter()
                 .enumerate()
                 .map(|(index, version)| {
@@ -264,92 +377,7 @@ fn hero(
                 window,
                 cx,
             )
-        }));
-
-    let mut meta = film_page::meta(detail).into_iter();
-    let meta_line = div()
-        .flex()
-        .items_center()
-        .gap(px(10.))
-        .text_size(px(14.))
-        .text_color(theme::muted())
-        .children(meta.next())
-        .children(meta.map(|part| {
-            div()
-                .flex()
-                .items_center()
-                .gap(px(10.))
-                .child(div().w(px(1.)).h(px(12.)).bg(theme::line()))
-                .child(part)
-        }));
-
-    div()
-        .relative()
-        .w_full()
-        .h(px(height))
-        .children(picture(backdrop, 0.))
-        .child(div().absolute().inset_0().bg(linear_gradient(
-            90.,
-            linear_color_stop(bg, 0.),
-            linear_color_stop(clear, 0.75),
-        )))
-        .child(div().absolute().inset_0().bg(linear_gradient(
-            0.,
-            linear_color_stop(bg, 0.),
-            linear_color_stop(clear, 0.45),
-        )))
-        .child(
-            div()
-                .absolute()
-                .left(px(EDGE))
-                .bottom(px(28.))
-                .w(px(TEXT_WIDTH))
-                .flex()
-                .flex_col()
-                .gap(px(14.))
-                .child(
-                    div()
-                        .text_size(px(44.))
-                        .line_height(px(50.))
-                        .font_weight(FontWeight::BOLD)
-                        .child(film.title.clone()),
-                )
-                .child(meta_line)
-                .children((!detail.directors.is_empty()).then(|| {
-                    div()
-                        .text_size(px(13.))
-                        .text_color(theme::muted())
-                        .child(format!("Réalisé par {}", detail.directors.join(", ")))
-                }))
-                .children(detail.overview.clone().map(|overview| {
-                    div()
-                        .text_size(px(15.))
-                        .line_height(px(23.))
-                        .text_color(rgba(0xf4f4f5d9))
-                        .child(overview)
-                }))
-                .child(div().pt(px(6.)).child(buttons))
-                .children(film_page::progress(film).map(|fraction| {
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(px(12.))
-                        .child(progress_bar(fraction, 300.))
-                        .children(film_page::time_left(film).map(|left| {
-                            div()
-                                .text_size(px(12.))
-                                .text_color(theme::muted())
-                                .child(left)
-                        }))
-                }))
-                .children(error.map(|why| {
-                    div()
-                        .text_size(px(13.))
-                        .text_color(theme::danger())
-                        .child(why)
-                }))
-                .child(chips),
-        )
+        }))
 }
 
 /// `AUDIO  Français · E-AC-3 5.1 ⌄`; a click opens the choices under it.
@@ -357,7 +385,7 @@ fn hero(
     clippy::too_many_arguments,
     reason = "one chip's state, read once per frame"
 )]
-fn chip(
+pub(super) fn chip(
     kind: Chip,
     label: &'static str,
     value: Option<String>,
@@ -491,7 +519,7 @@ fn menu(
 }
 
 /// Round photos, the name and the role.
-fn cast_row(
+pub(super) fn cast_row(
     shell: &mut Shell,
     cast: &[CastMember],
     scroll: &ScrollHandle,
@@ -585,6 +613,16 @@ fn poster_row(
             poster(shell, film, ROW_POSTER, id, outlined, cx)
         })
         .collect();
+    row(title, caption, posters, scroll)
+}
+
+/// A heading, and cards in a row that scrolls sideways under the window's edges.
+pub(super) fn row(
+    title: &str,
+    caption: Option<String>,
+    cards: Vec<Stateful<Div>>,
+    scroll: &ScrollHandle,
+) -> Div {
     div()
         .flex()
         .flex_col()
@@ -611,7 +649,7 @@ fn poster_row(
                 .px(px(EDGE))
                 .overflow_hidden()
                 .track_scroll(scroll)
-                .children(posters),
+                .children(cards),
         )
 }
 

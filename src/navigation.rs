@@ -8,17 +8,19 @@ pub enum Screen {
     Library,
     FilmDetail,
     Player,
+    Series,
+    SeriesDetail,
 }
 
 impl Screen {
     pub fn shows_pill_bar(self) -> bool {
-        matches!(self, Screen::Home | Screen::Library)
+        matches!(self, Screen::Home | Screen::Library | Screen::Series)
     }
 
     /// Detail pages have no pill bar: they say where Escape leads instead. The player draws its
     /// own controls.
     pub fn shows_back_link(self) -> bool {
-        self == Screen::FilmDetail
+        matches!(self, Screen::FilmDetail | Screen::SeriesDetail)
     }
 
     /// The word the back link of a detail page uses for the screen it goes back to.
@@ -27,8 +29,9 @@ impl Screen {
             Screen::Login => "Connexion",
             Screen::Home => "Accueil",
             Screen::Library => "Films",
-            Screen::FilmDetail => "Fiche",
+            Screen::FilmDetail | Screen::SeriesDetail => "Fiche",
             Screen::Player => "Lecteur",
+            Screen::Series => "Séries",
         }
     }
 }
@@ -66,7 +69,8 @@ impl NavEntry {
         match self {
             NavEntry::Home => Some(Screen::Home),
             NavEntry::Films => Some(Screen::Library),
-            NavEntry::Series | NavEntry::Collections | NavEntry::MyList => None,
+            NavEntry::Series => Some(Screen::Series),
+            NavEntry::Collections | NavEntry::MyList => None,
         }
     }
 
@@ -239,11 +243,35 @@ mod tests {
     #[test]
     fn the_entries_not_built_yet_are_inert() {
         let mut nav = on_library();
-        for entry in [NavEntry::Series, NavEntry::Collections, NavEntry::MyList] {
+        for entry in [NavEntry::Collections, NavEntry::MyList] {
             assert_eq!(entry.target(), None);
             assert!(!nav.select(entry));
             assert_eq!(nav.current(), Screen::Library);
         }
+    }
+
+    #[test]
+    fn the_series_entry_opens_the_series_grid_under_the_pill_bar() {
+        let mut nav = on_library();
+        assert!(nav.select(NavEntry::Series));
+        assert_eq!(nav.current(), Screen::Series);
+        assert!(Screen::Series.shows_pill_bar());
+        assert!(NavEntry::Series.is_current(Screen::Series));
+    }
+
+    #[test]
+    fn a_series_page_has_a_back_link_to_the_series_and_no_pill_bar() {
+        let mut nav = Navigator::new();
+        nav.switch_root(Screen::Home);
+        assert!(nav.select(NavEntry::Series));
+        nav.open(Screen::SeriesDetail);
+        assert!(!Screen::SeriesDetail.shows_pill_bar());
+        assert_eq!(nav.back_label(), Some("Séries"));
+        nav.open(Screen::Player);
+        assert!(nav.back());
+        assert_eq!(nav.current(), Screen::SeriesDetail);
+        assert!(nav.back());
+        assert_eq!(nav.current(), Screen::Series);
     }
 
     #[test]

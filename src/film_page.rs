@@ -22,19 +22,19 @@ pub struct Choices {
 
 impl Choices {
     /// The first version, with its default audio track and its default subtitle, if any.
-    pub fn new(detail: &FilmDetail) -> Self {
+    pub fn new(versions: &[MediaSource]) -> Self {
         let mut choices = Self {
             version: 0,
             audio: None,
             subtitle: None,
         };
-        choices.set_version(detail, 0);
+        choices.set_version(versions, 0);
         choices
     }
 
     /// Another version has its own tracks: they go back to its defaults.
-    pub fn set_version(&mut self, detail: &FilmDetail, version: usize) {
-        let Some(source) = detail.versions.get(version) else {
+    pub fn set_version(&mut self, versions: &[MediaSource], version: usize) {
+        let Some(source) = versions.get(version) else {
             return;
         };
         self.version = version;
@@ -51,8 +51,8 @@ impl Choices {
             .map(|track| track.index);
     }
 
-    pub fn source<'a>(&self, detail: &'a FilmDetail) -> Option<&'a MediaSource> {
-        detail.versions.get(self.version)
+    pub fn source<'a>(&self, versions: &'a [MediaSource]) -> Option<&'a MediaSource> {
+        versions.get(self.version)
     }
 }
 
@@ -90,9 +90,10 @@ pub struct Plan {
     externals: Vec<(i32, String, Option<String>)>,
 }
 
-/// The plan of a play button, `None` when the film has no version to play.
-pub fn plan(detail: &FilmDetail, choices: &Choices, from: From) -> Option<Plan> {
-    let source = choices.source(detail)?;
+/// The plan of a play button for a film or an episode and its versions, `None` when it has no
+/// version to play.
+pub fn plan(film: &Film, versions: &[MediaSource], choices: &Choices, from: From) -> Option<Plan> {
+    let source = choices.source(versions)?;
     let audio = choices.audio.and_then(|index| {
         let position = source.audio.iter().position(|t| t.index == index)?;
         Some(position as i64 + 1)
@@ -110,12 +111,12 @@ pub fn plan(detail: &FilmDetail, choices: &Choices, from: From) -> Option<Plan> 
         }
     };
     let start = match from {
-        From::Resume => detail.film.resume.unwrap_or_default(),
+        From::Resume => film.resume.unwrap_or_default(),
         From::Beginning => Duration::ZERO,
     };
     Some(Plan {
-        film: detail.film.id.clone(),
-        title: detail.film.title.clone(),
+        film: film.id.clone(),
+        title: film.title.clone(),
         source: source.id.clone(),
         start,
         audio_index: choices.audio,
@@ -338,7 +339,13 @@ mod tests {
     #[test]
     fn resume_starts_where_the_viewer_stopped() {
         let detail = detail();
-        let plan = plan(&detail, &Choices::new(&detail), From::Resume).unwrap();
+        let plan = plan(
+            &detail.film,
+            &detail.versions,
+            &Choices::new(&detail.versions),
+            From::Resume,
+        )
+        .unwrap();
         assert_eq!(plan.start, Duration::from_secs(72 * 60));
         let Call::Load { start, .. } = load(&plan) else {
             panic!("not a load");
@@ -349,7 +356,13 @@ mod tests {
     #[test]
     fn from_the_beginning_starts_at_zero() {
         let detail = detail();
-        let plan = plan(&detail, &Choices::new(&detail), From::Beginning).unwrap();
+        let plan = plan(
+            &detail.film,
+            &detail.versions,
+            &Choices::new(&detail.versions),
+            From::Beginning,
+        )
+        .unwrap();
         let Call::Load { start, .. } = load(&plan) else {
             panic!("not a load");
         };
@@ -360,7 +373,13 @@ mod tests {
     fn a_film_never_started_resumes_at_the_beginning() {
         let mut detail = detail();
         detail.film.resume = None;
-        let plan = plan(&detail, &Choices::new(&detail), From::Resume).unwrap();
+        let plan = plan(
+            &detail.film,
+            &detail.versions,
+            &Choices::new(&detail.versions),
+            From::Resume,
+        )
+        .unwrap();
         assert_eq!(plan.start, Duration::ZERO);
     }
 
@@ -368,7 +387,7 @@ mod tests {
     fn the_defaults_are_the_first_version_its_default_audio_and_no_subtitles() {
         let detail = detail();
         assert_eq!(
-            Choices::new(&detail),
+            Choices::new(&detail.versions),
             Choices {
                 version: 0,
                 audio: Some(1),
@@ -380,12 +399,12 @@ mod tests {
     #[test]
     fn tracks_chosen_on_the_detail_page_reach_the_player() {
         let detail = detail();
-        let mut choices = Choices::new(&detail);
+        let mut choices = Choices::new(&detail.versions);
         // The English TrueHD track, the second audio track of the file; the full French ASS,
         // the second embedded subtitle.
         choices.audio = Some(2);
         choices.subtitle = Some(4);
-        let plan = plan(&detail, &choices, From::Resume).unwrap();
+        let plan = plan(&detail.film, &detail.versions, &choices, From::Resume).unwrap();
         let Call::Load {
             audio,
             subtitle,
@@ -410,9 +429,9 @@ mod tests {
     #[test]
     fn an_external_subtitle_chosen_on_the_detail_page_is_shown_first() {
         let detail = detail();
-        let mut choices = Choices::new(&detail);
+        let mut choices = Choices::new(&detail.versions);
         choices.subtitle = Some(5);
-        let plan = plan(&detail, &choices, From::Resume).unwrap();
+        let plan = plan(&detail.film, &detail.versions, &choices, From::Resume).unwrap();
         let Call::Load { subtitle, .. } = load(&plan) else {
             panic!("not a load");
         };
@@ -422,7 +441,13 @@ mod tests {
     #[test]
     fn no_subtitles_chosen_turns_them_off() {
         let detail = detail();
-        let plan = plan(&detail, &Choices::new(&detail), From::Resume).unwrap();
+        let plan = plan(
+            &detail.film,
+            &detail.versions,
+            &Choices::new(&detail.versions),
+            From::Resume,
+        )
+        .unwrap();
         let Call::Load { subtitle, .. } = load(&plan) else {
             panic!("not a load");
         };
@@ -432,12 +457,12 @@ mod tests {
     #[test]
     fn the_version_chosen_is_the_one_played_with_its_own_tracks() {
         let detail = detail();
-        let mut choices = Choices::new(&detail);
+        let mut choices = Choices::new(&detail.versions);
         choices.subtitle = Some(5);
-        choices.set_version(&detail, 1);
+        choices.set_version(&detail.versions, 1);
         assert_eq!(choices.audio, Some(1));
         assert_eq!(choices.subtitle, None);
-        let plan = plan(&detail, &choices, From::Resume).unwrap();
+        let plan = plan(&detail.film, &detail.versions, &choices, From::Resume).unwrap();
         assert_eq!(plan.source, MediaSourceId("source-1080".into()));
     }
 

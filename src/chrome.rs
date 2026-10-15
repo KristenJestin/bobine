@@ -9,7 +9,7 @@ use crate::navigation::{NavEntry, Screen};
 use crate::shell::Shell;
 use crate::theme;
 
-/// Centred at the top, over the screen. Series, Collections, Ma liste and the search are
+/// Centred at the top, over the screen. Collections, Ma liste and the search are
 /// visible but inert until their screens exist.
 pub fn pill_bar(current: Screen, cx: &mut Context<Shell>) -> impl IntoElement {
     let entries = NavEntry::ALL.into_iter().enumerate().map(|(index, entry)| {
