@@ -1,21 +1,22 @@
-//! The times under the seek bar, in French, after the validated design: `1 h 12 min`,
-//! `− 59 min`, `fin à 23 h 41`.
+//! The times under the seek bar: the elapsed time and what is left as clock times (`0:01:05`,
+//! `−1:40:12`), then the clock time the film ends (`fin à 23 h 41`).
 
-/// A length of time: hours and minutes past the hour, minutes alone under an hour, seconds
-/// under a minute.
-pub fn duration(seconds: f64) -> String {
+/// A length of time as a clock reads it, `h:mm:ss`, the hours always shown: the elapsed time
+/// and the time left keep one shape from the first second to the last.
+pub fn clock(seconds: f64) -> String {
     // `max` also turns NaN into 0.
     let seconds = seconds.max(0.) as u64;
-    match (seconds / 3600, seconds % 3600 / 60) {
-        (0, 0) => format!("{seconds} s"),
-        (0, minutes) => format!("{minutes} min"),
-        (hours, minutes) => format!("{hours} h {minutes:02} min"),
-    }
+    format!(
+        "{}:{:02}:{:02}",
+        seconds / 3600,
+        seconds % 3600 / 60,
+        seconds % 60
+    )
 }
 
 /// What is left, after a minus sign.
 pub fn remaining(seconds: f64) -> String {
-    format!("− {}", duration(seconds))
+    format!("−{}", clock(seconds))
 }
 
 /// The clock time the film ends, from the local time now (hours, minutes) and what is left.
@@ -42,32 +43,28 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_long_time_reads_in_hours_and_minutes() {
-        assert_eq!(duration(4320.), "1 h 12 min");
-        assert_eq!(duration(7200.), "2 h 00 min");
+    fn the_elapsed_time_is_a_clock_time() {
+        assert_eq!(clock(65.), "0:01:05");
+        assert_eq!(clock(4324.), "1:12:04");
+        assert_eq!(clock(36000.), "10:00:00");
     }
 
     #[test]
-    fn under_an_hour_reads_in_minutes() {
-        assert_eq!(duration(3599.), "59 min");
-        assert_eq!(duration(60.), "1 min");
-    }
-
-    #[test]
-    fn under_a_minute_reads_in_seconds() {
-        assert_eq!(duration(42.7), "42 s");
-        assert_eq!(duration(0.), "0 s");
+    fn under_a_minute_the_clock_still_shows_hours_and_minutes() {
+        assert_eq!(clock(42.7), "0:00:42");
+        assert_eq!(clock(0.), "0:00:00");
     }
 
     #[test]
     fn a_negative_or_unknown_time_reads_as_zero() {
-        assert_eq!(duration(-3.), "0 s");
-        assert_eq!(duration(f64::NAN), "0 s");
+        assert_eq!(clock(-3.), "0:00:00");
+        assert_eq!(clock(f64::NAN), "0:00:00");
     }
 
     #[test]
-    fn the_remaining_time_has_a_minus_sign() {
-        assert_eq!(remaining(3540.), "− 59 min");
+    fn the_remaining_time_is_a_clock_time_after_a_minus_sign() {
+        assert_eq!(remaining(6012.), "−1:40:12");
+        assert_eq!(remaining(59.), "−0:00:59");
     }
 
     #[test]

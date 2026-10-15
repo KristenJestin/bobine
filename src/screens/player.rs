@@ -201,7 +201,7 @@ fn bottom_bar(session: &Session, window: &Window, cx: &mut Context<Shell>) -> im
                 .items_center()
                 .justify_between()
                 .text_size(px(13.))
-                .child(div().w(px(220.)).child(time::duration(session.position)))
+                .child(div().w(px(220.)).child(time::clock(session.position)))
                 .child(
                     div()
                         .flex()
