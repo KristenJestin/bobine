@@ -271,6 +271,7 @@ impl Shell {
 
 impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.images.new_frame();
         // Escape needs the focus; a click on a button must not lose it for good. A text field
         // keeps it while it has it; the login's first field takes it when nothing has.
         if window.focused(cx).is_none() {

@@ -226,6 +226,10 @@ impl Shell {
         self.home = HomePage::default();
         self.library = LibraryPage::default();
         self.details.clear();
+        // The atlas holds the old images until they are dropped from it.
+        for gone in self.images.cache.drain() {
+            cx.drop_image(gone, None);
+        }
         self.images = images::Images::default();
         self.navigator.switch_root(Screen::Home);
         self.load_home(cx);
@@ -637,33 +641,39 @@ impl Shell {
         if let Some(found) = self.images.cache.get(&key) {
             return Some(found.clone());
         }
-        if self.images.failed.contains(&key) || !self.images.pending.insert(key.clone()) {
-            return None;
-        }
-        let svg = cx.svg_renderer();
-        let asked = image.clone();
-        self.ask(
-            cx,
-            move |server| {
-                let bytes = server.image(&asked, width).ok()?;
-                let format = images::format(&bytes)?;
-                Arc::new(Image::from_bytes(format, bytes))
-                    .to_image_data(svg)
-                    .ok()
-            },
-            move |shell, decoded, cx| {
-                shell.images.pending.remove(&key);
-                let Some(decoded) = decoded else {
-                    shell.images.failed.insert(key);
-                    return;
-                };
-                let size = decoded.size(0);
-                let bytes = (size.width.0 * size.height.0 * 4).max(0) as usize;
-                for gone in shell.images.cache.insert(key, decoded, bytes) {
-                    cx.drop_image(gone, None);
-                }
-            },
-        );
+        self.images.want(&key, image, Instant::now());
+        self.fetch_images(cx);
         None
+    }
+
+    /// Starts the fetches that may, up to the cap; each one that ends starts the next.
+    fn fetch_images(&mut self, cx: &mut Context<Self>) {
+        while let Some((key, image)) = self.images.next_fetch() {
+            let svg = cx.svg_renderer();
+            let width = key.width();
+            self.ask(
+                cx,
+                move |server| {
+                    let bytes = server.image(&image, width).ok()?;
+                    let format = images::format(&bytes)?;
+                    Arc::new(Image::from_bytes(format, bytes))
+                        .to_image_data(svg)
+                        .ok()
+                },
+                move |shell, decoded, cx| {
+                    shell
+                        .images
+                        .fetched(&key, decoded.is_some(), Instant::now());
+                    if let Some(decoded) = decoded {
+                        let size = decoded.size(0);
+                        let bytes = (size.width.0 * size.height.0 * 4).max(0) as usize;
+                        for gone in shell.images.cache.insert(key, decoded, bytes) {
+                            cx.drop_image(gone, None);
+                        }
+                    }
+                    shell.fetch_images(cx);
+                },
+            );
+        }
     }
 }
