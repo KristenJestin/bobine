@@ -2,6 +2,7 @@
 
 mod chrome;
 mod navigation;
+mod player;
 mod screens;
 mod shell;
 mod theme;

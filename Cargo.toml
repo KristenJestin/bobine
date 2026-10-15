@@ -7,6 +7,8 @@ publish = false
 [dependencies]
 # The window (#3). Pinned: gpui-kit pins its own GPUI snapshot, so a bump is a deliberate act.
 gpui-kit = { version = "=0.7.3", default-features = false }
+# The player (#5): libmpv draws with OpenGL into a Wayland subsurface under the window.
+libmpv2-sys = "4.0.1"
 
 [features]
 default = ["fast"]
