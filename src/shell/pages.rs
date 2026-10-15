@@ -574,7 +574,7 @@ impl Shell {
                 session: opened.session.clone(),
                 film: opened.film.clone(),
                 source: opened.source.clone(),
-                position: Duration::ZERO,
+                position: plan.start,
                 paused: false,
                 audio_track: plan.audio_index,
                 subtitle_track: plan.subtitle_index,

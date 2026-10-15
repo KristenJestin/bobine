@@ -69,6 +69,16 @@ impl Reporting {
         self.last = Some(now);
     }
 
+    /// Where the viewer is: until mpv says, where the film was planned to start, so an early
+    /// report never wipes the resume point.
+    fn position(&self, session: &Session) -> f64 {
+        if session.position_known() {
+            session.position
+        } else {
+            self.base.position.as_secs_f64()
+        }
+    }
+
     /// Called after each update of the session; `ended` when the film reached its end.
     pub fn tick(&mut self, now: Instant, session: &Session, ended: bool) {
         if self.stopped || !session.loaded() {
@@ -78,7 +88,7 @@ impl Reporting {
             self.started = true;
             self.paused = session.paused;
             self.seeks = session.seeks();
-            self.send(Kind::Started, session.position, session.paused, now);
+            self.send(Kind::Started, self.position(session), session.paused, now);
         }
         if ended {
             // At its very end, so the server marks it watched.
@@ -92,7 +102,7 @@ impl Reporting {
         if changed || due {
             self.paused = session.paused;
             self.seeks = session.seeks();
-            self.send(Kind::Progress, session.position, session.paused, now);
+            self.send(Kind::Progress, self.position(session), session.paused, now);
         }
     }
 
@@ -100,7 +110,8 @@ impl Reporting {
     /// once every report has been sent.
     pub fn finish(mut self, session: &Session) -> JoinHandle<()> {
         if self.started && !self.stopped {
-            self.send(Kind::Stopped, session.position, false, Instant::now());
+            let position = self.position(session);
+            self.send(Kind::Stopped, position, false, Instant::now());
         }
         drop(self.sender);
         self.worker
@@ -126,6 +137,11 @@ mod tests {
 
     impl Fixture {
         fn new() -> Self {
+            Self::starting_at(0)
+        }
+
+        /// A playback planned to start `start` seconds in, as a resume does.
+        fn starting_at(start: u64) -> Self {
             let server = FakeServer::new(3, true);
             let player = FakePlayer::default();
             let session = Session::new(
@@ -143,7 +159,7 @@ mod tests {
                     session: PlaySessionId("session-1".into()),
                     film: ItemId(FILM.into()),
                     source: MediaSourceId("source-4k".into()),
-                    position: Duration::ZERO,
+                    position: Duration::from_secs(start),
                     paused: false,
                     audio_track: Some(2),
                     subtitle_track: Some(4),
@@ -273,5 +289,36 @@ mod tests {
         let state = server.state.lock().unwrap();
         let film = state.films.iter().find(|f| f.id.0 == FILM).unwrap();
         assert_eq!(film.resume, Some(Duration::from_secs(600)));
+    }
+
+    #[test]
+    fn the_resume_position_is_never_wiped_by_an_early_report() {
+        let mut f = Fixture::starting_at(4320);
+        // Loaded comes before mpv's first time-pos: the viewer is where the film resumes.
+        f.after(0, vec![PlayerEvent::Loaded]);
+        let server = f.server.clone();
+        assert_eq!(
+            summary(&f.finish()),
+            [("started", 4320, false), ("stopped", 4320, false)]
+        );
+        let state = server.state.lock().unwrap();
+        let film = state.films.iter().find(|f| f.id.0 == FILM).unwrap();
+        assert_eq!(film.resume, Some(Duration::from_secs(72 * 60)));
+    }
+
+    #[test]
+    fn a_pause_before_the_first_position_reports_the_planned_start() {
+        let mut f = Fixture::starting_at(4320);
+        f.after(0, vec![PlayerEvent::Loaded]);
+        f.session.toggle_pause();
+        f.after(1, vec![]);
+        assert_eq!(
+            summary(&f.finish()),
+            [
+                ("started", 4320, false),
+                ("progress", 4320, true),
+                ("stopped", 4320, false)
+            ]
+        );
     }
 }

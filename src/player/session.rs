@@ -34,6 +34,8 @@ pub struct Session {
     controls: Controls,
     panel_open: bool,
     pub position: f64,
+    /// mpv sent a `time-pos`: before it, `position` is the 0 it starts at, not where the film is.
+    position_known: bool,
     pub duration: f64,
     pub paused: bool,
     tracks: Vec<Track>,
@@ -65,6 +67,7 @@ impl Session {
             controls: Controls::default(),
             panel_open: false,
             position: 0.,
+            position_known: false,
             duration: 0.,
             paused: false,
             tracks: Vec::new(),
@@ -164,6 +167,10 @@ impl Session {
         self.player.select_subtitle(id);
     }
 
+    pub fn position_known(&self) -> bool {
+        self.position_known
+    }
+
     pub fn loaded(&self) -> bool {
         self.loaded
     }
@@ -181,7 +188,10 @@ impl Session {
     pub fn update(&mut self, now: Instant) -> bool {
         for event in self.player.events() {
             match event {
-                PlayerEvent::Position(seconds) => self.position = seconds,
+                PlayerEvent::Position(seconds) => {
+                    self.position = seconds;
+                    self.position_known = true;
+                }
                 PlayerEvent::Duration(seconds) => self.duration = seconds,
                 PlayerEvent::Paused(paused) => self.paused = paused,
                 PlayerEvent::Tracks(tracks) => self.tracks = tracks,
