@@ -91,10 +91,10 @@ impl Reporting {
             self.send(Kind::Started, self.position(session), session.paused, now);
         }
         if ended {
-            // At its very end, so the server marks it watched.
-            let end = session.duration.max(session.position);
+            // Where it really ended: a dropped network stream also ends with EOF, and the server
+            // marks the film watched by its own threshold.
             self.stopped = true;
-            self.send(Kind::Stopped, end, false, now);
+            self.send(Kind::Stopped, self.position(session), false, now);
             return;
         }
         let changed = session.paused != self.paused || session.seeks() != self.seeks;
@@ -265,7 +265,7 @@ mod tests {
         let server = f.server.clone();
         assert_eq!(
             summary(&f.finish()),
-            [("started", 7855, false), ("stopped", 7860, false)]
+            [("started", 7855, false), ("stopped", 7855, false)]
         );
         let state = server.state.lock().unwrap();
         let film = state.films.iter().find(|f| f.id.0 == FILM).unwrap();
@@ -320,5 +320,29 @@ mod tests {
                 ("stopped", 4320, false)
             ]
         );
+    }
+
+    #[test]
+    fn a_film_cut_off_is_stopped_where_it_was_not_at_its_duration() {
+        let mut f = Fixture::new();
+        f.after(
+            0,
+            vec![
+                PlayerEvent::Loaded,
+                PlayerEvent::Duration(7860.),
+                PlayerEvent::Position(2400.),
+            ],
+        );
+        // A dropped network stream ends with the reason EOF, far from the end.
+        f.after(1, vec![PlayerEvent::EndOfFile]);
+        let server = f.server.clone();
+        assert_eq!(
+            summary(&f.finish()),
+            [("started", 2400, false), ("stopped", 2400, false)]
+        );
+        let state = server.state.lock().unwrap();
+        let film = state.films.iter().find(|f| f.id.0 == FILM).unwrap();
+        assert!(!film.watched);
+        assert_eq!(film.resume, Some(Duration::from_secs(2400)));
     }
 }
