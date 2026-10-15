@@ -4,6 +4,7 @@
 
 use std::ffi::{CStr, c_char, c_int, c_void};
 use std::ptr;
+use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
@@ -84,14 +85,43 @@ pub fn run(
 
 type Egl = egl::DynamicInstance<egl::EGL1_5>;
 
+/// Declared in the order they go: mpv's render context while its GL context is current, the
+/// EGL surface, the window it drew into, then the GL context. A setup that fails halfway frees
+/// what it made, the same way.
 struct Gl {
-    /// Freed first, while its GL context still exists.
-    render: Option<RenderContext>,
+    render: RenderContext,
+    surface: EglSurface,
     window: wayland_egl::WlEglSurface,
+    context: Rc<EglContext>,
+}
+
+/// The EGL display's GL context, and the EGL instance everything else uses.
+struct EglContext {
     egl: Box<Egl>,
     display: egl::Display,
-    surface: egl::Surface,
     context: egl::Context,
+}
+
+impl Drop for EglContext {
+    fn drop(&mut self) {
+        let _ = self.egl.make_current(self.display, None, None, None);
+        let _ = self.egl.destroy_context(self.display, self.context);
+    }
+}
+
+struct EglSurface {
+    context: Rc<EglContext>,
+    surface: egl::Surface,
+}
+
+impl Drop for EglSurface {
+    /// Made not current first: a current surface outlives its destruction, and the window under
+    /// it is about to go.
+    fn drop(&mut self) {
+        let EglContext { egl, display, .. } = &*self.context;
+        let _ = egl.make_current(*display, None, None, None);
+        let _ = egl.destroy_surface(*display, self.surface);
+    }
 }
 
 impl Gl {
@@ -135,15 +165,30 @@ impl Gl {
         let context = egl
             .create_context(display, config, None, &[egl::NONE])
             .map_err(|e| format!("eglCreateContext: {e}"))?;
+        let context = Rc::new(EglContext {
+            egl,
+            display,
+            context,
+        });
+        let egl = &context.egl;
         let window = wayland_egl::WlEglSurface::new(wl_surface, 1, 1)
             .map_err(|e| format!("wl_egl_window: {e}"))?;
-        // SAFETY: `window` is a live wl_egl_window, kept in `Gl` past the EGL surface.
+        // SAFETY: `window` is a live wl_egl_window, dropped after the EGL surface.
         let surface = unsafe {
             egl.create_window_surface(display, config, window.ptr() as egl::NativeWindowType, None)
         }
         .map_err(|e| format!("eglCreateWindowSurface: {e}"))?;
-        egl.make_current(display, Some(surface), Some(surface), Some(context))
-            .map_err(|e| format!("eglMakeCurrent: {e}"))?;
+        let surface = EglSurface {
+            context: context.clone(),
+            surface,
+        };
+        egl.make_current(
+            display,
+            Some(surface.surface),
+            Some(surface.surface),
+            Some(context.context),
+        )
+        .map_err(|e| format!("eglMakeCurrent: {e}"))?;
         // Never paced by the compositor's frame callbacks: a hidden window (another workspace)
         // gets none, and a swap waiting for one would never return, nor the thread, nor the app
         // that waits for it to leave the player. mpv paces the frames: its update callback says
@@ -153,7 +198,7 @@ impl Gl {
 
         let init = sys::mpv_opengl_init_params {
             get_proc_address: Some(get_proc_address),
-            get_proc_address_ctx: &*egl as *const Egl as *mut c_void,
+            get_proc_address_ctx: &**egl as *const Egl as *mut c_void,
         };
         let mut params = [
             param(
@@ -173,20 +218,15 @@ impl Gl {
         ];
         let render = RenderContext::new(mpv, &mut params, target)?;
         Ok(Gl {
-            render: Some(render),
-            window,
-            egl,
-            display,
+            render,
             surface,
+            window,
             context,
         })
     }
 
     fn run(&self, target: &Target) -> Result<(), String> {
-        let render = self
-            .render
-            .as_ref()
-            .expect("the render context lives until drop");
+        let render = &self.render;
         let mut size = (0, 0);
         while !target.stop.load(Ordering::Relaxed) {
             target.wait(Duration::from_millis(100));
@@ -219,21 +259,13 @@ impl Gl {
                 ),
                 end(),
             ])?;
-            self.egl
-                .swap_buffers(self.display, self.surface)
+            self.context
+                .egl
+                .swap_buffers(self.context.display, self.surface.surface)
                 .map_err(|e| format!("eglSwapBuffers: {e}"))?;
             render.report_swap();
         }
         Ok(())
-    }
-}
-
-impl Drop for Gl {
-    fn drop(&mut self) {
-        drop(self.render.take());
-        let _ = self.egl.make_current(self.display, None, None, None);
-        let _ = self.egl.destroy_surface(self.display, self.surface);
-        let _ = self.egl.destroy_context(self.display, self.context);
     }
 }
 

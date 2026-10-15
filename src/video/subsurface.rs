@@ -41,9 +41,7 @@ pub struct VideoSurface {
     connection: Connection,
     queue: EventQueue<State>,
     state: State,
-    surface: WlSurface,
-    subsurface: WlSubsurface,
-    viewport: WpViewport,
+    surfaces: Surfaces,
     seat: Option<WlSeat>,
     cursor_shapes: Option<WpCursorShapeManagerV1>,
     placement: Option<Placement>,
@@ -102,6 +100,12 @@ impl VideoSurface {
         let surface = compositor.create_surface(&qh, ());
         let subsurface = subcompositor.get_subsurface(&surface, &parent, &qh, ());
         let viewport = viewporter.get_viewport(&surface, &qh, ());
+        let surfaces = Surfaces {
+            connection: connection.clone(),
+            surface: surface.clone(),
+            subsurface: subsurface.clone(),
+            viewport,
+        };
         subsurface.place_below(&parent);
         // Desynchronised: mpv's frames reach the screen without waiting for a GPUI commit.
         subsurface.set_desync();
@@ -125,17 +129,21 @@ impl VideoSurface {
                 .spawn(move || gl::run(display, surface, mpv, target, ready))
                 .map_err(|e| e.to_string())?
         };
-        is_ready
+        let outcome = is_ready
             .recv()
-            .map_err(|_| "the render thread died".to_string())??;
+            .map_err(|_| "the render thread died".to_string())
+            .flatten();
+        if let Err(error) = outcome {
+            // Its EGL objects go before the surface they were made on.
+            let _ = thread.join();
+            return Err(error);
+        }
 
         Ok(VideoSurface {
             connection,
             queue,
             state: State::default(),
-            surface,
-            subsurface,
-            viewport,
+            surfaces,
             seat,
             cursor_shapes,
             placement: None,
@@ -173,8 +181,11 @@ impl VideoDisplay for VideoSurface {
             return;
         }
         self.placement = Some(placement);
-        self.subsurface.set_position(placement.x, placement.y);
-        self.viewport
+        self.surfaces
+            .subsurface
+            .set_position(placement.x, placement.y);
+        self.surfaces
+            .viewport
             .set_destination(placement.width, placement.height);
         self.target
             .set_size(placement.buffer_width, placement.buffer_height);
@@ -221,6 +232,21 @@ impl Drop for VideoSurface {
         {
             pointer.release();
         }
+        let _ = self.connection.flush();
+    }
+}
+
+/// The video's own surface, its place under the window and its size: destroyed when dropped,
+/// so a setup that fails halfway leaves no empty subsurface under the window.
+struct Surfaces {
+    connection: Connection,
+    surface: WlSurface,
+    subsurface: WlSubsurface,
+    viewport: WpViewport,
+}
+
+impl Drop for Surfaces {
+    fn drop(&mut self) {
         self.viewport.destroy();
         self.subsurface.destroy();
         self.surface.destroy();
