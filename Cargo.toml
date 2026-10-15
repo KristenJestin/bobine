@@ -12,8 +12,8 @@ serde_json = "1"
 toml = "1"
 ureq = { version = "3", features = ["json"] }
 # The window (#3). Pinned: gpui-kit pins its own GPUI snapshot, so a bump is a deliberate act.
-# `assets`: the Lucide icons (ISC licence), only those named in `src/icons.rs` are embedded.
-gpui-kit = { version = "=0.7.3", default-features = false, features = ["assets"] }
+# The icons are Phosphor SVGs under `assets/icons/` (see `src/icons.rs`), no icon feature needed.
+gpui-kit = { version = "=0.7.3", default-features = false }
 # The player (#5): libmpv draws with OpenGL into a Wayland subsurface under the window.
 khronos-egl = { version = "6", features = ["dynamic"] }
 libc = "0.2"
