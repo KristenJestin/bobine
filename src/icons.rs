@@ -1,4 +1,5 @@
 //! The icons, from Lucide (ISC licence) as GPUI Kit bundles them: only those drawn are embedded.
+//! The licence notice Lucide asks to ship is in `THIRD-PARTY-NOTICES.md`.
 //! An icon is a square the size of the text beside it, centred, coloured like that text.
 
 pub use gpui_kit::assets::IconName;
