@@ -32,6 +32,11 @@ pub fn accent() -> Rgba {
     rgb(0x4ade80)
 }
 
+/// What went wrong.
+pub fn danger() -> Rgba {
+    rgb(0xf87171)
+}
+
 /// A button, an entry of the pill bar, a search field.
 pub const RADIUS: f32 = 9.;
 /// A floating bar, a card.
@@ -47,7 +52,7 @@ pub fn font_family(cx: &App) -> Option<SharedString> {
 }
 
 /// White, black text: the one thing to do on a screen.
-pub fn primary_button(id: impl Into<ElementId>, label: &'static str) -> Stateful<Div> {
+pub fn primary_button(id: impl Into<ElementId>, label: impl Into<SharedString>) -> Stateful<Div> {
     div()
         .id(id)
         .px(px(20.))
@@ -59,11 +64,11 @@ pub fn primary_button(id: impl Into<ElementId>, label: &'static str) -> Stateful
         .font_weight(FontWeight::SEMIBOLD)
         .cursor_pointer()
         .hover(|style| style.bg(rgb(0xe4e4e7)))
-        .child(label)
+        .child(label.into())
 }
 
 /// Outlined, for what comes second.
-pub fn ghost_button(id: impl Into<ElementId>, label: &'static str) -> Stateful<Div> {
+pub fn ghost_button(id: impl Into<ElementId>, label: impl Into<SharedString>) -> Stateful<Div> {
     div()
         .id(id)
         .px(px(20.))
@@ -77,20 +82,5 @@ pub fn ghost_button(id: impl Into<ElementId>, label: &'static str) -> Stateful<D
         .font_weight(FontWeight::SEMIBOLD)
         .cursor_pointer()
         .hover(|style| style.bg(line()))
-        .child(label)
-}
-
-/// A small pill: a filter, a version, a track.
-pub fn chip(label: &'static str) -> Div {
-    div()
-        .px(px(10.))
-        .py(px(5.))
-        .rounded_full()
-        .border_1()
-        .border_color(line())
-        .bg(rgba(0x14141699))
-        .text_color(muted())
-        .text_size(px(11.))
-        .font_weight(FontWeight::SEMIBOLD)
-        .child(label)
+        .child(label.into())
 }

@@ -1,0 +1,157 @@
+//! The films of a library as the grid shows them: how many columns fit, and the pages asked of
+//! the server as rows come into view. A library may hold thousands of films: only the pages of
+//! the visible rows are asked, each once.
+
+use std::collections::{HashMap, HashSet};
+use std::ops::Range;
+
+use bobine::provider::{Film, FilmQuery, FilmSort, Page};
+
+/// Films per request.
+pub const PAGE: u32 = 100;
+/// The grid's margin, left and right, and the gap between two posters.
+pub const MARGIN: f32 = 40.;
+pub const GAP: f32 = 16.;
+const MAX_COLUMNS: usize = 8;
+const MIN_POSTER: f32 = 150.;
+
+/// Eight columns at 1440 px wide, fewer when narrower, never less than two.
+pub fn columns(width: f32) -> usize {
+    let room = width - 2. * MARGIN + GAP;
+    ((room / (MIN_POSTER + GAP)).floor() as usize).clamp(2, MAX_COLUMNS)
+}
+
+/// `1 284 titres`, with the narrow space French puts between thousands.
+pub fn count(total: u32) -> String {
+    let digits = total.to_string();
+    let mut grouped = String::new();
+    for (index, digit) in digits.chars().enumerate() {
+        if index > 0 && (digits.len() - index).is_multiple_of(3) {
+            grouped.push('\u{202f}');
+        }
+        grouped.push(digit);
+    }
+    let noun = if total > 1 { "titres" } else { "titre" };
+    format!("{grouped} {noun}")
+}
+
+/// The newest first.
+pub fn query(page: u32) -> FilmQuery {
+    FilmQuery {
+        sort: FilmSort::DateAdded,
+        descending: true,
+        start: page * PAGE,
+        limit: PAGE,
+    }
+}
+
+#[derive(Default)]
+pub struct Grid {
+    /// Known once the first page came back.
+    pub total: Option<u32>,
+    pages: HashMap<u32, Vec<Film>>,
+    asked: HashSet<u32>,
+}
+
+impl Grid {
+    pub fn rows(&self, columns: usize) -> usize {
+        (self.total.unwrap_or(0) as usize).div_ceil(columns.max(1))
+    }
+
+    pub fn film(&self, index: usize) -> Option<&Film> {
+        let page = (index / PAGE as usize) as u32;
+        self.pages.get(&page)?.get(index % PAGE as usize)
+    }
+
+    /// The pages holding `films` (indexes) not asked yet; they count as asked from now on.
+    pub fn pages_to_ask(&mut self, films: Range<usize>) -> Vec<u32> {
+        if films.is_empty() {
+            return Vec::new();
+        }
+        let first = (films.start / PAGE as usize) as u32;
+        let last = ((films.end - 1) / PAGE as usize) as u32;
+        (first..=last)
+            .filter(|page| self.asked.insert(*page))
+            .collect()
+    }
+
+    pub fn loaded(&mut self, page: u32, films: Page<Film>) {
+        self.total = Some(films.total);
+        self.pages.insert(page, films.items);
+    }
+
+    /// The page may be asked again when its rows show.
+    pub fn failed(&mut self, page: u32) {
+        self.asked.remove(&page);
+    }
+
+    /// A film changed (watched, resume point): the grid shows it as it is now.
+    pub fn update(&mut self, film: &Film) {
+        for page in self.pages.values_mut() {
+            for found in page.iter_mut().filter(|f| f.id == film.id) {
+                *found = film.clone();
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::fake::FakeServer;
+    use bobine::provider::{ItemId, MediaServer};
+
+    #[test]
+    fn eight_columns_at_1440_fewer_when_narrower() {
+        assert_eq!(columns(1440.), 8);
+        assert_eq!(columns(1920.), 8);
+        assert_eq!(columns(1100.), 6);
+        assert_eq!(columns(800.), 4);
+        assert_eq!(columns(300.), 2);
+    }
+
+    #[test]
+    fn the_count_reads_in_french() {
+        assert_eq!(count(1284), "1\u{202f}284 titres");
+        assert_eq!(count(1), "1 titre");
+        assert_eq!(count(1234567), "1\u{202f}234\u{202f}567 titres");
+    }
+
+    #[test]
+    fn films_are_sorted_by_date_added_newest_first() {
+        let q = query(3);
+        assert_eq!((q.sort, q.descending), (FilmSort::DateAdded, true));
+        assert_eq!((q.start, q.limit), (300, PAGE));
+    }
+
+    #[test]
+    fn only_the_pages_of_the_visible_rows_are_asked_once() {
+        let mut grid = Grid::default();
+        assert_eq!(grid.pages_to_ask(0..24), [0]);
+        assert_eq!(grid.pages_to_ask(0..24), Vec::<u32>::new());
+        assert_eq!(grid.pages_to_ask(96..120), [1]);
+        assert_eq!(grid.pages_to_ask(2000..2024), [20]);
+    }
+
+    #[test]
+    fn a_failed_page_is_asked_again() {
+        let mut grid = Grid::default();
+        assert_eq!(grid.pages_to_ask(0..8), [0]);
+        grid.failed(0);
+        assert_eq!(grid.pages_to_ask(0..8), [0]);
+    }
+
+    #[test]
+    fn thousands_of_films_make_rows_from_the_total_and_show_as_pages_come() {
+        let server = FakeServer::new(1284, true);
+        let mut grid = Grid::default();
+        assert_eq!(grid.rows(8), 0);
+        let library = ItemId(crate::fake::FILMS_LIBRARY.into());
+        grid.loaded(0, server.films(&library, &query(0)).unwrap());
+        assert_eq!(grid.rows(8), 161);
+        assert_eq!(grid.film(99).map(|f| f.id.0.as_str()), Some("film-99"));
+        assert!(grid.film(100).is_none());
+        grid.loaded(12, server.films(&library, &query(12)).unwrap());
+        assert_eq!(grid.film(1283).map(|f| f.id.0.as_str()), Some("film-1283"));
+    }
+}

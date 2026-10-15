@@ -44,6 +44,10 @@ pub struct Session {
     subtitle_position: f64,
     /// Kept once seen: an update whose answer is dropped (a mouse move) must not lose it.
     ended: bool,
+    /// The file is open and playing: the server may be told.
+    loaded: bool,
+    /// How many seeks the viewer asked for, so a seek can be told to the server.
+    seeks: u64,
 }
 
 impl Session {
@@ -69,6 +73,8 @@ impl Session {
             controls_shown: false,
             subtitle_position: 100.,
             ended: false,
+            loaded: false,
+            seeks: 0,
         }
     }
 
@@ -96,12 +102,14 @@ impl Session {
     }
 
     pub fn skip(&mut self, seconds: f64) {
+        self.seeks += 1;
         self.player.seek(Seek::By(seconds));
     }
 
     /// A click on the seek bar, `fraction` of the way along it.
     pub fn seek_to_fraction(&mut self, fraction: f32) {
         let fraction = f64::from(fraction.clamp(0., 1.));
+        self.seeks += 1;
         self.player.seek(Seek::To(fraction * self.duration));
     }
 
@@ -156,6 +164,14 @@ impl Session {
         self.player.select_subtitle(id);
     }
 
+    pub fn loaded(&self) -> bool {
+        self.loaded
+    }
+
+    pub fn seeks(&self) -> u64 {
+        self.seeks
+    }
+
     pub fn error(&self) -> Option<&PlayerError> {
         self.error.as_ref()
     }
@@ -171,8 +187,9 @@ impl Session {
                 PlayerEvent::Tracks(tracks) => self.tracks = tracks,
                 PlayerEvent::EndOfFile => self.ended = true,
                 PlayerEvent::Error(error) => self.error = Some(error),
+                PlayerEvent::Loaded => self.loaded = true,
                 // The film plays; a refused subtitle is simply not in the panel.
-                PlayerEvent::Loaded | PlayerEvent::SubtitleFailed(_) => {}
+                PlayerEvent::SubtitleFailed(_) => {}
             }
         }
         let shown = self.controls_visible(now);
