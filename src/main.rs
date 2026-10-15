@@ -6,6 +6,7 @@ mod player;
 mod screens;
 mod shell;
 mod theme;
+mod video;
 
 use gpui_kit::prelude::*;
 use gpui_kit::{App, Bounds, WindowBounds, WindowOptions, px, size};

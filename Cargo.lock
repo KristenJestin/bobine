@@ -662,7 +662,13 @@ name = "bobine"
 version = "0.0.0"
 dependencies = [
  "gpui-kit",
+ "khronos-egl",
  "libmpv2-sys",
+ "raw-window-handle",
+ "wayland-backend",
+ "wayland-client",
+ "wayland-egl",
+ "wayland-protocols",
 ]
 
 [[package]]
@@ -7268,6 +7274,16 @@ dependencies = [
  "rustix",
  "wayland-client",
  "xcursor",
+]
+
+[[package]]
+name = "wayland-egl"
+version = "0.32.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9b97bdb7c49e5bd9b7562f38ff84f0dad47079fdc9e926f691a787f6dbc05451"
+dependencies = [
+ "wayland-backend",
+ "wayland-sys",
 ]
 
 [[package]]

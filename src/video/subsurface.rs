@@ -1,0 +1,296 @@
+//! The video on Wayland: a `wl_subsurface` placed under GPUI's surface, desynchronised, with an
+//! empty input region, sized with `wp_viewporter`, that mpv draws into with OpenGL on its own
+//! thread (`super::gl`). GPUI leaves a transparent hole where the video is and draws its
+//! controls above: no frame goes through the CPU, and the video moves with the window because
+//! it is part of it.
+//!
+//! GPUI gives its `wl_display` and `wl_surface` through raw-window-handle, so GPUI is not
+//! patched: a second libwayland queue on GPUI's own connection holds the objects made here, and
+//! GPUI never sees their events. The same queue hides the cursor, which GPUI cannot do on
+//! request.
+
+use std::sync::Arc;
+use std::sync::mpsc;
+use std::thread::{self, JoinHandle};
+
+use gpui_kit::Window;
+use raw_window_handle::{HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle};
+use wayland_backend::client::{Backend, ObjectId};
+use wayland_client::globals::{GlobalListContents, registry_queue_init};
+use wayland_client::protocol::wl_compositor::WlCompositor;
+use wayland_client::protocol::wl_pointer::{self, WlPointer};
+use wayland_client::protocol::wl_region::WlRegion;
+use wayland_client::protocol::wl_registry::{self, WlRegistry};
+use wayland_client::protocol::wl_seat::{self, WlSeat};
+use wayland_client::protocol::wl_subcompositor::WlSubcompositor;
+use wayland_client::protocol::wl_subsurface::WlSubsurface;
+use wayland_client::protocol::wl_surface::WlSurface;
+use wayland_client::{Connection, Dispatch, EventQueue, Proxy, QueueHandle, WEnum, delegate_noop};
+use wayland_protocols::wp::cursor_shape::v1::client::wp_cursor_shape_device_v1::{
+    Shape, WpCursorShapeDeviceV1,
+};
+use wayland_protocols::wp::cursor_shape::v1::client::wp_cursor_shape_manager_v1::WpCursorShapeManagerV1;
+use wayland_protocols::wp::viewporter::client::wp_viewport::WpViewport;
+use wayland_protocols::wp::viewporter::client::wp_viewporter::WpViewporter;
+
+use super::gl::{self, SendPtr, Target};
+use super::{Placement, VideoDisplay};
+use crate::player::libmpv::Libmpv;
+
+pub struct VideoSurface {
+    connection: Connection,
+    queue: EventQueue<State>,
+    state: State,
+    surface: WlSurface,
+    subsurface: WlSubsurface,
+    viewport: WpViewport,
+    seat: Option<WlSeat>,
+    cursor_shapes: Option<WpCursorShapeManagerV1>,
+    placement: Option<Placement>,
+    /// The cursor as last set, and the pointer entry it was set for.
+    cursor: Option<(bool, u32)>,
+    target: Arc<Target>,
+    thread: Option<JoinHandle<()>>,
+}
+
+impl VideoSurface {
+    /// Creates the subsurface under `window` and starts the thread that draws `mpv` into it.
+    pub fn new(window: &Window, mpv: Arc<Libmpv>) -> Result<VideoSurface, String> {
+        let RawWindowHandle::Wayland(window_handle) = HasWindowHandle::window_handle(window)
+            .map_err(|e| e.to_string())?
+            .as_raw()
+        else {
+            return Err("the window is not a Wayland window".into());
+        };
+        let RawDisplayHandle::Wayland(display_handle) =
+            window.display_handle().map_err(|e| e.to_string())?.as_raw()
+        else {
+            return Err("the display is not a Wayland display".into());
+        };
+        let display = display_handle.display.as_ptr();
+
+        // SAFETY: GPUI's display stays connected as long as its window, which outlives this.
+        let connection =
+            Connection::from_backend(unsafe { Backend::from_foreign_display(display.cast()) });
+        let (globals, queue) = registry_queue_init::<State>(&connection)
+            .map_err(|e| format!("Wayland registry: {e}"))?;
+        let qh = queue.handle();
+        let compositor: WlCompositor = globals
+            .bind(&qh, 4..=6, ())
+            .map_err(|e| format!("wl_compositor: {e}"))?;
+        let subcompositor: WlSubcompositor = globals
+            .bind(&qh, 1..=1, ())
+            .map_err(|e| format!("wl_subcompositor: {e}"))?;
+        let viewporter: WpViewporter = globals
+            .bind(&qh, 1..=1, ())
+            .map_err(|e| format!("wp_viewporter: {e}"))?;
+        // Without them the cursor simply stays.
+        let seat: Option<WlSeat> = globals.bind(&qh, 1..=5, ()).ok();
+        let cursor_shapes: Option<WpCursorShapeManagerV1> = globals.bind(&qh, 1..=1, ()).ok();
+
+        // SAFETY: GPUI's live wl_surface proxy, of that interface.
+        let parent_id = unsafe {
+            ObjectId::from_ptr(
+                WlSurface::interface(),
+                window_handle.surface.as_ptr().cast(),
+            )
+        }
+        .map_err(|_| "the window's wl_surface is not a live proxy")?;
+        let parent = WlSurface::from_id(&connection, parent_id)
+            .map_err(|_| "the window's wl_surface is not a wl_surface")?;
+
+        let surface = compositor.create_surface(&qh, ());
+        let subsurface = subcompositor.get_subsurface(&surface, &parent, &qh, ());
+        let viewport = viewporter.get_viewport(&surface, &qh, ());
+        subsurface.place_below(&parent);
+        // Desynchronised: mpv's frames reach the screen without waiting for a GPUI commit.
+        subsurface.set_desync();
+        // The video takes no input: the pointer and the keys stay with the window above.
+        let region = compositor.create_region(&qh, ());
+        surface.set_input_region(Some(&region));
+        region.destroy();
+        surface.commit();
+        connection
+            .flush()
+            .map_err(|e| format!("Wayland flush: {e}"))?;
+
+        let target = Arc::new(Target::default());
+        let (ready, is_ready) = mpsc::channel();
+        let thread = {
+            let display = SendPtr(display);
+            let surface = surface.id();
+            let target = target.clone();
+            thread::Builder::new()
+                .name("video-gl".into())
+                .spawn(move || gl::run(display, surface, mpv, target, ready))
+                .map_err(|e| e.to_string())?
+        };
+        is_ready
+            .recv()
+            .map_err(|_| "the render thread died".to_string())??;
+
+        Ok(VideoSurface {
+            connection,
+            queue,
+            state: State::default(),
+            surface,
+            subsurface,
+            viewport,
+            seat,
+            cursor_shapes,
+            placement: None,
+            cursor: None,
+            target,
+            thread: Some(thread),
+        })
+    }
+
+    /// Handles what the compositor said to this queue: the seat's pointer, its enter serial.
+    fn dispatch(&mut self) {
+        let _ = self.queue.dispatch_pending(&mut self.state);
+        if self.state.pointer.is_none()
+            && self.state.has_pointer
+            && let Some(seat) = &self.seat
+        {
+            let qh = self.queue.handle();
+            let pointer = seat.get_pointer(&qh, ());
+            self.state.shape_device = self
+                .cursor_shapes
+                .as_ref()
+                .map(|shapes| shapes.get_pointer(&pointer, &qh, ()));
+            self.state.pointer = Some(pointer);
+            let _ = self.connection.flush();
+        }
+    }
+}
+
+impl VideoDisplay for VideoSurface {
+    /// Called while GPUI paints, so the position (applied on the window's next commit) lands in
+    /// the same frame as the controls around it.
+    fn place(&mut self, placement: Placement) {
+        self.dispatch();
+        if self.placement == Some(placement) {
+            return;
+        }
+        self.placement = Some(placement);
+        self.subsurface.set_position(placement.x, placement.y);
+        self.viewport
+            .set_destination(placement.width, placement.height);
+        self.target
+            .set_size(placement.buffer_width, placement.buffer_height);
+        let _ = self.connection.flush();
+    }
+
+    fn set_cursor_visible(&mut self, visible: bool) {
+        self.dispatch();
+        let (Some(pointer), Some(device), Some(serial)) = (
+            &self.state.pointer,
+            &self.state.shape_device,
+            self.state.enter_serial,
+        ) else {
+            // Hidden without a way to bring it back would be worse than shown.
+            return;
+        };
+        // Each entry into the window lets GPUI set its own cursor again.
+        if self.cursor == Some((visible, serial)) {
+            return;
+        }
+        self.cursor = Some((visible, serial));
+        if visible {
+            device.set_shape(serial, Shape::Default);
+        } else {
+            pointer.set_cursor(serial, None, 0, 0);
+        }
+        let _ = self.connection.flush();
+    }
+}
+
+impl Drop for VideoSurface {
+    /// The render thread frees mpv's render context and the EGL objects before the surface they
+    /// draw into goes, and all of it before the window does.
+    fn drop(&mut self) {
+        self.target.stop();
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+        if let Some(device) = self.state.shape_device.take() {
+            device.destroy();
+        }
+        if let Some(pointer) = self.state.pointer.take()
+            && pointer.version() >= 3
+        {
+            pointer.release();
+        }
+        self.viewport.destroy();
+        self.subsurface.destroy();
+        self.surface.destroy();
+        let _ = self.connection.flush();
+    }
+}
+
+#[derive(Default)]
+struct State {
+    has_pointer: bool,
+    pointer: Option<WlPointer>,
+    shape_device: Option<WpCursorShapeDeviceV1>,
+    /// The serial of the pointer's last entry into one of the window's surfaces: the cursor can
+    /// only be changed with it.
+    enter_serial: Option<u32>,
+}
+
+impl Dispatch<WlRegistry, GlobalListContents> for State {
+    fn event(
+        _: &mut State,
+        _: &WlRegistry,
+        _: wl_registry::Event,
+        _: &GlobalListContents,
+        _: &Connection,
+        _: &QueueHandle<State>,
+    ) {
+    }
+}
+
+impl Dispatch<WlSeat, ()> for State {
+    fn event(
+        state: &mut State,
+        _: &WlSeat,
+        event: wl_seat::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<State>,
+    ) {
+        if let wl_seat::Event::Capabilities {
+            capabilities: WEnum::Value(capabilities),
+        } = event
+        {
+            state.has_pointer = capabilities.contains(wl_seat::Capability::Pointer);
+        }
+    }
+}
+
+impl Dispatch<WlPointer, ()> for State {
+    fn event(
+        state: &mut State,
+        _: &WlPointer,
+        event: wl_pointer::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<State>,
+    ) {
+        match event {
+            wl_pointer::Event::Enter { serial, .. } => state.enter_serial = Some(serial),
+            wl_pointer::Event::Leave { .. } => state.enter_serial = None,
+            _ => {}
+        }
+    }
+}
+
+delegate_noop!(State: WlCompositor);
+delegate_noop!(State: WlSubcompositor);
+delegate_noop!(State: WlSubsurface);
+delegate_noop!(State: WlRegion);
+delegate_noop!(State: WpViewporter);
+delegate_noop!(State: WpViewport);
+delegate_noop!(State: WpCursorShapeManagerV1);
+delegate_noop!(State: WpCursorShapeDeviceV1);
+delegate_noop!(State: ignore WlSurface);
