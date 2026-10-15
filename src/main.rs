@@ -14,6 +14,7 @@ mod navigation;
 mod player;
 mod reports;
 mod screens;
+mod scroll;
 mod shell;
 mod start;
 mod theme;

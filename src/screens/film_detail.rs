@@ -5,8 +5,8 @@
 use bobine::provider::{CastMember, Film, FilmDetail};
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    AnyElement, Context, Div, FontWeight, IntoElement, SharedString, Stateful, Window, anchored,
-    deferred, div, linear_color_stop, linear_gradient, px, rgba,
+    AnyElement, Context, Div, FontWeight, IntoElement, ScrollHandle, SharedString, Stateful,
+    Window, anchored, deferred, div, linear_color_stop, linear_gradient, px, rgba,
 };
 
 use super::{centered, note, picture, poster, progress_bar, row_heading};
@@ -33,12 +33,13 @@ pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -
     let (menu, error, busy) = (page.menu, page.error, page.busy);
     let collection = page.collection.clone();
     let scroll = page.scroll.clone();
+    let [cast_scroll, collection_scroll, similar_scroll] = page.rows.clone();
     let height = f32::from(window.viewport_size().height);
 
     let hero = hero(shell, &detail, &choices, menu, error, busy, height, cx);
     let mut rows: Vec<AnyElement> = Vec::new();
     if !detail.cast.is_empty() {
-        rows.push(cast_row(shell, &detail.cast, cx).into_any_element());
+        rows.push(cast_row(shell, &detail.cast, &cast_scroll, cx).into_any_element());
     }
     if let Some(collection) = collection {
         let mut films = collection.others.clone();
@@ -52,6 +53,7 @@ pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -
                 Some(caption),
                 &films,
                 Some(&detail.film),
+                &collection_scroll,
                 cx,
             )
             .into_any_element(),
@@ -59,15 +61,29 @@ pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -
     }
     if !detail.similar.is_empty() {
         rows.push(
-            poster_row(shell, "Titres proches", None, &detail.similar, None, cx).into_any_element(),
+            poster_row(
+                shell,
+                "Titres proches",
+                None,
+                &detail.similar,
+                None,
+                &similar_scroll,
+                cx,
+            )
+            .into_any_element(),
         );
     }
 
+    // The page scrolls itself and its rows by hand (`Shell::scroll_film_page`): GPUI's own
+    // scrolling moves every container under the pointer on both axes at once.
     div()
         .id("film-page")
         .size_full()
-        .overflow_y_scroll()
+        .overflow_hidden()
         .track_scroll(&scroll)
+        .on_scroll_wheel(
+            cx.listener(|shell, event, window, cx| shell.scroll_film_page(event, window, cx)),
+        )
         .child(hero)
         .child(
             div()
@@ -405,7 +421,12 @@ fn menu(
 }
 
 /// Round photos, the name and the role.
-fn cast_row(shell: &mut Shell, cast: &[CastMember], cx: &mut Context<Shell>) -> Div {
+fn cast_row(
+    shell: &mut Shell,
+    cast: &[CastMember],
+    scroll: &ScrollHandle,
+    cx: &mut Context<Shell>,
+) -> Div {
     let people: Vec<Stateful<Div>> = cast
         .iter()
         .enumerate()
@@ -460,7 +481,8 @@ fn cast_row(shell: &mut Shell, cast: &[CastMember], cx: &mut Context<Shell>) -> 
                 .id("cast-row")
                 .flex()
                 .gap(px(12.))
-                .overflow_x_scroll()
+                .overflow_hidden()
+                .track_scroll(scroll)
                 .children(people),
         )
 }
@@ -472,6 +494,7 @@ fn poster_row(
     caption: Option<String>,
     films: &[Film],
     current: Option<&Film>,
+    scroll: &ScrollHandle,
     cx: &mut Context<Shell>,
 ) -> Div {
     let posters: Vec<Stateful<Div>> = films
@@ -505,7 +528,8 @@ fn poster_row(
                 .id(format!("{title}-row"))
                 .flex()
                 .gap(px(GAP))
-                .overflow_x_scroll()
+                .overflow_hidden()
+                .track_scroll(scroll)
                 .children(posters),
         )
 }

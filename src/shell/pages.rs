@@ -11,8 +11,8 @@ use bobine::provider::{
 };
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    Context, Entity, Image, RenderImage, ScrollHandle, Subscription, Task, UniformListScrollHandle,
-    Window,
+    Context, Entity, Image, RenderImage, ScrollHandle, ScrollWheelEvent, Subscription, Task,
+    TouchPhase, UniformListScrollHandle, Window, point, px,
 };
 
 use super::{Film as Playing, Shell};
@@ -23,6 +23,7 @@ use crate::input::TextInput;
 use crate::navigation::{NavEntry, Screen};
 use crate::player::libmpv::Libmpv;
 use crate::reports::Reporting;
+use crate::scroll::{self, Move, Phase, Wheel};
 use crate::start::{self, Start};
 
 /// How long the address must stay unchanged before the server is asked who it is.
@@ -75,6 +76,9 @@ pub struct DetailPage {
     pub collection: Option<Collection>,
     pub menu: Option<Chip>,
     pub scroll: ScrollHandle,
+    /// The rows that scroll sideways: the cast, the collection, similar titles.
+    pub rows: [ScrollHandle; 3],
+    gesture: scroll::Gesture,
     /// What went wrong with the last button.
     pub error: Option<&'static str>,
     pub busy: bool,
@@ -370,6 +374,8 @@ impl Shell {
             collection: None,
             menu: None,
             scroll: ScrollHandle::new(),
+            rows: Default::default(),
+            gesture: Default::default(),
             error: None,
             busy: false,
         });
@@ -449,6 +455,49 @@ impl Shell {
             Chip::Subtitle => choices.subtitle = value,
         }
         cx.notify();
+    }
+
+    /// The wheel or the touchpad over the film page: the page goes up and down, the row under
+    /// the pointer sideways, never both.
+    pub fn scroll_film_page(
+        &mut self,
+        event: &ScrollWheelEvent,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(page) = self.details.last_mut() else {
+            return;
+        };
+        let delta = event.delta.pixel_delta(window.line_height());
+        let wheel = Wheel {
+            dx: delta.x.into(),
+            dy: delta.y.into(),
+            precise: event.delta.precise(),
+            shift: event.modifiers.shift,
+            phase: match event.touch_phase {
+                TouchPhase::Started => Phase::Started,
+                TouchPhase::Moved => Phase::Moved,
+                TouchPhase::Ended | TouchPhase::Cancelled => Phase::Ended,
+            },
+        };
+        let row = page
+            .rows
+            .iter()
+            .position(|row| row.bounds().contains(&event.position));
+        let (handle, delta) = match page.gesture.route(wheel, row, Instant::now()) {
+            Some(Move::Page(dy)) => (&page.scroll, point(px(0.), px(dy))),
+            Some(Move::Row(row, dx)) => (&page.rows[row], point(px(dx), px(0.))),
+            None => return,
+        };
+        let (offset, max) = (handle.offset(), handle.max_offset());
+        let to = point(
+            px(scroll::moved(offset.x.into(), delta.x.into(), max.x.into())),
+            px(scroll::moved(offset.y.into(), delta.y.into(), max.y.into())),
+        );
+        if to != offset {
+            handle.set_offset(to);
+            cx.notify();
+        }
     }
 
     pub fn toggle_menu(&mut self, chip: Chip, cx: &mut Context<Self>) {
