@@ -361,10 +361,11 @@ impl MediaServer for Jellyfin {
 
         let base = self.http.base();
         let (film_id, source_id) = (encode(&film.0), encode(&source.0));
+        // `ApiKey`, not the older `api_key`: Jellyfin 10.11 keeps that one behind a legacy setting.
         let api_key = encode(self.token());
         let stream = StreamUrl::new(format!(
             "{base}/Videos/{film_id}/stream?static=true&mediaSourceId={source_id}\
-             &playSessionId={}&deviceId={}&api_key={api_key}",
+             &playSessionId={}&deviceId={}&ApiKey={api_key}",
             encode(&session),
             encode(&self.http.device().id),
         ));
@@ -375,7 +376,7 @@ impl MediaServer for Jellyfin {
             .map(|s| ExternalSubtitle {
                 index: s.index,
                 url: StreamUrl::new(format!(
-                    "{base}/Videos/{film_id}/{source_id}/Subtitles/{}/Stream.{}?api_key={api_key}",
+                    "{base}/Videos/{film_id}/{source_id}/Subtitles/{}/Stream.{}?ApiKey={api_key}",
                     s.index,
                     subtitle_format(s.codec.as_deref()),
                 )),

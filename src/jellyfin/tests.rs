@@ -639,10 +639,11 @@ fn direct_play_stream() {
         "static=true".to_string(),
         format!("mediaSourceId={SOURCE}"),
         format!("playSessionId={PLAY_SESSION}"),
-        format!("api_key={TOKEN}"),
+        format!("ApiKey={TOKEN}"),
     ] {
         assert!(url.contains(&part), "{part} missing");
     }
+    assert!(!url.contains("api_key"), "the legacy parameter is not used");
 
     let asked = s.fake.last("POST", &format!("/Items/{FILM}/PlaybackInfo"));
     assert_eq!(asked.param("userId"), Some(USER_ID));
@@ -668,8 +669,8 @@ fn external_subtitle_urls() {
     assert_eq!(
         urls,
         [
-            (5, format!("{base}/5/Stream.srt?api_key={TOKEN}").as_str()),
-            (6, format!("{base}/6/Stream.ass?api_key={TOKEN}").as_str()),
+            (5, format!("{base}/5/Stream.srt?ApiKey={TOKEN}").as_str()),
+            (6, format!("{base}/6/Stream.ass?ApiKey={TOKEN}").as_str()),
         ]
     );
 }

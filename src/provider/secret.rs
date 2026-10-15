@@ -35,7 +35,7 @@ impl fmt::Debug for Token {
     }
 }
 
-/// A URL that carries the token in its query (`api_key`), because the player opens it itself.
+/// A URL that carries the token in its query (`ApiKey`), because the player opens it itself.
 #[derive(Clone, PartialEq, Eq)]
 pub struct StreamUrl(String);
 
