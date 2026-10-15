@@ -436,8 +436,9 @@ fn menu(
                 .flex()
                 .items_center()
                 .gap(px(10.))
+                .flex_none()
+                .h(px(menu::LINE))
                 .px(px(12.))
-                .py(px(8.))
                 .rounded(px(7.))
                 .text_size(px(13.))
                 .cursor_pointer()
@@ -453,16 +454,22 @@ fn menu(
                 .child(label)
         })
         .collect();
-    // It drops into place from a little higher.
-    let rise = point(px(0.), px(-8. * (1. - shown)));
+    let wanted = menu::height(lines.len());
+    let window_height = f32::from(window.viewport_size().height);
+    let (at, height) = menu::place(chip, wanted, window_height);
+    // It comes into place from a little nearer its chip.
+    let toward_chip = if at.y > chip.top() { -8. } else { 8. };
+    let rise = point(px(0.), px(toward_chip * (1. - shown)));
     deferred(
         anchored()
-            .position(menu::position(chip) + rise)
-            .snap_to_window_with_margin(px(8.))
+            .position(at + rise)
+            .snap_to_window_with_margin(px(menu::MARGIN))
             .child(
                 div()
                     .id("chip-menu")
                     .opacity(shown)
+                    .h(px(height))
+                    .overflow_y_scroll()
                     .min_w(px(240.))
                     .p(px(6.))
                     .flex()

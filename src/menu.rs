@@ -3,12 +3,33 @@
 
 use gpui_kit::{Bounds, Pixels, Point, point, px};
 
-/// Between the bottom of a chip and the top of its menu.
+/// Between a chip and its menu.
 pub const GAP: f32 = 6.;
+/// Kept free between a menu and the window's edge.
+pub const MARGIN: f32 = 8.;
+/// One choice of a menu.
+pub const LINE: f32 = 34.;
 
-/// Where a menu's top left goes, in the window, for a chip drawn at `chip`.
-pub fn position(chip: Bounds<Pixels>) -> Point<Pixels> {
-    point(chip.left(), chip.bottom() + px(GAP))
+/// The height of a menu of `lines` choices: the lines, the padding and the border around them.
+pub fn height(lines: usize) -> f32 {
+    lines as f32 * LINE + 2. * 6. + 2.
+}
+
+/// Where a menu `height` tall goes, in the window, for a chip drawn at `chip`: its top left, and
+/// the height it gets. Under the chip when it fits there, else above it; a menu too long for
+/// either side takes the larger one and scrolls.
+pub fn place(chip: Bounds<Pixels>, height: f32, window_height: f32) -> (Point<Pixels>, f32) {
+    let (top, bottom) = (f32::from(chip.top()), f32::from(chip.bottom()));
+    let below = window_height - bottom - GAP - MARGIN;
+    let above = top - GAP - MARGIN;
+    let under = height <= below || (height > above && below >= above);
+    let height = height.min(if under { below } else { above }).max(0.);
+    let y = if under {
+        bottom + GAP
+    } else {
+        top - GAP - height
+    };
+    (point(chip.left(), px(y)), height)
 }
 
 pub struct Menus<K> {
@@ -54,10 +75,39 @@ mod tests {
     use super::*;
     use gpui_kit::size;
 
+    fn chip_at(top: f32) -> Bounds<Pixels> {
+        Bounds::new(point(px(372.), px(top)), size(px(180.), px(32.)))
+    }
+
     #[test]
     fn a_chip_menu_opens_right_under_its_chip() {
-        let chip = Bounds::new(point(px(372.), px(640.)), size(px(180.), px(32.)));
-        assert_eq!(position(chip), point(px(372.), px(678.)));
+        assert_eq!(
+            place(chip_at(640.), 80., 810.),
+            (point(px(372.), px(678.)), 80.)
+        );
+    }
+
+    #[test]
+    fn a_menu_without_room_below_opens_right_above_its_chip() {
+        // 810 - 672 - 6 - 8 = 124 pixels below: too few for 216.
+        assert_eq!(
+            place(chip_at(640.), 216., 810.),
+            (point(px(372.), px(418.)), 216.)
+        );
+    }
+
+    #[test]
+    fn a_menu_too_long_for_either_side_takes_the_larger_one_and_scrolls() {
+        // 626 pixels above, 124 below.
+        assert_eq!(
+            place(chip_at(640.), 700., 810.),
+            (point(px(372.), px(8.)), 626.)
+        );
+        // 46 above, 704 below.
+        assert_eq!(
+            place(chip_at(60.), 900., 810.),
+            (point(px(372.), px(98.)), 704.)
+        );
     }
 
     #[test]
