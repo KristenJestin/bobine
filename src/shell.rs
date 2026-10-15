@@ -24,7 +24,7 @@ use crate::player::libmpv::Libmpv;
 use crate::player::mpv::MpvPlayer;
 use crate::player::session::{Session, WindowRequest};
 use crate::player::{Media, Player};
-use crate::reports::Reporting;
+use crate::reports::{self, Reporting};
 use crate::screens;
 use crate::theme;
 use crate::video::Rect;
@@ -32,6 +32,9 @@ use crate::video::subsurface::{VideoSurface, Wayland};
 
 /// How often the player is asked what changed, and the controls checked for hiding.
 const PLAYER_TICK: Duration = Duration::from_millis(100);
+
+/// How long closing the window waits for "stopped" to reach the server.
+const CLOSE_WAITS_FOR_REPORTS: Duration = Duration::from_secs(2);
 
 pub struct Shell {
     pub navigator: Navigator,
@@ -160,10 +163,13 @@ impl Shell {
         reports
     }
 
-    /// The window is closing: the film goes, then what the video bound of the compositor,
-    /// while GPUI's display is still connected.
+    /// The window is closing: the film goes, the server is told where it stopped (a moment
+    /// is waited for it, no more), then what the video bound of the compositor goes, while
+    /// GPUI's display is still connected.
     pub fn close_video(&mut self) {
-        self.stop_playback();
+        if let Some(reports) = self.stop_playback() {
+            reports::wait(reports, CLOSE_WAITS_FOR_REPORTS);
+        }
         self.wayland = None;
     }
 

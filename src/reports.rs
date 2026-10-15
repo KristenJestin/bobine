@@ -118,6 +118,20 @@ impl Reporting {
     }
 }
 
+/// Waits for the reports still to be sent, no longer than `bound`: a slow server must not keep
+/// the window open. Whether they all went.
+pub fn wait(worker: JoinHandle<()>, bound: Duration) -> bool {
+    let end = Instant::now() + bound;
+    while !worker.is_finished() {
+        if Instant::now() >= end {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let _ = worker.join();
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -344,5 +358,33 @@ mod tests {
         let film = state.films.iter().find(|f| f.id.0 == FILM).unwrap();
         assert!(!film.watched);
         assert_eq!(film.resume, Some(Duration::from_secs(2400)));
+    }
+
+    #[test]
+    fn closing_the_window_mid_film_sends_stopped_with_the_current_position() {
+        let mut f = Fixture::starting_at(4320);
+        f.after(0, vec![PlayerEvent::Loaded, PlayerEvent::Position(4400.)]);
+        let server = f.server.clone();
+        let worker = f.reporting.finish(&f.session);
+        assert!(wait(worker, Duration::from_secs(2)));
+        // Nothing joined the worker but `wait`: the report is there once it returned.
+        assert_eq!(
+            summary(&server.reports()),
+            [("started", 4400, false), ("stopped", 4400, false)]
+        );
+    }
+
+    #[test]
+    fn waiting_for_the_reports_is_bounded() {
+        let slow = std::thread::spawn(|| std::thread::sleep(Duration::from_secs(5)));
+        let begun = Instant::now();
+        assert!(!wait(slow, Duration::from_millis(100)));
+        assert!(begun.elapsed() < Duration::from_secs(2));
+    }
+
+    #[test]
+    fn waiting_for_reports_already_sent_returns_at_once() {
+        let done = std::thread::spawn(|| {});
+        assert!(wait(done, Duration::from_secs(2)));
     }
 }
