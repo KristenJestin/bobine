@@ -3,3 +3,13 @@ name = "bobine"
 version = "0.0.0"
 edition = "2024"
 publish = false
+
+[dependencies]
+# The window (#3). Pinned: gpui-kit pins its own GPUI snapshot, so a bump is a deliberate act.
+gpui-kit = { version = "=0.7.3", default-features = false }
+
+[features]
+default = ["fast"]
+# GPUI Fast (a GPUI fork that redraws only what changed). `--no-default-features` is the rollback
+# to plain GPUI: both must keep building.
+fast = ["gpui-kit/gpui-fast"]
