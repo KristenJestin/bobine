@@ -1,6 +1,8 @@
 //! `bobine`: a native client for films and series, Jellyfin first.
 
 mod chrome;
+#[cfg(feature = "harness")]
+mod harness;
 mod navigation;
 mod player;
 mod screens;
@@ -33,6 +35,8 @@ fn main() {
                 closing.update(cx, |shell, _| shell.stop_playback()).ok();
                 true
             });
+            #[cfg(feature = "harness")]
+            harness::start(&shell, window, cx);
             shell
         });
         if let Err(error) = opened {

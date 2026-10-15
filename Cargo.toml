@@ -22,3 +22,6 @@ default = ["fast"]
 # GPUI Fast (a GPUI fork that redraws only what changed). `--no-default-features` is the rollback
 # to plain GPUI: both must keep building.
 fast = ["gpui-kit/gpui-fast"]
+# A startup path for the headless checks only (play a file, show the controls or the panel, go
+# fullscreen, measure): never part of the application a user runs.
+harness = []
