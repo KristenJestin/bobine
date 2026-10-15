@@ -59,10 +59,30 @@ pub fn error_message(error: &ProviderError) -> &'static str {
     }
 }
 
+/// Whether this error brings the login back. Several requests fail with an expired session at
+/// once: the form is built for the first, the others leave what the user is typing alone.
+pub fn brings_the_login_back(error: &ProviderError, login_shown: bool) -> bool {
+    *error == ProviderError::SessionExpired && !login_shown
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::fake::{FakeServer, PASSWORD, USER};
+
+    #[test]
+    fn one_expired_session_shows_the_login_once() {
+        let expired = ProviderError::SessionExpired;
+        assert!(brings_the_login_back(&expired, false));
+        // The second and third requests that failed with it.
+        assert!(!brings_the_login_back(&expired, true));
+    }
+
+    #[test]
+    fn only_an_expired_session_brings_the_login_back() {
+        assert!(!brings_the_login_back(&ProviderError::NotFound, false));
+        assert!(!brings_the_login_back(&ProviderError::Forbidden, false));
+    }
 
     const ADDRESS: &str = "https://media.exemple.org";
 

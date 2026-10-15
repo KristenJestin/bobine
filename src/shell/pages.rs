@@ -234,7 +234,7 @@ impl Shell {
     /// What the user is told; an expired session brings the login back.
     fn failed(&mut self, error: ProviderError, cx: &mut Context<Self>) -> &'static str {
         let said = start::error_message(&error);
-        if error == ProviderError::SessionExpired {
+        if start::brings_the_login_back(&error, self.login.is_some()) {
             self.show_login(Some(said), cx);
         }
         said
