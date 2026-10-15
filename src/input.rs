@@ -105,6 +105,11 @@ impl TextInput {
     }
 
     #[cfg(feature = "harness")]
+    pub fn selected(&self) -> &str {
+        &self.editor.text()[self.editor.selection()]
+    }
+
+    #[cfg(feature = "harness")]
     pub fn set_text(&mut self, text: &str, cx: &mut Context<Self>) {
         self.editor.take();
         self.editor.insert(text);

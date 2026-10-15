@@ -11,12 +11,24 @@ const QUICK: Duration = Duration::from_millis(160);
 /// Going to a page and back.
 const PAGE: Duration = Duration::from_millis(220);
 
+/// How many times slower every move is: the headless harness slows them down to photograph
+/// their frames. Always 1 in the application.
+#[cfg(feature = "harness")]
+pub static SLOWER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
+
+fn slowed(duration: Duration) -> Duration {
+    #[cfg(feature = "harness")]
+    return duration * SLOWER.load(std::sync::atomic::Ordering::Relaxed);
+    #[cfg(not(feature = "harness"))]
+    duration
+}
+
 pub fn quick() -> Duration {
-    QUICK
+    slowed(QUICK)
 }
 
 pub fn page() -> Duration {
-    PAGE
+    slowed(PAGE)
 }
 
 /// Fast at first, gentle at the end.

@@ -61,6 +61,9 @@ pub struct Shell {
     page: (Screen, usize),
     page_turns: u64,
     turned_forward: bool,
+    /// When each draw started: the harness reads the frame times of a move from it.
+    #[cfg(feature = "harness")]
+    pub frames: Vec<Instant>,
     /// Given to every mpv: the headless harness silences the sound.
     pub mpv_options: Vec<(&'static str, &'static str)>,
 }
@@ -105,6 +108,8 @@ impl Shell {
             page: (Screen::Login, 0),
             page_turns: 0,
             turned_forward: true,
+            #[cfg(feature = "harness")]
+            frames: Vec::new(),
             mpv_options: Vec::new(),
         };
         shell.begin(open, cx);
@@ -289,6 +294,8 @@ impl Shell {
 impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.images.new_frame();
+        #[cfg(feature = "harness")]
+        self.frames.push(Instant::now());
         // Escape needs the focus; a click on a button must not lose it for good. A text field
         // keeps it while it has it; the login's first field takes it when nothing has.
         if window.focused(cx).is_none() {
