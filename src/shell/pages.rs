@@ -154,6 +154,7 @@ impl Shell {
             busy: false,
             _address_changed: address_changed,
         });
+        self.login_focus_due = true;
         self.server = None;
         self.details.clear();
         self.people.clear();
