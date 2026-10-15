@@ -37,6 +37,35 @@ const PLAYER_TICK: Duration = Duration::from_millis(100);
 /// How long closing the window waits for "stopped" to reach the server.
 const CLOSE_WAITS_FOR_REPORTS: Duration = Duration::from_secs(2);
 
+/// Where the keyboard focus goes at a draw.
+#[derive(Debug, PartialEq, Eq)]
+enum FocusTo {
+    /// It stays where it is.
+    Keep,
+    /// The window's root, so that Escape and the player's keys are heard.
+    Root,
+    /// The login's address field.
+    Address,
+}
+
+/// What to do with the focus at a draw. A text field keeps it while it has it; the login's
+/// address field takes it when nothing has, and also when the login has just been shown: the
+/// window starts on the login before the form exists, so the root took the focus meanwhile.
+fn focus_to(login_shown: bool, address_due: &mut bool, nothing_focused: bool) -> FocusTo {
+    if login_shown && *address_due {
+        *address_due = false;
+        return FocusTo::Address;
+    }
+    if nothing_focused {
+        return if login_shown {
+            FocusTo::Address
+        } else {
+            FocusTo::Root
+        };
+    }
+    FocusTo::Keep
+}
+
 pub struct Shell {
     pub navigator: Navigator,
     focus: FocusHandle,
@@ -49,6 +78,8 @@ pub struct Shell {
     connector: Option<Arc<dyn Connector>>,
     server: Option<Arc<dyn MediaServer>>,
     pub login: Option<LoginForm>,
+    /// The login was just shown: its address field takes the focus at the next draw.
+    login_focus_due: bool,
     pub home: pages::HomePage,
     pub library: pages::LibraryPage,
     /// The film pages open, the last one on top: one per `Screen::FilmDetail` of the navigator.
@@ -102,6 +133,7 @@ impl Shell {
             connector: None,
             server: None,
             login: None,
+            login_focus_due: false,
             home: Default::default(),
             library: Default::default(),
             details: Vec::new(),
@@ -307,12 +339,18 @@ impl Render for Shell {
         self.frames.push(Instant::now());
         // Escape needs the focus; a click on a button must not lose it for good. A text field
         // keeps it while it has it; the login's first field takes it when nothing has.
-        if window.focused(cx).is_none() {
-            match &self.login {
-                Some(form) if self.navigator.current() == Screen::Login => {
+        let login_shown = self.login.is_some() && self.navigator.current() == Screen::Login;
+        match focus_to(
+            login_shown,
+            &mut self.login_focus_due,
+            window.focused(cx).is_none(),
+        ) {
+            FocusTo::Keep => {}
+            FocusTo::Root => window.focus(&self.focus, cx),
+            FocusTo::Address => {
+                if let Some(form) = &self.login {
                     window.focus(&form.address.focus_handle(cx), cx)
                 }
-                _ => window.focus(&self.focus, cx),
             }
         }
         let screen = self.navigator.current();
@@ -386,5 +424,48 @@ impl Render for Shell {
                 back_label.filter(|_| screen.shows_back_link()),
                 |root, label| root.child(back_link(label, window, cx)),
             )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_login_shown_takes_the_focus_the_root_had_taken_meanwhile() {
+        let mut due = true;
+        assert_eq!(focus_to(true, &mut due, false), FocusTo::Address);
+    }
+
+    #[test]
+    fn the_address_takes_the_focus_once_only() {
+        let mut due = true;
+        assert_eq!(focus_to(true, &mut due, false), FocusTo::Address);
+        assert_eq!(focus_to(true, &mut due, false), FocusTo::Keep);
+    }
+
+    #[test]
+    fn a_field_the_user_went_to_keeps_the_focus() {
+        let mut due = false;
+        assert_eq!(focus_to(true, &mut due, false), FocusTo::Keep);
+    }
+
+    #[test]
+    fn nothing_focused_on_the_login_gives_the_address_the_focus() {
+        let mut due = false;
+        assert_eq!(focus_to(true, &mut due, true), FocusTo::Address);
+    }
+
+    #[test]
+    fn nothing_focused_elsewhere_gives_the_root_the_focus() {
+        let mut due = false;
+        assert_eq!(focus_to(false, &mut due, true), FocusTo::Root);
+    }
+
+    #[test]
+    fn the_login_not_yet_built_leaves_the_focus_due() {
+        let mut due = true;
+        assert_eq!(focus_to(false, &mut due, true), FocusTo::Root);
+        assert!(due);
     }
 }
