@@ -67,6 +67,43 @@ pub trait MediaServer: Send + Sync {
 
     /// Ends the session: the server forgets the token and the keyring drops it.
     fn logout(&self) -> Result<(), ProviderError>;
+
+    /// The films, series and people whose name matches `query`, at most `per_group` of each.
+    fn search(&self, query: &str, per_group: u32) -> Result<SearchResults, ProviderError>;
+    /// The films and series a person took part in, the newest first.
+    fn person_titles(&self, person: &ItemId) -> Result<PersonTitles, ProviderError>;
+}
+
+/// What a search found, group by group.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SearchResults {
+    pub films: Vec<Film>,
+    pub series: Vec<SeriesHit>,
+    pub people: Vec<PersonHit>,
+}
+
+/// A series as a search or a list shows it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SeriesHit {
+    pub id: ItemId,
+    pub title: String,
+    pub year: Option<i32>,
+    pub poster: Option<ImageRef>,
+}
+
+/// A person as a search shows them: cast or crew, whatever the title.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PersonHit {
+    pub id: ItemId,
+    pub name: String,
+    pub photo: Option<ImageRef>,
+}
+
+/// What a person took part in.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct PersonTitles {
+    pub films: Vec<Film>,
+    pub series: Vec<SeriesHit>,
 }
 
 /// What a server says of itself before anyone signs in.

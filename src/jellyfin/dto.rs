@@ -2,7 +2,7 @@
 
 use crate::provider::{
     AudioTrack, CastMember, Film, ImageKind, ImageRef, ItemId, Library, LibraryKind, MediaSource,
-    MediaSourceId, ServerInfo, SubtitleTrack, VideoRange, VideoTrack,
+    MediaSourceId, PersonHit, SeriesHit, ServerInfo, SubtitleTrack, VideoRange, VideoTrack,
 };
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -72,6 +72,8 @@ pub struct Item {
     #[serde(default)]
     pub name: String,
     pub collection_type: Option<String>,
+    #[serde(rename = "Type")]
+    pub kind: Option<String>,
     pub production_year: Option<i32>,
     pub community_rating: Option<f32>,
     pub run_time_ticks: Option<i64>,
@@ -181,6 +183,31 @@ impl Item {
                 .backdrop_image_tags
                 .first()
                 .map(|tag| image(ImageKind::Backdrop, tag)),
+        }
+    }
+
+    fn primary(&self) -> Option<ImageRef> {
+        self.image_tags.get("Primary").map(|tag| ImageRef {
+            item: ItemId(self.id.clone()),
+            kind: ImageKind::Primary,
+            tag: tag.clone(),
+        })
+    }
+
+    pub fn series_hit(&self) -> SeriesHit {
+        SeriesHit {
+            id: ItemId(self.id.clone()),
+            title: self.name.clone(),
+            year: self.production_year,
+            poster: self.primary(),
+        }
+    }
+
+    pub fn person_hit(&self) -> PersonHit {
+        PersonHit {
+            id: ItemId(self.id.clone()),
+            name: self.name.clone(),
+            photo: self.primary(),
         }
     }
 

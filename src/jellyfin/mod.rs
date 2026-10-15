@@ -11,8 +11,9 @@ mod tests;
 
 use crate::provider::{
     Collection, Connector, ExternalSubtitle, Film, FilmDetail, FilmQuery, FilmSort, ImageKind,
-    ImageRef, ItemId, Library, MediaServer, MediaSourceId, Page, PlaySessionId, Playback,
-    PlaybackReport, ProviderError, ServerInfo, StreamUrl, Token, TokenStore,
+    ImageRef, ItemId, Library, MediaServer, MediaSourceId, Page, PersonTitles, PlaySessionId,
+    Playback, PlaybackReport, ProviderError, SearchResults, ServerInfo, StreamUrl, Token,
+    TokenStore,
 };
 use account::{AccountFile, Login};
 use dto::{AuthenticationResult, Item, PlaybackInfoResponse, PublicSystemInfo, QueryResult};
@@ -436,6 +437,65 @@ impl MediaServer for Jellyfin {
                 ("quality", "90".into()),
             ],
         )
+    }
+
+    /// One request per group, so that a group with many matches never crowds out the others
+    /// (search hints share a single limit between the three).
+    fn search(&self, query: &str, per_group: u32) -> Result<SearchResults, ProviderError> {
+        let titles = |kind: &str| {
+            self.items(
+                "search",
+                &[
+                    ("searchTerm", query.to_string()),
+                    ("includeItemTypes", kind.into()),
+                    ("recursive", "true".into()),
+                    ("limit", per_group.to_string()),
+                    ("imageTypeLimit", "1".into()),
+                    ("enableImageTypes", "Primary,Backdrop".into()),
+                ],
+            )
+        };
+        let films = titles("Movie")?;
+        let series = titles("Series")?;
+        let people: QueryResult = self.http.get(
+            "search people",
+            "/Persons",
+            &[
+                ("searchTerm", query.to_string()),
+                ("limit", per_group.to_string()),
+                ("imageTypeLimit", "1".into()),
+                ("enableImageTypes", "Primary".into()),
+                self.user(),
+            ],
+        )?;
+        Ok(SearchResults {
+            films: films.items.iter().map(Item::film).collect(),
+            series: series.items.iter().map(Item::series_hit).collect(),
+            people: people.items.iter().map(Item::person_hit).collect(),
+        })
+    }
+
+    fn person_titles(&self, person: &ItemId) -> Result<PersonTitles, ProviderError> {
+        let found = self.items(
+            "person titles",
+            &[
+                ("personIds", person.0.clone()),
+                ("includeItemTypes", "Movie,Series".into()),
+                ("recursive", "true".into()),
+                ("sortBy", "ProductionYear,SortName".into()),
+                ("sortOrder", "Descending".into()),
+                ("imageTypeLimit", "1".into()),
+                ("enableImageTypes", "Primary,Backdrop".into()),
+            ],
+        )?;
+        let (series, films): (Vec<&Item>, Vec<&Item>) = found
+            .items
+            .iter()
+            .partition(|item| item.kind.as_deref() == Some("Series"));
+        Ok(PersonTitles {
+            films: films.into_iter().map(Item::film).collect(),
+            series: series.into_iter().map(Item::series_hit).collect(),
+        })
     }
 
     fn logout(&self) -> Result<(), ProviderError> {

@@ -771,6 +771,143 @@ fn image_at_the_requested_size() {
     assert_eq!(asked.param("maxWidth"), Some("1280"));
 }
 
+fn found_titles(results: &SearchResults) -> (Vec<&str>, Vec<&str>, Vec<&str>) {
+    (
+        results.films.iter().map(|f| f.title.as_str()).collect(),
+        results.series.iter().map(|s| s.title.as_str()).collect(),
+        results.people.iter().map(|p| p.name.as_str()).collect(),
+    )
+}
+
+#[test]
+fn a_search_finds_films_series_and_people_in_their_own_groups() {
+    let s = Setup::new();
+    let found = s.signed_in().search("harbour", 5).unwrap();
+    assert_eq!(
+        found_titles(&found),
+        (
+            vec!["The Quiet Harbour"],
+            vec!["Harbour Lights", "Quiet Harbour Chronicles"],
+            vec!["Ivo Harbourne"]
+        )
+    );
+    assert_eq!(found.films[0].year, Some(1998));
+    assert_eq!(found.films[0].poster.as_ref().unwrap().tag, "poster-qh");
+    assert_eq!(found.series[0].year, Some(2016));
+    assert_eq!(
+        found.series[0].poster,
+        Some(ImageRef {
+            item: ItemId("5e000000000000000000000000000001".into()),
+            kind: ImageKind::Primary,
+            tag: "poster-hl".into()
+        })
+    );
+    // A person without a photo on the server has none here.
+    assert_eq!(found.people[0].photo, None);
+}
+
+#[test]
+fn a_person_found_has_a_photo_when_the_server_has_one() {
+    let s = Setup::new();
+    let found = s.signed_in().search("mara", 5).unwrap();
+    assert_eq!(found.people.len(), 1);
+    assert_eq!(
+        found.people[0].id,
+        ItemId("9e000000000000000000000000000003".into())
+    );
+    assert_eq!(found.people[0].photo.as_ref().unwrap().tag, "photo-mq");
+}
+
+#[test]
+fn a_search_is_limited_per_group() {
+    let s = Setup::new();
+    let found = s.signed_in().search("a", 1).unwrap();
+    assert_eq!(
+        (found.films.len(), found.series.len(), found.people.len()),
+        (1, 1, 1)
+    );
+    for (path, types) in [("/Items", "Movie"), ("/Items", "Series"), ("/Persons", "")] {
+        let asked = s
+            .fake
+            .seen()
+            .into_iter()
+            .rev()
+            .find(|r| {
+                r.path == path && (types.is_empty() || r.param("IncludeItemTypes") == Some(types))
+            })
+            .unwrap_or_else(|| panic!("no {path} {types}"));
+        assert_eq!(asked.param("Limit"), Some("1"), "{path} {types}");
+    }
+}
+
+#[test]
+fn a_search_asks_by_term_for_the_user() {
+    let s = Setup::new();
+    s.signed_in().search("harbour", 5).unwrap();
+    let films = s
+        .fake
+        .seen()
+        .into_iter()
+        .find(|r| r.param("IncludeItemTypes") == Some("Movie"))
+        .unwrap();
+    assert_eq!(films.param("SearchTerm"), Some("harbour"));
+    assert_eq!(films.param("userId"), Some(USER_ID));
+    assert_eq!(films.param("Recursive"), Some("true"));
+    assert_eq!(
+        s.fake.last("GET", "/Persons").param("userId"),
+        Some(USER_ID)
+    );
+}
+
+#[test]
+fn a_search_with_no_match_finds_nothing() {
+    let s = Setup::new();
+    let found = s.signed_in().search("zzzz", 5).unwrap();
+    assert_eq!(found, SearchResults::default());
+}
+
+#[test]
+fn the_term_reaches_the_server_as_typed() {
+    let s = Setup::new();
+    let term = "l'été & co/+ %20";
+    s.signed_in().search(term, 5).unwrap();
+    assert_eq!(
+        s.fake.last("GET", "/Persons").param("SearchTerm"),
+        Some(term)
+    );
+}
+
+#[test]
+fn a_search_with_a_revoked_token_asks_to_sign_in_again() {
+    let s = Setup::new();
+    let server = s.signed_in();
+    s.fake.state.lock().unwrap().revoked = true;
+    assert_eq!(
+        server.search("harbour", 5).unwrap_err(),
+        ProviderError::SessionExpired
+    );
+}
+
+#[test]
+fn what_a_person_took_part_in_is_split_into_films_and_series() {
+    let s = Setup::new();
+    let person = ItemId("9e000000000000000000000000000001".into());
+    let titles = s.signed_in().person_titles(&person).unwrap();
+    let films: Vec<_> = titles.films.iter().map(|f| f.title.as_str()).collect();
+    let series: Vec<_> = titles.series.iter().map(|f| f.title.as_str()).collect();
+    assert_eq!(films, ["The Quiet Harbour", "Copper Sky"]);
+    assert_eq!(series, ["Harbour Lights"]);
+    let asked = s
+        .fake
+        .seen()
+        .into_iter()
+        .find(|r| r.param("PersonIds").is_some())
+        .unwrap();
+    assert_eq!(asked.param("PersonIds"), Some(person.0.as_str()));
+    assert_eq!(asked.param("IncludeItemTypes"), Some("Movie,Series"));
+    assert_eq!(asked.param("Recursive"), Some("true"));
+}
+
 #[test]
 fn the_token_never_in_debug_or_error_output() {
     let s = Setup::new();

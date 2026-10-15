@@ -30,6 +30,9 @@ fn fixture(name: &str) -> Value {
         "boxset_harbour_trilogy" => include_str!("fixtures/boxset_harbour_trilogy.json"),
         "similar" => include_str!("fixtures/similar.json"),
         "resume" => include_str!("fixtures/resume.json"),
+        "series" => include_str!("fixtures/series.json"),
+        "persons" => include_str!("fixtures/persons.json"),
+        "person_titles" => include_str!("fixtures/person_titles.json"),
         "playback_info" => include_str!("fixtures/playback_info.json"),
         _ => panic!("no fixture {name}"),
     };
@@ -144,6 +147,29 @@ fn films(seen: &Seen) -> Value {
     json!({ "Items": page, "TotalRecordCount": total, "StartIndex": start })
 }
 
+/// The items of a fixture whose name holds the search term, at most `Limit` of them.
+fn matching(fixture_name: &str, seen: &Seen) -> Value {
+    let term = seen.param("SearchTerm").unwrap_or_default().to_lowercase();
+    let limit: usize = seen
+        .param("Limit")
+        .map_or(usize::MAX, |s| s.parse().unwrap());
+    let found: Vec<Value> = fixture(fixture_name)
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|item| {
+            item["Name"]
+                .as_str()
+                .unwrap()
+                .to_lowercase()
+                .contains(&term)
+        })
+        .take(limit)
+        .cloned()
+        .collect();
+    json!({ "Items": found, "TotalRecordCount": found.len() })
+}
+
 fn answer(state: &State, seen: &Seen) -> Answer {
     if state.not_jellyfin {
         return Answer::Json(404, json!({ "error": "not here" }));
@@ -180,7 +206,17 @@ fn answer(state: &State, seen: &Seen) -> Answer {
         ("POST", "/Sessions/Logout") => Answer::Empty(204),
         ("GET", "/UserViews") => Answer::Json(200, fixture("user_views")),
         ("GET", "/UserItems/Resume") => Answer::Json(200, fixture("resume")),
+        ("GET", "/Persons") => Answer::Json(200, matching("persons", seen)),
         ("GET", "/Items") => match (seen.param("ParentId"), seen.param("IncludeItemTypes")) {
+            (_, Some("Movie")) if seen.param("SearchTerm").is_some() => {
+                Answer::Json(200, matching("films", seen))
+            }
+            (_, Some("Series")) if seen.param("SearchTerm").is_some() => {
+                Answer::Json(200, matching("series", seen))
+            }
+            (_, Some("Movie,Series")) if seen.param("PersonIds").is_some() => {
+                Answer::Json(200, fixture("person_titles"))
+            }
             (Some(FILMS_LIBRARY), _) => Answer::Json(200, films(seen)),
             (None, Some("BoxSet")) => Answer::Json(200, fixture("boxsets")),
             (Some("b0000000000000000000000000000001"), _) => {
