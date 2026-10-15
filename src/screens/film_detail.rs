@@ -1,6 +1,8 @@
 //! A film's page, after Infuse: the backdrop fills the top; on the left the title, the facts, the
 //! synopsis, the play buttons and the chips that choose the version and the tracks. Below, rows
-//! aligned with the text: the cast, the collection, similar titles. The page scrolls.
+//! aligned with the text: the cast, the collection, similar titles. A row reaches the window's
+//! edges: its first item lines up with the text, and it scrolls under the edges. The page
+//! scrolls.
 
 use bobine::provider::{CastMember, Film, FilmDetail};
 use gpui_kit::prelude::*;
@@ -90,7 +92,6 @@ pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -
                 .flex()
                 .flex_col()
                 .gap(px(40.))
-                .px(px(EDGE))
                 .pt(px(12.))
                 .pb(px(64.))
                 .children(rows),
@@ -475,12 +476,13 @@ fn cast_row(
         .flex()
         .flex_col()
         .gap(px(16.))
-        .child(row_heading("Distribution"))
+        .child(row_heading("Distribution").px(px(EDGE)))
         .child(
             div()
                 .id("cast-row")
                 .flex()
                 .gap(px(12.))
+                .px(px(EDGE))
                 .overflow_hidden()
                 .track_scroll(scroll)
                 .children(people),
@@ -515,6 +517,7 @@ fn poster_row(
                 .flex()
                 .items_baseline()
                 .gap(px(12.))
+                .px(px(EDGE))
                 .child(row_heading(title.to_string()))
                 .children(caption.map(|caption| {
                     div()
@@ -528,6 +531,7 @@ fn poster_row(
                 .id(format!("{title}-row"))
                 .flex()
                 .gap(px(GAP))
+                .px(px(EDGE))
                 .overflow_hidden()
                 .track_scroll(scroll)
                 .children(posters),
