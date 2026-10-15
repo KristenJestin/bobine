@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 use std::thread::JoinHandle;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use bobine::provider::{
     Collection, Connector, Film, FilmDetail, ItemId, LibraryKind, MediaServer, Playback as Opened,
@@ -340,7 +340,7 @@ impl Shell {
             return;
         };
         let library = library.clone();
-        for page in self.library.grid.pages_to_ask(films) {
+        for page in self.library.grid.pages_to_ask(films, Instant::now()) {
             let library = library.clone();
             self.ask(
                 cx,
@@ -348,7 +348,7 @@ impl Shell {
                 move |shell, films, cx| match films {
                     Ok(films) => shell.library.grid.loaded(page, films),
                     Err(error) => {
-                        shell.library.grid.failed(page);
+                        shell.library.grid.failed(page, Instant::now());
                         if shell.library.grid.total.is_none() {
                             shell.library.library = Some(Loadable::Failed(shell.failed(error, cx)));
                         }

@@ -4,6 +4,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
+use std::time::{Duration, Instant};
 
 use bobine::provider::{Film, FilmQuery, FilmSort, Page};
 
@@ -14,6 +15,10 @@ pub const MARGIN: f32 = 40.;
 pub const GAP: f32 = 16.;
 const MAX_COLUMNS: usize = 8;
 const MIN_POSTER: f32 = 150.;
+/// A page that failed is asked again no sooner than this, and only this many times: a server
+/// answering 500 must not be asked at every render.
+pub const RETRY_AFTER: Duration = Duration::from_secs(5);
+pub const MAX_RETRIES: u32 = 3;
 
 /// Eight columns at 1440 px wide, fewer when narrower, never less than two.
 pub fn columns(width: f32) -> usize {
@@ -51,6 +56,8 @@ pub struct Grid {
     pub total: Option<u32>,
     pages: HashMap<u32, Vec<Film>>,
     asked: HashSet<u32>,
+    /// How many times a page failed, and when it last did.
+    failures: HashMap<u32, (u32, Instant)>,
 }
 
 impl Grid {
@@ -64,25 +71,35 @@ impl Grid {
     }
 
     /// The pages holding `films` (indexes) not asked yet; they count as asked from now on.
-    pub fn pages_to_ask(&mut self, films: Range<usize>) -> Vec<u32> {
+    pub fn pages_to_ask(&mut self, films: Range<usize>, now: Instant) -> Vec<u32> {
         if films.is_empty() {
             return Vec::new();
         }
         let first = (films.start / PAGE as usize) as u32;
         let last = ((films.end - 1) / PAGE as usize) as u32;
         (first..=last)
-            .filter(|page| self.asked.insert(*page))
+            .filter(|page| self.may_ask(*page, now) && self.asked.insert(*page))
             .collect()
     }
 
+    fn may_ask(&self, page: u32, now: Instant) -> bool {
+        match self.failures.get(&page) {
+            None => true,
+            Some(&(failures, at)) => failures <= MAX_RETRIES && now >= at + RETRY_AFTER,
+        }
+    }
+
     pub fn loaded(&mut self, page: u32, films: Page<Film>) {
+        self.failures.remove(&page);
         self.total = Some(films.total);
         self.pages.insert(page, films.items);
     }
 
-    /// The page may be asked again when its rows show.
-    pub fn failed(&mut self, page: u32) {
+    /// The page may be asked again, a few times, once `RETRY_AFTER` has passed.
+    pub fn failed(&mut self, page: u32, now: Instant) {
         self.asked.remove(&page);
+        let failures = self.failures.get(&page).map_or(0, |&(count, _)| count);
+        self.failures.insert(page, (failures + 1, now));
     }
 
     /// A film changed (watched, resume point): the grid shows it as it is now.
@@ -127,18 +144,56 @@ mod tests {
     #[test]
     fn only_the_pages_of_the_visible_rows_are_asked_once() {
         let mut grid = Grid::default();
-        assert_eq!(grid.pages_to_ask(0..24), [0]);
-        assert_eq!(grid.pages_to_ask(0..24), Vec::<u32>::new());
-        assert_eq!(grid.pages_to_ask(96..120), [1]);
-        assert_eq!(grid.pages_to_ask(2000..2024), [20]);
+        let now = Instant::now();
+        assert_eq!(grid.pages_to_ask(0..24, now), [0]);
+        assert_eq!(grid.pages_to_ask(0..24, now), Vec::<u32>::new());
+        assert_eq!(grid.pages_to_ask(96..120, now), [1]);
+        assert_eq!(grid.pages_to_ask(2000..2024, now), [20]);
     }
 
     #[test]
-    fn a_failed_page_is_asked_again() {
+    fn a_failed_page_is_not_asked_again_at_every_render() {
         let mut grid = Grid::default();
-        assert_eq!(grid.pages_to_ask(0..8), [0]);
-        grid.failed(0);
-        assert_eq!(grid.pages_to_ask(0..8), [0]);
+        let now = Instant::now();
+        assert_eq!(grid.pages_to_ask(0..8, now), [0]);
+        grid.failed(0, now);
+        // The renders that follow the failure, one frame apart.
+        for frame in 1..=100 {
+            let later = now + Duration::from_millis(16 * frame);
+            assert_eq!(grid.pages_to_ask(0..8, later), Vec::<u32>::new());
+        }
+    }
+
+    #[test]
+    fn a_failed_page_is_asked_again_after_the_delay() {
+        let mut grid = Grid::default();
+        let now = Instant::now();
+        grid.pages_to_ask(0..8, now);
+        grid.failed(0, now);
+        let after = now + RETRY_AFTER;
+        assert_eq!(grid.pages_to_ask(0..8, after), [0]);
+    }
+
+    #[test]
+    fn a_page_that_always_fails_is_given_up_after_a_few_retries() {
+        let mut grid = Grid::default();
+        let mut now = Instant::now();
+        let mut asks = 0;
+        for _ in 0..50 {
+            asks += grid.pages_to_ask(0..8, now).len();
+            grid.failed(0, now);
+            now += RETRY_AFTER;
+        }
+        assert_eq!(asks, 1 + MAX_RETRIES as usize);
+    }
+
+    #[test]
+    fn a_page_that_failed_does_not_hold_back_the_others() {
+        let mut grid = Grid::default();
+        let now = Instant::now();
+        grid.pages_to_ask(0..8, now);
+        grid.failed(0, now);
+        assert_eq!(grid.pages_to_ask(0..220, now), [1, 2]);
     }
 
     #[test]
