@@ -8,6 +8,9 @@ use std::time::Duration;
 use ureq::http::Response;
 
 const TIMEOUT: Duration = Duration::from_secs(15);
+/// The server may convert an image before answering (a person's photo): it gets longer than an
+/// API call, which must stay quick to report an unreachable server.
+const IMAGE_TIMEOUT: Duration = Duration::from_secs(60);
 const CLIENT: &str = "Bobine";
 
 /// The device this installation is to the server.
@@ -21,6 +24,7 @@ pub struct Device {
 /// A Jellyfin server at one address, with or without a token.
 pub struct Http {
     agent: ureq::Agent,
+    image_timeout: Duration,
     base: String,
     device: Device,
     token: Option<Token>,
@@ -78,14 +82,25 @@ fn status(code: u16) -> ProviderError {
 
 impl Http {
     pub fn new(base: String, device: Device, token: Option<Token>) -> Self {
+        Self::with_timeouts(base, device, token, TIMEOUT, IMAGE_TIMEOUT)
+    }
+
+    fn with_timeouts(
+        base: String,
+        device: Device,
+        token: Option<Token>,
+        timeout: Duration,
+        image_timeout: Duration,
+    ) -> Self {
         let agent = ureq::Agent::config_builder()
-            .timeout_global(Some(TIMEOUT))
+            .timeout_global(Some(timeout))
             .http_status_as_error(false)
             .user_agent(format!("{CLIENT}/{}", env!("CARGO_PKG_VERSION")))
             .build()
             .into();
         Self {
             agent,
+            image_timeout,
             base,
             device,
             token,
@@ -167,6 +182,7 @@ impl Http {
         Self::json(what, Self::checked(what, sent)?)
     }
 
+    /// An image, which gets the longer image timeout.
     pub fn get_bytes(
         &self,
         what: &str,
@@ -177,6 +193,9 @@ impl Http {
             .agent
             .get(&self.url(path, query))
             .header("Authorization", &self.authorization())
+            .config()
+            .timeout_global(Some(self.image_timeout))
+            .build()
             .call();
         Self::checked(what, sent)?
             .body_mut()
@@ -256,6 +275,39 @@ impl Http {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_slow_image_still_arrives_after_the_api_timeout() {
+        use crate::jellyfin::fake::{FakeServer, IMAGE, TOKEN};
+        let fake = FakeServer::start();
+        fake.state.lock().unwrap().image_delay = Duration::from_millis(1500);
+        let device = Device {
+            id: "device".into(),
+            name: "Test".into(),
+        };
+        let token = Some(Token::new(TOKEN.into()));
+        let path = "/Items/f0000000000000000000000000000001/Images/Primary";
+        let http = Http::with_timeouts(
+            fake.url.clone(),
+            device.clone(),
+            token.clone(),
+            Duration::from_secs(1),
+            Duration::from_secs(10),
+        );
+        assert_eq!(http.get_bytes("image", path, &[]).unwrap(), IMAGE);
+        // Not forever: an image still takes at most its own timeout.
+        let http = Http::with_timeouts(
+            fake.url.clone(),
+            device,
+            token,
+            Duration::from_secs(10),
+            Duration::from_secs(1),
+        );
+        assert!(matches!(
+            http.get_bytes("image", path, &[]),
+            Err(ProviderError::Unreachable(_))
+        ));
+    }
 
     #[test]
     fn an_address_is_trimmed_and_needs_a_scheme_and_a_host() {
