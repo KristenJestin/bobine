@@ -494,7 +494,7 @@ fn detail_with_versions_and_tracks() {
 }
 
 #[test]
-fn detail_with_synopsis_genres_people_collection_and_similar() {
+fn detail_with_synopsis_genres_people_and_similar() {
     let s = Setup::new();
     let detail = s.signed_in().film(&film()).unwrap();
     assert_eq!(detail.film.title, "The Quiet Harbour");
@@ -528,11 +528,6 @@ fn detail_with_synopsis_genres_people_collection_and_similar() {
         ]
     );
 
-    let collection = detail.collection.expect("a collection");
-    assert_eq!(collection.name, "Harbour Trilogy");
-    let others: Vec<&str> = collection.others.iter().map(|f| f.title.as_str()).collect();
-    assert_eq!(others, ["Return to the Harbour", "Harbour Lights"]);
-
     let similar: Vec<&str> = detail.similar.iter().map(|f| f.title.as_str()).collect();
     assert_eq!(similar, ["Copper Sky", "Lanterns"]);
     assert_eq!(
@@ -541,6 +536,87 @@ fn detail_with_synopsis_genres_people_collection_and_similar() {
             .param("userId"),
         Some(USER_ID)
     );
+}
+
+const OTHER_FILM: &str = "f0000000000000000000000000000009";
+
+fn boxset_lookups(s: &Setup) -> Vec<Seen> {
+    s.fake
+        .seen()
+        .into_iter()
+        .filter(|r| {
+            r.path == "/Items"
+                && (r.param("includeItemTypes") == Some("BoxSet")
+                    || r.param("parentId").is_some_and(|p| p.starts_with("b000")))
+        })
+        .collect()
+}
+
+#[test]
+fn the_detail_costs_no_collection_lookup() {
+    let s = Setup::new();
+    let server = s.signed_in();
+    server.film(&film()).unwrap();
+    assert!(boxset_lookups(&s).is_empty(), "{:?}", boxset_lookups(&s));
+}
+
+#[test]
+fn the_collection_of_a_film_with_its_other_films() {
+    let s = Setup::new();
+    let collection = s
+        .signed_in()
+        .collection_of(&film())
+        .unwrap()
+        .expect("a collection");
+    assert_eq!(collection.name, "Harbour Trilogy");
+    let others: Vec<&str> = collection.others.iter().map(|f| f.title.as_str()).collect();
+    assert_eq!(others, ["Return to the Harbour", "Harbour Lights"]);
+    assert_eq!(
+        collection.others[0].poster.as_ref().map(|p| p.tag.as_str()),
+        Some("poster-rh")
+    );
+}
+
+#[test]
+fn the_collection_lookup_asks_each_collection_for_ids_only_and_stops_at_the_first_match() {
+    let s = Setup::new();
+    s.signed_in().collection_of(&film()).unwrap();
+    let asked: Vec<Seen> = boxset_lookups(&s);
+    let scanned: Vec<&str> = asked.iter().filter_map(|r| r.param("parentId")).collect();
+    // Sea Stories (no match), then Harbour Trilogy (the match, asked once more with its posters).
+    // Lone Wolves comes after the match and is never asked.
+    assert_eq!(
+        scanned,
+        [
+            "b0000000000000000000000000000001",
+            "b0000000000000000000000000000002",
+            "b0000000000000000000000000000002",
+        ]
+    );
+    for scan in &asked[1..3] {
+        assert_eq!(scan.param("enableImages"), Some("false"), "{scan:?}");
+        assert_eq!(scan.param("enableUserData"), Some("false"), "{scan:?}");
+        assert!(scan.param("enableImageTypes").is_none(), "{scan:?}");
+    }
+    assert!(asked[3].param("enableImages").is_none(), "{:?}", asked[3]);
+    assert_eq!(asked[3].param("enableImageTypes"), Some("Primary,Backdrop"));
+}
+
+#[test]
+fn a_film_in_no_collection() {
+    let s = Setup::new();
+    let alone = s.signed_in().collection_of(&ItemId(OTHER_FILM.into()));
+    assert_eq!(alone, Ok(None));
+    // Every collection was looked through, none held it.
+    assert_eq!(boxset_lookups(&s).len(), 1 + 3);
+}
+
+#[test]
+fn a_failed_collection_lookup_is_an_error_of_its_own() {
+    let s = Setup::new();
+    let server = s.signed_in();
+    s.fake.state.lock().unwrap().forbidden = true;
+    assert_eq!(server.collection_of(&film()), Err(ProviderError::Forbidden));
 }
 
 #[test]

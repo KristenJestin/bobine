@@ -50,6 +50,10 @@ pub trait MediaServer: Send + Sync {
     /// The films the user started and did not finish, the latest first.
     fn continue_watching(&self) -> Result<Vec<Film>, ProviderError>;
     fn film(&self, film: &ItemId) -> Result<FilmDetail, ProviderError>;
+    /// The collection the film belongs to, with its other films. Apart from `film` because the
+    /// server gives no direct link from a film to its collections: the lookup costs several
+    /// requests, so a screen asks it once the page shows and hides the row if it fails.
+    fn collection_of(&self, film: &ItemId) -> Result<Option<Collection>, ProviderError>;
 
     /// Opens a playback session of one version of a film, played directly from its file.
     fn play(&self, film: &ItemId, source: &MediaSourceId) -> Result<Playback, ProviderError>;
@@ -162,7 +166,6 @@ pub struct FilmDetail {
     pub official_rating: Option<String>,
     pub directors: Vec<String>,
     pub cast: Vec<CastMember>,
-    pub collection: Option<Collection>,
     pub similar: Vec<Film>,
     pub versions: Vec<MediaSource>,
 }

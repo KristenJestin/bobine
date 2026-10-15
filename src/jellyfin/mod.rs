@@ -172,34 +172,6 @@ impl Jellyfin {
         self.http.get(what, "/Items", &query)
     }
 
-    /// The collection that holds the film: Jellyfin gives a film no link to its collections, so
-    /// each collection of the user is looked through until one holds it.
-    fn collection_of(&self, film: &ItemId) -> Result<Option<Collection>, ProviderError> {
-        let boxsets = self.items(
-            "collections",
-            &[
-                ("includeItemTypes", "BoxSet".into()),
-                ("recursive", "true".into()),
-            ],
-        )?;
-        for boxset in boxsets.items {
-            let films = self.items("collection", &[("parentId", boxset.id.clone())])?;
-            if films.items.iter().any(|f| f.id == film.0) {
-                return Ok(Some(Collection {
-                    id: ItemId(boxset.id),
-                    name: boxset.name,
-                    others: films
-                        .items
-                        .iter()
-                        .filter(|f| f.id != film.0)
-                        .map(Item::film)
-                        .collect(),
-                }));
-            }
-        }
-        Ok(None)
-    }
-
     fn report(
         &self,
         what: &str,
@@ -298,12 +270,10 @@ impl MediaServer for Jellyfin {
             &format!("/Items/{}/Similar", encode(&film.0)),
             &[self.user(), ("limit", SIMILAR.to_string())],
         )?;
-        let collection = self.collection_of(film)?;
         Ok(FilmDetail {
             film: item.film(),
             directors: item.directors(),
             cast: item.cast(),
-            collection,
             similar: similar.items.iter().map(Item::film).collect(),
             overview: item.overview,
             genres: item.genres,
@@ -314,6 +284,55 @@ impl MediaServer for Jellyfin {
                 .map(|s| s.into_source())
                 .collect(),
         })
+    }
+
+    /// Jellyfin gives a film no link to its collections, so each collection of the user is looked
+    /// through, for ids only, until one holds the film. Only that one is asked again, in full,
+    /// for the posters of its other films.
+    fn collection_of(&self, film: &ItemId) -> Result<Option<Collection>, ProviderError> {
+        let ids_only = |parent: &str| {
+            self.items(
+                "collection",
+                &[
+                    ("parentId", parent.to_string()),
+                    ("enableImages", "false".into()),
+                    ("enableUserData", "false".into()),
+                ],
+            )
+        };
+        let boxsets = self.items(
+            "collections",
+            &[
+                ("includeItemTypes", "BoxSet".into()),
+                ("recursive", "true".into()),
+                ("enableImages", "false".into()),
+                ("enableUserData", "false".into()),
+            ],
+        )?;
+        for boxset in boxsets.items {
+            if !ids_only(&boxset.id)?.items.iter().any(|f| f.id == film.0) {
+                continue;
+            }
+            let films = self.items(
+                "collection",
+                &[
+                    ("parentId", boxset.id.clone()),
+                    ("imageTypeLimit", "1".into()),
+                    ("enableImageTypes", "Primary,Backdrop".into()),
+                ],
+            )?;
+            return Ok(Some(Collection {
+                id: ItemId(boxset.id),
+                name: boxset.name,
+                others: films
+                    .items
+                    .iter()
+                    .filter(|f| f.id != film.0)
+                    .map(Item::film)
+                    .collect(),
+            }));
+        }
+        Ok(None)
     }
 
     fn play(&self, film: &ItemId, source: &MediaSourceId) -> Result<Playback, ProviderError> {
