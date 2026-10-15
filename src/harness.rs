@@ -4,7 +4,8 @@
 //! with the numbers the pull request reports. Never part of the application a user runs.
 //!
 //! `bobine --play FILE [--title T] [--sub URL] [--subtitle-track ID] [--controls] [--panel]
-//! [--fullscreen-at S] [--windowed-at S] [--leave-at S] [--measure-from S] --quit-at S`
+//! [--fullscreen-at S] [--windowed-at S] [--next FILE --next-at S] [--leave-at S]
+//! [--measure-from S] --quit-at S`
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -29,6 +30,8 @@ struct Args {
     panel: bool,
     fullscreen_at: Option<f64>,
     windowed_at: Option<f64>,
+    /// A second film, played after leaving the first, as a user would.
+    next: Option<(String, f64)>,
     leave_at: Option<f64>,
     measure_from: f64,
     quit_at: f64,
@@ -65,6 +68,15 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Option<Args>, String>
             "--panel" => parsed.panel = true,
             "--fullscreen-at" => parsed.fullscreen_at = Some(seconds(args.next())?),
             "--windowed-at" => parsed.windowed_at = Some(seconds(args.next())?),
+            "--next" => {
+                let file = args.next().ok_or("--next needs a file")?;
+                parsed.next = Some((file, 0.));
+            }
+            "--next-at" => {
+                let at = seconds(args.next())?;
+                let next = parsed.next.as_mut().ok_or("--next-at comes after --next")?;
+                next.1 = at;
+            }
             "--leave-at" => parsed.leave_at = Some(seconds(args.next())?),
             "--measure-from" => parsed.measure_from = seconds(args.next())?,
             "--quit-at" => parsed.quit_at = seconds(args.next())?,
@@ -98,7 +110,7 @@ impl Snapshot {
 
 /// Starts the harness when the command line asks for it; else the application starts as usual.
 pub fn start(shell: &Entity<Shell>, window: &mut Window, cx: &mut App) {
-    let args = match parse(std::env::args().skip(1)) {
+    let mut args = match parse(std::env::args().skip(1)) {
         Ok(Some(args)) => args,
         Ok(None) => return,
         Err(error) => {
@@ -154,6 +166,7 @@ pub fn start(shell: &Entity<Shell>, window: &mut Window, cx: &mut App) {
         let mut start: Option<Snapshot> = None;
         let mut panel_opened = false;
         let (mut went_fullscreen, mut went_windowed, mut left) = (false, false, false);
+        let mut next = args.next.take();
         loop {
             cx.background_executor()
                 .timer(Duration::from_millis(250))
@@ -186,6 +199,35 @@ pub fn start(shell: &Entity<Shell>, window: &mut Window, cx: &mut App) {
                     if window.is_fullscreen() {
                         window.toggle_fullscreen();
                     }
+                }
+                if let Some((file, _)) = next.take_if(|(_, at)| elapsed >= *at) {
+                    // Back from the first film, then the second on a new mpv, as the film page
+                    // would.
+                    shell
+                        .update(cx, |shell, cx| {
+                            shell.player_back(window, cx);
+                            let media = Media {
+                                stream: Stream {
+                                    url: &file,
+                                    headers: &[],
+                                },
+                                start: 0.,
+                                audio: None,
+                                subtitle: FirstSubtitle::Default,
+                                external_subtitles: &[],
+                            };
+                            let film = Film {
+                                title: "Second film".to_string(),
+                                subtitle: None,
+                            };
+                            let played = Libmpv::new(&[("ao", "null")])
+                                .map_err(|e| e.to_string())
+                                .and_then(|mpv| shell.play(Arc::new(mpv), media, film, window, cx));
+                            if let Err(error) = played {
+                                eprintln!("bobine harness: the second film: {error}");
+                            }
+                        })
+                        .ok();
                 }
                 if args.leave_at.is_some_and(|at| elapsed >= at) && !left {
                     // The back arrow: mpv and the video surface go, the window stays.
