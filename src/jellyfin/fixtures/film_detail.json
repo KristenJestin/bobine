@@ -1,0 +1,184 @@
+{
+  "Name": "The Quiet Harbour",
+  "SortName": "quiet harbour",
+  "Id": "f0000000000000000000000000000001",
+  "Type": "Movie",
+  "DateCreated": "2025-03-02T10:00:00.0000000Z",
+  "ProductionYear": 1998,
+  "CommunityRating": 7.4,
+  "RunTimeTicks": 66000000000,
+  "UserData": {
+    "PlaybackPositionTicks": 12000000000,
+    "PlayCount": 0,
+    "Played": false
+  },
+  "ImageTags": {
+    "Primary": "poster-qh"
+  },
+  "BackdropImageTags": [
+    "backdrop-qh"
+  ],
+  "Overview": "A lighthouse keeper finds a boat with no crew.",
+  "Genres": [
+    "Drama",
+    "Mystery"
+  ],
+  "OfficialRating": "PG-13",
+  "People": [
+    {
+      "Name": "Ines Varga",
+      "Id": "p0000000000000000000000000000001",
+      "Type": "Director"
+    },
+    {
+      "Name": "Tomas Brell",
+      "Id": "p0000000000000000000000000000002",
+      "Role": "Keeper",
+      "Type": "Actor",
+      "PrimaryImageTag": "photo-tb"
+    },
+    {
+      "Name": "Lena Sato",
+      "Id": "p0000000000000000000000000000003",
+      "Role": "",
+      "Type": "Actor"
+    },
+    {
+      "Name": "Oskar Mint",
+      "Id": "p0000000000000000000000000000004",
+      "Type": "Writer"
+    }
+  ],
+  "MediaSources": [
+    {
+      "Protocol": "File",
+      "Id": "5a000000000000000000000000000001",
+      "Type": "Default",
+      "Container": "mkv",
+      "Name": "The Quiet Harbour - 2160p",
+      "IsRemote": false,
+      "RunTimeTicks": 66000000000,
+      "SupportsDirectPlay": true,
+      "SupportsDirectStream": true,
+      "SupportsTranscoding": true,
+      "MediaStreams": [
+        {
+          "Codec": "hevc",
+          "Type": "Video",
+          "Index": 0,
+          "Width": 3840,
+          "Height": 2160,
+          "VideoRange": "HDR",
+          "VideoRangeType": "HDR10",
+          "IsDefault": true,
+          "IsForced": false,
+          "IsExternal": false
+        },
+        {
+          "Codec": "truehd",
+          "Language": "eng",
+          "Title": "English Atmos",
+          "DisplayTitle": "English - TRUEHD - 7.1",
+          "Type": "Audio",
+          "Index": 1,
+          "Channels": 8,
+          "IsDefault": true,
+          "IsForced": false,
+          "IsExternal": false
+        },
+        {
+          "Codec": "ac3",
+          "Language": "fre",
+          "DisplayTitle": "French - Dolby Digital - 5.1",
+          "Type": "Audio",
+          "Index": 2,
+          "Channels": 6,
+          "IsDefault": false,
+          "IsForced": false,
+          "IsExternal": false
+        },
+        {
+          "Codec": "subrip",
+          "Language": "eng",
+          "DisplayTitle": "English - Default - SUBRIP",
+          "Type": "Subtitle",
+          "Index": 3,
+          "IsDefault": true,
+          "IsForced": false,
+          "IsExternal": false,
+          "IsTextSubtitleStream": true
+        },
+        {
+          "Codec": "PGSSUB",
+          "Language": "fre",
+          "Title": "Forced",
+          "DisplayTitle": "French - Forced - PGSSUB",
+          "Type": "Subtitle",
+          "Index": 4,
+          "IsDefault": false,
+          "IsForced": true,
+          "IsExternal": false
+        },
+        {
+          "Codec": "subrip",
+          "Language": "spa",
+          "DisplayTitle": "Spanish - SUBRIP - External",
+          "Type": "Subtitle",
+          "Index": 5,
+          "IsDefault": false,
+          "IsForced": false,
+          "IsExternal": true,
+          "IsTextSubtitleStream": true,
+          "SupportsExternalStream": true
+        },
+        {
+          "Codec": "ass",
+          "Language": "ger",
+          "DisplayTitle": "German - ASS - External",
+          "Type": "Subtitle",
+          "Index": 6,
+          "IsDefault": false,
+          "IsForced": true,
+          "IsExternal": true,
+          "IsTextSubtitleStream": true,
+          "SupportsExternalStream": true
+        }
+      ]
+    },
+    {
+      "Protocol": "File",
+      "Id": "5a000000000000000000000000000002",
+      "Type": "Default",
+      "Container": "mp4",
+      "Name": "The Quiet Harbour - 1080p",
+      "IsRemote": false,
+      "RunTimeTicks": 66000000000,
+      "SupportsDirectPlay": true,
+      "MediaStreams": [
+        {
+          "Codec": "h264",
+          "Type": "Video",
+          "Index": 0,
+          "Width": 1920,
+          "Height": 1080,
+          "VideoRange": "SDR",
+          "VideoRangeType": "SDR",
+          "IsDefault": true,
+          "IsForced": false,
+          "IsExternal": false
+        },
+        {
+          "Codec": "aac",
+          "Language": "eng",
+          "DisplayTitle": "English - AAC - Stereo",
+          "Type": "Audio",
+          "Index": 1,
+          "Channels": 2,
+          "IsDefault": true,
+          "IsForced": false,
+          "IsExternal": false
+        }
+      ]
+    }
+  ]
+}

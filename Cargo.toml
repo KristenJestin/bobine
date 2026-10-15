@@ -5,6 +5,12 @@ edition = "2024"
 publish = false
 
 [dependencies]
+getrandom = "0.3"
+secret-service = { version = "5", default-features = false, features = ["rt-async-io-crypto-rust"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "1"
+ureq = { version = "3", features = ["json"] }
 # The window (#3). Pinned: gpui-kit pins its own GPUI snapshot, so a bump is a deliberate act.
 gpui-kit = { version = "=0.7.3", default-features = false }
 
@@ -13,3 +19,7 @@ default = ["fast"]
 # GPUI Fast (a GPUI fork that redraws only what changed). `--no-default-features` is the rollback
 # to plain GPUI: both must keep building.
 fast = ["gpui-kit/gpui-fast"]
+
+[dev-dependencies]
+tempfile = "3"
+tiny_http = "0.12"
