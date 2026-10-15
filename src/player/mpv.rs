@@ -193,6 +193,10 @@ impl<C: MpvClient> Player for MpvPlayer<C> {
         ])
     }
 
+    fn set_subtitle_position(&mut self, percent: f64) {
+        let _ = self.client.set("sub-pos", &percent.to_string());
+    }
+
     fn events(&mut self) -> Vec<PlayerEvent> {
         let mut events = Vec::new();
         while let Some(event) = self.client.next_event() {
@@ -571,6 +575,13 @@ mod tests {
                 ]),
             ]
         );
+    }
+
+    #[test]
+    fn the_subtitle_position_sets_sub_pos() {
+        let mut player = MpvPlayer::new(FakeMpv::default());
+        player.set_subtitle_position(85.);
+        assert_eq!(log(&player), [line(&["set", "sub-pos", "85"])]);
     }
 
     #[test]

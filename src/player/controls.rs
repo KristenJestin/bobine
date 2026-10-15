@@ -25,6 +25,21 @@ impl Controls {
     }
 }
 
+/// How high the bottom controls reach from the bottom of the window, in logical pixels: the
+/// margin (40), the seek bar (15), the gap (14) and the buttons (52) of `screens::player`.
+pub const BOTTOM_CONTROLS_HEIGHT: f32 = 121.;
+
+/// mpv's `sub-pos` for a window `window_height` high: 100 is the subtitles' own place, above
+/// the bottom; while the controls show, they rise by the controls' height.
+pub fn subtitle_position(window_height: f32, controls_shown: bool) -> f64 {
+    // Before the first layout there is no height to rise in.
+    if !controls_shown || window_height <= 0. {
+        return 100.;
+    }
+    let lifted = 100. * f64::from(BOTTOM_CONTROLS_HEIGHT) / f64::from(window_height);
+    (100. - lifted).round().max(0.)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum KeyAction {
     TogglePause,
@@ -140,6 +155,25 @@ mod tests {
     fn other_keys_do_nothing() {
         assert_eq!(key_action("a", false, false), None);
         assert_eq!(key_action("enter", false, false), None);
+    }
+
+    #[test]
+    fn the_subtitles_keep_their_place_while_the_controls_hide() {
+        assert_eq!(subtitle_position(810., false), 100.);
+        assert_eq!(subtitle_position(1080., false), 100.);
+    }
+
+    #[test]
+    fn the_subtitles_rise_above_the_shown_controls() {
+        // 121 px of controls: 15 % of 810, 11 % of 1080.
+        assert_eq!(subtitle_position(810., true), 85.);
+        assert_eq!(subtitle_position(1080., true), 89.);
+    }
+
+    #[test]
+    fn in_a_tiny_window_the_subtitles_go_no_higher_than_the_top() {
+        assert_eq!(subtitle_position(100., true), 0.);
+        assert_eq!(subtitle_position(0., true), 100.);
     }
 
     #[test]

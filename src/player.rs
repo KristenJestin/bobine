@@ -158,6 +158,9 @@ pub trait Player {
         title: &str,
         language: Option<&str>,
     ) -> Result<(), PlayerError>;
+    /// Moves the subtitles up: `percent` of the window's height from its top, 100 being their
+    /// own place (mpv's `sub-pos`).
+    fn set_subtitle_position(&mut self, percent: f64);
     /// What happened since the last call, oldest first. Never waits.
     fn events(&mut self) -> Vec<PlayerEvent>;
 }
@@ -179,6 +182,7 @@ pub mod fake {
         Audio(Option<i64>),
         Subtitle(Option<i64>),
         AddSubtitle(String),
+        SubtitlePosition(f64),
     }
 
     #[derive(Default)]
@@ -222,6 +226,9 @@ pub mod fake {
         fn add_subtitle(&mut self, url: &str, _: &str, _: Option<&str>) -> Result<(), PlayerError> {
             self.record(Call::AddSubtitle(url.to_string()));
             Ok(())
+        }
+        fn set_subtitle_position(&mut self, percent: f64) {
+            self.record(Call::SubtitlePosition(percent));
         }
         fn events(&mut self) -> Vec<PlayerEvent> {
             std::mem::take(&mut *self.queued.borrow_mut())

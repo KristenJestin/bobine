@@ -4,7 +4,7 @@
 
 use std::time::Instant;
 
-use super::controls::{Controls, KeyAction, key_action};
+use super::controls::{Controls, KeyAction, key_action, subtitle_position};
 use super::{Player, PlayerError, PlayerEvent, Seek, Track, TrackKind, tracks};
 use crate::video::{Rect, VideoDisplay, placement};
 
@@ -38,6 +38,10 @@ pub struct Session {
     pub paused: bool,
     tracks: Vec<Track>,
     error: Option<PlayerError>,
+    window_height: f32,
+    /// Whether the controls showed at the last update, and mpv's `sub-pos` for it.
+    controls_shown: bool,
+    subtitle_position: f64,
     /// Kept once seen: an update whose answer is dropped (a mouse move) must not lose it.
     ended: bool,
 }
@@ -61,6 +65,9 @@ impl Session {
             paused: false,
             tracks: Vec::new(),
             error: None,
+            window_height: 0.,
+            controls_shown: false,
+            subtitle_position: 100.,
             ended: false,
         }
     }
@@ -168,8 +175,11 @@ impl Session {
                 PlayerEvent::Loaded | PlayerEvent::SubtitleFailed(_) => {}
             }
         }
+        let shown = self.controls_visible(now);
         // Told every time: the display can only act once the pointer is over the window.
-        self.display.set_cursor_visible(self.controls_visible(now));
+        self.display.set_cursor_visible(shown);
+        self.controls_shown = shown;
+        self.place_subtitles();
         self.ended
     }
 
@@ -177,6 +187,17 @@ impl Session {
     /// follows each size change of the window, fullscreen included.
     pub fn layout(&mut self, window: (f32, f32), video: Rect, scale: f32) {
         self.display.place(placement(window, video, scale));
+        self.window_height = window.1;
+        self.place_subtitles();
+    }
+
+    /// Above the bottom controls while they show, so neither hides the other.
+    fn place_subtitles(&mut self) {
+        let position = subtitle_position(self.window_height, self.controls_shown);
+        if position != self.subtitle_position {
+            self.subtitle_position = position;
+            self.player.set_subtitle_position(position);
+        }
     }
 }
 
@@ -474,6 +495,36 @@ mod tests {
         let mut f = fixture();
         f.queue(vec![PlayerEvent::EndOfFile]);
         assert!(f.session.update(Instant::now()));
+    }
+
+    #[test]
+    fn the_subtitles_rise_while_the_controls_show_and_come_back_when_they_hide() {
+        let mut f = fixture();
+        let start = Instant::now();
+        f.session.layout((1440., 810.), whole(1440., 810.), 1.);
+        f.session.update(start);
+        f.session.mouse_moved(start);
+        f.session.update(start);
+        f.session.update(start + Duration::from_secs(1));
+        f.session.update(start + Duration::from_secs(3));
+        assert_eq!(
+            f.calls(),
+            [Call::SubtitlePosition(85.), Call::SubtitlePosition(100.)]
+        );
+    }
+
+    #[test]
+    fn shown_subtitles_follow_a_window_size_change() {
+        let mut f = fixture();
+        let start = Instant::now();
+        f.session.layout((1440., 810.), whole(1440., 810.), 1.);
+        f.session.mouse_moved(start);
+        f.session.update(start);
+        f.session.layout((1920., 1080.), whole(1920., 1080.), 1.);
+        assert_eq!(
+            f.calls(),
+            [Call::SubtitlePosition(85.), Call::SubtitlePosition(89.)]
+        );
     }
 
     #[test]
