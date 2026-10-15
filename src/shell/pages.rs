@@ -156,6 +156,8 @@ impl Shell {
         });
         self.server = None;
         self.details.clear();
+        self.people.clear();
+        self.search = None;
         self.navigator.switch_root(Screen::Login);
         cx.notify();
     }
@@ -242,6 +244,8 @@ impl Shell {
         self.home = HomePage::default();
         self.library = LibraryPage::default();
         self.details.clear();
+        self.people.clear();
+        self.search = None;
         // The atlas holds the old images until they are dropped from it.
         for gone in self.images.cache.drain() {
             cx.drop_image(gone, None);
@@ -252,7 +256,7 @@ impl Shell {
     }
 
     /// What the user is told; an expired session brings the login back.
-    fn failed(&mut self, error: ProviderError, cx: &mut Context<Self>) -> &'static str {
+    pub(super) fn failed(&mut self, error: ProviderError, cx: &mut Context<Self>) -> &'static str {
         let said = start::error_message(&error);
         if start::brings_the_login_back(&error, self.login.is_some()) {
             self.show_login(Some(said), cx);
@@ -261,7 +265,7 @@ impl Shell {
     }
 
     /// Runs `work` against the server off the window's thread, then `then` with its answer.
-    fn ask<R: Send + 'static>(
+    pub(super) fn ask<R: Send + 'static>(
         &self,
         cx: &mut Context<Self>,
         work: impl FnOnce(&dyn MediaServer) -> R + Send + 'static,
@@ -290,14 +294,21 @@ impl Shell {
             return;
         }
         self.details.clear();
+        self.people.clear();
         self.arrived(cx);
         cx.notify();
     }
 
     /// Escape or the back link.
     pub fn go_back(&mut self, cx: &mut Context<Self>) -> bool {
-        if self.navigator.current() == Screen::FilmDetail {
-            self.details.pop();
+        match self.navigator.current() {
+            Screen::FilmDetail => {
+                self.details.pop();
+            }
+            Screen::Person => {
+                self.people.pop();
+            }
+            _ => {}
         }
         if !self.navigator.back() {
             return false;

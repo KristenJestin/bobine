@@ -7,7 +7,7 @@ use gpui_kit::assets::icon_assets;
 use gpui_kit::prelude::*;
 use gpui_kit::{Div, div, px};
 
-icon_assets!(pub Icons, [Play, Pause, RotateCcw, Check, ArrowLeft, ChevronDown]);
+icon_assets!(pub Icons, [Play, Pause, RotateCcw, Check, ArrowLeft, ChevronDown, Search]);
 
 /// `name`, `size` pixels square, centred, in the colour of the text around it.
 pub fn icon(name: IconName, size: f32) -> Div {
@@ -34,6 +34,7 @@ mod tests {
             IconName::Check,
             IconName::ArrowLeft,
             IconName::ChevronDown,
+            IconName::Search,
         ] {
             let svg = Icons.load(&name.path()).unwrap();
             assert!(
