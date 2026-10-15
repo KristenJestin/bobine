@@ -55,11 +55,13 @@ pub trait MediaServer: Send + Sync {
     /// requests, so a screen asks it once the page shows and hides the row if it fails.
     fn collection_of(&self, film: &ItemId) -> Result<Option<Collection>, ProviderError>;
 
-    /// Opens a playback session of one version of a film, played directly from its file.
+    /// Opens a playback session of one version of a film or an episode, played directly from
+    /// its file.
     fn play(&self, film: &ItemId, source: &MediaSourceId) -> Result<Playback, ProviderError>;
     fn report_started(&self, report: &PlaybackReport) -> Result<(), ProviderError>;
     fn report_progress(&self, report: &PlaybackReport) -> Result<(), ProviderError>;
     fn report_stopped(&self, report: &PlaybackReport) -> Result<(), ProviderError>;
+    /// Marks a film or an episode watched, or no longer; a season, all its episodes.
     fn set_watched(&self, film: &ItemId, watched: bool) -> Result<(), ProviderError>;
 
     /// An image at the width asked for (the server scales it down, keeping its proportions).
@@ -67,6 +69,66 @@ pub trait MediaServer: Send + Sync {
 
     /// Ends the session: the server forgets the token and the keyring drops it.
     fn logout(&self) -> Result<(), ProviderError>;
+
+    /// The series of a library, one page of them, sorted like films.
+    fn series(&self, library: &ItemId, query: &FilmQuery) -> Result<Page<Series>, ProviderError>;
+    fn series_detail(&self, series: &ItemId) -> Result<SeriesDetail, ProviderError>;
+    /// The seasons of a series, in order.
+    fn seasons(&self, series: &ItemId) -> Result<Vec<Season>, ProviderError>;
+    /// The episodes of a season, in order, each with its versions.
+    fn episodes(&self, series: &ItemId, season: &ItemId) -> Result<Vec<Episode>, ProviderError>;
+    /// The episode the user would watch next: the one started, else the one after the last
+    /// watched, across seasons; the first when none was watched; none when all were.
+    fn next_up(&self, series: &ItemId) -> Result<Option<Episode>, ProviderError>;
+}
+
+/// A series as a list shows it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Series {
+    pub id: ItemId,
+    pub title: String,
+    /// The year it began.
+    pub year: Option<i32>,
+    /// The year it ended, when it did.
+    pub end_year: Option<i32>,
+    pub community_rating: Option<f32>,
+    /// How many of its episodes the user has not watched.
+    pub unwatched: u32,
+    pub poster: Option<ImageRef>,
+    pub backdrop: Option<ImageRef>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SeriesDetail {
+    pub series: Series,
+    pub overview: Option<String>,
+    pub genres: Vec<String>,
+    pub official_rating: Option<String>,
+    pub cast: Vec<CastMember>,
+    pub similar: Vec<Series>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Season {
+    pub id: ItemId,
+    pub name: String,
+    pub number: Option<u32>,
+    /// How many of its episodes the user has not watched.
+    pub unwatched: u32,
+}
+
+/// An episode, with what it shares with a film in `item`: its id, title, runtime, watched state,
+/// resume point, and its still as the poster.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Episode {
+    pub item: Film,
+    pub series: ItemId,
+    pub series_title: String,
+    pub season: ItemId,
+    pub season_number: Option<u32>,
+    pub number: Option<u32>,
+    pub overview: Option<String>,
+    pub versions: Vec<MediaSource>,
 }
 
 /// What a server says of itself before anyone signs in.

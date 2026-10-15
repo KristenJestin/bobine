@@ -6,10 +6,10 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use bobine::provider::{
-    AudioTrack, CastMember, Collection, Connector, ExternalSubtitle, Film, FilmDetail, FilmQuery,
-    ImageKind, ImageRef, ItemId, Library, LibraryKind, MediaServer, MediaSource, MediaSourceId,
-    Page, PlaySessionId, Playback, PlaybackReport, ProviderError, ServerInfo, StreamUrl,
-    SubtitleTrack, VideoRange, VideoTrack,
+    AudioTrack, CastMember, Collection, Connector, Episode, ExternalSubtitle, Film, FilmDetail,
+    FilmQuery, ImageKind, ImageRef, ItemId, Library, LibraryKind, MediaServer, MediaSource,
+    MediaSourceId, Page, PlaySessionId, Playback, PlaybackReport, ProviderError, Season, Series,
+    SeriesDetail, ServerInfo, StreamUrl, SubtitleTrack, VideoRange, VideoTrack,
 };
 
 pub const USER: &str = "camille";
@@ -42,6 +42,9 @@ pub struct State {
     /// The token the "keyring" keeps: the session restored at the next start.
     pub kept: bool,
     pub films: Vec<Film>,
+    pub series: Vec<Series>,
+    /// Every episode of every series, in order: series, season, number.
+    pub episodes: Vec<Episode>,
     /// What `play` gives as the stream: a local file in the harness.
     pub stream: String,
     pub record: Record,
@@ -188,6 +191,100 @@ pub fn versions() -> Vec<MediaSource> {
     ]
 }
 
+const SERIES_TITLES: [&str; 12] = [
+    "Station Nord",
+    "Les Cartographes",
+    "Abysse",
+    "Ligne rouge",
+    "Hors-champ",
+    "Désert",
+    "Le Phare",
+    "Contre-jour",
+    "Les Veilleurs",
+    "Saison sèche",
+    "Archipel",
+    "Après la pluie",
+];
+
+const EPISODE_TITLES: [&str; 6] = [
+    "La Fissure",
+    "Le Signal",
+    "Dérive",
+    "Remontée",
+    "Les Absents",
+    "Silence radio",
+];
+
+/// The seasons of a series and their number of episodes: the first series has three, as in the
+/// design, the others one.
+fn season_sizes(series: usize) -> &'static [u32] {
+    if series == 0 { &[3, 6, 5] } else { &[4] }
+}
+
+/// Invented series. Their unwatched counts are worked out from their episodes when asked.
+pub fn series() -> Vec<Series> {
+    SERIES_TITLES
+        .iter()
+        .enumerate()
+        .map(|(n, title)| {
+            let id = format!("series-{n}");
+            let year = 2025 - (n % 6) as i32;
+            Series {
+                title: (*title).into(),
+                year: Some(year - 2),
+                end_year: (n % 3 != 1).then_some(year),
+                community_rating: Some(6.5 + (n * 3 % 20) as f32 / 10.),
+                unwatched: 0,
+                poster: image(&id, ImageKind::Primary),
+                backdrop: image(&id, ImageKind::Backdrop),
+                id: ItemId(id),
+            }
+        })
+        .collect()
+}
+
+/// The episodes of every series. The first series: season 1 watched, season 2 watched up to
+/// its third episode, its fourth stopped at 30 min of 48.
+pub fn episodes() -> Vec<Episode> {
+    let mut all = Vec::new();
+    for (n, title) in SERIES_TITLES.iter().enumerate() {
+        for (s, size) in season_sizes(n).iter().enumerate() {
+            let season = s as u32 + 1;
+            for number in 1..=*size {
+                let id = format!("series-{n}-s{season}-e{number}");
+                let watched = n == 0 && (season == 1 || (season == 2 && number <= 3));
+                let resume =
+                    (n == 0 && season == 2 && number == 4).then(|| Duration::from_secs(30 * 60));
+                all.push(Episode {
+                    item: Film {
+                        title: EPISODE_TITLES[(number as usize + s) % EPISODE_TITLES.len()].into(),
+                        year: None,
+                        community_rating: None,
+                        runtime: Some(Duration::from_secs(48 * 60)),
+                        watched,
+                        resume,
+                        poster: image(&id, ImageKind::Primary),
+                        backdrop: None,
+                        id: ItemId(id),
+                    },
+                    series: ItemId(format!("series-{n}")),
+                    series_title: (*title).into(),
+                    season: ItemId(format!("series-{n}-s{season}")),
+                    season_number: Some(season),
+                    number: Some(number),
+                    overview: Some(
+                        "L'équipage capte un message venu d'une base abandonnée depuis vingt ans, \
+                         et doit décider s'il remonte à la surface avant la tempête."
+                            .into(),
+                    ),
+                    versions: versions().split_off(1),
+                });
+            }
+        }
+    }
+    all
+}
+
 const CAST: [(&str, &str); 18] = [
     ("Paul Mercier", "Anton"),
     ("Léa Morand", "Hanna"),
@@ -216,6 +313,8 @@ impl FakeServer {
             state: Arc::new(Mutex::new(State {
                 kept,
                 films: films(count),
+                series: series(),
+                episodes: episodes(),
                 stream: "file:///nowhere.mkv".into(),
                 record: Record::default(),
                 image_delay: std::time::Duration::ZERO,
@@ -236,6 +335,27 @@ impl FakeServer {
     #[cfg(test)]
     pub fn reports(&self) -> Vec<Report> {
         self.state().record.reports.clone()
+    }
+
+    /// A series as the server shows it now: its unwatched count follows its episodes.
+    fn counted(state: &State, series: &Series) -> Series {
+        let unwatched = state
+            .episodes
+            .iter()
+            .filter(|e| e.series == series.id && !e.item.watched)
+            .count() as u32;
+        Series {
+            unwatched,
+            ..series.clone()
+        }
+    }
+
+    fn episode(&self, id: &ItemId) -> Option<Episode> {
+        self.state()
+            .episodes
+            .iter()
+            .find(|e| &e.item.id == id)
+            .cloned()
     }
 
     fn find(&self, film: &ItemId) -> Result<Film, ProviderError> {
@@ -387,9 +507,11 @@ impl MediaServer for FakeServer {
     }
 
     fn play(&self, film: &ItemId, source: &MediaSourceId) -> Result<Playback, ProviderError> {
-        let detail = self.film(film)?;
-        let found = detail
-            .versions
+        let versions = match self.episode(film) {
+            Some(episode) => episode.versions,
+            None => self.film(film)?.versions,
+        };
+        let found = versions
             .iter()
             .find(|s| &s.id == source)
             .ok_or(ProviderError::NotFound)?;
@@ -429,10 +551,17 @@ impl MediaServer for FakeServer {
     }
 
     fn report_stopped(&self, report: &PlaybackReport) -> Result<(), ProviderError> {
-        let mut state = self.state();
+        let mut guard = self.state();
+        let state = &mut *guard;
         state.record.reports.push(Report::Stopped(report.clone()));
         // Like Jellyfin: past nine tenths of the film, it is watched and has no resume point.
-        if let Some(film) = state.films.iter_mut().find(|f| f.id == report.film) {
+        let episodes = state.episodes.iter_mut().map(|e| &mut e.item);
+        if let Some(film) = state
+            .films
+            .iter_mut()
+            .chain(episodes)
+            .find(|f| f.id == report.film)
+        {
             let runtime = film.runtime.unwrap_or_default();
             if report.position.as_secs_f64() >= runtime.as_secs_f64() * 0.9 {
                 film.watched = true;
@@ -445,9 +574,20 @@ impl MediaServer for FakeServer {
     }
 
     fn set_watched(&self, film: &ItemId, watched: bool) -> Result<(), ProviderError> {
-        let mut state = self.state();
+        let mut guard = self.state();
+        let state = &mut *guard;
         state.record.watched.push((film.clone(), watched));
-        if let Some(found) = state.films.iter_mut().find(|f| &f.id == film) {
+        let episodes = state.episodes.iter_mut();
+        // A season marks all its episodes.
+        let marked = episodes
+            .filter(|e| &e.item.id == film || &e.season == film)
+            .map(|e| &mut e.item);
+        for found in state
+            .films
+            .iter_mut()
+            .filter(|f| &f.id == film)
+            .chain(marked)
+        {
             found.watched = watched;
             if watched {
                 found.resume = None;
@@ -479,6 +619,107 @@ impl MediaServer for FakeServer {
     fn logout(&self) -> Result<(), ProviderError> {
         self.state().kept = false;
         Ok(())
+    }
+
+    fn series(&self, _: &ItemId, query: &FilmQuery) -> Result<Page<Series>, ProviderError> {
+        let state = self.state();
+        Ok(Page {
+            items: state
+                .series
+                .iter()
+                .skip(query.start as usize)
+                .take(query.limit as usize)
+                .map(|series| Self::counted(&state, series))
+                .collect(),
+            total: state.series.len() as u32,
+        })
+    }
+
+    fn series_detail(&self, series: &ItemId) -> Result<SeriesDetail, ProviderError> {
+        let state = self.state();
+        let found = state
+            .series
+            .iter()
+            .find(|s| &s.id == series)
+            .ok_or(ProviderError::NotFound)?;
+        Ok(SeriesDetail {
+            series: Self::counted(&state, found),
+            overview: Some(
+                "Sous la glace de l'Arctique, l'équipage d'une station de recherche perd le \
+                 contact avec la surface et découvre qu'il n'est pas seul."
+                    .into(),
+            ),
+            genres: vec!["Science-fiction".into(), "Drame".into()],
+            official_rating: Some("12+".into()),
+            cast: CAST
+                .iter()
+                .take(8)
+                .enumerate()
+                .map(|(n, (name, role))| CastMember {
+                    id: ItemId(format!("person-{n}")),
+                    name: (*name).into(),
+                    role: Some((*role).into()),
+                    photo: image(&format!("person-{n}"), ImageKind::Primary),
+                })
+                .collect(),
+            similar: state
+                .series
+                .iter()
+                .filter(|s| &s.id != series)
+                .map(|s| Self::counted(&state, s))
+                .collect(),
+        })
+    }
+
+    fn seasons(&self, series: &ItemId) -> Result<Vec<Season>, ProviderError> {
+        let state = self.state();
+        let mut seasons: Vec<Season> = Vec::new();
+        for episode in state.episodes.iter().filter(|e| &e.series == series) {
+            if seasons.last().is_none_or(|s| s.id != episode.season) {
+                seasons.push(Season {
+                    id: episode.season.clone(),
+                    name: format!("Saison {}", episode.season_number.unwrap_or(0)),
+                    number: episode.season_number,
+                    unwatched: 0,
+                });
+            }
+            if !episode.item.watched {
+                seasons.last_mut().expect("pushed above").unwatched += 1;
+            }
+        }
+        Ok(seasons)
+    }
+
+    fn episodes(&self, series: &ItemId, season: &ItemId) -> Result<Vec<Episode>, ProviderError> {
+        let state = self.state();
+        Ok(state
+            .episodes
+            .iter()
+            .filter(|e| &e.series == series && &e.season == season)
+            .cloned()
+            .collect())
+    }
+
+    /// Like Jellyfin's Next Up: the episode started, else the one after the last watched, across
+    /// seasons; the first when none was watched; none once the last was.
+    fn next_up(&self, series: &ItemId) -> Result<Option<Episode>, ProviderError> {
+        let state = self.state();
+        let episodes: Vec<&Episode> = state
+            .episodes
+            .iter()
+            .filter(|e| &e.series == series)
+            .collect();
+        if let Some(started) = episodes
+            .iter()
+            .find(|e| e.item.resume.is_some() && !e.item.watched)
+        {
+            return Ok(Some((*started).clone()));
+        }
+        let after = episodes
+            .iter()
+            .rposition(|e| e.item.watched)
+            .map_or(0, |last| last + 1);
+        Ok(episodes.get(after).map(|e| (*e).clone()))
     }
 }
 

@@ -10,9 +10,10 @@ mod fake;
 mod tests;
 
 use crate::provider::{
-    Collection, Connector, ExternalSubtitle, Film, FilmDetail, FilmQuery, FilmSort, ImageKind,
-    ImageRef, ItemId, Library, MediaServer, MediaSourceId, Page, PlaySessionId, Playback,
-    PlaybackReport, ProviderError, ServerInfo, StreamUrl, Token, TokenStore,
+    Collection, Connector, Episode, ExternalSubtitle, Film, FilmDetail, FilmQuery, FilmSort,
+    ImageKind, ImageRef, ItemId, Library, MediaServer, MediaSourceId, Page, PlaySessionId,
+    Playback, PlaybackReport, ProviderError, Season, Series, SeriesDetail, ServerInfo, StreamUrl,
+    Token, TokenStore,
 };
 use account::{AccountFile, Login};
 use dto::{AuthenticationResult, Item, PlaybackInfoResponse, PublicSystemInfo, QueryResult};
@@ -21,8 +22,11 @@ use serde_json::json;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-/// How many similar titles a film's page shows.
+/// How many similar titles a film's or a series' page shows.
 const SIMILAR: u32 = 12;
+
+/// What an episode is asked with: its synopsis, and its versions for the chips.
+const EPISODE_FIELDS: &str = "Overview,MediaSources";
 
 /// Signs in to Jellyfin servers. The account file keeps the device id and the last login; the
 /// store keeps the token.
@@ -172,6 +176,41 @@ impl Jellyfin {
         self.http.get(what, "/Items", &query)
     }
 
+    /// One page of the items of a kind (`Movie`, `Series`) in a library, in the order asked.
+    fn page(
+        &self,
+        what: &str,
+        kind: &str,
+        library: &ItemId,
+        query: &FilmQuery,
+    ) -> Result<QueryResult, ProviderError> {
+        let sort = match query.sort {
+            FilmSort::Title => "SortName",
+            FilmSort::DateAdded => "DateCreated,SortName",
+            FilmSort::ReleaseYear => "ProductionYear,SortName",
+        };
+        let order = if query.descending {
+            "Descending"
+        } else {
+            "Ascending"
+        };
+        self.items(
+            what,
+            &[
+                ("parentId", library.0.clone()),
+                ("includeItemTypes", kind.into()),
+                ("recursive", "true".into()),
+                ("sortBy", sort.into()),
+                ("sortOrder", order.into()),
+                ("startIndex", query.start.to_string()),
+                ("limit", query.limit.to_string()),
+                ("imageTypeLimit", "1".into()),
+                ("enableImageTypes", "Primary,Backdrop".into()),
+                ("enableTotalRecordCount", "true".into()),
+            ],
+        )
+    }
+
     fn report(
         &self,
         what: &str,
@@ -211,31 +250,7 @@ impl MediaServer for Jellyfin {
     }
 
     fn films(&self, library: &ItemId, query: &FilmQuery) -> Result<Page<Film>, ProviderError> {
-        let sort = match query.sort {
-            FilmSort::Title => "SortName",
-            FilmSort::DateAdded => "DateCreated,SortName",
-            FilmSort::ReleaseYear => "ProductionYear,SortName",
-        };
-        let order = if query.descending {
-            "Descending"
-        } else {
-            "Ascending"
-        };
-        let found = self.items(
-            "films",
-            &[
-                ("parentId", library.0.clone()),
-                ("includeItemTypes", "Movie".into()),
-                ("recursive", "true".into()),
-                ("sortBy", sort.into()),
-                ("sortOrder", order.into()),
-                ("startIndex", query.start.to_string()),
-                ("limit", query.limit.to_string()),
-                ("imageTypeLimit", "1".into()),
-                ("enableImageTypes", "Primary,Backdrop".into()),
-                ("enableTotalRecordCount", "true".into()),
-            ],
-        )?;
+        let found = self.page("films", "Movie", library, query)?;
         let films: Vec<Film> = found.items.iter().map(Item::film).collect();
         let total = found.total_record_count.unwrap_or(films.len() as u32);
         Ok(Page {
@@ -445,5 +460,73 @@ impl MediaServer for Jellyfin {
         let mut account = AccountFile::open(&self.path)?;
         account.login = None;
         account.save(&self.path)
+    }
+
+    fn series(&self, library: &ItemId, query: &FilmQuery) -> Result<Page<Series>, ProviderError> {
+        let found = self.page("series", "Series", library, query)?;
+        let series: Vec<Series> = found.items.iter().map(Item::series).collect();
+        let total = found.total_record_count.unwrap_or(series.len() as u32);
+        Ok(Page {
+            items: series,
+            total,
+        })
+    }
+
+    fn series_detail(&self, series: &ItemId) -> Result<SeriesDetail, ProviderError> {
+        let item: Item = self.http.get(
+            "series",
+            &format!("/Items/{}", encode(&series.0)),
+            &[self.user()],
+        )?;
+        let similar: QueryResult = self.http.get(
+            "similar series",
+            &format!("/Items/{}/Similar", encode(&series.0)),
+            &[self.user(), ("limit", SIMILAR.to_string())],
+        )?;
+        Ok(SeriesDetail {
+            series: item.series(),
+            cast: item.cast(),
+            similar: similar.items.iter().map(Item::series).collect(),
+            overview: item.overview,
+            genres: item.genres,
+            official_rating: item.official_rating,
+        })
+    }
+
+    fn seasons(&self, series: &ItemId) -> Result<Vec<Season>, ProviderError> {
+        let found: QueryResult = self.http.get(
+            "seasons",
+            &format!("/Shows/{}/Seasons", encode(&series.0)),
+            &[self.user()],
+        )?;
+        Ok(found.items.iter().map(Item::season).collect())
+    }
+
+    fn episodes(&self, series: &ItemId, season: &ItemId) -> Result<Vec<Episode>, ProviderError> {
+        let found: QueryResult = self.http.get(
+            "episodes",
+            &format!("/Shows/{}/Episodes", encode(&series.0)),
+            &[
+                self.user(),
+                ("seasonId", season.0.clone()),
+                ("fields", EPISODE_FIELDS.into()),
+            ],
+        )?;
+        Ok(found.items.into_iter().map(Item::episode).collect())
+    }
+
+    fn next_up(&self, series: &ItemId) -> Result<Option<Episode>, ProviderError> {
+        let found: QueryResult = self.http.get(
+            "next up",
+            "/Shows/NextUp",
+            &[
+                self.user(),
+                ("seriesId", series.0.clone()),
+                ("limit", "1".into()),
+                ("enableResumable", "true".into()),
+                ("fields", EPISODE_FIELDS.into()),
+            ],
+        )?;
+        Ok(found.items.into_iter().next().map(Item::episode))
     }
 }

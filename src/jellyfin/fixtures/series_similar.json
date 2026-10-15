@@ -1,0 +1,6 @@
+{
+  "Items": [
+    { "Name": "Bramble Line", "Id": "50000000000000000000000000000003", "Type": "Series", "ProductionYear": 2019, "UserData": { "UnplayedItemCount": 10, "Played": false }, "ImageTags": {} }
+  ],
+  "TotalRecordCount": 1
+}

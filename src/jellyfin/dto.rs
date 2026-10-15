@@ -1,8 +1,8 @@
 //! Jellyfin's JSON, as much of it as Bobine reads, and its translation into the port's types.
 
 use crate::provider::{
-    AudioTrack, CastMember, Film, ImageKind, ImageRef, ItemId, Library, LibraryKind, MediaSource,
-    MediaSourceId, ServerInfo, SubtitleTrack, VideoRange, VideoTrack,
+    AudioTrack, CastMember, Episode, Film, ImageKind, ImageRef, ItemId, Library, LibraryKind,
+    MediaSource, MediaSourceId, Season, Series, ServerInfo, SubtitleTrack, VideoRange, VideoTrack,
 };
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -63,6 +63,7 @@ pub struct QueryResult {
 pub struct UserData {
     pub played: bool,
     pub playback_position_ticks: i64,
+    pub unplayed_item_count: Option<u32>,
 }
 
 #[derive(Deserialize)]
@@ -88,6 +89,15 @@ pub struct Item {
     pub people: Vec<Person>,
     #[serde(default)]
     pub media_sources: Vec<MediaSourceInfo>,
+    /// A series' end, `2024-05-12T00:00:00.0000000Z`.
+    pub end_date: Option<String>,
+    /// A season's or an episode's number.
+    pub index_number: Option<u32>,
+    /// An episode's season number.
+    pub parent_index_number: Option<u32>,
+    pub season_id: Option<String>,
+    pub series_id: Option<String>,
+    pub series_name: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -181,6 +191,57 @@ impl Item {
                 .backdrop_image_tags
                 .first()
                 .map(|tag| image(ImageKind::Backdrop, tag)),
+        }
+    }
+
+    pub fn series(&self) -> Series {
+        let film = self.film();
+        Series {
+            id: film.id,
+            title: film.title,
+            year: film.year,
+            end_year: self
+                .end_date
+                .as_deref()
+                .and_then(|date| date.get(..4)?.parse().ok()),
+            community_rating: film.community_rating,
+            unwatched: self
+                .user_data
+                .as_ref()
+                .and_then(|u| u.unplayed_item_count)
+                .unwrap_or(0),
+            poster: film.poster,
+            backdrop: film.backdrop,
+        }
+    }
+
+    pub fn season(&self) -> Season {
+        Season {
+            id: ItemId(self.id.clone()),
+            name: self.name.clone(),
+            number: self.index_number,
+            unwatched: self
+                .user_data
+                .as_ref()
+                .and_then(|u| u.unplayed_item_count)
+                .unwrap_or(0),
+        }
+    }
+
+    pub fn episode(self) -> Episode {
+        Episode {
+            item: self.film(),
+            series: ItemId(self.series_id.unwrap_or_default()),
+            series_title: self.series_name.unwrap_or_default(),
+            season: ItemId(self.season_id.unwrap_or_default()),
+            season_number: self.parent_index_number,
+            number: self.index_number,
+            overview: self.overview,
+            versions: self
+                .media_sources
+                .into_iter()
+                .map(MediaSourceInfo::into_source)
+                .collect(),
         }
     }
 
