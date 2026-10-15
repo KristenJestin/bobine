@@ -17,6 +17,26 @@ use crate::player::libmpv::{Libmpv, check};
 
 const EGL_PLATFORM_WAYLAND_KHR: egl::Enum = 0x31D8;
 
+/// The video's EGL configuration. With an alpha channel, though mpv draws it opaque: Hyprland
+/// takes a window whose only subsurface covers it with an opaque buffer for an opaque window, and
+/// then draws the window's own surface without blending where it cannot round its corners (in
+/// fullscreen), so the transparent hole over the video would hide it.
+const CONFIG: [egl::Int; 13] = [
+    egl::SURFACE_TYPE,
+    egl::WINDOW_BIT,
+    egl::RENDERABLE_TYPE,
+    egl::OPENGL_BIT,
+    egl::RED_SIZE,
+    8,
+    egl::GREEN_SIZE,
+    8,
+    egl::BLUE_SIZE,
+    8,
+    egl::ALPHA_SIZE,
+    8,
+    egl::NONE,
+];
+
 /// What the window asks of the render thread: the buffer size, and whether to stop. mpv's
 /// update callback wakes it too.
 #[derive(Default)]
@@ -144,22 +164,7 @@ impl Gl {
         egl.bind_api(egl::OPENGL_API)
             .map_err(|e| format!("eglBindAPI: {e}"))?;
         let config = egl
-            .choose_first_config(
-                display,
-                &[
-                    egl::SURFACE_TYPE,
-                    egl::WINDOW_BIT,
-                    egl::RENDERABLE_TYPE,
-                    egl::OPENGL_BIT,
-                    egl::RED_SIZE,
-                    8,
-                    egl::GREEN_SIZE,
-                    8,
-                    egl::BLUE_SIZE,
-                    8,
-                    egl::NONE,
-                ],
-            )
+            .choose_first_config(display, &CONFIG)
             .map_err(|e| format!("eglChooseConfig: {e}"))?
             .ok_or("no EGL configuration for an OpenGL window")?;
         let context = egl
@@ -355,4 +360,21 @@ fn end() -> sys::mpv_render_param {
         sys::mpv_render_param_type_MPV_RENDER_PARAM_INVALID,
         ptr::null(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The value `name` asks for in an EGL attribute list.
+    fn requested(list: &[egl::Int], name: egl::Int) -> Option<egl::Int> {
+        list.chunks(2)
+            .find(|pair| pair[0] == name)
+            .and_then(|pair| pair.get(1).copied())
+    }
+
+    #[test]
+    fn a_fullscreen_video_on_hyprland_is_not_covered_by_the_window_hole() {
+        assert_eq!(requested(&CONFIG, egl::ALPHA_SIZE), Some(8));
+    }
 }
