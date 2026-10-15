@@ -11,6 +11,8 @@ pub const OBSERVED: [&str; 6] = ["time-pos", "duration", "pause", "track-list", 
 pub enum MpvEvent {
     /// One of `OBSERVED` changed: its value is read again.
     Changed(String),
+    /// mpv begins to open a file: one per `loadfile`, before its `FileLoaded`.
+    StartFile,
     /// The file is open: its tracks exist.
     FileLoaded,
     EndFile(EndReason),
@@ -54,6 +56,12 @@ pub struct MpvPlayer<C: MpvClient> {
     client: C,
     /// What `load` asked that mpv only takes once the file is open.
     on_loaded: Option<OnLoaded>,
+    /// How many films `load` asked mpv for, how many it began to open, how many ended: mpv's
+    /// events do not name their file, but they come in the order of the `loadfile`s. An event
+    /// belongs to the latest film when its count has caught up with `loads`.
+    loads: u64,
+    started: u64,
+    ended: u64,
 }
 
 /// Owned, as it waits for mpv: the addresses may carry a token, so nothing here is printed.
@@ -68,6 +76,9 @@ impl<C: MpvClient> MpvPlayer<C> {
         Self {
             client,
             on_loaded: None,
+            loads: 0,
+            started: 0,
+            ended: 0,
         }
     }
 
@@ -122,7 +133,7 @@ impl<C: MpvClient> Player for MpvPlayer<C> {
             subtitle,
             external_subtitles,
         } = media;
-        self.on_loaded = Some(OnLoaded {
+        let on_loaded = OnLoaded {
             subtitles: external_subtitles
                 .iter()
                 .map(|sub| {
@@ -135,7 +146,7 @@ impl<C: MpvClient> Player for MpvPlayer<C> {
                 .collect(),
             audio,
             subtitle,
-        });
+        };
         self.client
             .command(&["change-list", "http-header-fields", "clr", ""])?;
         for (name, value) in stream.headers {
@@ -145,7 +156,11 @@ impl<C: MpvClient> Player for MpvPlayer<C> {
                 .command(&["change-list", "http-header-fields", "append", &header])?;
         }
         self.client.set("start", &start.to_string())?;
-        self.client.command(&["loadfile", stream.url, "replace"])
+        self.client.command(&["loadfile", stream.url, "replace"])?;
+        // Only a film mpv took replaces the one being opened.
+        self.loads += 1;
+        self.on_loaded = Some(on_loaded);
+        Ok(())
     }
 
     // A command refused here (a seek before the film is open, a track that just went) changes
@@ -215,15 +230,24 @@ impl<C: MpvClient> Player for MpvPlayer<C> {
                             .collect(),
                     )),
                 },
-                MpvEvent::FileLoaded => {
+                MpvEvent::StartFile => {
+                    self.started += 1;
+                    None
+                }
+                MpvEvent::FileLoaded if self.started == self.loads => {
                     events.extend(self.apply_on_loaded());
                     Some(PlayerEvent::Loaded)
                 }
-                MpvEvent::EndFile(EndReason::Eof) => Some(PlayerEvent::EndOfFile),
-                MpvEvent::EndFile(EndReason::Error(reason)) => {
-                    Some(PlayerEvent::Error(PlayerError(reason)))
+                MpvEvent::FileLoaded => None,
+                MpvEvent::EndFile(reason) => {
+                    self.ended += 1;
+                    match reason {
+                        _ if self.ended != self.loads => None,
+                        EndReason::Eof => Some(PlayerEvent::EndOfFile),
+                        EndReason::Error(reason) => Some(PlayerEvent::Error(PlayerError(reason))),
+                        EndReason::Stopped => None,
+                    }
                 }
-                MpvEvent::EndFile(EndReason::Stopped) => None,
             };
             events.extend(event);
         }
@@ -337,7 +361,7 @@ mod tests {
 
     #[test]
     fn the_loaded_file_is_reported() {
-        let mpv = FakeMpv::with(&[], &[MpvEvent::FileLoaded]);
+        let mpv = FakeMpv::with(&[], &[MpvEvent::StartFile, MpvEvent::FileLoaded]);
         let mut player = MpvPlayer::new(mpv);
         player.load(media(FILM, 0.)).unwrap();
         assert_eq!(player.events(), [PlayerEvent::Loaded]);
@@ -355,6 +379,11 @@ mod tests {
             })
             .unwrap();
         let loaded = log(&player).len();
+        player
+            .client()
+            .events
+            .borrow_mut()
+            .push_back(MpvEvent::StartFile);
         // mpv refuses `sub-add` before the file is open.
         assert_eq!(player.events(), []);
         assert_eq!(log(&player).len(), loaded);
@@ -390,7 +419,7 @@ mod tests {
     #[test]
     fn a_chosen_embedded_subtitle_or_none_is_set_once_the_file_is_loaded() {
         for (subtitle, sid) in [(FirstSubtitle::Track(3), "3"), (FirstSubtitle::Off, "no")] {
-            let mpv = FakeMpv::with(&[], &[MpvEvent::FileLoaded]);
+            let mpv = FakeMpv::with(&[], &[MpvEvent::StartFile, MpvEvent::FileLoaded]);
             let mut player = MpvPlayer::new(mpv);
             player
                 .load(Media {
@@ -406,7 +435,14 @@ mod tests {
 
     #[test]
     fn what_is_applied_once_loaded_is_not_applied_again_on_the_next_file() {
-        let mpv = FakeMpv::with(&[], &[MpvEvent::FileLoaded, MpvEvent::FileLoaded]);
+        let mpv = FakeMpv::with(
+            &[],
+            &[
+                MpvEvent::StartFile,
+                MpvEvent::FileLoaded,
+                MpvEvent::FileLoaded,
+            ],
+        );
         let mut player = MpvPlayer::new(mpv);
         player
             .load(Media {
@@ -424,7 +460,7 @@ mod tests {
 
     #[test]
     fn a_refused_external_subtitle_is_reported_and_the_film_goes_on() {
-        let mpv = FakeMpv::with(&[], &[MpvEvent::FileLoaded]);
+        let mpv = FakeMpv::with(&[], &[MpvEvent::StartFile, MpvEvent::FileLoaded]);
         mpv.refused.borrow_mut().push("sub-add".into());
         let mut player = MpvPlayer::new(mpv);
         player
@@ -633,10 +669,104 @@ mod tests {
         assert!(tracks[0].selected);
     }
 
+    fn push(player: &MpvPlayer<FakeMpv>, events: &[MpvEvent]) {
+        player
+            .client()
+            .events
+            .borrow_mut()
+            .extend(events.iter().cloned());
+    }
+
+    #[test]
+    fn the_file_loaded_of_a_replaced_film_applies_nothing_to_the_next_one() {
+        let mut player = MpvPlayer::new(FakeMpv::default());
+        player
+            .load(Media {
+                audio: Some(1),
+                external_subtitles: &SUBTITLES[..1],
+                ..media(FILM, 0.)
+            })
+            .unwrap();
+        push(&player, &[MpvEvent::StartFile, MpvEvent::FileLoaded]);
+        // A's file is open and its event is waiting when the next film is asked for.
+        player
+            .load(Media {
+                audio: Some(2),
+                subtitle: FirstSubtitle::Track(5),
+                external_subtitles: &SUBTITLES[1..],
+                ..media(FILM, 0.)
+            })
+            .unwrap();
+        let before = log(&player).len();
+        push(
+            &player,
+            &[MpvEvent::EndFile(EndReason::Stopped), MpvEvent::StartFile],
+        );
+        assert_eq!(player.events(), []);
+        assert_eq!(log(&player).len(), before, "nothing is applied to A");
+
+        push(&player, &[MpvEvent::FileLoaded]);
+        assert_eq!(player.events(), [PlayerEvent::Loaded]);
+        let applied = &log(&player)[before..];
+        assert!(
+            applied
+                .iter()
+                .any(|line| line[0] == "sub-add" && line[1].contains("en.srt"))
+        );
+        assert!(
+            !applied
+                .iter()
+                .any(|line| line.iter().any(|part| part.contains("fr.srt")))
+        );
+        assert!(applied.contains(&line(&["set", "aid", "2"])));
+        assert!(!applied.contains(&line(&["set", "aid", "1"])));
+        assert_eq!(log(&player).last(), Some(&line(&["set", "sid", "5"])));
+    }
+
+    #[test]
+    fn the_end_of_a_replaced_film_is_not_the_end_of_the_next_one() {
+        let mut player = MpvPlayer::new(FakeMpv::default());
+        player.load(media(FILM, 0.)).unwrap();
+        player.load(media(FILM, 0.)).unwrap();
+        push(
+            &player,
+            &[
+                MpvEvent::StartFile,
+                MpvEvent::EndFile(EndReason::Error("A failed".into())),
+                MpvEvent::StartFile,
+            ],
+        );
+        assert_eq!(player.events(), []);
+
+        push(&player, &[MpvEvent::EndFile(EndReason::Eof)]);
+        assert_eq!(player.events(), [PlayerEvent::EndOfFile]);
+    }
+
+    #[test]
+    fn a_load_mpv_refuses_leaves_the_film_being_opened_its_file_loaded() {
+        let mut player = MpvPlayer::new(FakeMpv::default());
+        player
+            .load(Media {
+                external_subtitles: &SUBTITLES[..1],
+                ..media(FILM, 0.)
+            })
+            .unwrap();
+        player.client().refused.borrow_mut().push("loadfile".into());
+        assert!(player.load(media(FILM, 0.)).is_err());
+        push(&player, &[MpvEvent::StartFile, MpvEvent::FileLoaded]);
+        assert_eq!(player.events(), [PlayerEvent::Loaded]);
+        assert!(log(&player).iter().any(|line| line[0] == "sub-add"));
+    }
+
     #[test]
     fn the_end_of_the_film_is_reported() {
-        let mpv = FakeMpv::with(&[], &[MpvEvent::EndFile(EndReason::Eof)]);
-        assert_eq!(MpvPlayer::new(mpv).events(), [PlayerEvent::EndOfFile]);
+        let mpv = FakeMpv::with(
+            &[],
+            &[MpvEvent::StartFile, MpvEvent::EndFile(EndReason::Eof)],
+        );
+        let mut player = MpvPlayer::new(mpv);
+        player.load(media(FILM, 0.)).unwrap();
+        assert_eq!(player.events(), [PlayerEvent::EndOfFile]);
     }
 
     #[test]
@@ -644,12 +774,17 @@ mod tests {
         let mpv = FakeMpv::with(
             &[],
             &[
+                MpvEvent::StartFile,
                 MpvEvent::EndFile(EndReason::Stopped),
+                MpvEvent::StartFile,
                 MpvEvent::EndFile(EndReason::Error("loading failed".into())),
             ],
         );
+        let mut player = MpvPlayer::new(mpv);
+        player.load(media(FILM, 0.)).unwrap();
+        player.load(media(FILM, 0.)).unwrap();
         assert_eq!(
-            MpvPlayer::new(mpv).events(),
+            player.events(),
             [PlayerEvent::Error(PlayerError("loading failed".into()))]
         );
     }
