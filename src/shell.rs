@@ -53,6 +53,8 @@ pub struct Shell {
     /// The film pages open, the last one on top: one per `Screen::FilmDetail` of the navigator.
     pub details: Vec<DetailPage>,
     pub images: Images,
+    /// The wake-up planned for an image to ask again, and when.
+    image_wake: Option<(Instant, Task<()>)>,
     /// Given to every mpv: the headless harness silences the sound.
     pub mpv_options: Vec<(&'static str, &'static str)>,
 }
@@ -90,6 +92,7 @@ impl Shell {
             library: Default::default(),
             details: Vec::new(),
             images: Images::default(),
+            image_wake: None,
             mpv_options: Vec::new(),
         };
         shell.begin(open, cx);

@@ -9,8 +9,8 @@
 //! [--fullscreen-at S] [--windowed-at S] [--next FILE --next-at S] [--leave-at S]
 //! [--measure-from S] --quit-at S`
 //!
-//! `bobine --screen login|home|library|detail|detail-rows|playing [--films N] [--media FILE]
-//! --quit-at S`
+//! `bobine --screen login|home|library|detail|detail-rows|detail-cast|playing [--films N]
+//! [--media FILE] [--image-delay-ms N] [--photos-fail-once] --quit-at S`
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -51,6 +51,10 @@ struct Args {
     films: usize,
     /// What the fake server's films play.
     media: Option<String>,
+    /// How long each image of the fake server takes, in milliseconds.
+    image_delay: u64,
+    /// The fake server fails the first time it is asked each person's photo.
+    photos_fail_once: bool,
 }
 
 fn parse(mut args: impl Iterator<Item = String>) -> Result<Option<Args>, String> {
@@ -105,6 +109,13 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Option<Args>, String>
                     .ok_or("--films needs a number")?;
             }
             "--media" => parsed.media = Some(args.next().ok_or("--media needs a file")?),
+            "--photos-fail-once" => parsed.photos_fail_once = true,
+            "--image-delay-ms" => {
+                parsed.image_delay = args
+                    .next()
+                    .and_then(|n| n.parse().ok())
+                    .ok_or("--image-delay-ms needs a number")?;
+            }
             other => return Err(format!("unknown argument {other}")),
         }
     }
@@ -150,9 +161,13 @@ impl Harness {
         };
         let fake = args.as_ref().map(|args| {
             let fake = FakeServer::new(args.films, args.screen.as_deref() != Some("login"));
+            let mut state = fake.state.lock().unwrap();
             if let Some(media) = &args.media {
-                fake.state.lock().unwrap().stream = media.clone();
+                state.stream = media.clone();
             }
+            state.image_delay = Duration::from_millis(args.image_delay);
+            state.photos_fail_once = args.photos_fail_once;
+            drop(state);
             fake
         });
         Self { args, fake }
@@ -173,7 +188,10 @@ impl Harness {
         };
         shell.update(cx, |shell, _| shell.mpv_options = vec![("ao", "null")]);
         match args.screen.clone() {
-            Some(screen) => show_screen(screen, args.quit_at, shell, window, cx),
+            Some(screen) => {
+                let fake = self.fake.expect("the harness always has its fake server");
+                show_screen(screen, args.quit_at, fake, shell, window, cx)
+            }
             None => play(args, shell, window, cx),
         }
     }
@@ -183,6 +201,7 @@ impl Harness {
 fn show_screen(
     screen: String,
     quit_at: f64,
+    fake: FakeServer,
     shell: &Entity<Shell>,
     window: &mut Window,
     cx: &mut App,
@@ -191,9 +210,10 @@ fn show_screen(
     let handle = window.window_handle();
     let begun = Instant::now();
     let wants = |names: &[&str]| names.contains(&screen.as_str());
-    let to_library = wants(&["library", "detail", "detail-rows", "playing"]);
-    let to_film = wants(&["detail", "detail-rows", "playing"]);
+    let to_library = wants(&["library", "detail", "detail-rows", "detail-cast", "playing"]);
+    let to_film = wants(&["detail", "detail-rows", "detail-cast", "playing"]);
     let (scroll, play) = (wants(&["detail-rows"]), wants(&["playing"]));
+    let to_cast = wants(&["detail-cast"]);
     let mut done_steps = 0;
     cx.spawn(async move |cx| {
         loop {
@@ -234,6 +254,9 @@ fn show_screen(
                                     let bottom = page.scroll.max_offset().y;
                                     page.scroll.set_offset(point(px(0.), -bottom));
                                 }
+                                if to_cast && let Some(page) = shell.details.last() {
+                                    page.scroll.set_offset(point(px(0.), px(-420.)));
+                                }
                                 if play {
                                     // The local file is shorter than the fake film's resume point.
                                     shell.play_film(From::Beginning, window, cx);
@@ -256,6 +279,12 @@ fn show_screen(
                     return false;
                 }
                 shell.update(cx, |shell, _| shell.close_video()).ok();
+                let images = fake.state.lock().unwrap().record.images.clone();
+                let persons = images
+                    .iter()
+                    .filter(|(image, _)| image.item.0.starts_with("person-"))
+                    .count();
+                println!("IMAGES asked={} persons={persons}", images.len());
                 cx.quit();
                 true
             });

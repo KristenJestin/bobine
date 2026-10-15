@@ -298,6 +298,20 @@ pub fn subtitle_label(track: Option<&SubtitleTrack>) -> String {
     })
 }
 
+/// What a person's disc shows without a photo: the first letter of the first and the last
+/// word of the name, `PM` for Paul Mercier.
+pub fn initials(name: &str) -> String {
+    let mut words = name.split_whitespace();
+    let first = words.next();
+    let last = words.next_back();
+    first
+        .into_iter()
+        .chain(last)
+        .filter_map(|word| word.chars().next())
+        .flat_map(char::to_uppercase)
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -481,5 +495,13 @@ mod tests {
         assert_eq!(time_left(&film).as_deref(), Some("reste 59 min"));
         let progress = progress(&film).unwrap();
         assert!((progress - 72. / 131.).abs() < 1e-4, "{progress}");
+    }
+
+    #[test]
+    fn a_person_without_a_photo_shows_their_initials() {
+        assert_eq!(initials("Paul Mercier"), "PM");
+        assert_eq!(initials("Zoé"), "Z");
+        assert_eq!(initials("élise de la Fabre"), "ÉF");
+        assert_eq!(initials("  "), "");
     }
 }

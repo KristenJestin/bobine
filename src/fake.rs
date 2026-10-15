@@ -45,6 +45,11 @@ pub struct State {
     /// What `play` gives as the stream: a local file in the harness.
     pub stream: String,
     pub record: Record,
+    /// How long an image takes to come: a real server makes the fetches overlap.
+    pub image_delay: std::time::Duration,
+    /// The first time each person's photo is asked, the server fails (as a busy server that
+    /// times out while it fetches the photo from elsewhere).
+    pub photos_fail_once: bool,
 }
 
 #[derive(Clone)]
@@ -183,7 +188,7 @@ pub fn versions() -> Vec<MediaSource> {
     ]
 }
 
-const CAST: [(&str, &str); 7] = [
+const CAST: [(&str, &str); 18] = [
     ("Paul Mercier", "Anton"),
     ("Léa Morand", "Hanna"),
     ("Yann Ribot", "Ilya"),
@@ -191,6 +196,17 @@ const CAST: [(&str, &str); 7] = [
     ("Marc Olier", "Le père"),
     ("Nina Brel", "Vera"),
     ("Tom Achard", "Le passeur"),
+    ("Iris Lemaire", "La douanière"),
+    ("Hugo Vasseur", "Le chauffeur"),
+    ("Chloé Arnaud", "Mila"),
+    ("Bastien Roux", "Le pêcheur"),
+    ("Anaïs Perrin", "La sœur"),
+    ("Karim Benali", "Le guide"),
+    ("Élise Fabre", "La voisine"),
+    ("Victor Lenoir", "Le prêtre"),
+    ("Manon Giraud", "L'enfant"),
+    ("Jules Caron", "Le soldat"),
+    ("Zoé Marchand", "La mère"),
 ];
 
 impl FakeServer {
@@ -202,6 +218,8 @@ impl FakeServer {
                 films: films(count),
                 stream: "file:///nowhere.mkv".into(),
                 record: Record::default(),
+                image_delay: std::time::Duration::ZERO,
+                photos_fail_once: false,
             })),
             info: ServerInfo {
                 id: "server-1".into(),
@@ -332,7 +350,10 @@ impl MediaServer for FakeServer {
                     id: ItemId(format!("person-{n}")),
                     name: (*name).into(),
                     role: Some((*role).into()),
-                    photo: image(&format!("person-{n}"), ImageKind::Primary),
+                    // Some people have no photo on the server.
+                    photo: (n % 4 != 3)
+                        .then(|| image(&format!("person-{n}"), ImageKind::Primary))
+                        .flatten(),
                 })
                 .collect(),
             similar: others
@@ -436,7 +457,18 @@ impl MediaServer for FakeServer {
     }
 
     fn image(&self, image: &ImageRef, width: u32) -> Result<Vec<u8>, ProviderError> {
-        self.state().record.images.push((image.clone(), width));
+        let (delay, fails) = {
+            let mut state = self.state();
+            let asked_before = state.record.images.iter().any(|(i, _)| i == image);
+            state.record.images.push((image.clone(), width));
+            let fails =
+                state.photos_fail_once && image.item.0.starts_with("person-") && !asked_before;
+            (state.image_delay, fails)
+        };
+        std::thread::sleep(delay);
+        if fails {
+            return Err(ProviderError::Unreachable("timed out".into()));
+        }
         let height = match image.kind {
             ImageKind::Primary => width * 3 / 2,
             ImageKind::Backdrop => width * 9 / 16,

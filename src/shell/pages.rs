@@ -732,6 +732,31 @@ impl Shell {
         None
     }
 
+    /// A failed image still on screen is asked again once its wait is over: the window is woken
+    /// then, since an idle window does not redraw by itself.
+    fn wake_for_image_retries(&mut self, cx: &mut Context<Self>) {
+        let Some(at) = self.images.next_retry() else {
+            return;
+        };
+        if self
+            .image_wake
+            .as_ref()
+            .is_some_and(|(planned, _)| *planned <= at && *planned > Instant::now())
+        {
+            return;
+        }
+        let wait = at.saturating_duration_since(Instant::now());
+        let task = cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(wait).await;
+            this.update(cx, |shell, cx| {
+                shell.image_wake = None;
+                cx.notify();
+            })
+            .ok();
+        });
+        self.image_wake = Some((at, task));
+    }
+
     /// Starts the fetches that may, up to the cap; each one that ends starts the next.
     fn fetch_images(&mut self, cx: &mut Context<Self>) {
         while let Some((key, image)) = self.images.next_fetch() {
@@ -758,6 +783,7 @@ impl Shell {
                         }
                     }
                     shell.fetch_images(cx);
+                    shell.wake_for_image_retries(cx);
                 },
             );
         }

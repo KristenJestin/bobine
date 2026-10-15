@@ -466,7 +466,15 @@ fn cast_row(
                         .size(px(PHOTO))
                         .rounded_full()
                         .overflow_hidden()
-                        .bg(theme::panel())
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .bg(theme::line())
+                        .text_size(px(26.))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(theme::muted())
+                        // Under the photo while it comes, alone when there is none.
+                        .child(film_page::initials(&person.name))
                         .children(picture(photo, PHOTO / 2.)),
                 )
                 .child(
