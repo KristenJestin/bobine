@@ -9,6 +9,9 @@
 //! GPUI never sees their events. The same queue hides the cursor, which GPUI cannot do on
 //! request.
 
+use std::cell::RefCell;
+use std::ffi::c_void;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::mpsc;
 use std::thread::{self, JoinHandle};
@@ -37,23 +40,27 @@ use super::gl::{self, SendPtr, Target};
 use super::{Placement, VideoDisplay};
 use crate::player::libmpv::Libmpv;
 
-pub struct VideoSurface {
+/// What the video needs of the compositor, bound once for the window and kept with it: Wayland
+/// cannot release a registry or a compositor, so binding them for each film would leave them
+/// behind, on a queue nobody reads any more.
+pub struct Wayland {
     connection: Connection,
     queue: EventQueue<State>,
     state: State,
-    surfaces: Surfaces,
+    /// GPUI's `wl_display`, for EGL and mpv.
+    display: *mut c_void,
+    /// GPUI's surface, the video's parent.
+    parent: WlSurface,
+    compositor: WlCompositor,
+    subcompositor: WlSubcompositor,
+    viewporter: WpViewporter,
     seat: Option<WlSeat>,
     cursor_shapes: Option<WpCursorShapeManagerV1>,
-    placement: Option<Placement>,
-    /// The cursor as last set, and the pointer entry it was set for.
-    cursor: Option<(bool, u32)>,
-    target: Arc<Target>,
-    thread: Option<JoinHandle<()>>,
 }
 
-impl VideoSurface {
-    /// Creates the subsurface under `window` and starts the thread that draws `mpv` into it.
-    pub fn new(window: &Window, mpv: Arc<Libmpv>) -> Result<VideoSurface, String> {
+impl Wayland {
+    /// Binds, on a queue of GPUI's own connection, what the video of `window` needs.
+    pub fn new(window: &Window) -> Result<Wayland, String> {
         let RawWindowHandle::Wayland(window_handle) = HasWindowHandle::window_handle(window)
             .map_err(|e| e.to_string())?
             .as_raw()
@@ -82,8 +89,9 @@ impl VideoSurface {
         let viewporter: WpViewporter = globals
             .bind(&qh, 1..=1, ())
             .map_err(|e| format!("wp_viewporter: {e}"))?;
-        // Without them the cursor simply stays.
-        let seat: Option<WlSeat> = globals.bind(&qh, 1..=5, ()).ok();
+        // Without them the cursor simply stays. Version 3 at least: each film's pointer is
+        // released when the film goes.
+        let seat: Option<WlSeat> = globals.bind(&qh, 3..=5, ()).ok();
         let cursor_shapes: Option<WpCursorShapeManagerV1> = globals.bind(&qh, 1..=1, ()).ok();
 
         // SAFETY: GPUI's live wl_surface proxy, of that interface.
@@ -97,59 +105,17 @@ impl VideoSurface {
         let parent = WlSurface::from_id(&connection, parent_id)
             .map_err(|_| "the window's wl_surface is not a wl_surface")?;
 
-        let surface = compositor.create_surface(&qh, ());
-        let subsurface = subcompositor.get_subsurface(&surface, &parent, &qh, ());
-        let viewport = viewporter.get_viewport(&surface, &qh, ());
-        let surfaces = Surfaces {
-            connection: connection.clone(),
-            surface: surface.clone(),
-            subsurface: subsurface.clone(),
-            viewport,
-        };
-        subsurface.place_below(&parent);
-        // Desynchronised: mpv's frames reach the screen without waiting for a GPUI commit.
-        subsurface.set_desync();
-        // The video takes no input: the pointer and the keys stay with the window above.
-        let region = compositor.create_region(&qh, ());
-        surface.set_input_region(Some(&region));
-        region.destroy();
-        surface.commit();
-        connection
-            .flush()
-            .map_err(|e| format!("Wayland flush: {e}"))?;
-
-        let target = Arc::new(Target::default());
-        let (ready, is_ready) = mpsc::channel();
-        let thread = {
-            let display = SendPtr(display);
-            let surface = surface.id();
-            let target = target.clone();
-            thread::Builder::new()
-                .name("video-gl".into())
-                .spawn(move || gl::run(display, surface, mpv, target, ready))
-                .map_err(|e| e.to_string())?
-        };
-        let outcome = is_ready
-            .recv()
-            .map_err(|_| "the render thread died".to_string())
-            .flatten();
-        if let Err(error) = outcome {
-            // Its EGL objects go before the surface they were made on.
-            let _ = thread.join();
-            return Err(error);
-        }
-
-        Ok(VideoSurface {
+        Ok(Wayland {
             connection,
             queue,
             state: State::default(),
-            surfaces,
+            display,
+            parent,
+            compositor,
+            subcompositor,
+            viewporter,
             seat,
             cursor_shapes,
-            placement: None,
-            cursor: None,
-            target,
-            thread: Some(thread),
         })
     }
 
@@ -170,13 +136,122 @@ impl VideoSurface {
             let _ = self.connection.flush();
         }
     }
+
+    /// The pointer made for a film goes with it: GPUI's own pointer keeps the cursor between
+    /// films.
+    fn release_pointer(&mut self) {
+        if let Some(device) = self.state.shape_device.take() {
+            device.destroy();
+        }
+        if let Some(pointer) = self.state.pointer.take() {
+            pointer.release();
+        }
+        self.state.enter_serial = None;
+        let _ = self.connection.flush();
+    }
+}
+
+impl Drop for Wayland {
+    /// What the protocol lets go goes; the registry and the compositor stay with the connection,
+    /// which forgets them when it closes.
+    fn drop(&mut self) {
+        self.release_pointer();
+        if let Some(shapes) = self.cursor_shapes.take() {
+            shapes.destroy();
+        }
+        if let Some(seat) = self.seat.take()
+            && seat.version() >= 5
+        {
+            seat.release();
+        }
+        self.viewporter.destroy();
+        self.subcompositor.destroy();
+        let _ = self.connection.flush();
+    }
+}
+
+pub struct VideoSurface {
+    wayland: Rc<RefCell<Wayland>>,
+    surfaces: Surfaces,
+    placement: Option<Placement>,
+    /// The cursor as last set, and the pointer entry it was set for.
+    cursor: Option<(bool, u32)>,
+    target: Arc<Target>,
+    thread: Option<JoinHandle<()>>,
+}
+
+impl VideoSurface {
+    /// Creates the subsurface under the window of `wayland` and starts the thread that draws
+    /// `mpv` into it.
+    pub fn new(wayland: Rc<RefCell<Wayland>>, mpv: Arc<Libmpv>) -> Result<VideoSurface, String> {
+        let surfaces = {
+            let wayland = wayland.borrow();
+            let qh = wayland.queue.handle();
+            let surface = wayland.compositor.create_surface(&qh, ());
+            let subsurface =
+                wayland
+                    .subcompositor
+                    .get_subsurface(&surface, &wayland.parent, &qh, ());
+            let viewport = wayland.viewporter.get_viewport(&surface, &qh, ());
+            let surfaces = Surfaces {
+                connection: wayland.connection.clone(),
+                surface,
+                subsurface,
+                viewport,
+            };
+            surfaces.subsurface.place_below(&wayland.parent);
+            // Desynchronised: mpv's frames reach the screen without waiting for a GPUI commit.
+            surfaces.subsurface.set_desync();
+            // The video takes no input: the pointer and the keys stay with the window above.
+            let region = wayland.compositor.create_region(&qh, ());
+            surfaces.surface.set_input_region(Some(&region));
+            region.destroy();
+            surfaces.surface.commit();
+            wayland
+                .connection
+                .flush()
+                .map_err(|e| format!("Wayland flush: {e}"))?;
+            surfaces
+        };
+
+        let target = Arc::new(Target::default());
+        let (ready, is_ready) = mpsc::channel();
+        let thread = {
+            let display = SendPtr(wayland.borrow().display);
+            let surface = surfaces.surface.id();
+            let target = target.clone();
+            thread::Builder::new()
+                .name("video-gl".into())
+                .spawn(move || gl::run(display, surface, mpv, target, ready))
+                .map_err(|e| e.to_string())?
+        };
+        let outcome = is_ready
+            .recv()
+            .map_err(|_| "the render thread died".to_string())
+            .flatten();
+        if let Err(error) = outcome {
+            // Its EGL objects go before the surface they were made on.
+            let _ = thread.join();
+            return Err(error);
+        }
+
+        Ok(VideoSurface {
+            wayland,
+            surfaces,
+            placement: None,
+            cursor: None,
+            target,
+            thread: Some(thread),
+        })
+    }
 }
 
 impl VideoDisplay for VideoSurface {
     /// Called while GPUI paints, so the position (applied on the window's next commit) lands in
     /// the same frame as the controls around it.
     fn place(&mut self, placement: Placement) {
-        self.dispatch();
+        let mut wayland = self.wayland.borrow_mut();
+        wayland.dispatch();
         if self.placement == Some(placement) {
             return;
         }
@@ -189,15 +264,16 @@ impl VideoDisplay for VideoSurface {
             .set_destination(placement.width, placement.height);
         self.target
             .set_size(placement.buffer_width, placement.buffer_height);
-        let _ = self.connection.flush();
+        let _ = wayland.connection.flush();
     }
 
     fn set_cursor_visible(&mut self, visible: bool) {
-        self.dispatch();
+        let mut wayland = self.wayland.borrow_mut();
+        wayland.dispatch();
         let (Some(pointer), Some(device), Some(serial)) = (
-            &self.state.pointer,
-            &self.state.shape_device,
-            self.state.enter_serial,
+            &wayland.state.pointer,
+            &wayland.state.shape_device,
+            wayland.state.enter_serial,
         ) else {
             // Hidden without a way to bring it back would be worse than shown.
             return;
@@ -212,27 +288,20 @@ impl VideoDisplay for VideoSurface {
         } else {
             pointer.set_cursor(serial, None, 0, 0);
         }
-        let _ = self.connection.flush();
+        let _ = wayland.connection.flush();
     }
 }
 
 impl Drop for VideoSurface {
     /// The render thread frees mpv's render context and the EGL objects before the surface they
-    /// draw into goes, and all of it before the window does.
+    /// draw into goes, and all of it before the window does. What was bound for the window
+    /// stays for the next film.
     fn drop(&mut self) {
         self.target.stop();
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
         }
-        if let Some(device) = self.state.shape_device.take() {
-            device.destroy();
-        }
-        if let Some(pointer) = self.state.pointer.take()
-            && pointer.version() >= 3
-        {
-            pointer.release();
-        }
-        let _ = self.connection.flush();
+        self.wayland.borrow_mut().release_pointer();
     }
 }
 

@@ -1,5 +1,7 @@
 //! The root view: the screen the navigator points at, framed by the pill bar or the back link.
 
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -18,7 +20,7 @@ use crate::player::{Media, Player};
 use crate::screens;
 use crate::theme;
 use crate::video::Rect;
-use crate::video::subsurface::VideoSurface;
+use crate::video::subsurface::{VideoSurface, Wayland};
 
 /// How often the player is asked what changed, and the controls checked for hiding.
 const PLAYER_TICK: Duration = Duration::from_millis(100);
@@ -28,6 +30,8 @@ pub struct Shell {
     focus: FocusHandle,
     font: Option<SharedString>,
     pub playback: Option<Playback>,
+    /// What the video binds of the compositor, once for this window: films reuse it.
+    wayland: Option<Rc<RefCell<Wayland>>>,
 }
 
 /// The film being played and what keeps it in step with the window.
@@ -52,6 +56,7 @@ impl Shell {
             focus: cx.focus_handle(),
             font,
             playback: None,
+            wayland: None,
         }
     }
 
@@ -70,7 +75,14 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
-        let display = VideoSurface::new(window, mpv.clone())?;
+        let wayland = match &self.wayland {
+            Some(wayland) => wayland.clone(),
+            None => self
+                .wayland
+                .insert(Rc::new(RefCell::new(Wayland::new(window)?)))
+                .clone(),
+        };
+        let display = VideoSurface::new(wayland, mpv.clone())?;
         let mut player = MpvPlayer::new(mpv);
         player.load(media).map_err(|e| e.to_string())?;
         let session = Session::new(
@@ -110,6 +122,13 @@ impl Shell {
     /// Closes the player: the video surface and mpv go before anything else does.
     pub fn stop_playback(&mut self) {
         self.playback = None;
+    }
+
+    /// The window is closing: the film goes, then what the video bound of the compositor,
+    /// while GPUI's display is still connected.
+    pub fn close_video(&mut self) {
+        self.stop_playback();
+        self.wayland = None;
     }
 
     fn leave_player(&mut self, window: &mut Window, cx: &mut Context<Self>) {

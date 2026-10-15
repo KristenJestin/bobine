@@ -245,7 +245,7 @@ pub fn start(shell: &Entity<Shell>, window: &mut Window, cx: &mut App) {
                 if let Some(start) = &start {
                     report(&mpv, start, window);
                 }
-                shell.update(cx, |shell, _| shell.stop_playback()).ok();
+                shell.update(cx, |shell, _| shell.close_video()).ok();
                 cx.quit();
                 true
             });

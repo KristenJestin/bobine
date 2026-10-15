@@ -32,7 +32,7 @@ fn main() {
             // The video surface and mpv go before the window's surface does.
             let closing = shell.downgrade();
             window.on_window_should_close(cx, move |_, cx| {
-                closing.update(cx, |shell, _| shell.stop_playback()).ok();
+                closing.update(cx, |shell, _| shell.close_video()).ok();
                 true
             });
             #[cfg(feature = "harness")]
