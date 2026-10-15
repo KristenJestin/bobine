@@ -386,6 +386,20 @@ mod tests {
     }
 
     #[test]
+    fn coming_back_to_a_page_of_cached_images_still_wakes_for_its_failed_one() {
+        let mut images = Images::default();
+        let now = Instant::now();
+        draw(&mut images, &["a"], now);
+        images.fetched(&image("a").0, false, now);
+        // The page was left, then comes back: "a" is the only image that is not cached, so it
+        // is the only one to want anything, and it must say when to be asked again.
+        draw(&mut images, &["b"], now + Duration::from_secs(1));
+        draw(&mut images, &[], now + Duration::from_secs(2));
+        draw(&mut images, &["a"], now + Duration::from_secs(3));
+        assert_eq!(images.next_retry(), Some(now + RETRY_AFTER));
+    }
+
+    #[test]
     fn a_failure_not_drawn_for_a_long_while_is_forgotten() {
         let mut images = Images::default();
         let now = Instant::now();

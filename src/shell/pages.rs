@@ -733,6 +733,8 @@ impl Shell {
         }
         self.images.want(&key, image, Instant::now());
         self.fetch_images(cx);
+        // A failed image waiting for its retry is drawn here, with nothing else to end a fetch.
+        self.wake_for_image_retries(cx);
         None
     }
 
