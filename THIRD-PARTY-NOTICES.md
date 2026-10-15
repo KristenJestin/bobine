@@ -2,8 +2,8 @@
 
 ## Phosphor icons
 
-Bobine draws its icons from the "fill" weight of [Phosphor Icons](https://phosphoricons.com),
-embedded as SVG files under `assets/icons/`. Phosphor is under the MIT licence, reproduced below
+Bobine draws its icons from the "fill" weight of [Phosphor Icons](https://phosphoricons.com)
+(and the "bold" weight for the list icon, which has no fill), embedded as SVG files under `assets/icons/`. Phosphor is under the MIT licence, reproduced below
 as it requires.
 
 ```

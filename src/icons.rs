@@ -1,6 +1,7 @@
 //! The icons: filled ones from Phosphor (MIT licence), each an SVG under `assets/icons/` embedded
 //! in the binary. The licence notice is in `THIRD-PARTY-NOTICES.md`.
-//! The names are Lucide's (what the screens already say), the drawings are Phosphor's "fill".
+//! The names are Lucide's (what the screens already say), the drawings are Phosphor's "fill"
+//! (or "bold" where a fill would be a box with the symbol cut out).
 //! An icon is a square the size of the text beside it, centred, coloured like that text.
 
 use std::borrow::Cow;
