@@ -5,7 +5,7 @@ mod film_detail;
 mod home;
 mod library;
 mod login;
-mod player;
+pub mod player;
 
 use gpui_kit::prelude::*;
 use gpui_kit::{AnyElement, Context, Div, FontWeight, IntoElement, div, px};
@@ -20,7 +20,7 @@ pub fn render(screen: Screen, cx: &mut Context<Shell>) -> AnyElement {
         Screen::Home => home::render(cx).into_any_element(),
         Screen::Library => library::render(cx).into_any_element(),
         Screen::FilmDetail => film_detail::render(cx).into_any_element(),
-        Screen::Player => player::render(cx).into_any_element(),
+        Screen::Player => player::empty(cx).into_any_element(),
     }
 }
 

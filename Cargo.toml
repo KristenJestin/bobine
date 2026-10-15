@@ -9,6 +9,7 @@ publish = false
 gpui-kit = { version = "=0.7.3", default-features = false }
 # The player (#5): libmpv draws with OpenGL into a Wayland subsurface under the window.
 khronos-egl = { version = "6", features = ["dynamic"] }
+libc = "0.2"
 libmpv2-sys = "4.0.1"
 raw-window-handle = "0.6"
 wayland-backend = { version = "0.3", features = ["client_system"] }

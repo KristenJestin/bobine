@@ -2,8 +2,11 @@
 //! implements it (`mpv`); a fake implements it in the tests. The video surface it draws into is
 //! the display port of `crate::video`.
 
+pub mod controls;
 pub mod libmpv;
 pub mod mpv;
+pub mod session;
+pub mod time;
 pub mod tracks;
 
 use std::fmt;

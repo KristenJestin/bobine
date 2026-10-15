@@ -663,6 +663,7 @@ version = "0.0.0"
 dependencies = [
  "gpui-kit",
  "khronos-egl",
+ "libc",
  "libmpv2-sys",
  "raw-window-handle",
  "wayland-backend",
