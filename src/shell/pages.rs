@@ -23,6 +23,7 @@ use crate::grid::{self, Grid};
 use crate::images::{self, Key};
 use crate::input::TextInput;
 use crate::menu::Menus;
+use crate::motion::{self, Presence};
 use crate::navigation::{NavEntry, Screen};
 use crate::player::libmpv::Libmpv;
 use crate::reports::Reporting;
@@ -82,6 +83,8 @@ pub struct DetailPage {
     /// Hidden while unknown, when the film is in none, or when the lookup failed.
     pub collection: Option<Collection>,
     pub menus: Menus<Chip>,
+    /// The menu drawn, kept while it fades out.
+    pub menu_fade: Presence<Chip>,
     /// Where each chip was last drawn, so its menu opens under it.
     pub chips: [Rc<Cell<Option<Bounds<Pixels>>>>; 3],
     pub scroll: ScrollHandle,
@@ -382,6 +385,7 @@ impl Shell {
             choices: None,
             collection: None,
             menus: Menus::default(),
+            menu_fade: Presence::new(motion::quick()),
             chips: Default::default(),
             scroll: ScrollHandle::new(),
             rows: Default::default(),

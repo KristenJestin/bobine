@@ -12,6 +12,7 @@ mod icons;
 mod images;
 mod input;
 mod menu;
+mod motion;
 mod navigation;
 mod player;
 mod reports;

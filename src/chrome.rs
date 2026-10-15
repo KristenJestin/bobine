@@ -2,7 +2,7 @@
 //! detail pages.
 
 use gpui_kit::prelude::*;
-use gpui_kit::{Context, Div, FontWeight, IntoElement, Stateful, div, px, rgba};
+use gpui_kit::{Context, Div, FontWeight, IntoElement, Stateful, Window, div, px, rgb, rgba};
 
 use crate::icons::{IconName, icon};
 use crate::navigation::{NavEntry, Screen};
@@ -108,9 +108,18 @@ fn search_field() -> Div {
 }
 
 /// Top left of a detail page, where the pill bar is not: an arrow and `Films`.
-pub fn back_link(label: &'static str, cx: &mut Context<Shell>) -> Stateful<Div> {
-    div()
-        .id("back-link")
+pub fn back_link(
+    label: &'static str,
+    window: &mut Window,
+    cx: &mut Context<Shell>,
+) -> Stateful<Div> {
+    // Readable over a page scrolled under it.
+    let shades = theme::Shades {
+        rest: rgba(0x09090acc),
+        hover: theme::line(),
+        press: rgb(0x2e2e33),
+    };
+    theme::eased("back-link", shades, window, cx)
         .flex()
         .items_center()
         .gap(px(6.))
@@ -122,10 +131,8 @@ pub fn back_link(label: &'static str, cx: &mut Context<Shell>) -> Stateful<Div> 
         .rounded(px(theme::RADIUS))
         .text_size(px(14.))
         .text_color(theme::muted())
-        // Readable over a page scrolled under it.
-        .bg(rgba(0x09090acc))
         .cursor_pointer()
-        .hover(|style| style.text_color(theme::text()).bg(theme::line()))
+        .hover(|style| style.text_color(theme::text()))
         .on_click(cx.listener(|app, _, _, cx| {
             app.go_back(cx);
         }))

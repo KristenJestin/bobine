@@ -28,7 +28,7 @@ pub fn render(
     cx: &mut Context<Shell>,
 ) -> AnyElement {
     match screen {
-        Screen::Login => login::render(shell, cx).into_any_element(),
+        Screen::Login => login::render(shell, window, cx).into_any_element(),
         Screen::Home => home::render(shell, cx).into_any_element(),
         Screen::Library => library::render(shell, window, cx).into_any_element(),
         Screen::FilmDetail => film_detail::render(shell, window, cx).into_any_element(),

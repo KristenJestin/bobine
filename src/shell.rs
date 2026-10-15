@@ -11,14 +11,15 @@ use std::time::{Duration, Instant};
 
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    Context, FocusHandle, Focusable, IntoElement, KeyDownEvent, Render, SharedString, Subscription,
-    Task, Window, div, px,
+    Animation, AnimationExt, Context, FocusHandle, Focusable, IntoElement, KeyDownEvent, Render,
+    SharedString, Subscription, Task, Window, div, px,
 };
 
 use bobine::provider::{Connector, MediaServer};
 
 use crate::chrome::{back_link, pill_bar};
 use crate::images::Images;
+use crate::motion::{self, Fade};
 use crate::navigation::{Navigator, Screen};
 use crate::player::libmpv::Libmpv;
 use crate::player::mpv::MpvPlayer;
@@ -55,6 +56,11 @@ pub struct Shell {
     pub images: Images,
     /// The wake-up planned for an image to ask again, and when.
     image_wake: Option<(Instant, Task<()>)>,
+    /// The page shown at the last draw, and how many times it changed: each change slides the
+    /// new page in, forwards (deeper) or backwards.
+    page: (Screen, usize),
+    page_turns: u64,
+    turned_forward: bool,
     /// Given to every mpv: the headless harness silences the sound.
     pub mpv_options: Vec<(&'static str, &'static str)>,
 }
@@ -62,6 +68,9 @@ pub struct Shell {
 /// The film being played and what keeps it in step with the window.
 pub struct Playback {
     pub session: Session,
+    /// The controls and the panel fade in and out.
+    controls_fade: Fade,
+    panel_fade: Fade,
     controls_shown: bool,
     had_error: bool,
     /// What the server is told; `None` for a local file.
@@ -93,6 +102,9 @@ impl Shell {
             details: Vec::new(),
             images: Images::default(),
             image_wake: None,
+            page: (Screen::Login, 0),
+            page_turns: 0,
+            turned_forward: true,
             mpv_options: Vec::new(),
         };
         shell.begin(open, cx);
@@ -143,6 +155,8 @@ impl Shell {
         });
         self.playback = Some(Playback {
             session,
+            controls_fade: Fade::new(motion::quick()),
+            panel_fade: Fade::new(motion::quick()),
             controls_shown: false,
             had_error: false,
             reporting,
@@ -288,6 +302,16 @@ impl Render for Shell {
         let screen = self.navigator.current();
         let back_label = self.navigator.back_label();
         let playing = screen == Screen::Player && self.playback.is_some();
+        let page = (screen, self.details.len());
+        if page != self.page {
+            self.turned_forward = page.1 > self.page.1;
+            self.page = page;
+            self.page_turns += 1;
+        }
+        let (turns, shift) = (
+            self.page_turns,
+            if self.turned_forward { 32. } else { -32. },
+        );
 
         div()
             .size_full()
@@ -308,19 +332,43 @@ impl Render for Shell {
             .text_color(theme::text())
             .text_size(px(14.))
             .when_some(self.font.clone(), |root, font| root.font_family(font))
-            .child(match &self.playback {
+            .child(match &mut self.playback {
                 Some(playback) if playing => {
-                    screens::player::render(&playback.session, window, cx).into_any_element()
+                    let now = Instant::now();
+                    let session = &playback.session;
+                    playback
+                        .controls_fade
+                        .set(session.controls_visible(now), now);
+                    playback.panel_fade.set(session.panel_open(), now);
+                    if playback.controls_fade.moving(now) || playback.panel_fade.moving(now) {
+                        window.request_animation_frame();
+                    }
+                    let shown = screens::player::Shown {
+                        controls: playback.controls_fade.level(now),
+                        panel: playback.panel_fade.level(now),
+                    };
+                    screens::player::render(session, shown, window, cx).into_any_element()
                 }
                 _ if self.starting => div().into_any_element(),
-                _ => screens::render(self, screen, window, cx),
+                // A page slides in from the side it comes from, and fades in.
+                _ => div()
+                    .id("page")
+                    .size_full()
+                    .relative()
+                    .child(screens::render(self, screen, window, cx))
+                    .with_animation(
+                        ("page-turn", turns as usize),
+                        Animation::new(motion::page()).with_easing(motion::ease_out),
+                        move |page, t| page.opacity(t).left(px(shift * (1. - t))),
+                    )
+                    .into_any_element(),
             })
             .when(screen.shows_pill_bar(), |root| {
                 root.child(pill_bar(screen, cx))
             })
             .when_some(
                 back_label.filter(|_| screen.shows_back_link()),
-                |root, label| root.child(back_link(label, cx)),
+                |root, label| root.child(back_link(label, window, cx)),
             )
     }
 }
