@@ -8,6 +8,7 @@ mod film_page;
 mod grid;
 #[cfg(feature = "harness")]
 mod harness;
+mod icons;
 mod images;
 mod input;
 mod menu;
@@ -42,43 +43,45 @@ fn open_jellyfin() -> Result<Arc<dyn Connector>, ProviderError> {
 fn main() {
     #[cfg(feature = "harness")]
     let harness = harness::Harness::from_args();
-    gpui_kit::application().run(move |cx: &mut App| {
-        input::bind_keys(cx);
-        let bounds = Bounds::centered(None, size(px(1440.), px(810.)), cx);
-        let options = WindowOptions {
-            window_bounds: Some(WindowBounds::Windowed(bounds)),
-            app_id: Some("bobine".into()),
-            // The video is under the window: the player leaves a hole for it, every other
-            // screen paints its own background.
-            window_background: WindowBackgroundAppearance::Transparent,
-            // A film plays on a window that may not have the focus.
-            inactive_frame_interval: None,
-            ..Default::default()
-        };
-        let font = theme::font_family(cx);
-        // The headless harness never touches the real account file nor the keyring.
-        #[cfg(feature = "harness")]
-        let open: shell::OpenConnector = match harness.connector() {
-            Some(fake) => Box::new(move || Ok(fake)),
-            None => Box::new(open_jellyfin),
-        };
-        #[cfg(not(feature = "harness"))]
-        let open: shell::OpenConnector = Box::new(open_jellyfin);
-        let opened = cx.open_window(options, move |window, cx| {
-            let shell = cx.new(|cx| shell::Shell::new(font, open, cx));
-            // The video surface and mpv go before the window's surface does.
-            let closing = shell.downgrade();
-            window.on_window_should_close(cx, move |_, cx| {
-                closing.update(cx, |shell, _| shell.close_video()).ok();
-                true
-            });
+    gpui_kit::application()
+        .with_assets(icons::Icons)
+        .run(move |cx: &mut App| {
+            input::bind_keys(cx);
+            let bounds = Bounds::centered(None, size(px(1440.), px(810.)), cx);
+            let options = WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(bounds)),
+                app_id: Some("bobine".into()),
+                // The video is under the window: the player leaves a hole for it, every other
+                // screen paints its own background.
+                window_background: WindowBackgroundAppearance::Transparent,
+                // A film plays on a window that may not have the focus.
+                inactive_frame_interval: None,
+                ..Default::default()
+            };
+            let font = theme::font_family(cx);
+            // The headless harness never touches the real account file nor the keyring.
             #[cfg(feature = "harness")]
-            harness.start(&shell, window, cx);
-            shell
+            let open: shell::OpenConnector = match harness.connector() {
+                Some(fake) => Box::new(move || Ok(fake)),
+                None => Box::new(open_jellyfin),
+            };
+            #[cfg(not(feature = "harness"))]
+            let open: shell::OpenConnector = Box::new(open_jellyfin);
+            let opened = cx.open_window(options, move |window, cx| {
+                let shell = cx.new(|cx| shell::Shell::new(font, open, cx));
+                // The video surface and mpv go before the window's surface does.
+                let closing = shell.downgrade();
+                window.on_window_should_close(cx, move |_, cx| {
+                    closing.update(cx, |shell, _| shell.close_video()).ok();
+                    true
+                });
+                #[cfg(feature = "harness")]
+                harness.start(&shell, window, cx);
+                shell
+            });
+            if let Err(error) = opened {
+                eprintln!("bobine: cannot open the window: {error}");
+                std::process::exit(1);
+            }
         });
-        if let Err(error) = opened {
-            eprintln!("bobine: cannot open the window: {error}");
-            std::process::exit(1);
-        }
-    });
 }

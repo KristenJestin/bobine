@@ -101,7 +101,7 @@ pub fn render(shell: &mut Shell, cx: &mut Context<Shell>) -> impl IntoElement {
                     .child(why)
             }))
             .child(
-                theme::primary_button("login-submit", label)
+                theme::primary_button("login-submit", None, label)
                     .flex()
                     .justify_center()
                     .when(form.busy, |button| button.opacity(0.6))

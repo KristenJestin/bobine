@@ -15,6 +15,7 @@ use gpui_kit::{
 };
 
 use crate::film_page;
+use crate::icons::{IconName, icon};
 use crate::images;
 use crate::navigation::Screen;
 use crate::shell::Shell;
@@ -166,9 +167,7 @@ fn poster(
                             .justify_center()
                             .bg(theme::accent())
                             .text_color(theme::background())
-                            .text_size(px(12.))
-                            .font_weight(FontWeight::BOLD)
-                            .child("✓"),
+                            .child(icon(IconName::Check, 13.)),
                     )
                 }),
         )

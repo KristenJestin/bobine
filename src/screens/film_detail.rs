@@ -17,6 +17,7 @@ use gpui_kit::{
 
 use super::{centered, note, picture, poster, progress_bar, row_heading};
 use crate::film_page::{self, Choices, From};
+use crate::icons::{IconName, icon};
 use crate::images;
 use crate::menu;
 use crate::shell::{Chip, Loadable, Shell};
@@ -132,33 +133,42 @@ fn hero(
     let bg = theme::background();
     let clear = rgba(0x09090a00);
 
-    let buttons = div()
-        .flex()
-        .gap(px(10.))
-        .when(busy, |row| row.opacity(0.6))
-        .child(
-            theme::primary_button("film-play", film_page::play_label(film)).on_click(
-                cx.listener(|shell, _, window, cx| shell.play_film(From::Resume, window, cx)),
-            ),
-        )
-        .when(film.resume.is_some(), |row| {
-            row.child(
-                theme::ghost_button("film-from-start", "↺ Depuis le début").on_click(
-                    cx.listener(|shell, _, window, cx| {
-                        shell.play_film(From::Beginning, window, cx)
-                    }),
+    let buttons =
+        div()
+            .flex()
+            .gap(px(10.))
+            .when(busy, |row| row.opacity(0.6))
+            .child(
+                theme::primary_button(
+                    "film-play",
+                    Some(IconName::Play),
+                    film_page::play_label(film),
+                )
+                .on_click(
+                    cx.listener(|shell, _, window, cx| shell.play_film(From::Resume, window, cx)),
                 ),
             )
-        })
-        .child(
-            theme::ghost_button("film-watched", "✓ Vu")
-                .when(film.watched, |button| {
-                    button
-                        .text_color(theme::accent())
-                        .border_color(theme::accent())
-                })
-                .on_click(cx.listener(|shell, _, _, cx| shell.toggle_watched(cx))),
-        );
+            .when(film.resume.is_some(), |row| {
+                row.child(
+                    theme::ghost_button(
+                        "film-from-start",
+                        Some(IconName::RotateCcw),
+                        "Depuis le début",
+                    )
+                    .on_click(cx.listener(|shell, _, window, cx| {
+                        shell.play_film(From::Beginning, window, cx)
+                    })),
+                )
+            })
+            .child(
+                theme::ghost_button("film-watched", Some(IconName::Check), "Vu")
+                    .when(film.watched, |button| {
+                        button
+                            .text_color(theme::accent())
+                            .border_color(theme::accent())
+                    })
+                    .on_click(cx.listener(|shell, _, _, cx| shell.toggle_watched(cx))),
+            );
 
     let chips = div()
         .flex()
@@ -324,7 +334,7 @@ fn hero(
         )
 }
 
-/// `AUDIO  Français · E-AC-3 5.1 ▾`; a click opens the choices under it.
+/// `AUDIO  Français · E-AC-3 5.1 ⌄`; a click opens the choices under it.
 fn chip(
     kind: Chip,
     label: &'static str,
@@ -366,12 +376,7 @@ fn chip(
                 .font_weight(FontWeight::SEMIBOLD)
                 .child(value.unwrap_or_else(|| "—".into())),
         )
-        .child(
-            div()
-                .text_size(px(13.))
-                .text_color(theme::muted())
-                .child("▾"),
-        );
+        .child(icon(IconName::ChevronDown, 14.).text_color(theme::muted()));
     let under = bounds.get().filter(|_| open == Some(kind));
     div()
         .relative()
@@ -410,9 +415,9 @@ fn menu(
                 .on_click(cx.listener(move |shell, _, _, cx| shell.choose(kind, value, cx)))
                 .child(
                     div()
-                        .w(px(14.))
+                        .size(px(14.))
                         .text_color(theme::accent())
-                        .child(if current { "✓" } else { "" }),
+                        .when(current, |mark| mark.child(icon(IconName::Check, 14.))),
                 )
                 .child(label)
         });

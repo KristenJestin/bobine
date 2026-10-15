@@ -4,6 +4,7 @@
 use gpui_kit::prelude::*;
 use gpui_kit::{Context, Div, FontWeight, IntoElement, Stateful, div, px, rgba};
 
+use crate::icons::{IconName, icon};
 use crate::navigation::{NavEntry, Screen};
 use crate::shell::Shell;
 use crate::theme;
@@ -106,10 +107,13 @@ fn search_field() -> Div {
         )
 }
 
-/// Top left of a detail page, where the pill bar is not: `← Films`.
+/// Top left of a detail page, where the pill bar is not: an arrow and `Films`.
 pub fn back_link(label: &'static str, cx: &mut Context<Shell>) -> Stateful<Div> {
     div()
         .id("back-link")
+        .flex()
+        .items_center()
+        .gap(px(6.))
         .absolute()
         .top(px(24.))
         .left(px(40.))
@@ -125,5 +129,6 @@ pub fn back_link(label: &'static str, cx: &mut Context<Shell>) -> Stateful<Div> 
         .on_click(cx.listener(|app, _, _, cx| {
             app.go_back(cx);
         }))
-        .child(format!("← {label}"))
+        .child(icon(IconName::ArrowLeft, 16.))
+        .child(label)
 }

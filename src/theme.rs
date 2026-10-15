@@ -4,6 +4,8 @@
 use gpui_kit::prelude::*;
 use gpui_kit::{App, Div, ElementId, FontWeight, Rgba, SharedString, Stateful, div, px, rgb, rgba};
 
+use crate::icons::{IconName, icon};
+
 pub fn background() -> Rgba {
     rgb(0x09090a)
 }
@@ -51,10 +53,21 @@ pub fn font_family(cx: &App) -> Option<SharedString> {
         .then(|| "Inter".into())
 }
 
+/// The size of an icon beside the text of a button.
+const BUTTON_ICON: f32 = 16.;
+
 /// White, black text: the one thing to do on a screen.
-pub fn primary_button(id: impl Into<ElementId>, label: impl Into<SharedString>) -> Stateful<Div> {
+pub fn primary_button(
+    id: impl Into<ElementId>,
+    leading: Option<IconName>,
+    label: impl Into<SharedString>,
+) -> Stateful<Div> {
     div()
         .id(id)
+        .flex()
+        .items_center()
+        .justify_center()
+        .gap(px(8.))
         .px(px(20.))
         .py(px(12.))
         .rounded(px(RADIUS))
@@ -64,13 +77,22 @@ pub fn primary_button(id: impl Into<ElementId>, label: impl Into<SharedString>) 
         .font_weight(FontWeight::SEMIBOLD)
         .cursor_pointer()
         .hover(|style| style.bg(rgb(0xe4e4e7)))
+        .children(leading.map(|name| icon(name, BUTTON_ICON)))
         .child(label.into())
 }
 
 /// Outlined, for what comes second.
-pub fn ghost_button(id: impl Into<ElementId>, label: impl Into<SharedString>) -> Stateful<Div> {
+pub fn ghost_button(
+    id: impl Into<ElementId>,
+    leading: Option<IconName>,
+    label: impl Into<SharedString>,
+) -> Stateful<Div> {
     div()
         .id(id)
+        .flex()
+        .items_center()
+        .justify_center()
+        .gap(px(8.))
         .px(px(20.))
         .py(px(12.))
         .rounded(px(RADIUS))
@@ -82,5 +104,6 @@ pub fn ghost_button(id: impl Into<ElementId>, label: impl Into<SharedString>) ->
         .font_weight(FontWeight::SEMIBOLD)
         .cursor_pointer()
         .hover(|style| style.bg(line()))
+        .children(leading.map(|name| icon(name, BUTTON_ICON)))
         .child(label.into())
 }

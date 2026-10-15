@@ -12,6 +12,7 @@ use gpui_kit::{
 };
 
 use super::empty_screen;
+use crate::icons::{IconName, icon};
 use crate::player::controls::SKIP_SECONDS;
 use crate::player::session::{Choice, Session};
 use crate::player::time;
@@ -99,8 +100,8 @@ fn title_bar(session: &Session, cx: &mut Context<Shell>) -> impl IntoElement {
                 .items_center()
                 .gap(px(16.))
                 .child(
-                    round_button("player-back", "←", 36.)
-                        .text_size(px(20.))
+                    round_button("player-back", 36.)
+                        .child(icon(IconName::ArrowLeft, 20.))
                         .on_click(cx.listener(|shell, _, window, cx| {
                             shell.player_back(window, cx);
                         })),
@@ -251,21 +252,23 @@ fn bottom_bar(session: &Session, window: &Window, cx: &mut Context<Shell>) -> im
         )
 }
 
-/// White, round: the pause bars while the film plays, the play triangle when it is paused.
+/// White, round: the pause icon while the film plays, the play icon when it is paused.
 fn play_pause(paused: bool) -> Stateful<Div> {
-    let button = round_button("player-play-pause", "", 52.)
+    round_button("player-play-pause", 52.)
         .bg(rgb(0xffffff))
         .text_color(rgb(0x000000))
-        .hover(|style| style.bg(rgb(0xe4e4e7)));
-    if paused {
-        button.text_size(px(18.)).child("▶")
-    } else {
-        let bar = || div().w(px(5.)).h(px(17.)).rounded(px(1.)).bg(rgb(0x000000));
-        button.gap(px(5.)).child(bar()).child(bar())
-    }
+        .hover(|style| style.bg(rgb(0xe4e4e7)))
+        .child(icon(
+            if paused {
+                IconName::Play
+            } else {
+                IconName::Pause
+            },
+            22.,
+        ))
 }
 
-fn round_button(id: &'static str, label: &'static str, side: f32) -> Stateful<Div> {
+fn round_button(id: &'static str, side: f32) -> Stateful<Div> {
     div()
         .id(id)
         .size(px(side))
@@ -275,7 +278,6 @@ fn round_button(id: &'static str, label: &'static str, side: f32) -> Stateful<Di
         .rounded_full()
         .cursor_pointer()
         .hover(|style| style.bg(rgba(0xffffff1f)))
-        .child(label)
 }
 
 fn text_button(id: &'static str, label: &'static str) -> Stateful<Div> {
@@ -375,11 +377,13 @@ fn choices(
                 select(shell, id);
                 cx.notify();
             }))
-            .child(if choice.current {
-                format!("✓ {}", choice.label)
-            } else {
-                choice.label
-            })
+            .flex()
+            .items_center()
+            .gap(px(8.))
+            .child(div().size(px(14.)).when(choice.current, |mark| {
+                mark.child(icon(IconName::Check, 14.))
+            }))
+            .child(choice.label)
     });
     div()
         .mt(px(12.))

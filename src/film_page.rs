@@ -201,11 +201,11 @@ pub fn short_duration(duration: Duration) -> String {
     }
 }
 
-/// `▶ Reprendre à 1 h 12` once started, else `▶ Lecture`.
+/// `Reprendre à 1 h 12` once started, else `Lecture`, after a play icon.
 pub fn play_label(film: &Film) -> String {
     match film.resume {
-        Some(resume) => format!("▶ Reprendre à {}", short_duration(resume)),
-        None => "▶ Lecture".to_string(),
+        Some(resume) => format!("Reprendre à {}", short_duration(resume)),
+        None => "Lecture".to_string(),
     }
 }
 
@@ -448,7 +448,7 @@ mod tests {
         let watched = toggle_watched(&server, &film).unwrap();
         assert!(watched.watched);
         assert_eq!(watched.resume, None);
-        assert_eq!(play_label(&watched), "▶ Lecture");
+        assert_eq!(play_label(&watched), "Lecture");
         let unwatched = toggle_watched(&server, &watched).unwrap();
         assert!(!unwatched.watched);
         assert_eq!(
@@ -460,12 +460,12 @@ mod tests {
     #[test]
     fn the_play_button_says_where_it_resumes() {
         let detail = detail();
-        assert_eq!(play_label(&detail.film), "▶ Reprendre à 1 h 12");
+        assert_eq!(play_label(&detail.film), "Reprendre à 1 h 12");
         let mut film = detail.film.clone();
         film.resume = None;
-        assert_eq!(play_label(&film), "▶ Lecture");
+        assert_eq!(play_label(&film), "Lecture");
         film.resume = Some(Duration::from_secs(42));
-        assert_eq!(play_label(&film), "▶ Reprendre à 42 s");
+        assert_eq!(play_label(&film), "Reprendre à 42 s");
     }
 
     #[test]
