@@ -38,6 +38,8 @@ pub struct Session {
     pub paused: bool,
     tracks: Vec<Track>,
     error: Option<PlayerError>,
+    /// Kept once seen: an update whose answer is dropped (a mouse move) must not lose it.
+    ended: bool,
 }
 
 impl Session {
@@ -59,6 +61,7 @@ impl Session {
             paused: false,
             tracks: Vec::new(),
             error: None,
+            ended: false,
         }
     }
 
@@ -146,22 +149,21 @@ impl Session {
     }
 
     /// Reads what the player says and shows or hides the cursor with the controls. Returns
-    /// whether the film reached its end.
+    /// whether the film reached its end, now or at an earlier update.
     pub fn update(&mut self, now: Instant) -> bool {
-        let mut ended = false;
         for event in self.player.events() {
             match event {
                 PlayerEvent::Position(seconds) => self.position = seconds,
                 PlayerEvent::Duration(seconds) => self.duration = seconds,
                 PlayerEvent::Paused(paused) => self.paused = paused,
                 PlayerEvent::Tracks(tracks) => self.tracks = tracks,
-                PlayerEvent::EndOfFile => ended = true,
+                PlayerEvent::EndOfFile => self.ended = true,
                 PlayerEvent::Error(error) => self.error = Some(error),
             }
         }
         // Told every time: the display can only act once the pointer is over the window.
         self.display.set_cursor_visible(self.controls_visible(now));
-        ended
+        self.ended
     }
 
     /// Puts the video where the view laid it out: called on every layout, so the subsurface
@@ -462,6 +464,18 @@ mod tests {
         let mut f = fixture();
         f.queue(vec![PlayerEvent::EndOfFile]);
         assert!(f.session.update(Instant::now()));
+    }
+
+    #[test]
+    fn the_end_of_the_film_is_not_lost_when_the_mouse_moves() {
+        // A mouse move updates the session at once and drops the answer: the next tick must
+        // still see the end.
+        let mut f = fixture();
+        let start = Instant::now();
+        f.queue(vec![PlayerEvent::EndOfFile]);
+        f.session.mouse_moved(start);
+        let _ = f.session.update(start);
+        assert!(f.session.update(start + Duration::from_millis(100)));
     }
 
     #[test]
