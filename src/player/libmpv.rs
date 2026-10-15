@@ -89,6 +89,15 @@ impl MpvClient for Libmpv {
         check(unsafe { sys::mpv_command(self.0, pointers.as_mut_ptr()) })
     }
 
+    fn command_async(&self, id: u64, args: &[&str]) -> Result<(), PlayerError> {
+        let owned: Vec<CString> = args.iter().map(|arg| text(arg)).collect();
+        let mut pointers: Vec<*const c_char> = owned.iter().map(|arg| arg.as_ptr()).collect();
+        pointers.push(ptr::null());
+        // SAFETY: a NULL-terminated array of NUL-terminated strings; mpv copies it before
+        // returning.
+        check(unsafe { sys::mpv_command_async(self.0, id, pointers.as_mut_ptr()) })
+    }
+
     fn get(&self, name: &str) -> Option<String> {
         let name = text(name);
         // SAFETY: the handle is alive; a non-null result is a string mpv allocated, freed here.
@@ -115,6 +124,12 @@ impl MpvClient for Libmpv {
                     if let Some(name) = OBSERVED.get(index) {
                         return Some(MpvEvent::Changed(name.to_string()));
                     }
+                }
+                sys::mpv_event_id_MPV_EVENT_COMMAND_REPLY => {
+                    return Some(MpvEvent::CommandReply {
+                        id: event.reply_userdata,
+                        error: (event.error < 0).then(|| error_text(event.error)),
+                    });
                 }
                 sys::mpv_event_id_MPV_EVENT_START_FILE => return Some(MpvEvent::StartFile),
                 sys::mpv_event_id_MPV_EVENT_FILE_LOADED => return Some(MpvEvent::FileLoaded),

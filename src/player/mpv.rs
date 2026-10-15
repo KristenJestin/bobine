@@ -16,6 +16,11 @@ pub enum MpvEvent {
     /// The file is open: its tracks exist.
     FileLoaded,
     EndFile(EndReason),
+    /// An asynchronous command finished; `error` is mpv's error code in words when it failed.
+    CommandReply {
+        id: u64,
+        error: Option<String>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -30,6 +35,9 @@ pub enum EndReason {
 pub trait MpvClient {
     fn set(&self, name: &str, value: &str) -> Result<(), PlayerError>;
     fn command(&self, args: &[&str]) -> Result<(), PlayerError>;
+    /// Queues a command that may do I/O (`sub-add` downloads its file) and returns at once; how
+    /// it went comes back as `MpvEvent::CommandReply` with the same `id`.
+    fn command_async(&self, id: u64, args: &[&str]) -> Result<(), PlayerError>;
     /// A property as text, `None` when it is unavailable.
     fn get(&self, name: &str) -> Option<String>;
     /// The next event, without waiting.
@@ -43,6 +51,9 @@ impl<C: MpvClient> MpvClient for std::sync::Arc<C> {
     }
     fn command(&self, args: &[&str]) -> Result<(), PlayerError> {
         (**self).command(args)
+    }
+    fn command_async(&self, id: u64, args: &[&str]) -> Result<(), PlayerError> {
+        (**self).command_async(id, args)
     }
     fn get(&self, name: &str) -> Option<String> {
         (**self).get(name)
@@ -62,6 +73,11 @@ pub struct MpvPlayer<C: MpvClient> {
     loads: u64,
     started: u64,
     ended: u64,
+    /// The `sub-add`s of the film being opened that mpv has not answered, by reply id.
+    adding: Vec<u64>,
+    /// The subtitle choice that waits for them: a late `auto` add must not undo it.
+    then: Option<FirstSubtitle>,
+    next_reply: u64,
 }
 
 /// Owned, as it waits for mpv: the addresses may carry a token, so nothing here is printed.
@@ -79,11 +95,15 @@ impl<C: MpvClient> MpvPlayer<C> {
             loads: 0,
             started: 0,
             ended: 0,
+            adding: Vec::new(),
+            then: None,
+            next_reply: 0,
         }
     }
 
-    /// The film is open: its external subtitles go in, then the chosen tracks. Returns what
-    /// mpv refused.
+    /// The film is open: its external subtitles are queued (mpv downloads them while the window
+    /// goes on), then the chosen tracks are set, the subtitle once the downloads are answered.
+    /// Returns what mpv refused to queue.
     fn apply_on_loaded(&mut self) -> Vec<PlayerEvent> {
         let Some(on_loaded) = self.on_loaded.take() else {
             return Vec::new();
@@ -96,22 +116,44 @@ impl<C: MpvClient> MpvPlayer<C> {
                 "auto"
             };
             let language = language.as_deref().unwrap_or_default();
-            if let Err(error) = self
+            self.next_reply += 1;
+            let id = self.next_reply;
+            match self
                 .client
-                .command(&["sub-add", url, flag, title, language])
+                .command_async(id, &["sub-add", url, flag, title, language])
             {
-                failed.push(PlayerEvent::SubtitleFailed(error));
+                Ok(()) => self.adding.push(id),
+                Err(error) => failed.push(PlayerEvent::SubtitleFailed(error)),
             }
         }
         if let Some(id) = on_loaded.audio {
             self.select_audio(Some(id));
         }
-        match on_loaded.subtitle {
-            FirstSubtitle::Off => self.select_subtitle(None),
-            FirstSubtitle::Track(id) => self.select_subtitle(Some(id)),
-            FirstSubtitle::Default | FirstSubtitle::External(_) => {}
-        }
+        self.then = Some(on_loaded.subtitle);
+        self.choose_subtitle_when_added();
         failed
+    }
+
+    /// Sets the subtitle `load` chose once no `sub-add` is left to answer. A chosen external
+    /// one was selected by its own `sub-add`.
+    fn choose_subtitle_when_added(&mut self) {
+        if !self.adding.is_empty() {
+            return;
+        }
+        match self.then.take() {
+            Some(FirstSubtitle::Off) => self.select_subtitle(None),
+            Some(FirstSubtitle::Track(id)) => self.select_subtitle(Some(id)),
+            Some(FirstSubtitle::Default | FirstSubtitle::External(_)) | None => {}
+        }
+    }
+
+    /// mpv answered a `sub-add`. Returns the refusal; an answer for a film that is gone is not
+    /// one.
+    fn subtitle_added(&mut self, id: u64, error: Option<String>) -> Option<PlayerEvent> {
+        let position = self.adding.iter().position(|&adding| adding == id)?;
+        self.adding.remove(position);
+        self.choose_subtitle_when_added();
+        error.map(|error| PlayerEvent::SubtitleFailed(PlayerError(error)))
     }
 
     #[cfg(test)]
@@ -160,6 +202,8 @@ impl<C: MpvClient> Player for MpvPlayer<C> {
         // Only a film mpv took replaces the one being opened.
         self.loads += 1;
         self.on_loaded = Some(on_loaded);
+        self.adding.clear();
+        self.then = None;
         Ok(())
     }
 
@@ -239,6 +283,7 @@ impl<C: MpvClient> Player for MpvPlayer<C> {
                     Some(PlayerEvent::Loaded)
                 }
                 MpvEvent::FileLoaded => None,
+                MpvEvent::CommandReply { id, error } => self.subtitle_added(id, error),
                 MpvEvent::EndFile(reason) => {
                     self.ended += 1;
                     match reason {
@@ -280,6 +325,10 @@ mod tests {
         events: RefCell<VecDeque<MpvEvent>>,
         /// Commands it refuses, by name.
         refused: RefCell<Vec<String>>,
+        /// The commands the caller waited for, by name: the others were queued.
+        synchronous: RefCell<Vec<String>>,
+        /// The reply ids of the commands queued.
+        queued: RefCell<Vec<u64>>,
     }
 
     impl FakeMpv {
@@ -303,12 +352,23 @@ mod tests {
             Ok(())
         }
         fn command(&self, args: &[&str]) -> Result<(), PlayerError> {
+            self.synchronous.borrow_mut().push(args[0].to_string());
             self.log
                 .borrow_mut()
                 .push(args.iter().map(|arg| arg.to_string()).collect());
             if self.refused.borrow().iter().any(|name| name == args[0]) {
                 return Err(PlayerError("error running command".into()));
             }
+            Ok(())
+        }
+        fn command_async(&self, id: u64, args: &[&str]) -> Result<(), PlayerError> {
+            self.log
+                .borrow_mut()
+                .push(args.iter().map(|arg| arg.to_string()).collect());
+            if self.refused.borrow().iter().any(|name| name == args[0]) {
+                return Err(PlayerError("error running command".into()));
+            }
+            self.queued.borrow_mut().push(id);
             Ok(())
         }
         fn get(&self, name: &str) -> Option<String> {
@@ -429,8 +489,96 @@ mod tests {
                 })
                 .unwrap();
             player.events();
+            // The added subtitles come first: a late `auto` add must not undo the choice.
+            assert!(!log(&player).iter().any(|line| line[..2] == ["set", "sid"]));
+
+            let id = player.client().queued.borrow()[0];
+            push(&player, &[MpvEvent::CommandReply { id, error: None }]);
+            assert_eq!(player.events(), []);
             assert_eq!(log(&player).last(), Some(&line(&["set", "sid", sid])));
         }
+    }
+
+    #[test]
+    fn adding_external_subtitles_never_waits_for_their_download() {
+        let mpv = FakeMpv::with(&[], &[MpvEvent::StartFile, MpvEvent::FileLoaded]);
+        let mut player = MpvPlayer::new(mpv);
+        player
+            .load(Media {
+                external_subtitles: &SUBTITLES,
+                ..media(FILM, 0.)
+            })
+            .unwrap();
+        assert_eq!(player.events(), [PlayerEvent::Loaded]);
+        let client = player.client();
+        assert!(
+            !client
+                .synchronous
+                .borrow()
+                .iter()
+                .any(|name| name == "sub-add")
+        );
+        assert_eq!(client.queued.borrow().len(), 2);
+    }
+
+    #[test]
+    fn a_refused_subtitle_is_reported_when_mpv_answers() {
+        let mpv = FakeMpv::with(&[], &[MpvEvent::StartFile, MpvEvent::FileLoaded]);
+        let mut player = MpvPlayer::new(mpv);
+        player
+            .load(Media {
+                external_subtitles: &SUBTITLES,
+                ..media(FILM, 0.)
+            })
+            .unwrap();
+        assert_eq!(player.events(), [PlayerEvent::Loaded]);
+
+        let ids = player.client().queued.borrow().clone();
+        push(
+            &player,
+            &[
+                MpvEvent::CommandReply {
+                    id: ids[0],
+                    error: Some("unrecognized file format".into()),
+                },
+                MpvEvent::CommandReply {
+                    id: ids[1],
+                    error: None,
+                },
+            ],
+        );
+        assert_eq!(
+            player.events(),
+            [PlayerEvent::SubtitleFailed(PlayerError(
+                "unrecognized file format".into()
+            ))]
+        );
+    }
+
+    #[test]
+    fn the_answer_for_a_replaced_film_changes_nothing() {
+        let mpv = FakeMpv::with(&[], &[MpvEvent::StartFile, MpvEvent::FileLoaded]);
+        let mut player = MpvPlayer::new(mpv);
+        player
+            .load(Media {
+                subtitle: FirstSubtitle::Off,
+                external_subtitles: &SUBTITLES[..1],
+                ..media(FILM, 0.)
+            })
+            .unwrap();
+        player.events();
+        let id = player.client().queued.borrow()[0];
+
+        player.load(media(FILM, 0.)).unwrap();
+        push(
+            &player,
+            &[MpvEvent::CommandReply {
+                id,
+                error: Some("unrecognized file format".into()),
+            }],
+        );
+        assert_eq!(player.events(), []);
+        assert!(!log(&player).iter().any(|line| line[..2] == ["set", "sid"]));
     }
 
     #[test]
@@ -720,6 +868,9 @@ mod tests {
         );
         assert!(applied.contains(&line(&["set", "aid", "2"])));
         assert!(!applied.contains(&line(&["set", "aid", "1"])));
+        let id = player.client().queued.borrow()[0];
+        push(&player, &[MpvEvent::CommandReply { id, error: None }]);
+        assert_eq!(player.events(), []);
         assert_eq!(log(&player).last(), Some(&line(&["set", "sid", "5"])));
     }
 
