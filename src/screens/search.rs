@@ -172,7 +172,15 @@ pub fn palette(
                 .border_color(theme::line())
                 .text_size(px(11.))
                 .text_color(theme::dim())
-                .child(hint(&["↑", "↓"], "choisir"))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(6.))
+                        .child(key_icon(IconName::ChevronUp))
+                        .child(key_icon(IconName::ChevronDown))
+                        .child("choisir"),
+                )
                 .child(hint(&["Entrée"], "ouvrir"))
                 .child(hint(&["Échap"], "fermer")),
         );
@@ -314,6 +322,10 @@ fn result(
 
 /// A key as the design draws it: small, outlined.
 fn key_cap(label: &'static str) -> Div {
+    key_frame().child(label)
+}
+
+fn key_frame() -> Div {
     div()
         .flex_none()
         .px(px(5.))
@@ -323,7 +335,11 @@ fn key_cap(label: &'static str) -> Div {
         .border_color(rgba(0x33333aff))
         .text_size(px(10.))
         .text_color(theme::dim())
-        .child(label)
+}
+
+/// A key drawn as an icon.
+fn key_icon(name: IconName) -> Div {
+    key_frame().flex().items_center().child(icon(name, 10.))
 }
 
 fn hint(keys: &[&'static str], what: &'static str) -> Div {
