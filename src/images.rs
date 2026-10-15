@@ -19,6 +19,9 @@ const MAX_FETCHES: usize = 6;
 /// again, up to `LONGEST_WAIT`.
 const RETRY_AFTER: Duration = Duration::from_secs(5);
 const LONGEST_WAIT: Duration = Duration::from_secs(60);
+/// A failure not drawn for this long is forgotten, so the map follows what is browsed, not
+/// everything ever browsed.
+const FORGET_AFTER: Duration = Duration::from_secs(300);
 
 /// The widths images are asked at, whatever the window's size, so one image serves every size.
 pub const POSTER: u32 = 300;
@@ -113,6 +116,8 @@ struct Failure {
     wait: Duration,
     /// The last draw that wanted it.
     drawn: u64,
+    /// When that draw was.
+    seen: Instant,
 }
 
 pub struct Images {
@@ -154,6 +159,7 @@ impl Images {
         }
         if let Some(failure) = self.failed.get_mut(key) {
             failure.drawn = self.frame;
+            failure.seen = now;
             if now < failure.at + failure.wait {
                 return;
             }
@@ -206,16 +212,20 @@ impl Images {
         }
         let frame = self.frame;
         self.failed
+            .retain(|_, failure| now < failure.seen + FORGET_AFTER);
+        self.failed
             .entry(key.clone())
             .and_modify(|failure| {
                 failure.wait = (failure.wait * 2).min(LONGEST_WAIT);
                 failure.at = now;
                 failure.drawn = frame;
+                failure.seen = now;
             })
             .or_insert(Failure {
                 at: now,
                 wait: RETRY_AFTER,
                 drawn: frame,
+                seen: now,
             });
     }
 }
@@ -373,6 +383,21 @@ mod tests {
         // The page was left.
         draw(&mut images, &["b"], now);
         assert_eq!(images.next_retry(), None);
+    }
+
+    #[test]
+    fn a_failure_not_drawn_for_a_long_while_is_forgotten() {
+        let mut images = Images::default();
+        let now = Instant::now();
+        draw(&mut images, &["a", "b"], now);
+        images.fetched(&image("a").0, false, now);
+        images.fetched(&image("b").0, false, now);
+        // "b" stays on screen; "a" is long gone when another image fails.
+        let later = now + FORGET_AFTER + Duration::from_secs(1);
+        draw(&mut images, &["b", "c"], later);
+        images.fetched(&image("c").0, false, later);
+        assert_eq!(images.failed.len(), 2);
+        assert!(!images.failed.contains_key(&image("a").0));
     }
 
     #[test]
