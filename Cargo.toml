@@ -13,12 +13,24 @@ toml = "1"
 ureq = { version = "3", features = ["json"] }
 # The window (#3). Pinned: gpui-kit pins its own GPUI snapshot, so a bump is a deliberate act.
 gpui-kit = { version = "=0.7.3", default-features = false }
+# The player (#5): libmpv draws with OpenGL into a Wayland subsurface under the window.
+khronos-egl = { version = "6", features = ["dynamic"] }
+libc = "0.2"
+libmpv2-sys = "4.0.1"
+raw-window-handle = "0.6"
+wayland-backend = { version = "0.3", features = ["client_system"] }
+wayland-client = "0.31"
+wayland-egl = "0.32"
+wayland-protocols = { version = "0.32", features = ["client", "staging", "unstable"] }
 
 [features]
 default = ["fast"]
 # GPUI Fast (a GPUI fork that redraws only what changed). `--no-default-features` is the rollback
 # to plain GPUI: both must keep building.
 fast = ["gpui-kit/gpui-fast"]
+# A startup path for the headless checks only (play a file, show the controls or the panel, go
+# fullscreen, measure): never part of the application a user runs.
+harness = []
 
 [dev-dependencies]
 tempfile = "3"
