@@ -68,7 +68,9 @@ fn transport(what: &str, e: ureq::Error) -> ProviderError {
 
 fn status(code: u16) -> ProviderError {
     match code {
-        401 | 403 => ProviderError::SessionExpired,
+        // Only 401 says the token is no longer good; 403 is this user refused one thing.
+        401 => ProviderError::SessionExpired,
+        403 => ProviderError::Forbidden,
         404 => ProviderError::NotFound,
         _ => ProviderError::Server(code),
     }

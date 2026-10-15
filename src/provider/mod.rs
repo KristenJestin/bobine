@@ -280,8 +280,13 @@ pub enum ProviderError {
     NotAMediaServer,
     /// The user name or the password is wrong.
     WrongCredentials,
+    /// The account is disabled or blocked on the server: a right password changes nothing.
+    AccountDisabled,
     /// The server no longer accepts the token: the user signs in again.
     SessionExpired,
+    /// The server refuses this user what was asked (parental control, access schedule): the
+    /// session is fine, only this is closed to them.
+    Forbidden,
     /// The server does not know what was asked.
     NotFound,
     /// No answer: network down, server stopped, timeout. What failed, in words.
@@ -303,7 +308,9 @@ impl fmt::Display for ProviderError {
             }
             Self::NotAMediaServer => f.write_str("no media server answers at this address"),
             Self::WrongCredentials => f.write_str("wrong user name or password"),
+            Self::AccountDisabled => f.write_str("the server has disabled or blocked this account"),
             Self::SessionExpired => f.write_str("the server ended the session: sign in again"),
+            Self::Forbidden => f.write_str("the server refused access to this"),
             Self::NotFound => f.write_str("the server does not know this item"),
             Self::Unreachable(what) => write!(f, "the server cannot be reached: {what}"),
             Self::Server(status) => write!(f, "the server answered with HTTP status {status}"),

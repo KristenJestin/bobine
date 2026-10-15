@@ -105,6 +105,7 @@ impl Connector for JellyfinConnector {
             .post("login", "/Users/AuthenticateByName", &[], &body)
             .map_err(|e| match e {
                 ProviderError::SessionExpired => ProviderError::WrongCredentials,
+                ProviderError::Forbidden => ProviderError::AccountDisabled,
                 _ => e,
             })?;
         let token = Token::new(answer.access_token);

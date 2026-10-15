@@ -239,6 +239,33 @@ fn a_revoked_token_asks_to_sign_in_again() {
 }
 
 #[test]
+fn a_refused_item_is_not_an_expired_session() {
+    let s = Setup::new();
+    let server = s.signed_in();
+    s.fake.state.lock().unwrap().forbidden = true;
+    let refused = server.film(&film()).unwrap_err();
+    assert_eq!(refused, ProviderError::Forbidden);
+    assert_ne!(refused, ProviderError::SessionExpired);
+    let said = format!("{refused} {refused:?}");
+    assert!(!said.contains(&s.fake.url), "{said}");
+    assert!(!said.contains(TOKEN), "{said}");
+}
+
+#[test]
+fn a_disabled_account_is_not_a_wrong_password() {
+    let s = Setup::new();
+    s.fake.state.lock().unwrap().account_disabled = true;
+    let refused = s.connector.login(&s.fake.url, USER, PASSWORD).err();
+    assert_eq!(refused, Some(ProviderError::AccountDisabled));
+    assert_ne!(
+        ProviderError::AccountDisabled.to_string(),
+        ProviderError::WrongCredentials.to_string()
+    );
+    assert!(s.tokens().is_empty());
+    assert!(s.restart().restore().unwrap().is_none());
+}
+
+#[test]
 fn libraries_of_the_user() {
     let s = Setup::new();
     let libraries = s.signed_in().libraries().unwrap();

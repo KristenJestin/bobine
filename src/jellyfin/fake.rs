@@ -66,6 +66,11 @@ pub struct State {
     pub not_jellyfin: bool,
     /// The token was revoked: every authenticated route answers 401.
     pub revoked: bool,
+    /// The user may not see what is asked (parental control, access schedule): every
+    /// authenticated route answers 403.
+    pub forbidden: bool,
+    /// The account is disabled: the login answers 403.
+    pub account_disabled: bool,
 }
 
 pub struct FakeServer {
@@ -145,6 +150,9 @@ fn answer(state: &State, seen: &Seen) -> Answer {
     match route {
         ("GET", "/System/Info/Public") => return Answer::Json(200, fixture("system_info_public")),
         ("POST", "/Users/AuthenticateByName") => {
+            if state.account_disabled {
+                return Answer::Json(403, json!("User is disabled."));
+            }
             let body = seen.json();
             return if body["Username"] == USER && body["Pw"] == PASSWORD {
                 Answer::Json(200, fixture("authenticate_by_name"))
@@ -161,6 +169,9 @@ fn answer(state: &State, seen: &Seen) -> Answer {
         .is_some_and(|a| a.starts_with("MediaBrowser ") && a.contains(&token));
     if !signed_in || state.revoked {
         return Answer::Empty(401);
+    }
+    if state.forbidden {
+        return Answer::Empty(403);
     }
     let images = format!("/Items/{FILM}/Images/");
     match route {
