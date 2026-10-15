@@ -88,7 +88,13 @@ impl Session {
         with_modifier: bool,
         fullscreen: bool,
     ) -> Option<WindowRequest> {
-        match key_action(key, with_modifier, fullscreen)? {
+        let action = key_action(key, with_modifier, fullscreen)?;
+        // Escape closes the panel before it leaves fullscreen or the player.
+        if self.panel_open && matches!(action, KeyAction::ExitFullscreen | KeyAction::Leave) {
+            self.panel_open = false;
+            return None;
+        }
+        match action {
             KeyAction::TogglePause => self.toggle_pause(),
             KeyAction::SeekBy(seconds) => self.skip(seconds),
             KeyAction::ToggleFullscreen => return Some(WindowRequest::ToggleFullscreen),
@@ -131,6 +137,11 @@ impl Session {
 
     pub fn toggle_panel(&mut self) {
         self.panel_open = !self.panel_open;
+    }
+
+    /// A click anywhere but in the panel closes it, the button that opened it included.
+    pub fn clicked_outside_panel(&mut self) {
+        self.panel_open = false;
     }
 
     pub fn audio_choices(&self) -> Vec<Choice> {
@@ -413,6 +424,29 @@ mod tests {
         assert!(f.session.controls_visible(start + Duration::from_secs(10)));
         f.session.toggle_panel();
         assert!(!f.session.controls_visible(start + Duration::from_secs(10)));
+    }
+
+    #[test]
+    fn escape_closes_the_panel_before_anything_else() {
+        let mut f = fixture();
+        f.session.toggle_panel();
+        assert_eq!(f.session.key("escape", false, true), None);
+        assert!(!f.session.panel_open());
+        assert_eq!(
+            f.session.key("escape", false, true),
+            Some(WindowRequest::ExitFullscreen)
+        );
+    }
+
+    #[test]
+    fn a_click_outside_the_panel_closes_it() {
+        let mut f = fixture();
+        f.session.toggle_panel();
+        f.session.clicked_outside_panel();
+        assert!(!f.session.panel_open());
+        // Closed, it stays closed.
+        f.session.clicked_outside_panel();
+        assert!(!f.session.panel_open());
     }
 
     #[test]

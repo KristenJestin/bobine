@@ -42,7 +42,9 @@ pub fn render(session: &Session, window: &Window, cx: &mut Context<Shell>) -> im
                 .child(title_bar(session, cx))
                 .child(bottom_bar(session, window, cx))
         })
-        .when(session.panel_open(), |root| root.child(panel(session, cx)))
+        .when(session.panel_open(), |root| {
+            root.child(outside_panel(cx)).child(panel(session, cx))
+        })
         .when_some(session.error(), |root, error| {
             root.child(
                 div()
@@ -287,6 +289,22 @@ fn text_button(id: &'static str, label: &'static str) -> Stateful<Div> {
         .cursor_pointer()
         .hover(|style| style.bg(rgba(0xffffff1f)))
         .child(label)
+}
+
+/// Under the open panel, over everything else: a click there closes the panel and does nothing
+/// more, even on the button that opened it.
+fn outside_panel(cx: &mut Context<Shell>) -> impl IntoElement {
+    div()
+        .id("player-outside-panel")
+        .absolute()
+        .inset_0()
+        .on_any_mouse_down(cx.listener(|shell, _: &MouseDownEvent, _, cx| {
+            if let Some(playback) = &mut shell.playback {
+                playback.session.clicked_outside_panel();
+            }
+            cx.stop_propagation();
+            cx.notify();
+        }))
 }
 
 /// Over the video at the right: the picture keeps its whole size under it.
