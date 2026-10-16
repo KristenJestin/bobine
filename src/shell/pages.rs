@@ -2,6 +2,7 @@
 //! background executor; its answer comes back to the window's thread, which updates the page.
 
 use std::cell::Cell;
+use std::ops::Range;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::thread::JoinHandle;
@@ -19,7 +20,7 @@ use gpui_kit::{
 
 use super::{Film as Playing, Shell};
 use crate::film_page::{self, Choices, From, Plan};
-use crate::grid::{Grid, Listed};
+use crate::grid::{Grid, Listed, RETRY_AFTER};
 use crate::images::{self, Key};
 use crate::input::TextInput;
 use crate::library_tools::{Sort, Tools};
@@ -179,6 +180,13 @@ impl<T: Listed> LibraryPage<T> {
             self.appear.jump(0.);
             self.appear.set(1., now);
         }
+    }
+
+    /// The pages to ask for the rows in view. While the old list is kept on screen the rows in
+    /// view are its, not the new list's: its first page is what is wanted.
+    pub fn pages_wanted(&mut self, items: Range<usize>, now: Instant) -> Vec<u32> {
+        let items = if self.grid.has_stale() { 0..1 } else { items };
+        self.grid.pages_to_ask(items, now)
     }
 
     /// A page of the list asked under `epoch` came back.
@@ -673,7 +681,7 @@ impl Shell {
         };
         let library = library.clone();
         let (tools, epoch) = (shown.tools.clone(), shown.grid.epoch());
-        for page in shown.grid.pages_to_ask(items.clone(), Instant::now()) {
+        for page in shown.pages_wanted(items.clone(), Instant::now()) {
             let (library, tools) = (library.clone(), tools.clone());
             self.ask(
                 cx,
@@ -686,6 +694,12 @@ impl Shell {
                         if shown.grid.total.is_none() && shown.grid.is_current(epoch) {
                             let said = shell.failed(error, cx);
                             page_of(shell).error = Some(said);
+                            // An idle window does not redraw by itself: the retry needs a wake.
+                            cx.spawn(async move |this, cx| {
+                                cx.background_executor().timer(RETRY_AFTER).await;
+                                this.update(cx, |_, cx| cx.notify()).ok();
+                            })
+                            .detach();
                         }
                     }
                 },
@@ -1571,5 +1585,39 @@ mod tests {
         page.change(|tools| tools.filters.unwatched = true);
         page.found_letter(asked, 412);
         assert_eq!(page.jump, None);
+    }
+
+    /// The page changed while it shows its list, the fade-out under way at `t`.
+    fn fading(start: Instant) -> (LibraryPage<Film>, Instant) {
+        let mut page = films_page_changed(start);
+        let t = at(start, 1000);
+        page.follow_list(t);
+        (page, t)
+    }
+
+    #[test]
+    fn a_first_page_that_fails_during_the_fade_is_asked_again_and_the_list_lands() {
+        let (mut page, t) = fading(Instant::now());
+        // The rows in view are the old list's: the new list's first page is what is wanted.
+        assert_eq!(page.pages_wanted(0..40, t), [0]);
+        let epoch = page.grid.epoch();
+        page.grid.failed(epoch, 0, t);
+        assert_eq!(page.pages_wanted(0..40, at(t, 1000)), Vec::<u32>::new());
+        // The old list is gone by now, and the retry still comes.
+        page.follow_list(at(t, 400));
+        assert!(page.grid.has_stale());
+        let retry = at(t, 1000) + crate::grid::RETRY_AFTER;
+        assert_eq!(page.pages_wanted(0..40, retry), [0]);
+        page.loaded(epoch, 0, answer(&page, 0));
+        page.follow_list(retry);
+        assert!(!page.grid.has_stale());
+        assert_eq!(page.grid.total, Some(1027));
+    }
+
+    #[test]
+    fn the_rows_of_the_old_list_are_not_asked_for_the_new_one() {
+        let (mut page, t) = fading(Instant::now());
+        assert_eq!(page.pages_wanted(400..440, t), [0]);
+        assert_eq!(page.pages_wanted(400..440, t), Vec::<u32>::new());
     }
 }

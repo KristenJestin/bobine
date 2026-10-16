@@ -161,10 +161,7 @@ fn grid_screen<T: Listed + 'static>(
         title,
         rows,
         cx.processor(move |shell: &mut Shell, range: Range<usize>, _, cx| {
-            // The old list leaving is not the one to ask pages for.
-            if !page(shell).grid.has_stale() {
-                ask(shell, range.start * columns..range.end * columns, cx);
-            }
+            ask(shell, range.start * columns..range.end * columns, cx);
             range
                 .map(|row| {
                     let items = (row * columns..(row + 1) * columns).map(|index| {
