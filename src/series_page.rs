@@ -173,6 +173,10 @@ pub fn land_episodes(
     };
     if shown {
         episodes.insert(season, answer);
+    } else if matches!(episodes.get(&season), Some(Loadable::Loading)) {
+        // Nothing newer may come for this season (the refresh can fail): forgotten, the next
+        // click on its tab asks again. A list already shown stays drawn.
+        episodes.remove(&season);
     }
 }
 
@@ -859,6 +863,48 @@ mod tests {
             some_episodes(),
         );
         assert!(!refreshes.holding());
+    }
+
+    #[test]
+    fn a_season_left_loading_by_a_dropped_answer_is_asked_again() {
+        let (mut refreshes, mut counter) = (Refreshes::default(), 0);
+        let mut episodes = HashMap::new();
+        let season = ItemId("season-2".into());
+        // A mark lands while another season's tab is clicked: the tab's episodes are asked
+        // under refresh N, then the page holds and asks N + 1.
+        let stale = refreshes.ask(&mut counter);
+        episodes.insert(season.clone(), Loadable::Loading);
+        refreshes.hold();
+        refreshes.ask(&mut counter);
+        // The tab's answer is dropped, and N + 1 then fails: nothing is left to fill the tab.
+        land_episodes(
+            &mut episodes,
+            &mut refreshes,
+            stale,
+            false,
+            season.clone(),
+            some_episodes(),
+        );
+        assert!(asks_episodes(episodes.get(&season), false));
+    }
+
+    #[test]
+    fn a_dropped_answer_leaves_the_list_shown_drawn() {
+        let (mut refreshes, mut counter) = (Refreshes::default(), 0);
+        let mut episodes = HashMap::new();
+        let season = ItemId("season-2".into());
+        let stale = refreshes.ask(&mut counter);
+        episodes.insert(season.clone(), some_episodes());
+        refreshes.ask(&mut counter);
+        land_episodes(
+            &mut episodes,
+            &mut refreshes,
+            stale,
+            false,
+            season.clone(),
+            Loadable::Failed("Le serveur ne répond pas."),
+        );
+        assert!(matches!(episodes.get(&season), Some(Loadable::Ready(_))));
     }
 
     #[test]
