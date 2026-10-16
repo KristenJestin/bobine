@@ -45,7 +45,7 @@ pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -
 
     let playback = section("settings-playback", IconName::Play, "Playback").child(row(
         "Default quality",
-        Some("Where each film starts. The player's settings change it for that film."),
+        Some("Where each movie starts. The player's settings change it for that movie."),
         quality_choice(shell, quality, open.is_some(), menu_shown, window, cx),
     ));
 
@@ -57,7 +57,7 @@ pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -
                 .on_click(cx.listener(|shell, _, window, cx| shell.toggle_blackout(window, cx)))
                 .child(row(
                     "Black out other screens",
-                    Some("The other monitors turn black while a film plays fullscreen."),
+                    Some("The other monitors turn black while a movie plays fullscreen."),
                     switch(switch_on),
                 )),
         )

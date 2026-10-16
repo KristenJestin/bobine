@@ -11,7 +11,7 @@
   "Overview": "A ferry crew keeps a drowned town's secrets.",
   "Genres": ["Drama", "Mystery"],
   "UserData": { "UnplayedItemCount": 7, "PlaybackPositionTicks": 0, "Played": false },
-  "ImageTags": { "Primary": "poster-tw" },
+  "ImageTags": { "Primary": "poster-tw", "Logo": "logo-tw" },
   "BackdropImageTags": ["backdrop-tw"],
   "People": [
     { "Name": "Mara Quill", "Id": "p0000000000000000000000000000011", "Role": "Captain Rook", "Type": "Actor", "PrimaryImageTag": "photo-mq" },

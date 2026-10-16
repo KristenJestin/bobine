@@ -349,7 +349,7 @@ pub fn bar_fade() -> Div {
 /// How far down the shade behind the bar goes.
 const BAR_FADE: f32 = 140.;
 
-/// Top left of a detail page, under the pill bar: an arrow and `Films`.
+/// Top left of a detail page, under the pill bar: an arrow and `Movies`.
 pub fn back_link(
     label: &'static str,
     window: &mut Window,

@@ -316,7 +316,7 @@ impl RequestServer for SeerrClient {
             self.get("title", &format!("/{}/{id}", kind_path(kind)), &[], None)?;
         details
             .detail(kind)
-            .ok_or_else(|| RequestError::BadAnswer("title: not a film or a series".into()))
+            .ok_or_else(|| RequestError::BadAnswer("title: not a movie or a series".into()))
     }
 
     fn recommendations(

@@ -18,7 +18,8 @@
     "Played": false
   },
   "ImageTags": {
-    "Primary": "poster-qh"
+    "Primary": "poster-qh",
+    "Logo": "logo-qh"
   },
   "BackdropImageTags": [
     "backdrop-qh"

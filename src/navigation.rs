@@ -56,7 +56,7 @@ impl Screen {
         match self {
             Screen::Login => "Sign in",
             Screen::Home => "Home",
-            Screen::Library => "Films",
+            Screen::Library => "Movies",
             Screen::FilmDetail | Screen::SeriesDetail => "Details",
             Screen::Person => "Person",
             Screen::Player => "Player",
@@ -96,7 +96,7 @@ impl NavEntry {
     pub fn label(self) -> &'static str {
         match self {
             NavEntry::Home => "Home",
-            NavEntry::Films => "Films",
+            NavEntry::Films => "Movies",
             NavEntry::Series => "Series",
             NavEntry::Collections => "Collections",
             NavEntry::MyList => "My list",
@@ -184,7 +184,7 @@ impl Navigator {
         }
     }
 
-    /// The label of the back link: `Films` when the page was reached from the library.
+    /// The label of the back link: `Movies` when the page was reached from the library.
     pub fn back_label(&self) -> Option<&'static str> {
         if !self.current().shows_back_link() {
             return None;
@@ -254,7 +254,7 @@ mod tests {
         nav.open(Screen::Settings);
         assert_eq!(nav.current(), Screen::Settings);
         assert!(Screen::Settings.shows_pill_bar());
-        assert_eq!(nav.back_label(), Some("Films"));
+        assert_eq!(nav.back_label(), Some("Movies"));
         // The pill of the screen the settings were reached from stays the one highlighted.
         assert_eq!(nav.section(), Screen::Library);
         assert!(nav.back());
@@ -303,7 +303,7 @@ mod tests {
     fn the_back_link_names_the_screen_it_returns_to() {
         let mut nav = on_library();
         nav.open(Screen::FilmDetail);
-        assert_eq!(nav.back_label(), Some("Films"));
+        assert_eq!(nav.back_label(), Some("Movies"));
 
         let mut nav = Navigator::new();
         nav.switch_root(Screen::Home);
@@ -331,7 +331,7 @@ mod tests {
         nav.switch_root(Screen::Library);
         // From the palette, over the films.
         nav.open(Screen::SeriesDetail);
-        assert_eq!(nav.back_label(), Some("Films"));
+        assert_eq!(nav.back_label(), Some("Movies"));
         assert!(nav.back());
         // From a person's page.
         nav.open(Screen::Person);
@@ -535,7 +535,7 @@ mod tests {
             labels,
             [
                 "Home",
-                "Films",
+                "Movies",
                 "Series",
                 "Collections",
                 "My list",

@@ -152,16 +152,30 @@ pub fn text_levels(level: f32) -> (f32, f32) {
     ((1. - 2. * level).max(0.), (2. * level - 1.).max(0.))
 }
 
+/// A bar under the header, one for each title: its width and its thickness. Short and thin, so
+/// that the bars stay quiet beside the title.
+pub const MARK: (f32, f32) = (28., 2.);
+
 /// The most a logo takes of the header.
 pub const LOGO: (f32, f32) = (440., 130.);
 
+/// The most a logo takes of a film's or a series' page, whose title is smaller than the
+/// header's.
+pub const PAGE_LOGO: (f32, f32) = (360., 110.);
+
 /// The size a logo of `size` is drawn at, to fit in the room it has; none for a logo with
 /// nothing to draw (a size of zero), so that the title in text shows instead.
-pub fn logo_fit((width, height): (f32, f32)) -> Option<(f32, f32)> {
+pub fn logo_fit(size: (f32, f32)) -> Option<(f32, f32)> {
+    logo_fit_in(size, LOGO)
+}
+
+/// The size a logo of `size` is drawn at, to fit in `room` (its widest and its tallest), never
+/// larger than it is: a small picture blown up turns blurry.
+pub fn logo_fit_in((width, height): (f32, f32), room: (f32, f32)) -> Option<(f32, f32)> {
     if width <= 0. || height <= 0. {
         return None;
     }
-    let scale = (LOGO.0 / width).min(LOGO.1 / height);
+    let scale = (room.0 / width).min(room.1 / height).min(1.);
     Some((width * scale, height * scale))
 }
 
@@ -258,11 +272,11 @@ impl Logos {
     }
 }
 
-/// `FILM` or `SERIES`, over the title.
+/// `Movie` or `Series`, over the title.
 pub fn kind_label(feature: &Feature) -> &'static str {
     match feature.kind {
-        FeatureKind::Film => "FILM",
-        FeatureKind::Series => "SERIES",
+        FeatureKind::Film => "Movie",
+        FeatureKind::Series => "Series",
     }
 }
 
@@ -400,6 +414,25 @@ mod tests {
         // Wide: the width fills the room. Tall: the height does.
         assert_eq!(logo_fit((880., 130.)), Some((440., 65.)));
         assert_eq!(logo_fit((200., 260.)), Some((100., 130.)));
+    }
+
+    #[test]
+    fn a_logo_smaller_than_its_room_keeps_its_own_size() {
+        assert_eq!(logo_fit((300., 60.)), Some((300., 60.)));
+        assert_eq!(logo_fit_in((200., 50.), PAGE_LOGO), Some((200., 50.)));
+        // Too wide for the page but not for the header: smaller only where it must be.
+        assert_eq!(logo_fit((400., 100.)), Some((400., 100.)));
+        assert_eq!(logo_fit_in((400., 100.), PAGE_LOGO), Some((360., 90.)));
+    }
+
+    #[test]
+    fn a_logo_on_a_page_fits_a_smaller_room_than_the_header_logo() {
+        assert_eq!(logo_fit_in((720., 144.), PAGE_LOGO), Some((360., 72.)));
+        assert_eq!(
+            logo_fit_in((200., 300.), PAGE_LOGO),
+            Some((73.333336, 110.))
+        );
+        assert!(PAGE_LOGO.0 < LOGO.0 && PAGE_LOGO.1 < LOGO.1);
     }
 
     #[test]
@@ -665,9 +698,9 @@ mod tests {
     }
 
     #[test]
-    fn the_header_says_whether_it_is_a_film_or_a_series() {
-        assert_eq!(kind_label(&feature(FeatureKind::Film)), "FILM");
-        assert_eq!(kind_label(&feature(FeatureKind::Series)), "SERIES");
+    fn the_header_says_whether_it_is_a_movie_or_a_series() {
+        assert_eq!(kind_label(&feature(FeatureKind::Film)), "Movie");
+        assert_eq!(kind_label(&feature(FeatureKind::Series)), "Series");
     }
 
     #[test]

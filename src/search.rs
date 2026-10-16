@@ -83,7 +83,7 @@ pub enum Group {
 impl Group {
     pub fn label(self) -> &'static str {
         match self {
-            Group::Films => "Films",
+            Group::Films => "Movies",
             Group::Series => "Series",
             Group::People => "People",
         }
@@ -534,7 +534,7 @@ mod tests {
                 Line::Hit(..) => None,
             })
             .collect();
-        assert_eq!(headings, ["Films", "Series"]);
+        assert_eq!(headings, ["Movies", "Series"]);
         assert_eq!(
             titles(&palette),
             ["Le Dernier Hiver", "Hivernage", "Hiver blanc"]

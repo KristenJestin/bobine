@@ -115,7 +115,7 @@ fn movie(id: u64, title: &str, date: &str, status: Option<u8>) -> Value {
         "mediaType": "movie",
         "title": title,
         "releaseDate": date,
-        "overview": format!("An invented film called {title}."),
+        "overview": format!("An invented movie called {title}."),
         "voteAverage": 7.1,
         "posterPath": format!("/poster-{id}.jpg"),
         "backdropPath": format!("/backdrop-{id}.jpg"),
@@ -399,7 +399,7 @@ fn answer(state: &mut State, seen: &Seen) -> Answer {
                 json!({
                     "id": COLLECTION,
                     "name": "Harbour Saga",
-                    "overview": "Four invented films about one harbour.",
+                    "overview": "Four invented movies about one harbour.",
                     "posterPath": "/harbour-saga.jpg",
                     "backdropPath": "/harbour-saga-backdrop.jpg",
                     "parts": parts,

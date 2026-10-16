@@ -285,7 +285,7 @@ impl RequestServer for FakeSeerr {
         Ok(CollectionParts {
             id,
             name: "Winter Saga".into(),
-            overview: Some("Four invented films about one long winter, oldest first.".into()),
+            overview: Some("Four invented movies about one long winter, oldest first.".into()),
             backdrop: Some(TmdbImage("/winter-saga.jpg".into())),
             films: self.of(&[
                 WINTER_LIGHT,

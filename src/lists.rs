@@ -1,12 +1,12 @@
 //! The words of the Collections and My list pages, and what they keep of the server's answer.
 
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 
-use bobine::provider::{CollectionCard, CollectionDetail, Film, ImageRef, ItemId};
+use bobine::provider::{CollectionCard, CollectionDetail, Film, ImageRef, ItemId, ProviderError};
 
 /// What the page says when the list holds nothing: where the list comes from.
 pub const EMPTY_LIST: &str =
-    "Your list is empty. Open a film or a series and choose “My list” to add it here.";
+    "Your list is empty. Open a movie or a series and choose “My list” to add it here.";
 
 /// What the page says when the server has no collection.
 pub const NO_COLLECTION: &str = "No collections on this server.";
@@ -24,6 +24,8 @@ pub struct PosterQueue {
     /// generation is never 0, which a reset queue keeps.
     generation: u64,
     waiting: VecDeque<ItemId>,
+    /// The cards whose request failed and was sent again: a second failure gives them up.
+    retried: HashSet<ItemId>,
 }
 
 impl PosterQueue {
@@ -36,6 +38,7 @@ impl PosterQueue {
                 .filter(|card| card.poster.is_none())
                 .map(|card| card.id.clone())
                 .collect(),
+            retried: HashSet::new(),
         }
     }
 
@@ -49,7 +52,9 @@ impl PosterQueue {
     }
 
     /// A request of the load numbered `generation` was answered: the card wears the poster if
-    /// there is one, and the id to ask next is returned. An answer of another load is no
+    /// there is one, and the id to ask next is returned. A request that failed puts its card
+    /// back at the end of the queue, once: a slow or busy server often answers the second time,
+    /// and a card left bare for good is what the user sees. An answer of another load is no
     /// business of this queue: it changes nothing and starts nothing, so the requests in flight
     /// stay at most `POSTERS_IN_FLIGHT` after a new sign-in.
     pub fn answered(
@@ -57,13 +62,20 @@ impl PosterQueue {
         cards: &mut [CollectionCard],
         generation: u64,
         collection: &ItemId,
-        poster: Option<ImageRef>,
+        answer: Result<Option<ImageRef>, ProviderError>,
     ) -> Option<ItemId> {
         if generation != self.generation {
             return None;
         }
-        if let Some(poster) = poster {
-            wear(cards, collection, poster);
+        match answer {
+            Ok(Some(poster)) => wear(cards, collection, poster),
+            Ok(None) => {}
+            // The server said no to this user: asking again gets the same answer.
+            Err(ProviderError::SessionExpired | ProviderError::Forbidden) => {}
+            Err(_) if self.retried.insert(collection.clone()) => {
+                self.waiting.push_back(collection.clone());
+            }
+            Err(_) => {}
         }
         self.next()
     }
@@ -81,9 +93,9 @@ pub fn plural(count: usize, one: &str, many: &str) -> String {
     format!("{count} {}", if count == 1 { one } else { many })
 }
 
-/// `0 films`, `1 film`, `3 films`.
+/// `0 movies`, `1 movie`, `3 movies`.
 pub fn films(count: u32) -> String {
-    plural(count as usize, "film", "films")
+    plural(count as usize, "movie", "movies")
 }
 
 /// `0 collections`, `1 collection`, `12 collections`.
@@ -126,7 +138,7 @@ mod tests {
     use super::*;
     use crate::fake::FakeServer;
     use crate::favourite;
-    use bobine::provider::{Favourite, ImageKind, MediaServer};
+    use bobine::provider::{Favourite, ImageKind, MediaServer, ProviderError};
 
     /// The title of an item of the list.
     fn title(favourite: &Favourite) -> &str {
@@ -146,11 +158,11 @@ mod tests {
     }
 
     #[test]
-    fn a_collection_counts_its_films_in_english() {
-        assert_eq!(films(1), "1 film");
-        assert_eq!(films(3), "3 films");
-        assert_eq!(films(0), "0 films");
-        assert_eq!(films(2), "2 films");
+    fn a_collection_counts_its_movies_in_english() {
+        assert_eq!(films(1), "1 movie");
+        assert_eq!(films(3), "3 movies");
+        assert_eq!(films(0), "0 movies");
+        assert_eq!(films(2), "2 movies");
         assert_eq!(collections(0), "0 collections");
         assert_eq!(collections(1), "1 collection");
         assert_eq!(collections(2), "2 collections");
@@ -177,7 +189,7 @@ mod tests {
         assert_eq!(years(&saga.films).as_deref(), Some("2019 – 2025"));
         assert_eq!(years(&saga.films[..1]).as_deref(), Some("2019"));
         assert_eq!(years(&[]), None);
-        assert_eq!(meta(&saga), ["2 films", "2019 – 2025"]);
+        assert_eq!(meta(&saga), ["2 movies", "2019 – 2025"]);
     }
 
     #[test]
@@ -209,7 +221,7 @@ mod tests {
         for card in bare {
             let first = server.collection(&card.id).unwrap().films.remove(0);
             assert!(first.poster.is_some(), "{}", card.name);
-            assert_eq!(server.collection_poster(&card.id), first.poster);
+            assert_eq!(server.collection_poster(&card.id).unwrap(), first.poster);
         }
     }
 
@@ -267,7 +279,7 @@ mod tests {
         let mut cards = cards_with_posters(&[false; 2 * POSTERS_IN_FLIGHT]);
         let mut queue = PosterQueue::of(&cards, LOAD);
         queue.start();
-        let next = queue.answered(&mut cards, LOAD, &id(0), None);
+        let next = queue.answered(&mut cards, LOAD, &id(0), Ok(None));
         assert_eq!(next, Some(id(POSTERS_IN_FLIGHT)));
         assert_eq!(cards[0].poster, None);
     }
@@ -277,7 +289,7 @@ mod tests {
         let mut cards = cards_with_posters(&[false, false]);
         let mut queue = PosterQueue::of(&cards, LOAD);
         queue.start();
-        queue.answered(&mut cards, LOAD, &id(1), Some(poster("film")));
+        queue.answered(&mut cards, LOAD, &id(1), Ok(Some(poster("film"))));
         assert_eq!(cards[0].poster, None);
         assert_eq!(cards[1].poster, Some(poster("film")));
     }
@@ -289,13 +301,13 @@ mod tests {
         queue.start();
         let before = cards.clone();
         for old in [LOAD - 1, LOAD + 1] {
-            let next = queue.answered(&mut cards, old, &id(0), Some(poster("old")));
+            let next = queue.answered(&mut cards, old, &id(0), Ok(Some(poster("old"))));
             assert_eq!(next, None, "generation {old}");
         }
         assert_eq!(cards, before);
         // The queue still holds what the current load has to ask, untouched by the stale answers.
         assert_eq!(
-            queue.answered(&mut cards, LOAD, &id(0), None),
+            queue.answered(&mut cards, LOAD, &id(0), Ok(None)),
             Some(id(POSTERS_IN_FLIGHT))
         );
     }
@@ -307,9 +319,48 @@ mod tests {
         queue.start();
         let before = cards.clone();
         let gone = ItemId("gone".into());
-        let next = queue.answered(&mut cards, LOAD, &gone, Some(poster("film")));
+        let next = queue.answered(&mut cards, LOAD, &gone, Ok(Some(poster("film"))));
         assert_eq!(next, Some(id(POSTERS_IN_FLIGHT)));
         assert_eq!(cards, before);
+    }
+
+    fn unreachable() -> Result<Option<ImageRef>, ProviderError> {
+        Err(ProviderError::Unreachable("timed out".into()))
+    }
+
+    #[test]
+    fn a_request_that_failed_is_asked_again_once_then_the_card_stays_bare() {
+        let mut cards = cards_with_posters(&[false, false]);
+        let mut queue = PosterQueue::of(&cards, LOAD);
+        assert_eq!(queue.start(), [id(0), id(1)]);
+        // The first failure sends the same card again, behind none: nothing else is waiting.
+        assert_eq!(
+            queue.answered(&mut cards, LOAD, &id(0), unreachable()),
+            Some(id(0))
+        );
+        // The second one gives up: the card stays bare and nothing more is asked for it.
+        assert_eq!(
+            queue.answered(&mut cards, LOAD, &id(0), unreachable()),
+            None
+        );
+        assert_eq!(cards[0].poster, None);
+        // The other card is still answered as before.
+        let answer = queue.answered(&mut cards, LOAD, &id(1), Ok(Some(poster("film"))));
+        assert_eq!(answer, None);
+        assert_eq!(cards[1].poster, Some(poster("film")));
+    }
+
+    #[test]
+    fn a_retry_waits_behind_the_cards_not_asked_yet() {
+        let mut cards = cards_with_posters(&[false; POSTERS_IN_FLIGHT + 2]);
+        let mut queue = PosterQueue::of(&cards, LOAD);
+        queue.start();
+        let next = queue.answered(&mut cards, LOAD, &id(0), unreachable());
+        assert_eq!(next, Some(id(POSTERS_IN_FLIGHT)));
+        let next = queue.answered(&mut cards, LOAD, &id(1), Ok(None));
+        assert_eq!(next, Some(id(POSTERS_IN_FLIGHT + 1)));
+        let next = queue.answered(&mut cards, LOAD, &id(2), Ok(None));
+        assert_eq!(next, Some(id(0)), "the failed one comes back last");
     }
 
     #[test]
@@ -324,13 +375,13 @@ mod tests {
         while !in_flight.is_empty() {
             let answered = in_flight.remove(0);
             assert_eq!(
-                queue.answered(&mut cards, LOAD - 1, &answered, None),
+                queue.answered(&mut cards, LOAD - 1, &answered, Ok(None)),
                 None,
                 "a stale answer"
             );
             // The answers come with a poster, then without, in turn.
             let poster = asked.is_multiple_of(2).then(|| poster("film"));
-            in_flight.extend(queue.answered(&mut cards, LOAD, &answered, poster));
+            in_flight.extend(queue.answered(&mut cards, LOAD, &answered, Ok(poster)));
             asked = total - queue.waiting.len();
             most = most.max(in_flight.len());
         }
@@ -348,7 +399,7 @@ mod tests {
     #[test]
     fn the_empty_list_says_how_to_add_a_title() {
         assert!(EMPTY_LIST.contains("My list"));
-        assert!(EMPTY_LIST.contains("film") && EMPTY_LIST.contains("series"));
+        assert!(EMPTY_LIST.contains("movie") && EMPTY_LIST.contains("series"));
     }
 
     #[test]

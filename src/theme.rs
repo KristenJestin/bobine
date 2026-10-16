@@ -60,6 +60,9 @@ pub fn font_family(cx: &App) -> Option<SharedString> {
         .then(|| "Inter".into())
 }
 
+/// The height of every button: a filled one and an outlined one side by side stand level.
+pub const BUTTON_HEIGHT: f32 = 44.;
+
 /// The size of an icon beside the text of a button.
 pub const BUTTON_ICON: f32 = 16.;
 
@@ -146,6 +149,30 @@ pub fn eased(
         })
 }
 
+/// What every button shares: one height, whatever its border, so that a filled one and an
+/// outlined one side by side stand level.
+fn button(
+    id: impl Into<ElementId>,
+    shades: Shades,
+    window: &mut Window,
+    cx: &mut App,
+) -> Stateful<Div> {
+    let id = id.into();
+    let selector = id.to_string();
+    eased(id, shades, window, cx)
+        .debug_selector(move || selector.clone())
+        .flex()
+        .items_center()
+        .justify_center()
+        .gap(px(8.))
+        .h(px(BUTTON_HEIGHT))
+        .px(px(20.))
+        .rounded(px(RADIUS))
+        .text_size(px(14.))
+        .font_weight(FontWeight::SEMIBOLD)
+        .cursor_pointer()
+}
+
 /// White, black text: the one thing to do on a screen.
 pub fn primary_button(
     id: impl Into<ElementId>,
@@ -159,18 +186,8 @@ pub fn primary_button(
         hover: rgb(0xe4e4e7),
         press: rgb(0xd4d4d8),
     };
-    eased(id, shades, window, cx)
-        .flex()
-        .items_center()
-        .justify_center()
-        .gap(px(8.))
-        .px(px(20.))
-        .py(px(12.))
-        .rounded(px(RADIUS))
+    button(id, shades, window, cx)
         .text_color(rgb(0x000000))
-        .text_size(px(14.))
-        .font_weight(FontWeight::SEMIBOLD)
-        .cursor_pointer()
         .children(leading.map(|name| icon(name, BUTTON_ICON)))
         .child(label.into())
 }
@@ -206,20 +223,10 @@ pub fn ghost_button_with(
         hover: line(),
         press: rgb(0x2e2e33),
     };
-    eased(id, shades, window, cx)
-        .flex()
-        .items_center()
-        .justify_center()
-        .gap(px(8.))
-        .px(px(20.))
-        .py(px(12.))
-        .rounded(px(RADIUS))
+    button(id, shades, window, cx)
         .border_1()
         .border_color(rgb(0x3a3a40))
         .text_color(text())
-        .text_size(px(14.))
-        .font_weight(FontWeight::SEMIBOLD)
-        .cursor_pointer()
         .children(leading)
         .child(label.into())
 }
