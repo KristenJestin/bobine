@@ -154,6 +154,10 @@ pub struct MediaStream {
     pub is_forced: bool,
     #[serde(default)]
     pub is_external: bool,
+    /// In a conversion, how a subtitle comes: `External` for a file at `delivery_url`, relative
+    /// to the server and holding the token.
+    pub delivery_method: Option<String>,
+    pub delivery_url: Option<String>,
     pub width: Option<u32>,
     pub height: Option<u32>,
     pub channels: Option<u32>,

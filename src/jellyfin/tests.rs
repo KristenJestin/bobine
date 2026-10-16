@@ -1430,6 +1430,41 @@ fn transcoding_asks_the_server_without_direct_play_from_the_position() {
     assert_eq!(body["SubtitleStreamIndex"], 4);
 }
 
+fn transcoded(s: &Setup, subtitle_track: Option<i32>) -> Playback {
+    s.signed_in()
+        .transcode(&TranscodeRequest {
+            film: film(),
+            source: MediaSourceId(SOURCE.into()),
+            start: Duration::ZERO,
+            audio_track: None,
+            subtitle_track,
+        })
+        .unwrap()
+}
+
+#[test]
+fn an_embedded_text_subtitle_chosen_comes_as_a_file_beside_the_conversion() {
+    let s = Setup::new();
+    let playback = transcoded(&s, Some(3));
+    let indexes: Vec<i32> = playback
+        .external_subtitles
+        .iter()
+        .map(|e| e.index)
+        .collect();
+    assert_eq!(indexes, [5, 6, 3]);
+    let url = playback.external_subtitles[2].url.expose_for_player();
+    assert_eq!(
+        url,
+        format!(
+            "{}/Videos/{FILM}/{SOURCE}/Subtitles/3/0/Stream.srt?ApiKey={TOKEN}",
+            s.fake.url
+        )
+    );
+    // Drawn into the picture, or not chosen: no file.
+    assert_eq!(transcoded(&s, Some(4)).external_subtitles.len(), 2);
+    assert_eq!(transcoded(&s, None).external_subtitles.len(), 2);
+}
+
 #[test]
 fn the_transcode_request_carries_the_device_profile_with_the_embedded_subtitles() {
     let s = Setup::new();

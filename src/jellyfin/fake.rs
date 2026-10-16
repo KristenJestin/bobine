@@ -553,6 +553,22 @@ fn playback_info(state: &State, seen: &Seen) -> Value {
         ));
         source["TranscodingSubProtocol"] = json!("hls");
     }
+    // In a conversion, an embedded text subtitle is extracted into a file; a picture one is
+    // drawn into the picture.
+    for stream in source["MediaStreams"].as_array_mut().unwrap() {
+        if stream["Type"] != "Subtitle" || stream["IsExternal"] == true {
+            continue;
+        }
+        if stream["Codec"] == "subrip" {
+            let index = stream["Index"].clone();
+            stream["DeliveryMethod"] = json!("External");
+            stream["DeliveryUrl"] = json!(format!(
+                "/Videos/{FILM}/{SOURCE}/Subtitles/{index}/0/Stream.srt?ApiKey={TOKEN}"
+            ));
+        } else {
+            stream["DeliveryMethod"] = json!("Encode");
+        }
+    }
     info
 }
 

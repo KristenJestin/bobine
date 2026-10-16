@@ -307,6 +307,17 @@ impl Jellyfin {
         Ok((session, found))
     }
 
+    /// The address of `path` on the server, with the token: the server puts it in the paths it
+    /// gives; an older one may not.
+    fn served(&self, path: &str) -> String {
+        let mut url = format!("{}{path}", self.http.base());
+        if !path.contains("ApiKey=") && !path.contains("api_key=") {
+            let separator = if path.contains('?') { '&' } else { '?' };
+            url += &format!("{separator}ApiKey={}", encode(self.token()));
+        }
+        url
+    }
+
     /// The playback of the version `found`, streamed from `stream`, with its subtitle files.
     fn opened(
         &self,
@@ -916,11 +927,24 @@ impl MediaServer for Jellyfin {
         let path = found.transcoding_url.as_deref().ok_or_else(|| {
             ProviderError::BadAnswer("playback: the server converts nothing for it".into())
         })?;
-        // The server puts the token in it; an older one may not.
-        let mut stream = format!("{}{path}", self.http.base());
-        if !path.contains("ApiKey=") && !path.contains("api_key=") {
-            stream += &format!("&ApiKey={}", encode(self.token()));
+        let stream = self.served(path);
+        let mut playback = self.opened(film, source, session, &found, stream);
+        // The embedded text subtitle chosen comes as a file the server extracts, beside the
+        // converted picture.
+        let delivered = found.media_streams.iter().find(|s| {
+            s.kind == "Subtitle"
+                && !s.is_external
+                && Some(s.index) == request.subtitle_track
+                && s.delivery_method.as_deref() == Some("External")
+        });
+        if let Some(subtitle) = delivered
+            && let Some(path) = subtitle.delivery_url.as_deref()
+        {
+            playback.external_subtitles.push(ExternalSubtitle {
+                index: subtitle.index,
+                url: StreamUrl::new(self.served(path)),
+            });
         }
-        Ok(self.opened(film, source, session, &found, stream))
+        Ok(playback)
     }
 }

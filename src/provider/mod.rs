@@ -491,8 +491,9 @@ pub struct TranscodeRequest {
     pub film: ItemId,
     pub source: MediaSourceId,
     pub start: Duration,
-    /// The server's indexes. The subtitle is an embedded one, which the server draws into the
-    /// picture: an external file is added by the player, as in direct play.
+    /// The server's indexes. The subtitle is an embedded one, which the server extracts into a
+    /// file or draws into the picture: an external file is added by the player, as in direct
+    /// play.
     pub audio_track: Option<i32>,
     pub subtitle_track: Option<i32>,
 }
