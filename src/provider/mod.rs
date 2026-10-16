@@ -47,6 +47,8 @@ pub trait MediaServer: Send + Sync {
 
     fn libraries(&self) -> Result<Vec<Library>, ProviderError>;
     fn films(&self, library: &ItemId, query: &FilmQuery) -> Result<Page<Film>, ProviderError>;
+    /// The genres and decades of a library's titles, to filter its grid by.
+    fn filter_choices(&self, library: &ItemId) -> Result<FilterChoices, ProviderError>;
     /// The films the user started and did not finish, the latest first.
     fn continue_watching(&self) -> Result<Vec<Film>, ProviderError>;
     fn film(&self, film: &ItemId) -> Result<FilmDetail, ProviderError>;
@@ -206,6 +208,17 @@ pub enum FilmSort {
     Title,
     DateAdded,
     ReleaseYear,
+    Rating,
+}
+
+/// What narrows a library's films or series: the server applies it, over the whole library.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Filters {
+    pub genre: Option<String>,
+    /// The first year of a decade (`1990` for the nineties).
+    pub decade: Option<i32>,
+    /// Only what the user has not watched.
+    pub unwatched: bool,
 }
 
 /// One page of the films of a library, in an order.
@@ -213,9 +226,21 @@ pub enum FilmSort {
 pub struct FilmQuery {
     pub sort: FilmSort,
     pub descending: bool,
+    pub filters: Filters,
+    /// Only the titles that sort before this letter's: the `total` of such a query, with a
+    /// `limit` of one, is the index of the first title of the letter.
+    pub before: Option<char>,
     /// The index of the first film of the page.
     pub start: u32,
     pub limit: u32,
+}
+
+/// What a library offers to filter by.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FilterChoices {
+    pub genres: Vec<String>,
+    /// The first year of each decade that holds a title, the latest first.
+    pub decades: Vec<i32>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

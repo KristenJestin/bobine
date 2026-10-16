@@ -6,7 +6,7 @@ use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::time::{Duration, Instant};
 
-use bobine::provider::{Film, FilmQuery, FilmSort, ItemId, Page, Series};
+use bobine::provider::{Film, FilmQuery, FilmSort, Filters, ItemId, Page, Series};
 
 /// Films per request.
 pub const PAGE: u32 = 100;
@@ -45,6 +45,8 @@ pub fn query(page: u32) -> FilmQuery {
     FilmQuery {
         sort: FilmSort::DateAdded,
         descending: true,
+        filters: Filters::default(),
+        before: None,
         start: page * PAGE,
         limit: PAGE,
     }

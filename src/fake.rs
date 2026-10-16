@@ -7,10 +7,10 @@ use std::time::Duration;
 
 use bobine::provider::{
     AudioTrack, CastMember, Collection, Connector, Episode, ExternalSubtitle, Film, FilmDetail,
-    FilmQuery, ImageKind, ImageRef, ItemId, Library, LibraryKind, MediaServer, MediaSource,
-    MediaSourceId, Page, PersonHit, PersonTitles, PlaySessionId, Playback, PlaybackReport,
-    ProviderError, SearchResults, Season, Series, SeriesDetail, SeriesHit, ServerInfo, StreamUrl,
-    SubtitleTrack, VideoRange, VideoTrack,
+    FilmQuery, FilterChoices, ImageKind, ImageRef, ItemId, Library, LibraryKind, MediaServer,
+    MediaSource, MediaSourceId, Page, PersonHit, PersonTitles, PlaySessionId, Playback,
+    PlaybackReport, ProviderError, SearchResults, Season, Series, SeriesDetail, SeriesHit,
+    ServerInfo, StreamUrl, SubtitleTrack, VideoRange, VideoTrack,
 };
 
 pub const USER: &str = "camille";
@@ -470,6 +470,10 @@ impl MediaServer for FakeServer {
                 kind: LibraryKind::Films,
             },
         ])
+    }
+
+    fn filter_choices(&self, _: &ItemId) -> Result<FilterChoices, ProviderError> {
+        Ok(FilterChoices::default())
     }
 
     fn films(&self, _: &ItemId, query: &FilmQuery) -> Result<Page<Film>, ProviderError> {

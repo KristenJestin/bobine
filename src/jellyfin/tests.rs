@@ -65,6 +65,8 @@ fn query(sort: FilmSort, descending: bool, start: u32, limit: u32) -> FilmQuery 
     FilmQuery {
         sort,
         descending,
+        filters: Filters::default(),
+        before: None,
         start,
         limit,
     }
@@ -372,6 +374,286 @@ fn films_are_sorted_by_release_year() {
     let asked = s.fake.last("GET", "/Items");
     assert_eq!(asked.param("SortBy"), Some("ProductionYear,SortName"));
     assert_eq!(asked.param("SortOrder"), Some("Ascending"));
+}
+
+fn filtered(sort: FilmSort, descending: bool, filters: Filters) -> FilmQuery {
+    FilmQuery {
+        filters,
+        ..query(sort, descending, 0, 10)
+    }
+}
+
+fn genre(name: &str) -> Filters {
+    Filters {
+        genre: Some(name.into()),
+        ..Filters::default()
+    }
+}
+
+#[test]
+fn films_are_filtered_by_genre() {
+    let s = Setup::new();
+    let page = s
+        .signed_in()
+        .films(
+            &ItemId(FILMS_LIBRARY.into()),
+            &filtered(FilmSort::Title, false, genre("Mystery")),
+        )
+        .unwrap();
+    assert_eq!(titles(&page), ["Copper Sky", "The Quiet Harbour"]);
+    assert_eq!(page.total, 2);
+    assert_eq!(
+        s.fake.last("GET", "/Items").param("Genres"),
+        Some("Mystery")
+    );
+}
+
+#[test]
+fn films_are_filtered_by_decade() {
+    let s = Setup::new();
+    let page = s
+        .signed_in()
+        .films(
+            &ItemId(FILMS_LIBRARY.into()),
+            &filtered(
+                FilmSort::Title,
+                false,
+                Filters {
+                    decade: Some(2010),
+                    ..Filters::default()
+                },
+            ),
+        )
+        .unwrap();
+    assert_eq!(titles(&page), ["Amber Fields"]);
+    assert_eq!(
+        s.fake.last("GET", "/Items").param("Years"),
+        Some("2010,2011,2012,2013,2014,2015,2016,2017,2018,2019")
+    );
+}
+
+#[test]
+fn only_the_films_not_watched_are_asked_for() {
+    let s = Setup::new();
+    let page = s
+        .signed_in()
+        .films(
+            &ItemId(FILMS_LIBRARY.into()),
+            &filtered(
+                FilmSort::Title,
+                false,
+                Filters {
+                    unwatched: true,
+                    ..Filters::default()
+                },
+            ),
+        )
+        .unwrap();
+    assert_eq!(
+        titles(&page),
+        ["Copper Sky", "Lanterns", "Northbound", "The Quiet Harbour"]
+    );
+    assert_eq!(page.total, 4);
+    assert_eq!(
+        s.fake.last("GET", "/Items").param("IsPlayed"),
+        Some("false")
+    );
+}
+
+#[test]
+fn no_filter_sends_no_filter_parameter() {
+    let s = Setup::new();
+    s.signed_in()
+        .films(
+            &ItemId(FILMS_LIBRARY.into()),
+            &query(FilmSort::Title, false, 0, 10),
+        )
+        .unwrap();
+    let asked = s.fake.last("GET", "/Items");
+    for key in ["Genres", "Years", "IsPlayed", "NameLessThan"] {
+        assert_eq!(asked.param(key), None, "{key}");
+    }
+}
+
+#[test]
+fn films_are_sorted_by_rating_best_first() {
+    let s = Setup::new();
+    let page = s
+        .signed_in()
+        .films(
+            &ItemId(FILMS_LIBRARY.into()),
+            &filtered(FilmSort::Rating, true, Filters::default()),
+        )
+        .unwrap();
+    // The film nobody rated comes last.
+    assert_eq!(
+        titles(&page),
+        [
+            "Copper Sky",
+            "The Quiet Harbour",
+            "Amber Fields",
+            "Lanterns",
+            "Northbound"
+        ]
+    );
+    let asked = s.fake.last("GET", "/Items");
+    assert_eq!(asked.param("SortBy"), Some("CommunityRating,SortName"));
+    assert_eq!(asked.param("SortOrder"), Some("Descending"));
+}
+
+#[test]
+fn filters_and_sort_apply_together_and_the_total_counts_the_filtered_list() {
+    let s = Setup::new();
+    let page = s
+        .signed_in()
+        .films(
+            &ItemId(FILMS_LIBRARY.into()),
+            &FilmQuery {
+                limit: 1,
+                ..filtered(
+                    FilmSort::ReleaseYear,
+                    true,
+                    Filters {
+                        genre: Some("Drama".into()),
+                        decade: None,
+                        unwatched: true,
+                    },
+                )
+            },
+        )
+        .unwrap();
+    // Drama not watched: Lanterns (2003) and The Quiet Harbour (1998).
+    assert_eq!(titles(&page), ["Lanterns"]);
+    assert_eq!(page.total, 2);
+}
+
+#[test]
+fn series_are_filtered_by_genre_decade_and_unwatched() {
+    let s = Setup::new();
+    let server = s.signed_in();
+    let names = |page: &Page<Series>| -> Vec<String> {
+        page.items.iter().map(|s| s.title.clone()).collect()
+    };
+    let drama = server
+        .series(
+            &series_library(),
+            &filtered(FilmSort::Title, false, genre("Drama")),
+        )
+        .unwrap();
+    assert_eq!(names(&drama), ["Bramble Line", "Tidewater"]);
+    assert_eq!(s.fake.last("GET", "/Items").param("Genres"), Some("Drama"));
+    let twenties = server
+        .series(
+            &series_library(),
+            &filtered(
+                FilmSort::Title,
+                false,
+                Filters {
+                    decade: Some(2020),
+                    ..Filters::default()
+                },
+            ),
+        )
+        .unwrap();
+    assert_eq!(names(&twenties), ["Glass Orchard", "Tidewater"]);
+    let unwatched = server
+        .series(
+            &series_library(),
+            &filtered(
+                FilmSort::Rating,
+                true,
+                Filters {
+                    unwatched: true,
+                    ..Filters::default()
+                },
+            ),
+        )
+        .unwrap();
+    assert_eq!(names(&unwatched), ["Tidewater", "Bramble Line"]);
+    assert_eq!(
+        s.fake.last("GET", "/Items").param("IsPlayed"),
+        Some("false")
+    );
+}
+
+#[test]
+fn a_library_offers_its_genres_and_its_decades() {
+    let s = Setup::new();
+    let choices = s
+        .signed_in()
+        .filter_choices(&ItemId(FILMS_LIBRARY.into()))
+        .unwrap();
+    assert_eq!(choices.genres, ["Drama", "Mystery", "Thriller"]);
+    // 1987, 1998, 2003, 2011 and 2020: the latest decade first.
+    assert_eq!(choices.decades, [2020, 2010, 2000, 1990, 1980]);
+    let genres = s.fake.last("GET", "/Genres");
+    assert_eq!(genres.param("ParentId"), Some(FILMS_LIBRARY));
+    assert_eq!(genres.param("userId"), Some(USER_ID));
+    assert_eq!(
+        s.fake.last("GET", "/Items/Filters").param("ParentId"),
+        Some(FILMS_LIBRARY)
+    );
+}
+
+fn letters() -> ItemId {
+    ItemId(LETTERS_LIBRARY.into())
+}
+
+/// The index of the first title of `letter`, as the server counts it.
+fn first_of(server: &dyn MediaServer, letter: char, filters: Filters) -> u32 {
+    server
+        .films(
+            &letters(),
+            &FilmQuery {
+                filters,
+                before: Some(letter),
+                ..query(FilmSort::Title, false, 0, 1)
+            },
+        )
+        .unwrap()
+        .total
+}
+
+#[test]
+fn the_index_of_a_letter_is_the_count_of_the_titles_before_it() {
+    let s = Setup::new();
+    let server = s.signed_in();
+    // "(Untitled)" and "1984 Remix" come first, then "Amber Road", "Brume"…
+    assert_eq!(first_of(&*server, 'A', Filters::default()), 2);
+    assert_eq!(first_of(&*server, 'B', Filters::default()), 3);
+    assert_eq!(first_of(&*server, 'G', Filters::default()), 8);
+    assert_eq!(first_of(&*server, 'Z', Filters::default()), 9);
+    let asked = s.fake.last("GET", "/Items");
+    assert_eq!(asked.param("ParentId"), Some(LETTERS_LIBRARY));
+    assert_eq!(asked.param("NameLessThan"), Some("Z"));
+    assert_eq!(asked.param("SortBy"), Some("SortName"));
+    assert_eq!(asked.param("SortOrder"), Some("Ascending"));
+}
+
+#[test]
+fn the_index_of_a_letter_asks_for_one_title_never_for_none() {
+    // Jellyfin reads a limit of 0 as no limit: the whole library would come back.
+    let s = Setup::new();
+    first_of(&*s.signed_in(), 'C', Filters::default());
+    assert_eq!(s.fake.last("GET", "/Items").param("Limit"), Some("1"));
+}
+
+#[test]
+fn an_accented_title_is_counted_with_its_unaccented_letter() {
+    let s = Setup::new();
+    let server = s.signed_in();
+    // "Éclipse" and "Écume" sit among the E titles: F starts after "Eden".
+    assert_eq!(first_of(&*server, 'E', Filters::default()), 4);
+    assert_eq!(first_of(&*server, 'F', Filters::default()), 7);
+}
+
+#[test]
+fn the_index_of_a_letter_counts_within_the_filtered_list() {
+    let s = Setup::new();
+    let server = s.signed_in();
+    // Drama only: "1984 Remix", "Amber Road", "Éclipse", "Écume", "Gale".
+    assert_eq!(first_of(&*server, 'F', genre("Drama")), 4);
+    assert_eq!(s.fake.last("GET", "/Items").param("Genres"), Some("Drama"));
 }
 
 #[test]

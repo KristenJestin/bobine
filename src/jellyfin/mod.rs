@@ -11,12 +11,14 @@ mod tests;
 
 use crate::provider::{
     Collection, Connector, Episode, ExternalSubtitle, Film, FilmDetail, FilmQuery, FilmSort,
-    ImageKind, ImageRef, ItemId, Library, MediaServer, MediaSourceId, Page, PersonTitles,
-    PlaySessionId, Playback, PlaybackReport, ProviderError, SearchResults, Season, Series,
-    SeriesDetail, ServerInfo, StreamUrl, Token, TokenStore,
+    FilterChoices, ImageKind, ImageRef, ItemId, Library, MediaServer, MediaSourceId, Page,
+    PersonTitles, PlaySessionId, Playback, PlaybackReport, ProviderError, SearchResults, Season,
+    Series, SeriesDetail, ServerInfo, StreamUrl, Token, TokenStore,
 };
 use account::{AccountFile, Login};
-use dto::{AuthenticationResult, Item, PlaybackInfoResponse, PublicSystemInfo, QueryResult};
+use dto::{
+    AuthenticationResult, Item, PlaybackInfoResponse, PublicSystemInfo, QueryFilters, QueryResult,
+};
 use http::{Device, Http, encode, normalize_address};
 use serde_json::json;
 use std::path::PathBuf;
@@ -192,27 +194,41 @@ impl Jellyfin {
             FilmSort::Title => "SortName",
             FilmSort::DateAdded => "DateCreated,SortName",
             FilmSort::ReleaseYear => "ProductionYear,SortName",
+            FilmSort::Rating => "CommunityRating,SortName",
         };
         let order = if query.descending {
             "Descending"
         } else {
             "Ascending"
         };
-        self.items(
-            what,
-            &[
-                ("parentId", library.0.clone()),
-                ("includeItemTypes", kind.into()),
-                ("recursive", "true".into()),
-                ("sortBy", sort.into()),
-                ("sortOrder", order.into()),
-                ("startIndex", query.start.to_string()),
-                ("limit", query.limit.to_string()),
-                ("imageTypeLimit", "1".into()),
-                ("enableImageTypes", "Primary,Backdrop".into()),
-                ("enableTotalRecordCount", "true".into()),
-            ],
-        )
+        let mut asked = vec![
+            ("parentId", library.0.clone()),
+            ("includeItemTypes", kind.into()),
+            ("recursive", "true".into()),
+            ("sortBy", sort.into()),
+            ("sortOrder", order.into()),
+            ("startIndex", query.start.to_string()),
+            // Never 0: Jellyfin reads it as no limit at all.
+            ("limit", query.limit.max(1).to_string()),
+            ("imageTypeLimit", "1".into()),
+            ("enableImageTypes", "Primary,Backdrop".into()),
+            ("enableTotalRecordCount", "true".into()),
+        ];
+        let filters = &query.filters;
+        if let Some(genre) = &filters.genre {
+            asked.push(("genres", genre.clone()));
+        }
+        if let Some(decade) = filters.decade {
+            let years: Vec<String> = (decade..decade + 10).map(|y| y.to_string()).collect();
+            asked.push(("years", years.join(",")));
+        }
+        if filters.unwatched {
+            asked.push(("isPlayed", "false".into()));
+        }
+        if let Some(letter) = query.before {
+            asked.push(("nameLessThan", letter.to_string()));
+        }
+        self.items(what, &asked)
     }
 
     fn report(
@@ -261,6 +277,25 @@ impl MediaServer for Jellyfin {
             items: films,
             total,
         })
+    }
+
+    fn filter_choices(&self, library: &ItemId) -> Result<FilterChoices, ProviderError> {
+        let genres: QueryResult = self.http.get(
+            "genres",
+            "/Genres",
+            &[self.user(), ("parentId", library.0.clone())],
+        )?;
+        let filters: QueryFilters = self.http.get(
+            "years",
+            "/Items/Filters",
+            &[self.user(), ("parentId", library.0.clone())],
+        )?;
+        let mut genres: Vec<String> = genres.items.into_iter().map(|g| g.name).collect();
+        genres.sort_by_key(|genre| genre.to_lowercase());
+        let mut decades: Vec<i32> = filters.years.iter().map(|y| y - y.rem_euclid(10)).collect();
+        decades.sort_unstable_by(|a, b| b.cmp(a));
+        decades.dedup();
+        Ok(FilterChoices { genres, decades })
     }
 
     fn continue_watching(&self) -> Result<Vec<Film>, ProviderError> {
