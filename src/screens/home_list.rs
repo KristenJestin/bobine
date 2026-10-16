@@ -2,6 +2,7 @@
 //! theirs. Only the rows in view are built, and only their pages are asked of the server.
 
 use std::ops::Range;
+use std::rc::Rc;
 
 use bobine::provider::Title;
 use gpui_kit::prelude::*;
@@ -130,12 +131,13 @@ fn card(
     cx: &mut Context<Shell>,
 ) -> AnyElement {
     let id = (SharedString::from("home-list-card"), index);
+    let alone = || Rc::<[Title]>::from([title.clone()]);
     match title {
-        _ if wide => wide_card(shell, title, width, id, true, window, cx).into_any_element(),
+        _ if wide => wide_card(shell, &alone(), 0, width, id, true, window, cx).into_any_element(),
         Title::Film(film) => poster(shell, film, width, id, false, cx).into_any_element(),
         Title::Series(series) => series_poster(shell, series, width, id, cx).into_any_element(),
         Title::Episode(_) => {
-            wide_card(shell, title, width, id, true, window, cx).into_any_element()
+            wide_card(shell, &alone(), 0, width, id, true, window, cx).into_any_element()
         }
     }
 }

@@ -3,8 +3,8 @@
 //! The playback itself, its reports and its end are the film page's and the series page's.
 
 use bobine::provider::{
-    Episode, FilmQuery, FilmSort, ItemId, LibraryKind, MediaServer, Page, Playback, ProviderError,
-    Title,
+    Episode, Feature, FeatureKind, FilmQuery, FilmSort, ItemId, LibraryKind, MediaServer, Page,
+    Playback, ProviderError, Title,
 };
 
 use crate::film_page::{self, Choices, Plan};
@@ -30,6 +30,14 @@ impl PlayTarget {
             Title::Series(series) => Self::Series(series.id.clone()),
             Title::Episode(episode) => Self::Episode(Box::new(episode.clone())),
         }
+    }
+}
+
+/// What the "Lecture" under the header's title starts.
+pub fn play_target(feature: &Feature) -> PlayTarget {
+    match feature.kind {
+        FeatureKind::Film => PlayTarget::Film(feature.id.clone()),
+        FeatureKind::Series => PlayTarget::Series(feature.id.clone()),
     }
 }
 

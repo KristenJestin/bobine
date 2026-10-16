@@ -3,14 +3,15 @@
 //! what each library gained. Each row scrolls sideways and has its "Tout voir". The page scrolls
 //! up and down, and the wheel goes to the row under the pointer when it is over one.
 
+use std::rc::Rc;
 use std::time::Instant;
 
 use bobine::provider::{Feature, ImageRef, Title};
 use gpui_kit::prelude::*;
 use gpui_kit::{
     Animation, AnimationExt, AnyElement, App, Context, Div, ElementId, Entity, FontWeight,
-    IntoElement, ObjectFit, ScrollHandle, SharedString, Stateful, Window, div, img,
-    linear_color_stop, linear_gradient, px, relative, rgb, rgba,
+    IntoElement, ObjectFit, Render, ScrollHandle, SharedString, Stateful, WeakEntity, Window, div,
+    img, linear_color_stop, linear_gradient, px, relative, rgb, rgba,
 };
 
 use super::film_detail::{EDGE, ROW_POSTER, hero_frame, meta_line};
@@ -41,8 +42,8 @@ const LOGO: (f32, f32) = (440., 130.);
 
 /// What a row holds.
 enum Body {
-    Wide(Vec<Title>),
-    Posters(Vec<Title>),
+    Wide(Rc<[Title]>),
+    Posters(Rc<[Title]>),
     Failed(&'static str),
 }
 
@@ -64,18 +65,15 @@ impl RowSpec {
     }
 }
 
-/// The rows to draw now, in order; the ones with nothing to show are left out.
+/// The rows to draw now, in order; the ones with nothing to show are left out. The titles are
+/// shared with the page, not copied: this runs at every frame.
 fn rows(shell: &Shell) -> Vec<RowSpec> {
     let mut rows = Vec::new();
-    let started: &[Title] = match &shell.home.resume {
-        Some(Loadable::Ready(started)) => started,
-        _ => &[],
-    };
     match &shell.home.resume {
         Some(Loadable::Ready(titles)) if !titles.is_empty() => rows.push(RowSpec {
             list: ListKind::Resume,
             caption: None,
-            body: Body::Wide(titles.clone()),
+            body: Body::Wide(Rc::clone(titles)),
         }),
         Some(Loadable::Failed(why)) => rows.push(RowSpec {
             list: ListKind::Resume,
@@ -84,15 +82,12 @@ fn rows(shell: &Shell) -> Vec<RowSpec> {
         }),
         _ => {}
     }
-    if let Some(Loadable::Ready(next)) = &shell.home.next_up {
-        let next = home_page::next_up_row(next.clone(), started);
-        if !next.is_empty() {
-            rows.push(RowSpec {
-                list: ListKind::NextUp,
-                caption: None,
-                body: Body::Wide(next.into_iter().map(Title::Episode).collect()),
-            });
-        }
+    if !shell.home.next_row.is_empty() {
+        rows.push(RowSpec {
+            list: ListKind::NextUp,
+            caption: None,
+            body: Body::Wide(Rc::clone(&shell.home.next_row)),
+        });
     }
     if let Some(Loadable::Ready(latest)) = &shell.home.latest {
         for row in latest {
@@ -102,7 +97,7 @@ fn rows(shell: &Shell) -> Vec<RowSpec> {
                 Loadable::Ready(titles) if !titles.is_empty() => rows.push(RowSpec {
                     list,
                     caption,
-                    body: Body::Posters(titles.clone()),
+                    body: Body::Posters(Rc::clone(titles)),
                 }),
                 Loadable::Failed(why) => rows.push(RowSpec {
                     list,
@@ -116,12 +111,17 @@ fn rows(shell: &Shell) -> Vec<RowSpec> {
     rows
 }
 
+/// How tall the header is in a window of this height.
+fn hero_height(window_height: f32) -> f32 {
+    (window_height * 0.72).clamp(460., 760.)
+}
+
 pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -> impl IntoElement {
     // The header's time runs while this is drawn.
     shell.start_hero_ticker(window, cx);
     let viewport = window.viewport_size();
     let (width, window_height) = (f32::from(viewport.width), f32::from(viewport.height));
-    let hero_height = (window_height * 0.72).clamp(460., 760.);
+    let hero_height = hero_height(window_height);
     let features = shell.home.featured().len();
     let hero_wanted = features > 0 || matches!(shell.home.features, Some(Loadable::Loading));
     // Under the pill bar when there is no header.
@@ -154,7 +154,7 @@ pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -
     };
 
     let header = if features > 0 {
-        Some(hero(shell, hero_height, window, cx).into_any_element())
+        Some(shell.hero_view.clone().into_any_element())
     } else if hero_wanted {
         // The header is on its way: its room is kept, so that nothing moves when it comes.
         Some(div().w_full().h(px(hero_height)).into_any_element())
@@ -211,6 +211,36 @@ pub(super) fn error_pill(why: &'static str) -> impl IntoElement {
 
 // The header.
 
+/// The header as a view of its own: its time makes it redraw 30 times a second, and nothing
+/// else on the page has to be built again for that. The shell tells it when what it shows
+/// changes (`Shell::notify_hero`).
+pub struct HeroView {
+    shell: WeakEntity<Shell>,
+}
+
+impl HeroView {
+    pub fn new(shell: WeakEntity<Shell>) -> Self {
+        Self { shell }
+    }
+}
+
+impl Render for HeroView {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let Some(shell) = self.shell.upgrade() else {
+            return div().into_any_element();
+        };
+        let height = hero_height(f32::from(window.viewport_size().height));
+        shell.update(cx, |shell, shell_cx| {
+            #[cfg(feature = "harness")]
+            shell.note_frame();
+            if shell.home.featured().is_empty() {
+                return div().into_any_element();
+            }
+            hero(shell, height, window, shell_cx).into_any_element()
+        })
+    }
+}
+
 fn hero(
     shell: &mut Shell,
     height: f32,
@@ -218,7 +248,7 @@ fn hero(
     cx: &mut Context<Shell>,
 ) -> impl IntoElement {
     let now = Instant::now();
-    let features: Vec<Feature> = shell.home.featured().to_vec();
+    let features: Rc<[Feature]> = shell.home.shared_features().unwrap_or_else(|| Rc::from([]));
     let current = shell.home.carousel.current().min(features.len() - 1);
     let blend = shell.home.carousel.blend(now);
     if shell.home.carousel.crossfading(now) {
@@ -231,7 +261,7 @@ fn hero(
         let _ = shell.image(next.backdrop.as_ref(), images::BACKDROP, cx);
     }
 
-    let leaving = blend.leaving.and_then(|at| features.get(at));
+    let leaving = blend.leaving.filter(|at| *at < features.len());
     let backdrop = |shell: &mut Shell, feature: &Feature, level: f32, cx: &mut Context<Shell>| {
         let image = shell.image(feature.backdrop.as_ref(), images::BACKDROP, cx);
         div()
@@ -242,14 +272,16 @@ fn hero(
     };
     let mut layers: Vec<AnyElement> = Vec::new();
     if let Some(leaving) = leaving {
-        layers.push(backdrop(shell, leaving, 1., cx).into_any_element());
+        layers.push(backdrop(shell, &features[leaving], 1., cx).into_any_element());
     }
     layers.push(backdrop(shell, &features[current], blend.level, cx).into_any_element());
     if let Some(leaving) = leaving {
-        layers.push(slide_text(shell, leaving, text_out, false, window, cx).into_any_element());
+        layers.push(
+            slide_text(shell, &features, leaving, text_out, false, window, cx).into_any_element(),
+        );
     }
     layers
-        .push(slide_text(shell, &features[current], text_in, true, window, cx).into_any_element());
+        .push(slide_text(shell, &features, current, text_in, true, window, cx).into_any_element());
 
     div()
         .id("hero")
@@ -264,47 +296,37 @@ fn hero(
         .children((features.len() > 1).then(|| marks(shell, features.len(), now, window, cx)))
 }
 
-/// The text of one title, `level` of the way in. Only the title on show answers a click.
+/// The text of the `at`th title, `level` of the way in. Only the title on show answers a click.
 fn slide_text(
     shell: &mut Shell,
-    feature: &Feature,
+    features: &[Feature],
+    at: usize,
     level: f32,
     live: bool,
     window: &mut Window,
     cx: &mut Context<Shell>,
 ) -> Div {
+    let feature = &features[at];
     let headline = match hero::headline(feature) {
         Headline::Logo(logo) => logo_or_title(shell, &logo, &feature.title, cx),
         Headline::Text(title) => title_text(title).into_any_element(),
     };
-    let target = match feature.kind {
-        bobine::provider::FeatureKind::Film => PlayTarget::Film(feature.id.clone()),
-        bobine::provider::FeatureKind::Series => PlayTarget::Series(feature.id.clone()),
-    };
-    let id =
-        |name: &'static str| SharedString::from(format!("hero-{name}-{}-{live}", feature.id.0));
-    let play =
-        theme::primary_button(
-            id("play"),
-            Some(IconName::Play),
-            hero::play_label(feature),
-            window,
-            cx,
-        )
+    // One id for each button of each title and of each of its two states.
+    let id = |name: &'static str| (name, at * 2 + usize::from(live));
+    let play = theme::primary_button(
+        id("play"),
+        Some(IconName::Play),
+        hero::play_label(feature),
+        window,
+        cx,
+    )
+    .when(live, |button| {
+        button.on_click(cx.listener(move |shell, _, window, cx| shell.play_feature(at, window, cx)))
+    });
+    let more = theme::ghost_button(id("more"), Some(IconName::Plus), "Plus d'infos", window, cx)
         .when(live, |button| {
-            button.on_click(cx.listener(move |shell, _, window, cx| {
-                shell.play_from_home(target.clone(), window, cx)
-            }))
+            button.on_click(cx.listener(move |shell, _, _, cx| shell.open_feature(at, cx)))
         });
-    let more = {
-        let opened = feature.clone();
-        theme::ghost_button(id("more"), Some(IconName::Plus), "Plus d'infos", window, cx).when(
-            live,
-            |button| {
-                button.on_click(cx.listener(move |shell, _, _, cx| shell.open_feature(&opened, cx)))
-            },
-        )
-    };
     let busy = shell.home.busy;
     div()
         .absolute()
@@ -498,23 +520,23 @@ fn titles_row(
         Body::Failed(why) => div().px(px(EDGE)).child(note(*why)).into_any_element(),
         Body::Wide(titles) => {
             let range = near_cards(scroll, width, WIDE, titles.len(), near);
-            let cards: Vec<_> = titles
-                .iter()
-                .enumerate()
-                .map(|(at, title)| {
-                    let id = (SharedString::from(format!("home-wide-{index}")), at);
-                    wide_card(shell, title, WIDE, id, range.contains(&at), window, cx)
+            let name = SharedString::from(format!("home-wide-{index}"));
+            let cards: Vec<_> = (0..titles.len())
+                .map(|at| {
+                    let id = (name.clone(), at);
+                    wide_card(shell, titles, at, WIDE, id, range.contains(&at), window, cx)
                 })
                 .collect();
             cards_row(index, scroll, WIDE * 9. / 16. + WIDE_CAPTION, cards).into_any_element()
         }
         Body::Posters(titles) => {
             let range = near_cards(scroll, width, ROW_POSTER, titles.len(), near);
+            let name = SharedString::from(format!("home-poster-{index}"));
             let cards: Vec<AnyElement> = titles
                 .iter()
                 .enumerate()
                 .map(|(at, title)| {
-                    let id = (SharedString::from(format!("home-poster-{index}")), at);
+                    let id = (name.clone(), at);
                     poster_card(shell, title, id, range.contains(&at), cx)
                 })
                 .collect();
@@ -592,9 +614,14 @@ struct Over(Fade);
 
 /// A wide card: the picture, how far the viewer went, the title and a line; the pointer over it
 /// brings a veil and a play button. A click opens the page of the title, the button plays it.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one card's state, read once per frame"
+)]
 pub(super) fn wide_card(
     shell: &mut Shell,
-    title: &Title,
+    titles: &Rc<[Title]>,
+    at: usize,
     width: f32,
     id: (SharedString, usize),
     near: bool,
@@ -602,6 +629,7 @@ pub(super) fn wide_card(
     cx: &mut Context<Shell>,
 ) -> Stateful<Div> {
     let height = width * 9. / 16.;
+    let title = &titles[at];
     let item = match title {
         Title::Film(film) => (film.backdrop.as_ref().or(film.poster.as_ref()), Some(film)),
         Title::Episode(episode) => (
@@ -620,8 +648,9 @@ pub(super) fn wide_card(
     let (heading, detail) = home_page::card_lines(title);
     let left = home_page::time_left(title);
     let progress = home_page::progress(title);
-    let opened = title.clone();
-    let played = PlayTarget::of(title);
+    // The click reads the title from the row when it comes: no copy of it is made per frame.
+    let opened = Rc::clone(titles);
+    let played = Rc::clone(titles);
 
     let over_id: ElementId = (id.0.clone(), id.1 + 100_000).into();
     let over = window.use_keyed_state(over_id, cx, |_, _| Over(Fade::new(motion::quick())));
@@ -660,7 +689,7 @@ pub(super) fn wide_card(
                 .bottom(px(14.))
                 .child(progress_bar(fraction, width - 28.))
         }))
-        .child(hover_layer(&id, &over, level, played, window, cx));
+        .child(hover_layer(&id, &over, level, played, at, window, cx));
 
     div()
         .id(id)
@@ -670,7 +699,7 @@ pub(super) fn wide_card(
         .flex_col()
         .gap(px(10.))
         .cursor_pointer()
-        .on_click(cx.listener(move |shell, _, _, cx| shell.open_title(&opened, cx)))
+        .on_click(cx.listener(move |shell, _, _, cx| shell.open_title(&opened[at], cx)))
         .child(picture_box)
         .child(
             div()
@@ -713,7 +742,8 @@ fn hover_layer(
     id: &(SharedString, usize),
     over: &Entity<Over>,
     level: f32,
-    target: PlayTarget,
+    titles: Rc<[Title]>,
+    at: usize,
     window: &mut Window,
     cx: &mut Context<Shell>,
 ) -> Stateful<Div> {
@@ -738,7 +768,7 @@ fn hover_layer(
     // A click on the button plays; it never opens the page behind it.
     .on_click(cx.listener(move |shell, _, window, cx| {
         cx.stop_propagation();
-        shell.play_from_home(target.clone(), window, cx)
+        shell.play_from_home(PlayTarget::of(&titles[at]), window, cx)
     }))
     .child(icon(IconName::Play, 22.));
     div()

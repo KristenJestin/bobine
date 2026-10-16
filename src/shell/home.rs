@@ -3,10 +3,13 @@
 //! off the window's thread, and an answer that comes after a newer ask is dropped.
 
 use std::ops::Range;
+use std::rc::Rc;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use bobine::provider::{Episode, Feature, ItemId, Library, LibraryKind, ProviderError, Title};
+use bobine::provider::{
+    Episode, Feature, FeatureKind, ItemId, Library, LibraryKind, ProviderError, Title,
+};
 use gpui_kit::{Context, ScrollHandle, ScrollWheelEvent, Task, UniformListScrollHandle, Window};
 
 use super::pages::{Loadable, Origin, route_wheel};
@@ -33,16 +36,19 @@ impl Listed for Title {
 /// What a library gained lately: one row of the Home.
 pub struct LatestRow {
     pub library: Library,
-    pub titles: Loadable<Vec<Title>>,
+    pub titles: Loadable<Rc<[Title]>>,
 }
 
 pub struct HomePage {
-    pub features: Option<Loadable<Vec<Feature>>>,
+    pub features: Option<Loadable<Rc<[Feature]>>>,
     pub carousel: Carousel,
     /// The pointer is over the header: the time stops.
     pub hovered: bool,
-    pub resume: Option<Loadable<Vec<Title>>>,
+    pub resume: Option<Loadable<Rc<[Title]>>>,
     pub next_up: Option<Loadable<Vec<Episode>>>,
+    /// What "Prochain épisode" shows, worked out when `resume` or `next_up` changes rather than
+    /// at every frame.
+    pub next_row: Rc<[Title]>,
     /// One row for each library of films or of series, in the server's order.
     pub latest: Option<Loadable<Vec<LatestRow>>>,
     pub scroll: ScrollHandle,
@@ -64,6 +70,7 @@ impl Default for HomePage {
             hovered: false,
             resume: None,
             next_up: None,
+            next_row: Rc::from([]),
             latest: None,
             scroll: ScrollHandle::new(),
             rows: Vec::new(),
@@ -82,6 +89,31 @@ impl HomePage {
             Some(Loadable::Ready(features)) => features,
             _ => &[],
         }
+    }
+
+    /// The same titles, shared: the header draws them while it also asks the shell for pictures.
+    pub fn shared_features(&self) -> Option<Rc<[Feature]>> {
+        match &self.features {
+            Some(Loadable::Ready(features)) => Some(Rc::clone(features)),
+            _ => None,
+        }
+    }
+
+    /// The row under "Reprendre" worked out again: what is started is not asked as next.
+    fn work_out_next_row(&mut self) {
+        self.next_row = match &self.next_up {
+            Some(Loadable::Ready(next)) => {
+                let started: &[Title] = match &self.resume {
+                    Some(Loadable::Ready(started)) => started,
+                    _ => &[],
+                };
+                home_page::next_up_row(next.clone(), started)
+                    .into_iter()
+                    .map(Title::Episode)
+                    .collect()
+            }
+            _ => Rc::from([]),
+        };
     }
 
     /// The rows under the header need as many handles to scroll sideways as they are drawn.
@@ -122,7 +154,7 @@ impl Shell {
                     return;
                 }
                 let features = match features {
-                    Ok(features) => Loadable::Ready(features),
+                    Ok(features) => Loadable::Ready(Rc::from(features)),
                     Err(error) => Loadable::Failed(shell.failed(error, cx)),
                 };
                 shell.show_features(features);
@@ -134,9 +166,10 @@ impl Shell {
             move |shell, started, cx| {
                 if shell.home.asked.is_latest(asked) {
                     shell.home.resume = Some(match started {
-                        Ok(started) => Loadable::Ready(started),
+                        Ok(started) => Loadable::Ready(Rc::from(started)),
                         Err(error) => Loadable::Failed(shell.failed(error, cx)),
                     });
+                    shell.home.work_out_next_row();
                 }
             },
         );
@@ -149,6 +182,7 @@ impl Shell {
                         Ok(next) => Loadable::Ready(next),
                         Err(error) => Loadable::Failed(shell.failed(error, cx)),
                     });
+                    shell.home.work_out_next_row();
                 }
             },
         );
@@ -170,7 +204,7 @@ impl Shell {
     }
 
     /// The header's titles came: the one shown stays shown when it is still among them.
-    fn show_features(&mut self, features: Loadable<Vec<Feature>>) {
+    fn show_features(&mut self, features: Loadable<Rc<[Feature]>>) {
         let now = Instant::now();
         let shown = self
             .home
@@ -184,6 +218,11 @@ impl Shell {
         let kept = hero::kept(shown.as_ref(), list);
         self.home.carousel.retarget(list.len(), kept, now);
         self.home.features = Some(features);
+    }
+
+    /// What the header shows changed: it is drawn again, alone.
+    pub fn notify_hero(&self, cx: &mut Context<Self>) {
+        self.hero_view.update(cx, |_, cx| cx.notify());
     }
 
     /// One row for each library of films or of series.
@@ -221,7 +260,7 @@ impl Shell {
                         return;
                     }
                     let titles = match titles {
-                        Ok(titles) => Loadable::Ready(titles),
+                        Ok(titles) => Loadable::Ready(Rc::from(titles)),
                         Err(error) => Loadable::Failed(shell.failed(error, cx)),
                     };
                     if let Some(Loadable::Ready(rows)) = &mut shell.home.latest
@@ -269,17 +308,26 @@ impl Shell {
         // The window redraws while the bar grows; nothing while the pointer holds it.
         let moved = self.home.carousel.tick(now);
         if moved || !self.home.carousel.paused() {
-            cx.notify();
+            self.notify_hero(cx);
         }
         true
     }
 
     /// Whether the header's time is stopped now.
     fn header_holds(&self, window: &Window) -> bool {
+        // The nested compositor of the harness has no pointer to enter the window: the events it
+        // sends stand for it.
+        #[cfg(feature = "harness")]
+        let inside = {
+            let _ = window;
+            true
+        };
+        #[cfg(not(feature = "harness"))]
+        let inside = window.is_window_hovered();
         hero::holds(
             self.navigator.current() == Screen::Home,
             self.home.hovered,
-            window.is_window_hovered(),
+            inside,
         )
     }
 
@@ -298,7 +346,7 @@ impl Shell {
     /// A click on one of the marks under the header.
     pub fn jump_hero(&mut self, to: usize, cx: &mut Context<Self>) {
         self.home.carousel.jump(to, Instant::now());
-        cx.notify();
+        self.notify_hero(cx);
     }
 
     /// The wheel or the touchpad over the Home: the page goes up and down, the row under the
@@ -325,11 +373,25 @@ impl Shell {
         }
     }
 
-    pub fn open_feature(&mut self, feature: &Feature, cx: &mut Context<Self>) {
+    /// "Plus d'infos" under the header's `at`th title.
+    pub fn open_feature(&mut self, at: usize, cx: &mut Context<Self>) {
+        let Some(feature) = self.home.featured().get(at) else {
+            return;
+        };
+        let id = feature.id.clone();
         match feature.kind {
-            bobine::provider::FeatureKind::Film => self.open_film(feature.id.clone(), cx),
-            bobine::provider::FeatureKind::Series => self.open_series(feature.id.clone(), cx),
+            FeatureKind::Film => self.open_film(id, cx),
+            FeatureKind::Series => self.open_series(id, cx),
         }
+    }
+
+    /// "Lecture" under the header's `at`th title.
+    pub fn play_feature(&mut self, at: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(feature) = self.home.featured().get(at) else {
+            return;
+        };
+        let target = home_page::play_target(feature);
+        self.play_from_home(target, window, cx);
     }
 
     /// "Lecture": the server opens a playback, then the player starts, like the page of the
@@ -348,6 +410,7 @@ impl Shell {
         };
         self.home.busy = true;
         self.home.error = None;
+        self.notify_hero(cx);
         let task = cx
             .background_executor()
             .spawn(async move { home_page::start(&*server, &target) });
@@ -369,6 +432,7 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.notify_hero(cx);
         match started {
             Ok(started) => {
                 let playing = Playing {

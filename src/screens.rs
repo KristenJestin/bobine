@@ -11,6 +11,7 @@ pub mod player;
 pub mod search;
 mod series_detail;
 
+pub use home::HeroView;
 pub use series_detail::up_next_card;
 
 use bobine::provider::{Film, Series};

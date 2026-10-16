@@ -736,8 +736,24 @@ impl Acts {
         }
     }
 
-    /// The frame times after each act: the draws of the half second that followed it.
+    /// The frame times after each act: the draws of the half second that followed it, then the
+    /// whole run after its first three seconds (the start is not what is measured).
     fn report(&self, frames: &[Instant]) {
+        let settled: Vec<Instant> = frames
+            .iter()
+            .copied()
+            .filter(|frame| frame.duration_since(self.begun) >= Duration::from_secs(3))
+            .collect();
+        let gaps: Vec<u128> = settled
+            .windows(2)
+            .map(|pair| pair[1].duration_since(pair[0]).as_millis())
+            .collect();
+        println!(
+            "FRAMES whole run: draws={} longest_gap_ms={} gaps_over_40ms={}",
+            settled.len(),
+            gaps.iter().max().copied().unwrap_or(0),
+            gaps.iter().filter(|gap| **gap > 40).count(),
+        );
         let slower = crate::motion::SLOWER.load(std::sync::atomic::Ordering::Relaxed);
         let span = Duration::from_millis(500) * slower;
         for (label, at) in self.done.iter().filter(|(label, _)| !label.is_empty()) {

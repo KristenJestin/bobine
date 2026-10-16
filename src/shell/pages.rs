@@ -973,6 +973,7 @@ impl Shell {
                             cx.drop_image(gone, None);
                         }
                     }
+                    shell.notify_hero(cx);
                     shell.fetch_images(cx);
                     shell.wake_for_image_retries(cx);
                 },
