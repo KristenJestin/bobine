@@ -7,7 +7,7 @@ use std::rc::Rc;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use bobine::provider::{Episode, ItemId, ProviderError, Season, SeriesDetail, TrackPreferences};
+use bobine::provider::{Episode, ItemId, ProviderError, Season, SeriesDetail};
 use gpui_kit::{Bounds, Context, Pixels, ScrollHandle, ScrollWheelEvent, Task, Window};
 
 use super::pages::{Chip, Loadable, Origin, route_wheel};
@@ -19,7 +19,6 @@ use crate::motion::{self, Presence};
 use crate::navigation::Screen;
 use crate::scroll;
 use crate::series_page::{self, Refreshes};
-use crate::track_choice::Rules;
 
 /// How often the "Next episode" card checks its countdown.
 const UP_NEXT_TICK: Duration = Duration::from_millis(250);
@@ -37,9 +36,6 @@ pub struct SeriesPage {
     /// What the main button plays, and the version and tracks its chips chose.
     pub next: Option<Episode>,
     pub choices: Option<Choices>,
-    /// What chooses the tracks of an episode that is not the one the chips are made for: the
-    /// user's settings, and the languages kept from the episodes played from this page.
-    pub rules: Rules,
     pub menus: Menus<Chip>,
     pub menu_fade: Presence<Chip>,
     pub chips: [Rc<Cell<Option<Bounds<Pixels>>>>; 3],
@@ -85,8 +81,6 @@ struct Fresh {
     detail: SeriesDetail,
     seasons: Vec<Season>,
     next: Option<Episode>,
-    /// None when the server could not say: the page keeps what it had.
-    preferences: Option<TrackPreferences>,
 }
 
 impl Shell {
@@ -103,7 +97,6 @@ impl Shell {
             episodes: HashMap::new(),
             next: None,
             choices: None,
-            rules: Rules::default(),
             menus: Menus::default(),
             menu_fade: Presence::new(motion::quick()),
             chips: Default::default(),
@@ -163,7 +156,6 @@ impl Shell {
                     detail: server.series_detail(&asked)?,
                     seasons: server.seasons(&asked)?,
                     next: series_page::next_to_play(server, &asked)?,
-                    preferences: server.track_preferences(),
                 })
             },
             move |shell, fresh, cx| {
@@ -187,14 +179,10 @@ impl Shell {
                 else {
                     return;
                 };
-                if fresh.preferences.is_some() {
-                    page.rules.preferences = fresh.preferences;
-                }
                 page.choices = series_page::choices_after(
                     page.next.as_ref(),
                     page.choices.take(),
                     fresh.next.as_ref(),
-                    &page.rules,
                 );
                 if first {
                     page.season = fresh
@@ -377,12 +365,7 @@ impl Shell {
             return;
         }
         self.up_next_ticker = None;
-        let choices = series_page::choices_for(
-            page.next.as_ref(),
-            page.choices.as_ref(),
-            &episode,
-            &page.rules,
-        );
+        let choices = series_page::choices_for(page.next.as_ref(), page.choices.as_ref(), &episode);
         let Some(plan) = film_page::plan(&episode.item, &episode.versions, &choices, From::Resume)
         else {
             page.error = Some("This episode has no version to play.");
@@ -392,8 +375,6 @@ impl Shell {
         let Some(server) = self.server.clone() else {
             return;
         };
-        // What was picked by hand here is what the episode after plays with.
-        page.rules.remembered = choices.remembered(&episode.versions);
         page.busy = true;
         page.error = None;
         let origin = Origin::Series(depth, page.id.clone());

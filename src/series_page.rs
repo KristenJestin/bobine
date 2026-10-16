@@ -12,7 +12,6 @@ use bobine::provider::{
 
 use crate::film_page::{self, Choices};
 use crate::shell::Loadable;
-use crate::track_choice::Rules;
 
 /// How long the "Next episode" card counts down before the next episode plays.
 pub const COUNTDOWN: Duration = Duration::from_secs(10);
@@ -193,31 +192,25 @@ pub fn starts_episode(waiting: bool, card: &mut UpNext) -> bool {
 }
 
 /// The chips' choices once the episode the main button plays is known anew: kept while it stays
-/// the same, else that episode's, chosen by `rules`.
+/// the same, else that episode's defaults.
 pub fn choices_after(
     shown: Option<&Episode>,
     chosen: Option<Choices>,
     fresh: Option<&Episode>,
-    rules: &Rules,
 ) -> Option<Choices> {
     let fresh = fresh?;
     match chosen {
         Some(chosen) if shown.is_some_and(|shown| shown.item.id == fresh.item.id) => Some(chosen),
-        _ => Some(Choices::with_rules(&fresh.versions, rules.clone())),
+        _ => Some(Choices::new(&fresh.versions)),
     }
 }
 
 /// What `episode` plays with: the chips' choices when it is the episode they were made for, else
-/// the tracks `rules` choose for it, the languages kept from the episodes before included.
-pub fn choices_for(
-    next: Option<&Episode>,
-    chosen: Option<&Choices>,
-    episode: &Episode,
-    rules: &Rules,
-) -> Choices {
+/// its defaults.
+pub fn choices_for(next: Option<&Episode>, chosen: Option<&Choices>, episode: &Episode) -> Choices {
     match (next, chosen) {
         (Some(next), Some(chosen)) if next.item.id == episode.item.id => chosen.clone(),
-        _ => Choices::with_rules(&episode.versions, rules.clone()),
+        _ => Choices::new(&episode.versions),
     }
 }
 
@@ -379,9 +372,8 @@ mod tests {
     use crate::player::fake::{Call, FakePlayer};
     use crate::player::session::Session;
     use crate::reports::Reporting;
-    use crate::track_choice::Remembered;
     use crate::video::fake::FakeDisplay;
-    use bobine::provider::{PlaybackReport, SubtitleMode, TrackPreferences};
+    use bobine::provider::PlaybackReport;
     use std::sync::Arc;
 
     fn series() -> ItemId {
@@ -991,81 +983,12 @@ mod tests {
         let mut chosen = Choices::new(&next.versions);
         crate::shell::Chip::Audio.choose(&mut chosen, &next.versions, Some(7));
         assert_ne!(chosen, Choices::new(&next.versions));
-        assert_eq!(
-            choices_for(Some(&next), Some(&chosen), &next, &Rules::default()),
-            chosen
-        );
+        assert_eq!(choices_for(Some(&next), Some(&chosen), &next), chosen);
         // Another episode of the list plays with its own defaults.
         assert_eq!(
-            choices_for(Some(&next), Some(&chosen), &other, &Rules::default()),
+            choices_for(Some(&next), Some(&chosen), &other),
             Choices::new(&other.versions)
         );
-    }
-
-    fn remembering(audio: bool, subtitle: bool) -> Rules {
-        Rules {
-            preferences: Some(TrackPreferences {
-                audio_language: None,
-                play_default_audio: true,
-                subtitle_language: None,
-                subtitle_mode: SubtitleMode::Default,
-                remember_audio: audio,
-                remember_subtitle: subtitle,
-            }),
-            remembered: Remembered::default(),
-        }
-    }
-
-    /// An episode with the film's two versions, so that it has an English track to pick.
-    fn with_two_languages(mut episode: Episode) -> Episode {
-        episode.versions = crate::fake::versions();
-        episode
-    }
-
-    /// The episode after `first` plays, once the viewer picked English audio and the English
-    /// subtitle file on the chips of `first`.
-    fn after_a_pick_by_hand(rules: Rules) -> Choices {
-        let server = FakeServer::new(1, true);
-        let first = with_two_languages(episode(&server, 2, 4));
-        let after = with_two_languages(episode(&server, 2, 5));
-        let mut chosen = Choices::with_rules(&first.versions, rules.clone());
-        crate::shell::Chip::Audio.choose(&mut chosen, &first.versions, Some(2));
-        crate::shell::Chip::Subtitle.choose(&mut chosen, &first.versions, Some(5));
-        let rules = Rules {
-            remembered: chosen.remembered(&first.versions),
-            ..rules
-        };
-        choices_for(Some(&first), Some(&chosen), &after, &rules)
-    }
-
-    #[test]
-    fn the_next_episode_keeps_the_audio_and_subtitle_languages_chosen_by_hand() {
-        let kept = after_a_pick_by_hand(remembering(true, true));
-        assert_eq!((kept.audio, kept.subtitle), (Some(2), Some(5)));
-    }
-
-    #[test]
-    fn the_next_episode_keeps_only_what_the_settings_remember() {
-        // The subtitles then follow the mode (Default: the forced French track).
-        let audio_only = after_a_pick_by_hand(remembering(true, false));
-        assert_eq!((audio_only.audio, audio_only.subtitle), (Some(2), Some(3)));
-        let nothing = after_a_pick_by_hand(remembering(false, false));
-        assert_eq!((nothing.audio, nothing.subtitle), (Some(1), Some(3)));
-    }
-
-    #[test]
-    fn the_series_page_shows_the_kept_languages_for_the_episode_that_comes_next() {
-        let server = FakeServer::new(1, true);
-        let first = with_two_languages(episode(&server, 2, 4));
-        let after = with_two_languages(episode(&server, 2, 5));
-        let mut chosen = Choices::with_rules(&first.versions, remembering(true, true));
-        chosen.choose_audio(Some(2));
-        let rules = Rules {
-            remembered: chosen.remembered(&first.versions),
-            ..remembering(true, true)
-        };
-        let shown = choices_after(Some(&first), Some(chosen), Some(&after), &rules).unwrap();
-        assert_eq!(shown.audio, Some(2));
     }
 
     #[test]
@@ -1077,26 +1000,18 @@ mod tests {
         let mut refreshed = next.clone();
         refreshed.item.resume = Some(Duration::from_secs(31 * 60));
         assert_eq!(
-            choices_after(
-                Some(&next),
-                Some(chosen.clone()),
-                Some(&refreshed),
-                &Rules::default()
-            ),
+            choices_after(Some(&next), Some(chosen.clone()), Some(&refreshed)),
             Some(chosen.clone())
         );
         assert_eq!(
-            choices_after(Some(&next), Some(chosen), Some(&other), &Rules::default()),
+            choices_after(Some(&next), Some(chosen), Some(&other)),
             Some(Choices::new(&other.versions))
         );
         assert_eq!(
-            choices_after(None, None, Some(&next), &Rules::default()),
+            choices_after(None, None, Some(&next)),
             Some(Choices::new(&next.versions))
         );
-        assert_eq!(
-            choices_after(Some(&next), None, None, &Rules::default()),
-            None
-        );
+        assert_eq!(choices_after(Some(&next), None, None), None);
     }
 
     #[test]

@@ -14,7 +14,7 @@ use crate::provider::{
     Feature, Film, FilmDetail, FilmQuery, FilmSort, FilterChoices, ImageKind, ImageRef, ItemId,
     Library, MediaServer, MediaSourceId, Page, PersonTitles, PlayMethod, PlaySessionId, Playback,
     PlaybackReport, ProviderError, SearchResults, Season, Segment, Series, SeriesDetail,
-    ServerInfo, StreamUrl, Title, Token, TokenStore, TrackPreferences, TranscodeRequest, Trickplay,
+    ServerInfo, StreamUrl, Title, Token, TokenStore, TranscodeRequest, Trickplay,
 };
 use account::{AccountFile, Login};
 use dto::{
@@ -24,7 +24,7 @@ use dto::{
 use http::{Device, Http, encode, normalize_address};
 use serde_json::json;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 /// How many similar titles a film's or a series' page shows.
 const SIMILAR: u32 = 12;
@@ -85,7 +85,6 @@ impl JellyfinConnector {
             login,
             path: self.path.clone(),
             store: Arc::clone(&self.store),
-            preferences: Mutex::new(None),
         })
     }
 }
@@ -172,9 +171,6 @@ pub struct Jellyfin {
     server: ServerInfo,
     path: PathBuf,
     store: Arc<dyn TokenStore>,
-    /// The user's track preferences once read: they change rarely, and a playback needs them
-    /// at every start.
-    preferences: Mutex<Option<TrackPreferences>>,
 }
 
 /// High enough that the server never converts a file for its bitrate alone: the user's own
@@ -1048,17 +1044,5 @@ impl MediaServer for Jellyfin {
             Err(ProviderError::NotFound) => Ok(Vec::new()),
             Err(error) => Err(error),
         }
-    }
-
-    fn track_preferences(&self) -> Option<TrackPreferences> {
-        let mut kept = self.preferences.lock().ok()?;
-        if kept.is_none() {
-            let path = format!("/Users/{}", encode(&self.login.user_id));
-            let settings: Result<dto::UserSettings, _> =
-                self.http.get("track preferences", &path, &[]);
-            // A failure keeps nothing: the next playback asks again.
-            *kept = settings.ok().map(|s| s.configuration.into_preferences());
-        }
-        kept.clone()
     }
 }

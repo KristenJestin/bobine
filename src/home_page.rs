@@ -11,7 +11,6 @@ use crate::film_page::{self, Choices, Plan};
 use crate::grid;
 use crate::library_tools::Tools;
 use crate::series_page;
-use crate::track_choice::{Remembered, Rules};
 
 /// What a play button of the Home starts.
 #[derive(Debug, Clone, PartialEq)]
@@ -66,21 +65,12 @@ pub struct Started {
     pub opened: Result<Playback, ProviderError>,
 }
 
-/// What chooses the tracks of a playback started from the Home: the user's settings, when the
-/// server gives them. Nothing was picked by hand there.
-fn rules(server: &dyn MediaServer) -> Rules {
-    Rules {
-        preferences: server.track_preferences(),
-        remembered: Remembered::default(),
-    }
-}
-
 /// Opens the playback of `target`, off the window's thread: it blocks on the server.
 pub fn start(server: &dyn MediaServer, target: &PlayTarget) -> Result<Started, StartError> {
     match target {
         PlayTarget::Film(film) => {
             let detail = server.film(film)?;
-            let choices = Choices::with_rules(&detail.versions, rules(server));
+            let choices = Choices::new(&detail.versions);
             let plan = film_page::plan(
                 &detail.film,
                 &detail.versions,
@@ -108,7 +98,7 @@ pub fn start(server: &dyn MediaServer, target: &PlayTarget) -> Result<Started, S
             start(server, &PlayTarget::Episode(Box::new(episode)))
         }
         PlayTarget::Episode(episode) => {
-            let choices = Choices::with_rules(&episode.versions, rules(server));
+            let choices = Choices::new(&episode.versions);
             let plan = film_page::plan(
                 &episode.item,
                 &episode.versions,
@@ -419,57 +409,6 @@ mod tests {
         assert_eq!(
             server.state.lock().unwrap().record.plays,
             [(ItemId(FILM.into()), begun.plan.source.clone())]
-        );
-    }
-
-    fn english_always() -> bobine::provider::TrackPreferences {
-        bobine::provider::TrackPreferences {
-            audio_language: Some("eng".into()),
-            play_default_audio: false,
-            subtitle_language: Some("fra".into()),
-            subtitle_mode: bobine::provider::SubtitleMode::Always,
-            remember_audio: true,
-            remember_subtitle: true,
-        }
-    }
-
-    #[test]
-    fn a_film_from_the_header_starts_with_the_tracks_the_user_prefers() {
-        let server = server();
-        server.state.lock().unwrap().preferences = Some(english_always());
-        let begun = start(&server, &PlayTarget::Film(ItemId(FILM.into()))).unwrap();
-        assert_eq!(
-            (begun.plan.audio_index, begun.plan.subtitle_index),
-            (Some(2), Some(4))
-        );
-    }
-
-    #[test]
-    fn an_episode_from_the_home_starts_with_the_tracks_the_user_prefers() {
-        let server = server();
-        server.state.lock().unwrap().preferences = Some(english_always());
-        let episode = episode(&server, "series-0-s2-e4");
-        let begun = start(&server, &PlayTarget::Episode(Box::new(episode.clone()))).unwrap();
-        let wanted = Choices::with_rules(
-            &episode.versions,
-            Rules {
-                preferences: Some(english_always()),
-                remembered: Remembered::default(),
-            },
-        );
-        assert_eq!(begun.plan.audio_index, wanted.audio);
-        assert_eq!(begun.plan.subtitle_index, wanted.subtitle);
-    }
-
-    #[test]
-    fn when_the_preferences_cannot_be_read_a_play_is_not_blocked_and_chooses_as_before() {
-        let server = server();
-        assert_eq!(server.state.lock().unwrap().preferences, None);
-        let begun = start(&server, &PlayTarget::Film(ItemId(FILM.into()))).unwrap();
-        assert!(begun.opened.is_ok());
-        assert_eq!(
-            (begun.plan.audio_index, begun.plan.subtitle_index),
-            (Some(1), None)
         );
     }
 
