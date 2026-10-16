@@ -289,6 +289,9 @@ impl Item {
     }
 
     pub fn series(&self) -> Series {
+        if let Some(series) = self.season_as_series() {
+            return series;
+        }
         let film = self.film();
         Series {
             id: film.id,
@@ -306,7 +309,38 @@ impl Item {
                 .unwrap_or(0),
             poster: film.poster,
             backdrop: film.backdrop,
+            season: None,
         }
+    }
+
+    /// A season the server hands where a series is expected (a series that gained a season, in
+    /// `/Items/Latest`): its series, with the season to open it on. A season has no page of its
+    /// own, and no backdrop worth borrowing.
+    fn season_as_series(&self) -> Option<Series> {
+        if self.kind.as_deref() != Some("Season") {
+            return None;
+        }
+        let id = ItemId(self.series_id.clone()?);
+        // The series' poster when the server gave it, else the season's own.
+        let poster = match &self.series_primary_image_tag {
+            Some(tag) => Some(ImageRef {
+                item: id.clone(),
+                kind: ImageKind::Primary,
+                tag: tag.clone(),
+            }),
+            None => self.primary(),
+        };
+        Some(Series {
+            id,
+            title: self.series_name.clone().unwrap_or_default(),
+            year: None,
+            end_year: None,
+            community_rating: None,
+            unwatched: 0,
+            poster,
+            backdrop: None,
+            season: Some(self.season()),
+        })
     }
 
     pub fn collection_card(&self) -> CollectionCard {
@@ -348,11 +382,11 @@ impl Item {
         }
     }
 
-    /// What a row of the Home lists: an episode, a series, else a film.
+    /// What a row of the Home lists: an episode, a series (or the season of one), else a film.
     pub fn title(self) -> Title {
         match self.kind.as_deref() {
             Some("Episode") => Title::Episode(self.episode()),
-            Some("Series") => Title::Series(self.series()),
+            Some("Series" | "Season") => Title::Series(self.series()),
             _ => Title::Film(self.film()),
         }
     }
@@ -380,6 +414,7 @@ impl Item {
             unwatched: 0,
             poster,
             backdrop: None,
+            season: None,
         })
     }
 
