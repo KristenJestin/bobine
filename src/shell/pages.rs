@@ -2680,4 +2680,29 @@ mod tests {
         assert_eq!(pages_ahead(&window, cx), 1);
     }
 
+    #[gpui_kit::test]
+    fn the_forward_stack_is_cleared_by_a_bar_entry(cx: &mut gpui_kit::TestAppContext) {
+        let (_server, window) = signed_in_window(cx);
+        with_a_page_ahead(&window, cx);
+        window
+            .update(cx, |shell, _, cx| shell.select(NavEntry::Films, cx))
+            .unwrap();
+        assert_eq!(pages_ahead(&window, cx), 0);
+    }
+
+    #[gpui_kit::test]
+    fn the_forward_stack_is_cleared_by_starting_a_playback(cx: &mut gpui_kit::TestAppContext) {
+        let (server, window) = signed_in_window(cx);
+        with_a_page_ahead(&window, cx);
+        play_a_film(&server, &window, cx);
+        assert_eq!(pages_ahead(&window, cx), 0);
+    }
+
+    #[gpui_kit::test]
+    fn the_forward_stack_is_cleared_by_signing_out(cx: &mut gpui_kit::TestAppContext) {
+        let (_server, window) = signed_in_window(cx);
+        with_a_page_ahead(&window, cx);
+        sign_out(&window, cx);
+        assert_eq!(pages_ahead(&window, cx), 0);
+    }
 }
