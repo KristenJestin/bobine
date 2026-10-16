@@ -8,7 +8,7 @@ use gpui_kit::{Context, Div, FontWeight, IntoElement, Stateful, Window, div, px}
 use super::{note, picture, poster, row_heading};
 use crate::film_page;
 use crate::images;
-use crate::shell::{Loadable, SERIES_PAGE, Shell};
+use crate::shell::{Loadable, Shell};
 use crate::theme;
 
 const EDGE: f32 = 40.;
@@ -144,7 +144,7 @@ fn section(title: &'static str, cards: Vec<gpui_kit::AnyElement>) -> Div {
         )
 }
 
-/// A series as a poster. It opens nothing until the series page exists.
+/// A series as a poster: it opens the series page.
 fn series_card(
     shell: &mut Shell,
     series: &SeriesHit,
@@ -160,12 +160,10 @@ fn series_card(
         .flex()
         .flex_col()
         .gap(px(8.))
-        .when(SERIES_PAGE, |card| {
-            card.cursor_pointer()
-                .on_click(cx.listener(move |shell, _, _, cx| {
-                    shell.open_series(opened.clone(), cx);
-                }))
-        })
+        .cursor_pointer()
+        .on_click(cx.listener(move |shell, _, _, cx| {
+            shell.open_series(opened.clone(), cx);
+        }))
         .child(
             div()
                 .relative()

@@ -14,7 +14,7 @@ use super::picture;
 use crate::icons::{IconName, icon};
 use crate::images;
 use crate::search::{self, Hit, Line};
-use crate::shell::{SERIES_PAGE, Shell};
+use crate::shell::Shell;
 use crate::theme;
 
 const WIDTH: f32 = 680.;
@@ -243,7 +243,6 @@ fn result(
     selected: bool,
     cx: &mut Context<Shell>,
 ) -> AnyElement {
-    let disabled = matches!(hit, Hit::Series(_)) && !SERIES_PAGE;
     let (image, round) = match &hit {
         Hit::Film(film) => (film.poster.clone(), false),
         Hit::Series(series) => (series.poster.clone(), false),
@@ -251,11 +250,7 @@ fn result(
     };
     let image = shell.image(image.as_ref(), images::THUMB, cx);
     let (width, radius) = if round { (42., 21.) } else { (36., 5.) };
-    let caption = match (hit.caption(), disabled) {
-        (caption, false) => caption,
-        (caption, true) if caption.is_empty() => "page à venir".to_string(),
-        (caption, true) => format!("{caption} · page à venir"),
-    };
+    let caption = hit.caption();
     let title = hit.title().to_string();
     let initials = crate::film_page::initials(&title);
     div()
@@ -267,7 +262,6 @@ fn result(
         .items_center()
         .gap(px(12.))
         .cursor_pointer()
-        .when(disabled, |row| row.opacity(0.5))
         .on_mouse_move(cx.listener(move |shell, _: &MouseMoveEvent, _, cx| {
             shell.search_hover(index, cx);
         }))
@@ -316,7 +310,7 @@ fn result(
                     )
                 }),
         )
-        .when(selected && !disabled, |row| row.child(key_cap("Entrée")))
+        .when(selected, |row| row.child(key_cap("Entrée")))
         .into_any_element()
 }
 

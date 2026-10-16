@@ -5,7 +5,7 @@ mod palette;
 mod series;
 
 pub use pages::{Chip, DetailPage, LibraryPage, Loadable, LoginForm, OpenConnector};
-pub use palette::{PersonPage, SERIES_PAGE, SearchState};
+pub use palette::{PersonPage, SearchState};
 pub use series::SeriesPage;
 
 use std::cell::RefCell;

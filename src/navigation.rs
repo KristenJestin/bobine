@@ -210,6 +210,22 @@ mod tests {
     }
 
     #[test]
+    fn a_series_found_or_on_a_person_page_opens_with_a_back_link_to_where_it_was() {
+        let mut nav = Navigator::new();
+        nav.switch_root(Screen::Library);
+        // From the palette, over the films.
+        nav.open(Screen::SeriesDetail);
+        assert_eq!(nav.back_label(), Some("Films"));
+        assert!(nav.back());
+        // From a person's page.
+        nav.open(Screen::Person);
+        nav.open(Screen::SeriesDetail);
+        assert_eq!(nav.back_label(), Some("Personne"));
+        assert!(nav.back());
+        assert_eq!(nav.current(), Screen::Person);
+    }
+
+    #[test]
     fn there_is_no_back_link_on_a_screen_that_does_not_show_one() {
         assert_eq!(on_library().back_label(), None);
     }
