@@ -70,6 +70,8 @@ pub struct State {
     /// The first time each person's photo is asked, the server fails (as a busy server that
     /// times out while it fetches the photo from elsewhere).
     pub photos_fail_once: bool,
+    /// The server refuses to convert anything.
+    pub transcode_fails: bool,
     pub people: Vec<PersonHit>,
     /// How long a search takes to answer: the headless harness shows the palette waiting.
     pub search_delay: std::time::Duration,
@@ -455,6 +457,7 @@ impl FakeServer {
                 record: Record::default(),
                 image_delay: std::time::Duration::ZERO,
                 photos_fail_once: false,
+                transcode_fails: false,
                 people: people(),
                 search_delay: std::time::Duration::ZERO,
                 favourites: ["film-2", "film-7", "series-1", "series-4"]
@@ -1100,6 +1103,9 @@ impl MediaServer for FakeServer {
         let external_subtitles = self.external_subtitles(&request.film, &request.source)?;
         let mut state = self.state();
         state.record.transcodes.push(request.clone());
+        if state.transcode_fails {
+            return Err(ProviderError::BadAnswer("converts nothing".into()));
+        }
         Ok(Playback {
             session: PlaySessionId(TRANSCODE_SESSION.into()),
             film: request.film.clone(),

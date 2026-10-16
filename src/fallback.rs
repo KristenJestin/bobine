@@ -3,9 +3,13 @@
 //! its opening. A file that showed a picture plays: an error later is not one a conversion
 //! mends, and is shown as it is.
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-use bobine::provider::{PlayMethod, Playback};
+use bobine::provider::{
+    MediaServer, PlayMethod, Playback, PlaybackReport, ProviderError, TranscodeRequest,
+};
 
 use crate::film_page::Plan;
 use crate::player::PlayerError;
@@ -23,7 +27,7 @@ pub const FIRST_CONVERTED_PICTURE_WAIT: Duration = Duration::from_secs(60);
 pub const NOTICE_FOR: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Step {
+enum Step {
     Nothing,
     /// Ask the server to convert the version, from there.
     Convert {
@@ -34,7 +38,7 @@ pub enum Step {
 }
 
 /// What to do now about a playback sent by `method`, planned to start at `planned`.
-pub fn step(method: PlayMethod, session: &Session, planned: Duration, now: Instant) -> Step {
+fn step(method: PlayMethod, session: &Session, planned: Duration, now: Instant) -> Step {
     if session.first_frame_at().is_some() {
         return Step::Nothing;
     }
@@ -61,20 +65,116 @@ pub fn step(method: PlayMethod, session: &Session, planned: Duration, now: Insta
 }
 
 /// Plays the conversion `opened` of `plan` (already [`Plan::converted`]) in place of the file.
-pub fn restart(session: &mut Session, plan: &Plan, opened: &Playback) -> Result<(), PlayerError> {
+fn restart(session: &mut Session, plan: &Plan, opened: &Playback) -> Result<(), PlayerError> {
     let externals = plan.externals(opened);
     session.restart(plan.media(opened, &externals))
 }
 
 /// The line under the title once the server converts: "lecture directe" becomes "conversion
 /// par le serveur".
-pub fn said(subtitle: Option<String>) -> Option<String> {
+fn said(subtitle: Option<String>) -> Option<String> {
     subtitle.map(|line| line.replace("lecture directe", "conversion par le serveur"))
+}
+
+/// A film of the server, which the server may convert when it does not play as it is: once.
+pub struct Fallback {
+    pub server: Arc<dyn MediaServer>,
+    pub plan: Plan,
+    method: PlayMethod,
+    /// The server is being asked to convert from there.
+    asking: Option<Duration>,
+    /// Names this playback, so an answer for one the viewer left is told apart.
+    id: u64,
+}
+
+impl Fallback {
+    pub fn new(server: Arc<dyn MediaServer>, plan: Plan) -> Self {
+        static PLAYBACKS: AtomicU64 = AtomicU64::new(0);
+        Self {
+            server,
+            plan,
+            method: PlayMethod::DirectPlay,
+            asking: None,
+            id: PLAYBACKS.fetch_add(1, Ordering::Relaxed),
+        }
+    }
+
+    pub fn id(&self) -> u64 {
+        self.id
+    }
+
+    /// At each tick: what to ask the server when the file does not play. The conversion is
+    /// asked once: whether the server refuses it or it shows no picture, the film cannot play.
+    pub fn tick(&mut self, session: &mut Session, now: Instant) -> Option<TranscodeRequest> {
+        if self.asking.is_some() {
+            return None;
+        }
+        match step(self.method, session, self.plan.start, now) {
+            Step::Convert { from } => {
+                self.method = PlayMethod::Transcode;
+                self.asking = Some(from);
+                // Its words go: the conversion says what it does instead.
+                session.forget_error();
+                Some(self.plan.transcode_request(from))
+            }
+            Step::CannotPlay => {
+                session.fail(PlayerError("aucune image".into()));
+                None
+            }
+            Step::Nothing => None,
+        }
+    }
+
+    /// The server's answer to the playback `id`: the player plays the conversion where the file
+    /// stopped, and what to report of it comes back. Nothing for a playback the viewer left, or
+    /// when the conversion cannot play, which is said.
+    pub fn answered(
+        &mut self,
+        id: u64,
+        session: &mut Session,
+        opened: Result<Playback, ProviderError>,
+    ) -> Option<PlaybackReport> {
+        if id != self.id {
+            return None;
+        }
+        let from = self.asking.take()?;
+        let opened = match opened {
+            Ok(opened) => opened,
+            Err(error) => {
+                eprintln!("bobine: the server does not convert the film: {error}");
+                session.fail(PlayerError("le serveur ne peut pas le convertir".into()));
+                return None;
+            }
+        };
+        self.plan = self.plan.converted(from);
+        session.subtitle = said(session.subtitle.take());
+        if let Err(error) = restart(session, &self.plan, &opened) {
+            // mpv's error code in words: no address in it.
+            eprintln!("bobine: the conversion does not play: {error}");
+            session.fail(error);
+            return None;
+        }
+        Some(PlaybackReport {
+            session: opened.session,
+            film: opened.film,
+            source: opened.source,
+            position: from,
+            paused: false,
+            audio_track: self.plan.audio_index,
+            subtitle_track: self.plan.subtitle_index,
+            method: PlayMethod::Transcode,
+        })
+    }
+
+    /// Whether "Conversion par le serveur" shows.
+    pub fn notice_shown(&self, session: &Session, now: Instant) -> bool {
+        notice_shown(self.method, self.asking.is_some(), session, now)
+    }
 }
 
 /// Whether "Conversion par le serveur" shows: while the server is asked, then until a moment
 /// after the converted picture comes, unless the film cannot play.
-pub fn notice_shown(method: PlayMethod, asking: bool, session: &Session, now: Instant) -> bool {
+fn notice_shown(method: PlayMethod, asking: bool, session: &Session, now: Instant) -> bool {
     if asking {
         return true;
     }
@@ -89,10 +189,10 @@ pub fn notice_shown(method: PlayMethod, asking: bool, session: &Session, now: In
 mod tests {
     use std::sync::Arc;
 
-    use bobine::provider::{ItemId, MediaServer};
+    use bobine::provider::{ItemId, MediaServer, PlaySessionId, PlaybackReport, TranscodeRequest};
 
     use super::*;
-    use crate::fake::{FILM, FakeServer};
+    use crate::fake::{FILM, FakeServer, TRANSCODE_SESSION};
     use crate::film_page::{Choices, From, plan};
     use crate::player::PlayerEvent;
     use crate::player::fake::{Call, FakePlayer};
@@ -289,5 +389,177 @@ mod tests {
         f.convert(Duration::from_secs(60));
         f.after(1, vec![failed()]);
         assert!(!notice_shown(f.method, false, &f.session, f.now));
+    }
+
+    /// The film resumed at 72 min, as the window plays it, on its own player.
+    fn playing(server: &Arc<FakeServer>) -> (Fallback, Session, FakePlayer) {
+        let f = Fixture::new();
+        let player = FakePlayer::default();
+        let session = Session::new(
+            Box::new(FakePlayer {
+                calls: player.calls.clone(),
+                queued: player.queued.clone(),
+            }),
+            Box::new(FakeDisplay::default()),
+            "Le Dernier Hiver".into(),
+            Some("2025 · 4K HDR10 · lecture directe".into()),
+        );
+        let fallback = Fallback::new(server.clone(), f.plan);
+        (fallback, session, player)
+    }
+
+    /// The window's tick, `seconds` later, with what the player says then.
+    fn tick(
+        fallback: &mut Fallback,
+        session: &mut Session,
+        player: &FakePlayer,
+        now: &mut Instant,
+        seconds: u64,
+        events: Vec<PlayerEvent>,
+    ) -> Option<TranscodeRequest> {
+        *now += Duration::from_secs(seconds);
+        player.queued.borrow_mut().extend(events);
+        session.update(*now);
+        fallback.tick(session, *now)
+    }
+
+    #[test]
+    fn a_server_that_refuses_to_convert_is_asked_once_and_its_refusal_shown() {
+        let server = Arc::new(FakeServer::new(3, false));
+        server.state.lock().unwrap().transcode_fails = true;
+        let (mut fallback, mut session, player) = playing(&server);
+        let mut now = Instant::now();
+        let mut asked = 0;
+        let request = tick(
+            &mut fallback,
+            &mut session,
+            &player,
+            &mut now,
+            1,
+            vec![failed()],
+        )
+        .expect("converted");
+        asked += 1;
+        assert!(
+            fallback.notice_shown(&session, now),
+            "while the server is asked"
+        );
+        assert_eq!(
+            tick(&mut fallback, &mut session, &player, &mut now, 1, vec![]),
+            None
+        );
+        let answer = server.transcode(&request);
+        assert!(answer.is_err());
+        let id = fallback.id();
+        assert_eq!(fallback.answered(id, &mut session, answer), None);
+        assert_eq!(
+            session.error(),
+            Some(&PlayerError("le serveur ne peut pas le convertir".into()))
+        );
+        assert!(!fallback.notice_shown(&session, now));
+        for _ in 0..100 {
+            asked += usize::from(
+                tick(&mut fallback, &mut session, &player, &mut now, 1, vec![]).is_some(),
+            );
+        }
+        assert_eq!(asked, 1);
+        assert_eq!(server.state.lock().unwrap().record.transcodes.len(), 1);
+        assert!(session.error().is_some(), "the refusal stays shown");
+    }
+
+    #[test]
+    fn an_answer_after_the_viewer_left_does_nothing() {
+        let server = Arc::new(FakeServer::new(3, false));
+        let (mut left, mut first, player) = playing(&server);
+        let mut now = Instant::now();
+        let request =
+            tick(&mut left, &mut first, &player, &mut now, 1, vec![failed()]).expect("converted");
+        let asked = left.id();
+        drop((left, first));
+
+        let (mut fallback, mut session, player) = playing(&server);
+        tick(
+            &mut fallback,
+            &mut session,
+            &player,
+            &mut now,
+            1,
+            vec![PlayerEvent::Loaded],
+        );
+        let answer = server.transcode(&request);
+        assert_eq!(fallback.answered(asked, &mut session, answer), None);
+        assert!(player.calls.borrow().is_empty(), "the other film plays on");
+        assert_eq!(session.error(), None);
+        assert!(!fallback.notice_shown(&session, now));
+    }
+
+    #[test]
+    fn a_conversion_that_plays_is_reported_as_before() {
+        let server = Arc::new(FakeServer::new(3, false));
+        let (mut fallback, mut session, player) = playing(&server);
+        let mut now = Instant::now();
+        let request = tick(
+            &mut fallback,
+            &mut session,
+            &player,
+            &mut now,
+            1,
+            vec![failed()],
+        )
+        .expect("converted");
+        let resume = Duration::from_secs(72 * 60);
+        let answer = server.transcode(&request);
+        let id = fallback.id();
+        let report = fallback.answered(id, &mut session, answer).expect("plays");
+        assert_eq!(
+            report,
+            PlaybackReport {
+                session: PlaySessionId(TRANSCODE_SESSION.into()),
+                film: request.film.clone(),
+                source: request.source.clone(),
+                position: resume,
+                paused: false,
+                audio_track: request.audio_track,
+                subtitle_track: fallback.plan.subtitle_index,
+                method: PlayMethod::Transcode,
+            }
+        );
+        let converted = server.state.lock().unwrap().converted.clone();
+        let loads: Vec<_> = player
+            .calls
+            .borrow()
+            .iter()
+            .filter_map(|call| match call {
+                Call::Load { url, start, .. } => Some((url.clone(), *start)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(loads, [(converted, resume.as_secs_f64())]);
+        assert_eq!(
+            session.subtitle.as_deref(),
+            Some("2025 · 4K HDR10 · conversion par le serveur")
+        );
+        assert_eq!(session.error(), None, "the first error is not shown");
+        tick(
+            &mut fallback,
+            &mut session,
+            &player,
+            &mut now,
+            1,
+            vec![PlayerEvent::Loaded],
+        );
+        assert!(fallback.notice_shown(&session, now));
+        assert_eq!(
+            tick(
+                &mut fallback,
+                &mut session,
+                &player,
+                &mut now,
+                2,
+                vec![failed()]
+            ),
+            None,
+            "never converted twice"
+        );
     }
 }

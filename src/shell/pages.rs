@@ -18,7 +18,8 @@ use gpui_kit::{
     Subscription, Task, TouchPhase, UniformListScrollHandle, Window, point, px,
 };
 
-use super::{Conversion, Film as Playing, HomePage, Shell};
+use super::{Film as Playing, HomePage, Shell};
+use crate::fallback::Fallback;
 use crate::favourite::{self, ListPage, Toggle};
 use crate::film_page::{self, Choices, From, Plan};
 use crate::grid::{Grid, Listed, RETRY_AFTER};
@@ -1285,15 +1286,12 @@ impl Shell {
         );
         let externals = plan.externals(&opened);
         let media = plan.media(&opened, &externals);
-        let conversion = Conversion {
-            server: server.clone(),
-            plan: plan.clone(),
-        };
+        let fallback = Fallback::new(server.clone(), plan.clone());
         match self.play(mpv, media, playing, Some(reporting), window, cx) {
             Ok(()) => {
                 if let Some(playback) = &mut self.playback {
                     playback.next = next;
-                    playback.conversion = Some(conversion);
+                    playback.fallback = Some(fallback);
                 }
             }
             Err(error) => {
