@@ -13,21 +13,21 @@ use bobine::provider::{
 use crate::film_page::{self, Choices};
 use crate::shell::Loadable;
 
-/// How long the "Épisode suivant" card counts down before the next episode plays.
+/// How long the "Next episode" card counts down before the next episode plays.
 pub const COUNTDOWN: Duration = Duration::from_secs(10);
 
 /// An end this close to the duration is the end of the episode; further, the stream was cut.
 const END_WITHIN: f64 = 10.;
 
-/// `S2 · É4`, when the server numbers the episode.
+/// `S2 · E4`, when the server numbers the episode.
 pub fn code(episode: &Episode) -> Option<String> {
     Some(format!(
-        "S{} · É{}",
+        "S{} · E{}",
         episode.season_number?, episode.number?
     ))
 }
 
-/// `S2 · É4 Reprendre à 12 min` once started, else `Lecture S1 · É1`, after a play icon.
+/// `S2 · E4 Resume from 12m` once started, else `Play S1 · E1`, after a play icon.
 pub fn play_label(episode: &Episode) -> String {
     let play = film_page::play_label(&episode.item);
     match (code(episode), episode.item.resume) {
@@ -37,11 +37,11 @@ pub fn play_label(episode: &Episode) -> String {
     }
 }
 
-/// A season's tab: `Saison 2`, `Épisodes spéciaux` for season 0, else its name.
+/// A season's tab: `Season 2`, `Specials` for season 0, else its name.
 pub fn season_label(season: &Season) -> String {
     match season.number {
-        Some(0) => "Épisodes spéciaux".into(),
-        Some(n) => format!("Saison {n}"),
+        Some(0) => "Specials".into(),
+        Some(n) => format!("Season {n}"),
         None => season.name.clone(),
     }
 }
@@ -66,7 +66,7 @@ pub fn meta(detail: &SeriesDetail, seasons: usize) -> Vec<String> {
             .map(|rating| format!("★ {rating:.1}")),
     );
     if seasons > 0 {
-        let noun = if seasons > 1 { "saisons" } else { "saison" };
+        let noun = if seasons > 1 { "seasons" } else { "season" };
         parts.push(format!("{seasons} {noun}"));
     }
     if !detail.genres.is_empty() {
@@ -76,7 +76,7 @@ pub fn meta(detail: &SeriesDetail, seasons: usize) -> Vec<String> {
     parts
 }
 
-/// `48 min · reste 18 min`: the runtime, and what is left once started.
+/// `48m · 18m left`: the runtime, and what is left once started.
 pub fn duration_line(episode: &Episode) -> String {
     let item = &episode.item;
     item.runtime
@@ -92,7 +92,7 @@ pub fn badge(series: &Series) -> Option<String> {
     (series.unwatched > 0).then(|| series.unwatched.to_string())
 }
 
-/// What the player shows: the series, then `S2 · É4 · Le Signal`.
+/// What the player shows: the series, then `S2 · E4 · Le Signal`.
 pub fn player_title(episode: &Episode) -> (String, String) {
     let subtitle = code(episode)
         .into_iter()
@@ -297,7 +297,7 @@ impl Refreshes {
     }
 }
 
-/// The "Épisode suivant" card: counts down, then gives the episode to play, unless cancelled.
+/// The "Next episode" card: counts down, then gives the episode to play, unless cancelled.
 /// It belongs to the series page it showed over, at its depth among the series pages.
 #[derive(Default)]
 pub struct UpNext {
@@ -472,11 +472,11 @@ mod tests {
     }
 
     #[test]
-    fn the_specials_tab_says_episodes_speciaux() {
+    fn the_specials_tab_says_specials() {
         let server = FakeServer::new(1, true);
         let seasons = server.seasons(&ItemId("series-1".into())).unwrap();
-        assert_eq!(season_label(&seasons[0]), "Épisodes spéciaux");
-        assert_eq!(season_label(&seasons[1]), "Saison 1");
+        assert_eq!(season_label(&seasons[0]), "Specials");
+        assert_eq!(season_label(&seasons[1]), "Season 1");
         let mut unnumbered = seasons[1].clone();
         unnumbered.number = None;
         unnumbered.name = "Hors-série".into();
@@ -488,12 +488,12 @@ mod tests {
         let server = FakeServer::new(1, true);
         assert_eq!(
             play_label(&episode(&server, 2, 4)),
-            "S2 · É4 Reprendre à 30 min"
+            "S2 · E4 Resume from 30m"
         );
-        assert_eq!(play_label(&episode(&server, 3, 1)), "Lecture S3 · É1");
+        assert_eq!(play_label(&episode(&server, 3, 1)), "Play S3 · E1");
         let mut unnumbered = episode(&server, 3, 1);
         unnumbered.number = None;
-        assert_eq!(play_label(&unnumbered), "Lecture");
+        assert_eq!(play_label(&unnumbered), "Play");
     }
 
     #[test]
@@ -505,12 +505,12 @@ mod tests {
             [
                 "2023 – 2025",
                 "★ 6.5",
-                "3 saisons",
+                "3 seasons",
                 "Science-fiction, Drame",
                 "12+"
             ]
         );
-        assert_eq!(meta(&detail, 1)[2], "1 saison");
+        assert_eq!(meta(&detail, 1)[2], "1 season");
         let mut ongoing = detail.series.clone();
         ongoing.end_year = None;
         assert_eq!(years(&ongoing).as_deref(), Some("2023"));
@@ -519,11 +519,8 @@ mod tests {
     #[test]
     fn an_episode_line_says_its_runtime_and_what_is_left() {
         let server = FakeServer::new(1, true);
-        assert_eq!(
-            duration_line(&episode(&server, 2, 4)),
-            "48 min · reste 18 min"
-        );
-        assert_eq!(duration_line(&episode(&server, 3, 1)), "48 min");
+        assert_eq!(duration_line(&episode(&server, 2, 4)), "48m · 18m left");
+        assert_eq!(duration_line(&episode(&server, 3, 1)), "48m");
     }
 
     #[test]
@@ -547,7 +544,7 @@ mod tests {
         let server = FakeServer::new(1, true);
         let (title, subtitle) = player_title(&episode(&server, 2, 4));
         assert_eq!(title, "Station Nord");
-        assert_eq!(subtitle, "S2 · É4 · Le Signal");
+        assert_eq!(subtitle, "S2 · E4 · Le Signal");
     }
 
     #[test]
@@ -930,7 +927,7 @@ mod tests {
             stale,
             false,
             season.clone(),
-            Loadable::Failed("Le serveur ne répond pas."),
+            Loadable::Failed("The server is not answering."),
         );
         assert!(matches!(episodes.get(&season), Some(Loadable::Ready(_))));
     }
@@ -939,7 +936,7 @@ mod tests {
     fn a_failed_season_is_asked_again_when_its_tab_is_chosen() {
         assert!(asks_episodes(None, false));
         assert!(asks_episodes(
-            Some(&Loadable::Failed("Le serveur ne répond pas.")),
+            Some(&Loadable::Failed("The server is not answering.")),
             false
         ));
         assert!(!asks_episodes(Some(&Loadable::Loading), false));

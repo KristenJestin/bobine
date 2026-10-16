@@ -71,7 +71,7 @@ pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -
     let (detail, choices) = match (&page.detail, &page.choices) {
         (Loadable::Ready(detail), Some(choices)) => (detail.clone(), choices.clone()),
         (Loadable::Failed(why), _) => return centered().child(note(*why)).into_any_element(),
-        _ => return centered().child(note("Chargement…")).into_any_element(),
+        _ => return centered().child(note("Loading…")).into_any_element(),
     };
     let now = Instant::now();
     let page = shell.details.last_mut().expect("the page read above");
@@ -121,7 +121,7 @@ pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -
         rows.push(
             poster_row(
                 shell,
-                "Titres proches",
+                "Similar titles",
                 None,
                 None,
                 &detail.similar,
@@ -190,13 +190,13 @@ fn hero(
         theme::ghost_button(
             "film-from-start",
             Some(IconName::RotateCcw),
-            "Depuis le début",
+            "From the start",
             window,
             cx,
         )
         .on_click(cx.listener(|shell, _, window, cx| shell.play_film(From::Beginning, window, cx)))
     });
-    let watched = theme::ghost_button("film-watched", Some(IconName::Check), "Vu", window, cx)
+    let watched = theme::ghost_button("film-watched", Some(IconName::Check), "Watched", window, cx)
         .when(film.watched, |button| {
             button
                 .text_color(theme::accent())
@@ -224,7 +224,7 @@ fn hero(
                 div()
                     .text_size(px(13.))
                     .text_color(theme::muted())
-                    .child(format!("Réalisé par {}", detail.directors.join(", ")))
+                    .child(format!("Directed by {}", detail.directors.join(", ")))
             }))
             .children(detail.overview.clone().map(|overview| {
                 div()
@@ -292,7 +292,7 @@ pub(super) fn list_button(
                 .inset_0()
                 .opacity(level),
         );
-    theme::ghost_button_with(id, Some(icons.into_any_element()), "Ma liste", window, cx)
+    theme::ghost_button_with(id, Some(icons.into_any_element()), "My list", window, cx)
         .text_color(motion::mix(theme::text(), theme::accent(), level))
         .border_color(motion::mix(rgb(0x3a3a40), theme::accent(), level))
         .on_click(cx.listener(|shell, _, _, cx| shell.toggle_favourite(cx)))
@@ -446,7 +446,7 @@ pub(super) fn chips_row(
             chip(
                 Chip::Subtitle,
                 Chip::Subtitle as usize,
-                "SOUS-TITRES",
+                "SUBTITLES",
                 Some(film_page::subtitle_label(current)),
                 options,
                 menu,
@@ -458,7 +458,7 @@ pub(super) fn chips_row(
         }))
 }
 
-/// `AUDIO  Français · E-AC-3 5.1 ⌄`; a click opens the choices under it.
+/// `AUDIO  French · E-AC-3 5.1 ⌄`; a click opens the choices under it.
 #[allow(
     clippy::too_many_arguments,
     reason = "one chip's state, read once per frame"
@@ -668,7 +668,7 @@ pub(super) fn cast_row(
         .flex()
         .flex_col()
         .gap(px(16.))
-        .child(row_heading("Distribution").px(px(EDGE)))
+        .child(row_heading("Cast").px(px(EDGE)))
         .child(
             div()
                 .id("cast-row")
@@ -718,7 +718,7 @@ fn poster_row(
             .text_size(px(13.))
             .text_color(theme::muted())
             .cursor_pointer()
-            .child("Voir la collection")
+            .child("See the collection")
             .child(icon(IconName::ChevronRight, 13.))
             .on_click(cx.listener(move |shell, _, _, cx| {
                 shell.open_collection(target.clone(), cx);

@@ -143,7 +143,7 @@ impl Plan {
                 let known = self.externals.iter().find(|(i, _, _)| *i == external.index);
                 player::ExternalSubtitle {
                     url: external.url.expose_for_player(),
-                    title: known.map_or("Sous-titres", |(_, title, _)| title.as_str()),
+                    title: known.map_or("Subtitles", |(_, title, _)| title.as_str()),
                     language: known.and_then(|(_, _, language)| language.as_deref()),
                 }
             })
@@ -227,21 +227,22 @@ pub fn toggle_watched(server: &dyn MediaServer, film: &Film) -> Result<Film, Pro
     Ok(film)
 }
 
-/// `2 h 11`, `47 min`, `42 s`: the short times of the pages.
+/// `2h 11m`, `47m`, `42s`: the short times of the pages.
 pub fn short_duration(duration: Duration) -> String {
     let minutes = duration.as_secs() / 60;
     match (minutes / 60, minutes % 60) {
-        (0, 0) => format!("{} s", duration.as_secs()),
-        (0, minutes) => format!("{minutes} min"),
-        (hours, minutes) => format!("{hours} h {minutes:02}"),
+        (0, 0) => format!("{}s", duration.as_secs()),
+        (0, minutes) => format!("{minutes}m"),
+        (hours, 0) => format!("{hours}h"),
+        (hours, minutes) => format!("{hours}h {minutes}m"),
     }
 }
 
-/// `Reprendre à 1 h 12` once started, else `Lecture`, after a play icon.
+/// `Resume from 1h 12m` once started, else `Play`, after a play icon.
 pub fn play_label(film: &Film) -> String {
     match film.resume {
-        Some(resume) => format!("Reprendre à {}", short_duration(resume)),
-        None => "Lecture".to_string(),
+        Some(resume) => format!("Resume from {}", short_duration(resume)),
+        None => "Play".to_string(),
     }
 }
 
@@ -252,10 +253,10 @@ pub fn progress(film: &Film) -> Option<f32> {
     (runtime > 0.).then(|| (resume / runtime).clamp(0., 1.))
 }
 
-/// `reste 47 min`, for a film started.
+/// `47m left`, for a film started.
 pub fn time_left(film: &Film) -> Option<String> {
     let left = film.runtime?.checked_sub(film.resume?)?;
-    Some(format!("reste {}", short_duration(left)))
+    Some(format!("{} left", short_duration(left)))
 }
 
 /// `★ 8.1`
@@ -301,7 +302,7 @@ pub fn version_label(source: &MediaSource) -> String {
     format!("{resolution}{range}")
 }
 
-/// `Français · E-AC-3 5.1`, as the player's panel names it.
+/// `French · E-AC-3 5.1`, as the player's panel names it.
 pub fn audio_label(track: &AudioTrack) -> String {
     tracks::label(&Track {
         id: i64::from(track.index),
@@ -316,10 +317,10 @@ pub fn audio_label(track: &AudioTrack) -> String {
     })
 }
 
-/// `Aucun`, `Français · SRT · forcés`, `Anglais · SRT · fichier externe`.
+/// `None`, `French · SRT · forced`, `English · SRT · external file`.
 pub fn subtitle_label(track: Option<&SubtitleTrack>) -> String {
     let Some(track) = track else {
-        return "Aucun".to_string();
+        return "None".to_string();
     };
     tracks::label(&Track {
         id: i64::from(track.index),
@@ -454,7 +455,7 @@ mod tests {
         assert_eq!(
             externals,
             [(
-                "Anglais · SRT · fichier externe".to_string(),
+                "English · SRT · external file".to_string(),
                 Some("eng".to_string())
             )]
         );
@@ -564,7 +565,7 @@ mod tests {
         let watched = toggle_watched(&server, &film).unwrap();
         assert!(watched.watched);
         assert_eq!(watched.resume, None);
-        assert_eq!(play_label(&watched), "Lecture");
+        assert_eq!(play_label(&watched), "Play");
         let unwatched = toggle_watched(&server, &watched).unwrap();
         assert!(!unwatched.watched);
         assert_eq!(
@@ -576,19 +577,19 @@ mod tests {
     #[test]
     fn the_play_button_says_where_it_resumes() {
         let detail = detail();
-        assert_eq!(play_label(&detail.film), "Reprendre à 1 h 12");
+        assert_eq!(play_label(&detail.film), "Resume from 1h 12m");
         let mut film = detail.film.clone();
         film.resume = None;
-        assert_eq!(play_label(&film), "Lecture");
+        assert_eq!(play_label(&film), "Play");
         film.resume = Some(Duration::from_secs(42));
-        assert_eq!(play_label(&film), "Reprendre à 42 s");
+        assert_eq!(play_label(&film), "Resume from 42s");
     }
 
     #[test]
     fn the_page_says_year_rating_runtime_genres_and_age() {
         assert_eq!(
             meta(&detail()),
-            ["2025", "★ 6.0", "2 h 11", "Drame, Aventure", "12+"]
+            ["2025", "★ 6.0", "2h 11m", "Drame, Aventure", "12+"]
         );
     }
 
@@ -597,18 +598,18 @@ mod tests {
         let versions = crate::fake::versions();
         assert_eq!(version_label(&versions[0]), "4K HDR10");
         assert_eq!(version_label(&versions[1]), "1080p");
-        assert_eq!(audio_label(&versions[0].audio[0]), "Français · E-AC-3 5.1");
-        assert_eq!(subtitle_label(None), "Aucun");
+        assert_eq!(audio_label(&versions[0].audio[0]), "French · E-AC-3 5.1");
+        assert_eq!(subtitle_label(None), "None");
         assert_eq!(
             subtitle_label(Some(&versions[0].subtitles[0])),
-            "Français · SRT · forcés"
+            "French · SRT · forced"
         );
     }
 
     #[test]
     fn a_started_film_says_what_is_left_and_how_far() {
         let film = detail().film;
-        assert_eq!(time_left(&film).as_deref(), Some("reste 59 min"));
+        assert_eq!(time_left(&film).as_deref(), Some("59m left"));
         let progress = progress(&film).unwrap();
         assert!((progress - 72. / 131.).abs() < 1e-4, "{progress}");
     }

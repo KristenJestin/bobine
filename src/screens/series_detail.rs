@@ -1,7 +1,7 @@
 //! A series' page: the film page's hero, whose button plays the next episode; the seasons in
 //! tabs and the episodes of the one chosen (still, number and title, runtime, synopsis, watched
 //! or how far); below, the cast and similar series. The page scrolls; over it, after an episode
-//! ended, the "Épisode suivant" card counts down.
+//! ended, the "Next episode" card counts down.
 
 use std::time::Instant;
 
@@ -36,7 +36,7 @@ pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -
     let detail = match &page.detail {
         Loadable::Ready(detail) => detail.clone(),
         Loadable::Failed(why) => return centered().child(note(*why)).into_any_element(),
-        Loadable::Loading => return centered().child(note("Chargement…")).into_any_element(),
+        Loadable::Loading => return centered().child(note("Loading…")).into_any_element(),
     };
     let now = Instant::now();
     let open = page.menus.open();
@@ -67,7 +67,7 @@ pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -
                 series_poster(shell, series, ROW_POSTER, ("similar-series", index), cx)
             })
             .collect();
-        rows.push(row("Séries proches", None, cards, &similar_scroll).into_any_element());
+        rows.push(row("Similar series", None, cards, &similar_scroll).into_any_element());
     }
 
     // Scrolled by hand, like the film page: the page up and down, a row sideways.
@@ -247,9 +247,9 @@ fn seasons(shell: &mut Shell, shown: &Shown, window: &mut Window, cx: &mut Conte
     let all_watched = season.is_some_and(|s| s.unwatched == 0);
     let season_check = season.map(|_| {
         let label = if all_watched {
-            "Saison vue"
+            "Season watched"
         } else {
-            "Marquer la saison vue"
+            "Mark season as watched"
         };
         theme::ghost_button("season-watched", Some(IconName::Check), label, window, cx)
             .px(px(14.))
@@ -265,10 +265,10 @@ fn seasons(shell: &mut Shell, shown: &Shown, window: &mut Window, cx: &mut Conte
     });
 
     let list: AnyElement = match &shown.episodes {
-        None => note("Chargement…").into_any_element(),
+        None => note("Loading…").into_any_element(),
         Some(Err(why)) => note(*why).into_any_element(),
         Some(Ok(episodes)) if episodes.is_empty() => {
-            note("Aucun épisode dans cette saison.").into_any_element()
+            note("No episode in this season.").into_any_element()
         }
         Some(Ok(episodes)) => {
             let next = shown.next.as_ref().map(|e| e.item.id.clone());
@@ -302,7 +302,7 @@ fn seasons(shell: &mut Shell, shown: &Shown, window: &mut Window, cx: &mut Conte
         .gap(px(18.))
         .px(px(EDGE))
         .pt(px(8.))
-        .child(row_heading("Épisodes"))
+        .child(row_heading("Episodes"))
         .child(
             div()
                 .flex()
@@ -442,7 +442,7 @@ fn episode_row(
         .child(check)
 }
 
-/// "Épisode suivant", bottom right over the series page: the still, the episode, the seconds
+/// "Next episode", bottom right over the series page: the still, the episode, the seconds
 /// left with a bar that empties, "Lire" and "Annuler". Fades in and out.
 pub fn up_next_card(
     shell: &mut Shell,
@@ -459,11 +459,11 @@ pub fn up_next_card(
     window.request_animation_frame();
     let still = shell.image(episode.item.poster.as_ref(), images::CARD, cx);
     let (_, subtitle) = series_page::player_title(&episode);
-    let play = theme::primary_button("up-next-play", Some(IconName::Play), "Lire", window, cx)
+    let play = theme::primary_button("up-next-play", Some(IconName::Play), "Play", window, cx)
         .px(px(16.))
         .py(px(9.))
         .on_click(cx.listener(|shell, _, window, cx| shell.play_up_next_now(window, cx)));
-    let cancel = theme::ghost_button("up-next-cancel", None, "Annuler", window, cx)
+    let cancel = theme::ghost_button("up-next-cancel", None, "Cancel", window, cx)
         .px(px(16.))
         .py(px(9.))
         .on_click(cx.listener(|shell, _, _, cx| {
@@ -512,7 +512,7 @@ pub fn up_next_card(
                             .text_size(px(11.))
                             .font_weight(FontWeight::BOLD)
                             .text_color(theme::dim())
-                            .child("ÉPISODE SUIVANT"),
+                            .child("NEXT EPISODE"),
                     )
                     .child(
                         div()
@@ -525,7 +525,7 @@ pub fn up_next_card(
                         div()
                             .text_size(px(13.))
                             .text_color(theme::muted())
-                            .child(format!("Dans {left} s")),
+                            .child(format!("In {left}s")),
                     )
                     .child(
                         div()

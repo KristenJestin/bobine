@@ -89,7 +89,7 @@ fn note(text: impl Into<gpui_kit::SharedString>) -> Div {
         .child(text.into())
 }
 
-/// A row's heading: `Reprendre`, `Distribution`, `Titres proches`.
+/// A row's heading: `Continue Watching`, `Cast`, `Similar titles`.
 fn row_heading(title: impl Into<gpui_kit::SharedString>) -> Div {
     div()
         .text_size(px(18.))
@@ -195,7 +195,7 @@ fn film_card_with(
     let opened = film.id.clone();
     let mut caption: Vec<String> = film.year.iter().map(i32::to_string).collect();
     if outlined {
-        caption.push("ce film".into());
+        caption.push("this film".into());
     }
     let corner = if film.watched {
         Corner::Watched
