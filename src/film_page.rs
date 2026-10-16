@@ -334,18 +334,38 @@ pub fn rating(film: &Film) -> Option<String> {
     film.community_rating.map(|rating| format!("★ {rating:.1}"))
 }
 
-/// The line under the title: year, rating, runtime, genres, age rating.
-pub fn meta(detail: &FilmDetail) -> Vec<String> {
-    let film = &detail.film;
-    let mut parts: Vec<String> = Vec::new();
-    parts.extend(film.year.map(|year| year.to_string()));
-    parts.extend(rating(film));
-    parts.extend(film.runtime.map(short_duration));
-    if !detail.genres.is_empty() {
-        parts.push(detail.genres.join(", "));
+/// A fact of the line under a title: plain text, or the genres, each of them a link to the
+/// library filtered on it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Fact {
+    Text(String),
+    Genres(Vec<String>),
+}
+
+impl Fact {
+    /// The texts before the genres, the genres (when there are any), the texts after them.
+    pub fn line(
+        before: impl IntoIterator<Item = String>,
+        genres: &[String],
+        after: impl IntoIterator<Item = String>,
+    ) -> Vec<Fact> {
+        let mut facts: Vec<Fact> = before.into_iter().map(Fact::Text).collect();
+        if !genres.is_empty() {
+            facts.push(Fact::Genres(genres.to_vec()));
+        }
+        facts.extend(after.into_iter().map(Fact::Text));
+        facts
     }
-    parts.extend(detail.official_rating.clone());
-    parts
+}
+
+/// The line under the title: year, rating, runtime, genres, age rating.
+pub fn meta(detail: &FilmDetail) -> Vec<Fact> {
+    let film = &detail.film;
+    let mut before: Vec<String> = Vec::new();
+    before.extend(film.year.map(|year| year.to_string()));
+    before.extend(rating(film));
+    before.extend(film.runtime.map(short_duration));
+    Fact::line(before, &detail.genres, detail.official_rating.clone())
 }
 
 /// `4K HDR10`, `1080p`: what tells two versions apart.
@@ -704,9 +724,16 @@ mod tests {
 
     #[test]
     fn the_page_says_year_rating_runtime_genres_and_age() {
+        let text = |text: &str| Fact::Text(text.into());
         assert_eq!(
             meta(&detail()),
-            ["2025", "★ 6.0", "2h 11m", "Drame, Aventure", "12+"]
+            [
+                text("2025"),
+                text("★ 6.0"),
+                text("2h 11m"),
+                Fact::Genres(vec!["Drame".into(), "Aventure".into()]),
+                text("12+")
+            ]
         );
     }
 

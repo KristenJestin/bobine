@@ -10,7 +10,7 @@ use bobine::provider::{
     SeriesDetail,
 };
 
-use crate::film_page::{self, Carried, Choices};
+use crate::film_page::{self, Carried, Choices, Fact};
 use crate::shell::Loadable;
 
 /// How long the "Next episode" card counts down before the next episode plays.
@@ -80,24 +80,20 @@ pub fn opening_season(
 }
 
 /// The line under the title: years, rating, seasons, genres, age rating.
-pub fn meta(detail: &SeriesDetail, seasons: usize) -> Vec<String> {
+pub fn meta(detail: &SeriesDetail, seasons: usize) -> Vec<Fact> {
     let series = &detail.series;
-    let mut parts: Vec<String> = Vec::new();
-    parts.extend(years(series));
-    parts.extend(
+    let mut before: Vec<String> = Vec::new();
+    before.extend(years(series));
+    before.extend(
         series
             .community_rating
             .map(|rating| format!("★ {rating:.1}")),
     );
     if seasons > 0 {
         let noun = if seasons > 1 { "seasons" } else { "season" };
-        parts.push(format!("{seasons} {noun}"));
+        before.push(format!("{seasons} {noun}"));
     }
-    if !detail.genres.is_empty() {
-        parts.push(detail.genres.join(", "));
-    }
-    parts.extend(detail.official_rating.clone());
-    parts
+    Fact::line(before, &detail.genres, detail.official_rating.clone())
 }
 
 /// `48m · 18m left`: the runtime, and what is left once started.
@@ -580,17 +576,18 @@ mod tests {
     fn the_series_page_says_years_rating_seasons_and_genres() {
         let server = FakeServer::new(1, true);
         let detail = server.series_detail(&series()).unwrap();
+        let text = |text: &str| Fact::Text(text.into());
         assert_eq!(
             meta(&detail, 3),
             [
-                "2023 – 2025",
-                "★ 6.5",
-                "3 seasons",
-                "Science-fiction, Drame",
-                "12+"
+                text("2023 – 2025"),
+                text("★ 6.5"),
+                text("3 seasons"),
+                Fact::Genres(vec!["Science-fiction".into(), "Drame".into()]),
+                text("12+")
             ]
         );
-        assert_eq!(meta(&detail, 1)[2], "1 season");
+        assert_eq!(meta(&detail, 1)[2], text("1 season"));
         let mut ongoing = detail.series.clone();
         ongoing.end_year = None;
         assert_eq!(years(&ongoing).as_deref(), Some("2023"));

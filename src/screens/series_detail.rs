@@ -13,14 +13,15 @@ use gpui_kit::{
 };
 
 use super::film_detail::{
-    EDGE, MenuState, ROW_POSTER, TEXT_WIDTH, cast_row, chips_row, hero_frame, hero_text,
-    list_button, meta_line, row,
+    EDGE, MenuState, ROW_POSTER, TEXT_WIDTH, cast_row, chips_row, facts_line, hero_frame,
+    hero_text, list_button, row,
 };
 use super::{centered, note, picture, progress_bar, row_heading, series_poster};
 use crate::film_page::{self, Choices};
 use crate::icons::{IconName, icon};
 use crate::images;
 use crate::motion;
+use crate::navigation::NavEntry;
 use crate::series_page;
 use crate::shell::{Loadable, SeriesPage, Shell};
 use crate::theme;
@@ -170,7 +171,12 @@ fn hero(
         .map(|(next, choices)| chips_row(&next.versions, choices, menu, &shown.chips, window, cx));
     hero_frame(backdrop, height).child(
         hero_text(series.title.clone())
-            .child(meta_line(series_page::meta(detail, shown.seasons.len())))
+            .child(facts_line(
+                series_page::meta(detail, shown.seasons.len()),
+                NavEntry::Series,
+                window,
+                cx,
+            ))
             .children(detail.overview.clone().map(|overview| {
                 div()
                     .text_size(px(15.))

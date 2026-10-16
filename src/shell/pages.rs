@@ -1048,6 +1048,13 @@ impl Shell {
         }
     }
 
+    /// A genre of a page's facts: the library of `entry`, filtered on that genre, the same state
+    /// as choosing it in the genre menu.
+    pub fn open_genre(&mut self, entry: NavEntry, genre: String, cx: &mut Context<Self>) {
+        self.select(entry, cx);
+        self.change_tools(|tools| tools.filters.genre = Some(genre), cx);
+    }
+
     /// The menus of the tools above the grid shown, and where their chips were drawn.
     fn tool_menus(&mut self) -> Option<(&mut Menus<Tool>, &[ChipBounds; 3])> {
         match self.navigator.current() {
@@ -2793,7 +2800,7 @@ mod tests {
         open: impl FnOnce(&mut Shell, &mut Context<Shell>),
     ) -> gpui_kit::VisualTestContext {
         window.update(cx, |shell, _, cx| open(shell, cx)).unwrap();
-        let mut visual = drawn(window, cx);
+        let visual = drawn(window, cx);
         visual.simulate_resize(gpui_kit::size(px(1600.), px(3000.)));
         visual.run_until_parked();
         visual
@@ -2838,5 +2845,79 @@ mod tests {
                 .unwrap();
             assert_eq!(opened, (cast[1].id.clone(), cast[1].name.clone()));
         }
+    }
+
+    #[gpui_kit::test]
+    fn a_click_on_a_genre_of_a_film_opens_the_films_library_filtered_on_it(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        let (_server, window) = signed_in_window(cx);
+        let mut visual = drawn_page(&window, cx, |shell, cx| {
+            shell.open_film(ItemId(crate::fake::FILM.into()), cx)
+        });
+        // The film's genres are "Drame, Aventure".
+        click_on(&mut visual, "genre Aventure");
+        assert_eq!(current(&window, cx), Screen::Library);
+        let (films, series) = window
+            .update(cx, |shell, _, _| {
+                (
+                    shell.library.tools.filters.genre.clone(),
+                    shell.series.tools.filters.genre.clone(),
+                )
+            })
+            .unwrap();
+        assert_eq!((films.as_deref(), series), (Some("Aventure"), None));
+    }
+
+    #[gpui_kit::test]
+    fn a_click_on_a_genre_of_a_series_opens_the_series_library_filtered_on_it(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        let (_server, window) = signed_in_window(cx);
+        let mut visual = drawn_page(&window, cx, |shell, cx| {
+            shell.open_series(ItemId(crate::fake::SERIES.into()), cx)
+        });
+        // The series' genres are "Science-fiction, Drame".
+        click_on(&mut visual, "genre Drame");
+        assert_eq!(current(&window, cx), Screen::Series);
+        let (films, series) = window
+            .update(cx, |shell, _, _| {
+                (
+                    shell.library.tools.filters.genre.clone(),
+                    shell.series.tools.filters.genre.clone(),
+                )
+            })
+            .unwrap();
+        assert_eq!((films, series.as_deref()), (None, Some("Drame")));
+    }
+
+    /// The library was seen before: its list is asked again under the genre, as the genre menu
+    /// does, not kept as it was.
+    #[gpui_kit::test]
+    fn a_genre_clicked_over_a_library_already_loaded_filters_its_list(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        let (_server, window) = signed_in_window(cx);
+        window
+            .update(cx, |shell, _, cx| shell.select(NavEntry::Films, cx))
+            .unwrap();
+        cx.run_until_parked();
+        let before = window
+            .update(cx, |shell, _, _| shell.library.grid.epoch())
+            .unwrap();
+        let mut visual = drawn_page(&window, cx, |shell, cx| {
+            shell.open_film(ItemId(crate::fake::FILM.into()), cx)
+        });
+        click_on(&mut visual, "genre Aventure");
+        let (genre, epoch) = window
+            .update(cx, |shell, _, _| {
+                (
+                    shell.library.tools.filters.genre.clone(),
+                    shell.library.grid.epoch(),
+                )
+            })
+            .unwrap();
+        assert_eq!(genre.as_deref(), Some("Aventure"));
+        assert_ne!(epoch, before, "the list was not asked again");
     }
 }
