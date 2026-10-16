@@ -748,7 +748,13 @@ impl Shell {
     pub fn go_back(&mut self, cx: &mut Context<Self>) -> bool {
         let gone = match self.navigator.current() {
             Screen::FilmDetail => self.details.pop().map(|page| Reopen::Film(page.id)),
-            Screen::SeriesDetail => self.series_pages.pop().map(|page| Reopen::Series(page.id)),
+            Screen::SeriesDetail => self.series_pages.pop().map(|page| {
+                let season = page
+                    .seasons
+                    .get(page.season)
+                    .map(|season| season.id.clone());
+                Reopen::Series(page.id, season)
+            }),
             Screen::Person => self.people.pop().map(|page| {
                 Reopen::Person(PersonHit {
                     id: page.id,
@@ -794,8 +800,8 @@ impl Shell {
         true
     }
 
-    /// A side button of the mouse, wherever the pointer is. Not on the login nor in the player,
-    /// where a film would stop on a stray press.
+    /// A side button of the mouse, wherever the pointer is. Back does what Escape does. Not on
+    /// the login nor in the player, where a film would stop on a stray press.
     pub fn navigate(
         &mut self,
         direction: NavigationDirection,
@@ -812,9 +818,11 @@ impl Shell {
             return;
         }
         match direction {
-            NavigationDirection::Back => self.go_back(cx),
-            NavigationDirection::Forward => self.go_forward(cx),
-        };
+            NavigationDirection::Back => self.escape(cx),
+            NavigationDirection::Forward => {
+                self.go_forward(cx);
+            }
+        }
     }
 
     /// A root screen shows: what it lists may have changed since (a film watched, resumed).
@@ -2475,4 +2483,166 @@ mod tests {
         assert!(visual.debug_bounds("empty-reason").is_some());
         assert!(visual.debug_bounds("suggestions").is_some());
     }
+
+    /// A side button pressed at `at`, then released.
+    fn side_press(
+        window: &gpui_kit::WindowHandle<Shell>,
+        direction: gpui_kit::NavigationDirection,
+        at: Point<Pixels>,
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        let button = gpui_kit::MouseButton::Navigate(direction);
+        let mut visual = drawn(window, cx);
+        visual.simulate_mouse_down(at, button, gpui_kit::Modifiers::none());
+        visual.simulate_mouse_up(at, button, gpui_kit::Modifiers::none());
+        drawn(window, cx);
+    }
+
+    #[gpui_kit::test]
+    fn the_mouse_back_button_cancels_the_next_episode_card_and_stays(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        use gpui_kit::NavigationDirection::Back;
+
+        let (_server, window) = signed_in_window(cx);
+        let id = ItemId(crate::fake::SERIES.into());
+        window
+            .update(cx, |shell, _, cx| shell.open_series(id.clone(), cx))
+            .unwrap();
+        cx.run_until_parked();
+        window
+            .update(cx, |shell, _, _| {
+                let episode = crate::fake::episodes().remove(0);
+                shell.up_next.start(episode, (0, id), Instant::now());
+            })
+            .unwrap();
+        let at = drawn(&window, cx)
+            .debug_bounds("pill-bar")
+            .unwrap()
+            .center();
+        side_press(&window, Back, at, cx);
+        window
+            .update(cx, |shell, _, _| {
+                assert!(shell.up_next.episode().is_none(), "the card is still there");
+            })
+            .unwrap();
+        assert_eq!(current(&window, cx), Screen::SeriesDetail);
+        // Pressed again with nothing left to close, it goes back.
+        side_press(&window, Back, at, cx);
+        assert_eq!(current(&window, cx), Screen::Home);
+    }
+
+    #[gpui_kit::test]
+    fn the_mouse_back_button_closes_the_account_menu_and_stays(cx: &mut gpui_kit::TestAppContext) {
+        use gpui_kit::NavigationDirection::Back;
+
+        let (_server, window) = signed_in_window(cx);
+        window
+            .update(cx, |shell, _, cx| {
+                shell.open_film(ItemId(crate::fake::FILM.into()), cx);
+                shell.toggle_account_menu(cx);
+            })
+            .unwrap();
+        let at = drawn(&window, cx)
+            .debug_bounds("pill-bar")
+            .unwrap()
+            .center();
+        side_press(&window, Back, at, cx);
+        window
+            .update(cx, |shell, _, _| {
+                assert_eq!(shell.account_menu.open(), None, "the menu is still open");
+            })
+            .unwrap();
+        assert_eq!(current(&window, cx), Screen::FilmDetail);
+        side_press(&window, Back, at, cx);
+        assert_eq!(current(&window, cx), Screen::Home);
+    }
+
+    /// Gone back from a film page once: the forward button has a page to open.
+    fn with_a_page_ahead(
+        window: &gpui_kit::WindowHandle<Shell>,
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        window
+            .update(cx, |shell, _, cx| {
+                shell.open_film(ItemId(crate::fake::FILM.into()), cx);
+                shell.go_back(cx);
+                assert_eq!(shell.forward.len(), 1);
+            })
+            .unwrap();
+    }
+
+    fn pages_ahead(
+        window: &gpui_kit::WindowHandle<Shell>,
+        cx: &mut gpui_kit::TestAppContext,
+    ) -> usize {
+        window
+            .update(cx, |shell, _, _| shell.forward.len())
+            .unwrap()
+    }
+
+    #[gpui_kit::test]
+    fn the_side_buttons_are_ignored_in_the_player_and_on_the_login(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        use gpui_kit::NavigationDirection::{Back, Forward};
+
+        let (server, window) = signed_in_window(cx);
+        play_a_film(&server, &window, cx);
+        for direction in [Back, Forward] {
+            window
+                .update(cx, |shell, window, cx| {
+                    shell.navigate(direction, window, cx)
+                })
+                .unwrap();
+            window
+                .update(cx, |shell, _, _| {
+                    assert_eq!(shell.navigator.current(), Screen::Player);
+                    assert!(shell.playback.is_some(), "a stray press stopped the film");
+                })
+                .unwrap();
+        }
+        sign_out(&window, cx);
+        cx.run_until_parked();
+        for direction in [Back, Forward] {
+            window
+                .update(cx, |shell, window, cx| {
+                    shell.navigate(direction, window, cx)
+                })
+                .unwrap();
+            assert_eq!(current(&window, cx), Screen::Login);
+        }
+    }
+
+    #[gpui_kit::test]
+    fn with_the_palette_open_back_closes_it_and_forward_does_nothing(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        use gpui_kit::NavigationDirection::{Back, Forward};
+
+        let (_server, window) = signed_in_window(cx);
+        with_a_page_ahead(&window, cx);
+        window
+            .update(cx, |shell, window, cx| shell.open_search(window, cx))
+            .unwrap();
+        window
+            .update(cx, |shell, window, cx| shell.navigate(Forward, window, cx))
+            .unwrap();
+        window
+            .update(cx, |shell, _, _| {
+                assert!(shell.search_is_open());
+                assert_eq!(shell.navigator.current(), Screen::Home);
+            })
+            .unwrap();
+        assert_eq!(pages_ahead(&window, cx), 1);
+        window
+            .update(cx, |shell, window, cx| shell.navigate(Back, window, cx))
+            .unwrap();
+        window
+            .update(cx, |shell, _, _| assert!(!shell.search_is_open()))
+            .unwrap();
+        assert_eq!(current(&window, cx), Screen::Home);
+        assert_eq!(pages_ahead(&window, cx), 1);
+    }
+
 }

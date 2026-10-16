@@ -6,8 +6,9 @@ use std::rc::Rc;
 
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    Bounds, Context, Div, FontWeight, IntoElement, MouseDownEvent, Pixels, Point, Stateful, Window,
-    anchored, canvas, deferred, div, linear_color_stop, linear_gradient, point, px, rgb, rgba,
+    Bounds, Context, Div, FontWeight, IntoElement, MouseButton, MouseDownEvent, Pixels, Point,
+    Stateful, Window, anchored, canvas, deferred, div, linear_color_stop, linear_gradient, point,
+    px, rgb, rgba,
 };
 
 use crate::icons::{IconName, icon};
@@ -211,6 +212,10 @@ fn account_menu(
                     .when(open, |menu| {
                         menu.occlude().on_mouse_down_out(cx.listener(
                             |shell, event: &MouseDownEvent, _, cx| {
+                                // A side button is Back: it closes the menu itself, once.
+                                if matches!(event.button, MouseButton::Navigate(_)) {
+                                    return;
+                                }
                                 shell.pressed_outside_account_menu(event.position, cx);
                             },
                         ))
