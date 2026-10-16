@@ -2922,3 +2922,128 @@ fn a_segments_route_that_fails_is_an_error_left_to_the_caller() {
         Err(ProviderError::Server(500))
     );
 }
+
+fn rainy_sundays() -> ItemId {
+    ItemId(PLAYLIST.into())
+}
+
+fn titles_of(entries: &[PlaylistEntry]) -> Vec<String> {
+    entries
+        .iter()
+        .map(|entry| match &entry.title {
+            Title::Film(film) => film.title.clone(),
+            Title::Series(series) => series.title.clone(),
+            Title::Episode(episode) => episode.item.title.clone(),
+        })
+        .collect()
+}
+
+#[test]
+fn the_playlists_are_listed_by_name_each_with_its_titles_in_order() {
+    let s = Setup::new();
+    let playlists = s.signed_in().playlists().unwrap();
+    let names: Vec<&str> = playlists.iter().map(|p| p.name.as_str()).collect();
+    // A playlist of music has nothing to play here.
+    assert_eq!(names, ["Rainy Sundays", "Watchlist"]);
+    assert_eq!(
+        titles_of(&playlists[0].entries),
+        ["Northbound", "Low Water", "The Quiet Harbour"]
+    );
+    assert_eq!(
+        playlists[0].entries[1].id,
+        EntryId("a1000000000000000000000000000002".into())
+    );
+    assert!(matches!(playlists[0].entries[1].title, Title::Episode(_)));
+    assert!(playlists[1].entries.is_empty());
+}
+
+#[test]
+fn the_playlists_are_asked_as_the_users_playlists() {
+    let s = Setup::new();
+    s.signed_in().playlists().unwrap();
+    let asked = s
+        .fake
+        .seen()
+        .into_iter()
+        .find(|r| r.path == "/Items" && r.param("includeItemTypes") == Some("Playlist"))
+        .expect("the playlists were asked");
+    assert_eq!(asked.param("recursive"), Some("true"));
+    assert_eq!(asked.param("sortBy"), Some("SortName"));
+    assert_eq!(asked.param("userId"), Some(USER_ID));
+    let items = s.fake.last("GET", &format!("/Playlists/{PLAYLIST}/Items"));
+    assert_eq!(items.param("userId"), Some(USER_ID));
+}
+
+#[test]
+fn a_playlist_gives_its_titles_in_order_with_the_versions_of_its_episodes() {
+    let s = Setup::new();
+    let entries = s.signed_in().playlist(&rainy_sundays()).unwrap();
+    assert_eq!(
+        titles_of(&entries),
+        ["Northbound", "Low Water", "The Quiet Harbour"]
+    );
+    let Title::Episode(episode) = &entries[1].title else {
+        panic!("an episode");
+    };
+    assert_eq!(episode.series_title, "Tidewater");
+    assert_eq!(episode.versions.len(), 1);
+    let asked = s.fake.last("GET", &format!("/Playlists/{PLAYLIST}/Items"));
+    assert_eq!(asked.param("userId"), Some(USER_ID));
+    assert!(asked.param("fields").unwrap().contains("MediaSources"));
+}
+
+#[test]
+fn a_new_playlist_is_made_with_the_title_in_it() {
+    let s = Setup::new();
+    let made = s.signed_in().create_playlist("Road trip", &film()).unwrap();
+    assert_eq!(made, ItemId(NEW_PLAYLIST.into()));
+    let body = s.fake.last("POST", "/Playlists").json();
+    assert_eq!(body["Name"], "Road trip");
+    assert_eq!(body["Ids"], serde_json::json!([FILM]));
+    assert_eq!(body["UserId"], USER_ID);
+    assert_eq!(body["MediaType"], "Video");
+}
+
+#[test]
+fn a_title_is_added_at_the_end_of_a_playlist() {
+    let s = Setup::new();
+    s.signed_in()
+        .add_to_playlist(&rainy_sundays(), &film())
+        .unwrap();
+    let asked = s.fake.last("POST", &format!("/Playlists/{PLAYLIST}/Items"));
+    assert_eq!(asked.param("ids"), Some(FILM));
+    assert_eq!(asked.param("userId"), Some(USER_ID));
+}
+
+#[test]
+fn an_entry_is_taken_out_of_a_playlist() {
+    let s = Setup::new();
+    let entry = EntryId("a1000000000000000000000000000002".into());
+    s.signed_in()
+        .remove_from_playlist(&rainy_sundays(), &entry)
+        .unwrap();
+    let asked = s
+        .fake
+        .last("DELETE", &format!("/Playlists/{PLAYLIST}/Items"));
+    assert_eq!(asked.param("entryIds"), Some(entry.0.as_str()));
+}
+
+#[test]
+fn a_refused_playlist_change_says_why() {
+    let s = Setup::new();
+    let server = s.signed_in();
+    let items = format!("/Playlists/{PLAYLIST}/Items");
+    s.fake.state.lock().unwrap().broken = vec![(items, 403), ("/Playlists".into(), 500)];
+    assert_eq!(
+        server.add_to_playlist(&rainy_sundays(), &film()),
+        Err(ProviderError::Forbidden)
+    );
+    assert_eq!(
+        server.remove_from_playlist(&rainy_sundays(), &EntryId("x".into())),
+        Err(ProviderError::Forbidden)
+    );
+    assert_eq!(
+        server.create_playlist("Road trip", &film()),
+        Err(ProviderError::Server(500))
+    );
+}

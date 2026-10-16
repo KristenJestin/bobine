@@ -10,11 +10,12 @@ mod fake;
 mod tests;
 
 use crate::provider::{
-    Collection, CollectionCard, CollectionDetail, Connector, Episode, ExternalSubtitle, Favourite,
-    Feature, Film, FilmDetail, FilmQuery, FilmSort, FilterChoices, ImageKind, ImageRef, ItemId,
-    Library, MediaServer, MediaSourceId, Page, PersonTitles, PlayMethod, PlaySessionId, Playback,
-    PlaybackReport, ProviderError, SearchResults, Season, Segment, Series, SeriesDetail,
-    ServerInfo, StreamUrl, Title, Token, TokenStore, TranscodeRequest, Trickplay,
+    Collection, CollectionCard, CollectionDetail, Connector, EntryId, Episode, ExternalSubtitle,
+    Favourite, Feature, Film, FilmDetail, FilmQuery, FilmSort, FilterChoices, ImageKind, ImageRef,
+    ItemId, Library, MediaServer, MediaSourceId, Page, PersonTitles, PlayMethod, PlaySessionId,
+    Playback, PlaybackReport, Playlist, PlaylistEntry, ProviderError, SearchResults, Season,
+    Segment, Series, SeriesDetail, ServerInfo, StreamUrl, Title, Token, TokenStore,
+    TranscodeRequest, Trickplay,
 };
 use account::{AccountFile, Login};
 use dto::{
@@ -237,6 +238,36 @@ impl Jellyfin {
         let mut query = query.to_vec();
         query.push(self.user());
         self.http.get(what, "/Items", &query)
+    }
+
+    /// What a playlist holds, in its order; only what plays here: films, episodes, series.
+    fn entries(
+        &self,
+        playlist: &ItemId,
+        fields: &str,
+    ) -> Result<Vec<PlaylistEntry>, ProviderError> {
+        let found: QueryResult = self.http.get(
+            "playlist",
+            &format!("/Playlists/{}/Items", encode(&playlist.0)),
+            &[
+                self.user(),
+                ("fields", fields.into()),
+                ("imageTypeLimit", "1".into()),
+                ("enableImageTypes", "Primary,Backdrop".into()),
+            ],
+        )?;
+        Ok(found
+            .items
+            .into_iter()
+            .filter(|item| matches!(item.kind.as_deref(), Some("Movie" | "Episode" | "Series")))
+            .filter_map(|item| {
+                let id = EntryId(item.playlist_item_id.clone()?);
+                Some(PlaylistEntry {
+                    id,
+                    title: item.title()?,
+                })
+            })
+            .collect())
     }
 
     /// One page of the items of a kind (`Movie`, `Series`) in a library, in the order asked.
@@ -955,6 +986,83 @@ impl MediaServer for Jellyfin {
             self.http
                 .delete("take out of the list", &path, &[self.user()])
         }
+    }
+
+    /// One request for the playlists, then one per playlist for what it holds, all at once.
+    fn playlists(&self) -> Result<Vec<Playlist>, ProviderError> {
+        let found = self.items(
+            "playlists",
+            &[
+                ("includeItemTypes", "Playlist".into()),
+                ("recursive", "true".into()),
+                ("sortBy", "SortName".into()),
+            ],
+        )?;
+        let playlists: Vec<&Item> = found
+            .items
+            .iter()
+            .filter(|item| item.media_type.as_deref() != Some("Audio"))
+            .collect();
+        std::thread::scope(|scope| {
+            let asked: Vec<_> = playlists
+                .iter()
+                .map(|item| {
+                    let id = ItemId(item.id.clone());
+                    scope.spawn(move || self.entries(&id, ""))
+                })
+                .collect();
+            playlists
+                .iter()
+                .zip(asked)
+                .map(|(item, entries)| {
+                    Ok(Playlist {
+                        id: ItemId(item.id.clone()),
+                        name: item.name.clone(),
+                        entries: entries.join().expect("a playlist request panicked")?,
+                    })
+                })
+                .collect()
+        })
+    }
+
+    /// An episode played from the playlist plays without its page: it needs its versions now.
+    fn playlist(&self, playlist: &ItemId) -> Result<Vec<PlaylistEntry>, ProviderError> {
+        self.entries(playlist, EPISODE_FIELDS)
+    }
+
+    fn create_playlist(&self, name: &str, item: &ItemId) -> Result<ItemId, ProviderError> {
+        let made: dto::PlaylistCreated = self.http.post(
+            "new playlist",
+            "/Playlists",
+            &[],
+            &json!({
+                "Name": name,
+                "Ids": [item.0],
+                "UserId": self.login.user_id,
+                "MediaType": "Video",
+            }),
+        )?;
+        Ok(ItemId(made.id))
+    }
+
+    fn add_to_playlist(&self, playlist: &ItemId, item: &ItemId) -> Result<(), ProviderError> {
+        self.http.post_empty(
+            "add to the playlist",
+            &format!("/Playlists/{}/Items", encode(&playlist.0)),
+            &[("ids", item.0.clone()), self.user()],
+        )
+    }
+
+    fn remove_from_playlist(
+        &self,
+        playlist: &ItemId,
+        entry: &EntryId,
+    ) -> Result<(), ProviderError> {
+        self.http.delete(
+            "take out of the playlist",
+            &format!("/Playlists/{}/Items", encode(&playlist.0)),
+            &[("entryIds", entry.0.clone())],
+        )
     }
 
     fn trickplay(

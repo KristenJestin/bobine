@@ -116,6 +116,17 @@ pub trait MediaServer: Send + Sync {
     fn favourites(&self) -> Result<Vec<Favourite>, ProviderError>;
     /// Puts a film or a series in the user's list, or takes it out.
     fn set_favourite(&self, item: &ItemId, favourite: bool) -> Result<(), ProviderError>;
+    /// The user's playlists of films and episodes, by name, each with what it holds.
+    fn playlists(&self) -> Result<Vec<Playlist>, ProviderError>;
+    /// What a playlist holds, in its order, the episodes with their versions.
+    fn playlist(&self, playlist: &ItemId) -> Result<Vec<PlaylistEntry>, ProviderError>;
+    /// Makes a playlist named `name` that holds `item`: its id.
+    fn create_playlist(&self, name: &str, item: &ItemId) -> Result<ItemId, ProviderError>;
+    /// Puts a film, an episode or a series at the end of a playlist.
+    fn add_to_playlist(&self, playlist: &ItemId, item: &ItemId) -> Result<(), ProviderError>;
+    /// Takes one entry out of a playlist.
+    fn remove_from_playlist(&self, playlist: &ItemId, entry: &EntryId)
+    -> Result<(), ProviderError>;
 
     /// How the trickplay thumbnails of one version are laid out, at the size to show; none when
     /// the server made none for it.
@@ -479,6 +490,26 @@ pub enum Favourite {
     Film(Film),
     Series(Series),
 }
+
+/// A playlist of the user's.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Playlist {
+    pub id: ItemId,
+    pub name: String,
+    /// What it holds, in its order.
+    pub entries: Vec<PlaylistEntry>,
+}
+
+/// One place in a playlist: a title may be in it twice, so the place is what is taken out.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlaylistEntry {
+    pub id: EntryId,
+    pub title: Title,
+}
+
+/// The id of a place in a playlist.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct EntryId(pub String);
 
 /// One version of a film: one file, with its tracks.
 #[derive(Debug, Clone, PartialEq, Eq)]
