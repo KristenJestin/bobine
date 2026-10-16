@@ -252,14 +252,14 @@ impl Shell {
         }
     }
 
-    /// Opens the player on `media`. Its addresses go straight to mpv: nothing here keeps or
-    /// prints them.
     /// The number of the film or series page about to open.
     fn next_generation(&mut self) -> u64 {
         self.pages_opened += 1;
         self.pages_opened
     }
 
+    /// Opens the player on `media`. Its addresses go straight to mpv: nothing here keeps or
+    /// prints them.
     pub fn play(
         &mut self,
         mpv: Arc<Libmpv>,
