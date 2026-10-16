@@ -97,6 +97,10 @@ pub struct LibraryPage<T> {
     pub waiting_jump: Option<(u64, u32)>,
     /// The alphabet bar comes and goes with the sort by title.
     pub letters: Fade,
+    /// How much the "Non vus" chip is lit.
+    pub unwatched: Fade,
+    /// Where the current letter is on the bar, as a position that glides from letter to letter.
+    pub highlight: Glide,
 }
 
 impl<T> Default for LibraryPage<T> {
@@ -116,6 +120,8 @@ impl<T> Default for LibraryPage<T> {
             jump: None,
             waiting_jump: None,
             letters: Fade::new(motion::quick()),
+            unwatched: Fade::new(motion::quick()),
+            highlight: Glide::new(0., motion::quick()),
         }
     }
 }

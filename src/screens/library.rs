@@ -16,7 +16,10 @@ use super::film_detail::{Actions, ChipBounds, MenuState, chip};
 use super::{note, poster, series_poster};
 use crate::grid::{self, GAP, Listed, MARGIN};
 use crate::icons::{IconName, icon};
-use crate::library_tools::{LETTERS, Sort, Tools, decade_label, letter_of};
+use crate::library_tools::{
+    LETTERS, Sort, Tools, decade_label, letter_index, letter_of, letter_weight,
+};
+use crate::motion;
 use crate::shell::LibraryPage;
 use crate::shell::{GONE, Loadable, Shell, Tool};
 use crate::theme;
@@ -109,9 +112,8 @@ fn grid_screen<T: Listed + 'static>(
         open,
         drawn: shown.menu_fade.follow(open, now),
     };
-    if shown.appear.moving(now) || shown.letters.moving(now) || shown.menu_fade.moving(now) {
-        window.request_animation_frame();
-    }
+    shown.unwatched.set(shown.tools.filters.unwatched, now);
+    let unwatched = shown.unwatched.level(now);
     let loading = shown.grid.total.is_none();
     let status = match &shown.library {
         Some(Loadable::Failed(why)) => Some(*why),
@@ -141,6 +143,19 @@ fn grid_screen<T: Listed + 'static>(
         .grid
         .shown_film(top_row * columns)
         .map(|first| letter_of(first.title()));
+    // The highlight goes from letter to letter instead of changing at once.
+    if let Some(index) = current.and_then(letter_index) {
+        shown.highlight.set(index as f32, now);
+    }
+    let highlight = shown.highlight.value(now);
+    if shown.appear.moving(now)
+        || shown.letters.moving(now)
+        || shown.menu_fade.moving(now)
+        || shown.unwatched.moving(now)
+        || shown.highlight.moving(now)
+    {
+        window.request_animation_frame();
+    }
 
     let list = uniform_list(
         title,
@@ -205,6 +220,7 @@ fn grid_screen<T: Listed + 'static>(
                 )
                 .child(tool_chips(
                     &tools,
+                    unwatched,
                     choices.as_ref(),
                     menu,
                     &chips,
@@ -222,7 +238,7 @@ fn grid_screen<T: Listed + 'static>(
                 .opacity(opacity)
                 .child(list),
         )
-        .children((letters > 0.).then(|| alphabet(current, letters, window, cx)))
+        .children((letters > 0.).then(|| alphabet(highlight, letters, window, cx)))
 }
 
 /// What the grid says when the filters leave nothing.
@@ -231,6 +247,7 @@ const NO_MATCH: &str = "Aucun titre ne correspond à ces filtres.";
 /// Genre, decade, unwatched only and the order, right of the title.
 fn tool_chips(
     tools: &Tools,
+    unwatched: f32,
     choices: Option<&FilterChoices>,
     menu: MenuState<Tool>,
     bounds: &[ChipBounds; 3],
@@ -311,7 +328,7 @@ fn tool_chips(
             decade.map_or("Toutes".to_string(), decade_label),
             decade_options,
         ))
-        .child(unwatched_chip(tools.filters.unwatched, window, cx))
+        .child(unwatched_chip(unwatched, window, cx))
         .child(tool(
             window,
             cx,
@@ -331,13 +348,15 @@ const TOOL_ACTIONS: Actions<Tool> = Actions {
     outside: Shell::pressed_outside_tool_menu,
 };
 
-/// `● NON VUS`: lit when only what the user has not watched shows.
-fn unwatched_chip(on: bool, window: &mut Window, cx: &mut Context<Shell>) -> Stateful<Div> {
+/// `● NON VUS`: lit when only what the user has not watched shows. `on` is how much it is, from
+/// 0 to 1, so that it lights and goes out by degrees.
+fn unwatched_chip(on: f32, window: &mut Window, cx: &mut Context<Shell>) -> Stateful<Div> {
     let shades = theme::Shades {
         rest: rgba(0x141416cc),
         hover: theme::line(),
         press: rgb(0x2e2e33),
     };
+    let lit = |off, on_| motion::mix(off, on_, on);
     theme::eased("unwatched", shades, window, cx)
         .flex()
         .items_center()
@@ -346,30 +365,22 @@ fn unwatched_chip(on: bool, window: &mut Window, cx: &mut Context<Shell>) -> Sta
         .py(px(7.))
         .rounded_full()
         .border_1()
-        .border_color(if on { theme::muted() } else { theme::line() })
+        .border_color(lit(theme::line(), theme::muted()))
         .cursor_pointer()
         .on_click(cx.listener(|shell, _, _, cx| shell.toggle_unwatched(cx)))
-        .child(icon(IconName::Circle, 8.).text_color(if on {
-            theme::accent()
-        } else {
-            theme::dim()
-        }))
+        .child(icon(IconName::Circle, 8.).text_color(lit(theme::dim(), theme::accent())))
         .child(
             div()
                 .text_size(px(10.))
                 .font_weight(FontWeight::BOLD)
-                .text_color(if on { theme::text() } else { theme::dim() })
+                .text_color(lit(theme::dim(), theme::text()))
                 .child("NON VUS"),
         )
 }
 
-/// A to Z and `#` down the right edge: a click goes to the first title of the letter.
-fn alphabet(
-    current: Option<char>,
-    shown: f32,
-    window: &mut Window,
-    cx: &mut Context<Shell>,
-) -> Div {
+/// A to Z and `#` down the right edge: a click goes to the first title of the letter. The
+/// current one is where the `highlight` is, a position on the bar that glides.
+fn alphabet(highlight: f32, shown: f32, window: &mut Window, cx: &mut Context<Shell>) -> Div {
     div()
         .absolute()
         .top(px(150.))
@@ -381,7 +392,7 @@ fn alphabet(
         .flex_col()
         .justify_between()
         .children(LETTERS.iter().enumerate().map(|(index, &letter)| {
-            let here = current == Some(letter);
+            let here = letter_weight(highlight, index);
             theme::eased(("letter", index), theme::Shades::veil(), window, cx)
                 .flex()
                 .items_center()
@@ -390,12 +401,12 @@ fn alphabet(
                 .w_full()
                 .rounded(px(5.))
                 .text_size(px(10.))
-                .font_weight(if here {
+                .font_weight(if here > 0.5 {
                     FontWeight::BOLD
                 } else {
                     FontWeight::MEDIUM
                 })
-                .text_color(if here { theme::text() } else { theme::dim() })
+                .text_color(motion::mix(theme::dim(), theme::text(), here))
                 .cursor_pointer()
                 .on_click(cx.listener(move |shell, _, _, cx| shell.jump_to_letter(letter, cx)))
                 .child(letter.to_string())
