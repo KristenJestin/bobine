@@ -33,6 +33,16 @@ pub enum Open {
     Pick(Pick),
 }
 
+impl Open {
+    /// The title the card stands for.
+    fn item(&self) -> Option<&ItemId> {
+        match self {
+            Open::Film(id) | Open::Series(id, _) | Open::Pick(Pick::Listed(_, id)) => Some(id),
+            Open::Pick(Pick::Row(titles, at)) => titles.get(*at).map(|title| title.id()),
+        }
+    }
+}
+
 /// What the play button starts.
 #[derive(Clone)]
 pub enum Play {
@@ -125,7 +135,11 @@ impl Cards {
     /// The card `id`, showing and offering `offer`.
     pub fn view(&mut self, id: &ElementId, offer: Offer, cx: &mut Context<Shell>) -> Entity<Card> {
         let frame = self.frame;
-        if let Some(kept) = self.views.get_mut(id) {
+        // Another title in the same place is another card: the pointer and the buttons of the
+        // one before are not its own.
+        if let Some(kept) = self.views.get_mut(id)
+            && kept.offer.open.item() == offer.open.item()
+        {
             kept.drawn = frame;
             kept.offer = offer;
             return kept.view.clone();

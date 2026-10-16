@@ -791,4 +791,31 @@ mod tests {
         );
         assert_eq!(screen(&window, cx), Screen::Person, "the page was opened");
     }
+
+    /// A card whose place now holds another title is a new card: the fades of the old one's
+    /// veil and buttons are not carried over to it.
+    #[gpui_kit::test]
+    fn a_card_whose_title_changes_starts_afresh(cx: &mut TestAppContext) {
+        let (server, window, cx) = home(cx);
+        let (id, first) = poster(&window, cx, |target| matches!(target, PlayTarget::Film(_)));
+        hover(cx, &id);
+        assert_eq!(veil(&window, cx, &id), 1.);
+        let shell = window.root(cx).unwrap();
+        let before = cx.read(|cx| shell.read(cx).cards.find(&id).unwrap().entity_id());
+
+        // The library gained a film since: the row moves along, another film in this place.
+        {
+            let mut state = server.state.lock().unwrap();
+            let at = state.films.iter().position(|f| f.id == first).unwrap();
+            let gained = state.films.pop().unwrap();
+            state.films.insert(at, gained);
+        }
+        window
+            .update(cx, |shell, _, cx| shell.load_home(cx))
+            .unwrap();
+        cx.run_until_parked();
+        assert_ne!(quick(&window, cx, &id).item, first);
+        let after = cx.read(|cx| shell.read(cx).cards.find(&id).unwrap().entity_id());
+        assert_ne!(before, after, "the old card was kept");
+    }
 }
