@@ -586,6 +586,15 @@ mod tests {
     }
 
     #[test]
+    fn a_short_duration_drops_the_minutes_of_a_whole_hour() {
+        let secs = |seconds| short_duration(Duration::from_secs(seconds));
+        assert_eq!(secs(42), "42s");
+        assert_eq!(secs(47 * 60), "47m");
+        assert_eq!(secs(2 * 3600), "2h");
+        assert_eq!(secs(2 * 3600 + 11 * 60), "2h 11m");
+    }
+
+    #[test]
     fn the_page_says_year_rating_runtime_genres_and_age() {
         assert_eq!(
             meta(&detail()),
