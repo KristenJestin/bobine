@@ -308,8 +308,12 @@ impl Jellyfin {
     }
 
     /// The address of `path` on the server, with the token: the server puts it in the paths it
-    /// gives; an older one may not.
+    /// gives; an older one may not. An absolute address is another host's (a remote subtitle):
+    /// as it is, never with our token.
     fn served(&self, path: &str) -> String {
+        if path.starts_with("http") {
+            return path.to_string();
+        }
         let mut url = format!("{}{path}", self.http.base());
         if !path.contains("ApiKey=") && !path.contains("api_key=") {
             let separator = if path.contains('?') { '&' } else { '?' };

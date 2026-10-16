@@ -1504,6 +1504,17 @@ fn the_transcode_request_carries_the_device_profile_with_the_embedded_subtitles(
 }
 
 #[test]
+fn an_absolute_delivery_url_is_used_as_it_is_without_a_token() {
+    let s = Setup::new();
+    s.fake.state.lock().unwrap().absolute_delivery = true;
+    let playback = transcoded(&s, Some(3));
+    assert_eq!(
+        playback.external_subtitles[2].url.expose_for_player(),
+        "https://subtitles.example.test/3.srt?lang=en"
+    );
+}
+
+#[test]
 fn a_version_the_server_cannot_convert_says_so() {
     let s = Setup::new();
     s.fake.state.lock().unwrap().no_transcoding = true;
