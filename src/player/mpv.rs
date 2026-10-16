@@ -2,7 +2,10 @@
 //! implements (`super::libmpv`) and the tests fake: the mapping from the port to mpv's commands
 //! and properties is tested without mpv.
 
-use super::{FirstSubtitle, Media, Player, PlayerError, PlayerEvent, Seek, TrackKind, tracks};
+use super::{
+    Aspect, FirstSubtitle, Media, PlaybackInfo, Player, PlayerError, PlayerEvent, Seek, TrackKind,
+    tracks,
+};
 
 /// The properties the player follows; mpv says when one changes.
 /// `vo-configured` turns on with the first picture the video output gets.
@@ -264,6 +267,47 @@ impl<C: MpvClient> Player for MpvPlayer<C> {
 
     fn set_subtitle_position(&mut self, percent: f64) {
         let _ = self.client.set("sub-pos", &percent.to_string());
+    }
+
+    fn set_speed(&mut self, speed: f64) {
+        let _ = self.client.set("speed", &speed.to_string());
+    }
+
+    fn set_subtitle_delay(&mut self, seconds: f64) {
+        let _ = self.client.set("sub-delay", &seconds.to_string());
+    }
+
+    fn set_aspect(&mut self, aspect: Aspect) {
+        // Fill keeps the film's shape and crops it to the window: mpv's pan and scan.
+        let (shape, crop) = match aspect {
+            Aspect::Auto => ("-1", "0"),
+            Aspect::Fill => ("-1", "1"),
+            Aspect::Wide => ("16:9", "0"),
+            Aspect::Standard => ("4:3", "0"),
+            Aspect::Scope => ("2.35:1", "0"),
+        };
+        let _ = self.client.set("video-aspect-override", shape);
+        let _ = self.client.set("panscan", crop);
+    }
+
+    fn info(&self) -> PlaybackInfo {
+        let text = |name: &str| self.client.get(name).filter(|value| !value.is_empty());
+        let whole = |name: &str| text(name)?.parse::<u64>().ok();
+        let dropped = match (whole("frame-drop-count"), whole("decoder-frame-drop-count")) {
+            (None, None) => None,
+            (output, decoder) => Some(output.unwrap_or(0) + decoder.unwrap_or(0)),
+        };
+        PlaybackInfo {
+            container: text("file-format"),
+            video_codec: text("video-format"),
+            audio_codec: text("audio-codec-name"),
+            size: whole("width")
+                .zip(whole("height"))
+                .map(|(width, height)| (width as u32, height as u32)),
+            video_bitrate: self.number("video-bitrate"),
+            dropped_frames: dropped,
+            hardware_decoder: text("hwdec-current").filter(|decoder| decoder != "no"),
+        }
     }
 
     fn events(&mut self) -> Vec<PlayerEvent> {
@@ -788,6 +832,85 @@ mod tests {
         let mut player = MpvPlayer::new(FakeMpv::default());
         player.set_subtitle_position(85.);
         assert_eq!(log(&player), [line(&["set", "sub-pos", "85"])]);
+    }
+
+    #[test]
+    fn the_speed_sets_the_speed_property() {
+        let mut player = MpvPlayer::new(FakeMpv::default());
+        player.set_speed(1.25);
+        assert_eq!(log(&player), [line(&["set", "speed", "1.25"])]);
+    }
+
+    #[test]
+    fn the_subtitle_offset_sets_sub_delay() {
+        let mut player = MpvPlayer::new(FakeMpv::default());
+        player.set_subtitle_delay(-0.3);
+        assert_eq!(log(&player), [line(&["set", "sub-delay", "-0.3"])]);
+    }
+
+    #[test]
+    fn each_aspect_sets_the_aspect_override_and_the_crop() {
+        let mut player = MpvPlayer::new(FakeMpv::default());
+        for aspect in Aspect::ALL {
+            player.set_aspect(aspect);
+        }
+        let set = |name: &str, value: &str| line(&["set", name, value]);
+        assert_eq!(
+            log(&player),
+            [
+                set("video-aspect-override", "-1"),
+                set("panscan", "0"),
+                set("video-aspect-override", "-1"),
+                set("panscan", "1"),
+                set("video-aspect-override", "16:9"),
+                set("panscan", "0"),
+                set("video-aspect-override", "4:3"),
+                set("panscan", "0"),
+                set("video-aspect-override", "2.35:1"),
+                set("panscan", "0"),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_playback_info_is_read_from_mpv() {
+        let mpv = FakeMpv::with(
+            &[
+                ("file-format", "matroska,webm"),
+                ("video-format", "hevc"),
+                ("audio-codec-name", "eac3"),
+                ("width", "3840"),
+                ("height", "2160"),
+                ("video-bitrate", "18500000"),
+                ("frame-drop-count", "2"),
+                ("decoder-frame-drop-count", "1"),
+                ("hwdec-current", "vaapi"),
+            ],
+            &[],
+        );
+        let player = MpvPlayer::new(mpv);
+        assert_eq!(
+            player.info(),
+            PlaybackInfo {
+                container: Some("matroska,webm".into()),
+                video_codec: Some("hevc".into()),
+                audio_codec: Some("eac3".into()),
+                size: Some((3840, 2160)),
+                video_bitrate: Some(18_500_000.),
+                dropped_frames: Some(3),
+                hardware_decoder: Some("vaapi".into()),
+            }
+        );
+    }
+
+    #[test]
+    fn a_film_the_processor_decodes_has_no_hardware_decoder() {
+        for said in ["no", ""] {
+            let player = MpvPlayer::new(FakeMpv::with(&[("hwdec-current", said)], &[]));
+            assert_eq!(player.info().hardware_decoder, None, "{said:?}");
+        }
+        let nothing = MpvPlayer::new(FakeMpv::default()).info();
+        assert_eq!(nothing, PlaybackInfo::default());
     }
 
     #[test]

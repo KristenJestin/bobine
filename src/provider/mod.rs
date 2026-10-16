@@ -567,6 +567,9 @@ pub struct TranscodeRequest {
     /// play.
     pub audio_track: Option<i32>,
     pub subtitle_track: Option<i32>,
+    /// Bits per second the conversion keeps under, chosen by the viewer; `None` for no cap but
+    /// the server's own.
+    pub max_bitrate: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

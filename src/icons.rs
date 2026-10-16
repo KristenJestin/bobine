@@ -68,6 +68,8 @@ icons! {
     Monitor => "monitor",
     Plug => "plug",
     Info => "info",
+    CornersOut => "corners-out",
+    CornersIn => "corners-in",
 }
 
 /// The asset source of the window: the icons above and nothing else.

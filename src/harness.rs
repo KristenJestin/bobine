@@ -12,7 +12,7 @@
 //! `bobine --screen login|home|home-rows|home-list-resume|home-list-next|home-list-latest|home-list-empty|library|detail|
 //! detail-rows|detail-cast|playing|series|series-page|series-rows|up-next|collections|collection-page|
 //! my-list|my-list-empty|film-list|series-list [--films N]
-//! [--media FILE] [--segments SECONDS] [--direct-fails] [--image-delay-ms N] [--photos-fail-once] [--scenario menu|scroll|select|panel|blackout|settings|search|search-slow|search-keys|tools|tools-keys|home-rotate|home-hover|home-jump|home-scroll|home-lists|home-play|home-poster-hover|grid-poster-hover|skip]
+//! [--media FILE] [--segments SECONDS] [--direct-fails] [--image-delay-ms N] [--photos-fail-once] [--scenario menu|scroll|select|panel|blackout|search|search-slow|search-keys|tools|tools-keys|home-rotate|home-hover|home-jump|home-scroll|home-lists|home-play|home-poster-hover|grid-poster-hover|skip|settings|settings-screen|long-tracks|segment-marks]
 //! [--search-delay-ms N] [--favourite-delay-ms N] [--logout-delay-ms N] [--favourite-fails] [--slower N] --quit-at S`
 //!
 //! A scenario sends clicks, keys and scroll events to the window as the compositor would, at set
@@ -638,15 +638,17 @@ enum Target {
     /// The account button of the pill bar.
     Account,
     /// "Settings" in the account menu.
-    Settings,
+    SettingsLine,
     /// "Sign out" in the account menu.
     SignOut,
     /// The settings' default quality button.
-    Quality,
+    QualityButton,
     /// A line of its menu, from the first.
     QualityChoice(usize),
     /// The player's seek bar, this far along it (0 to 1).
     SeekBar(f32),
+    /// The player's gear, bottom right, left of the fullscreen button.
+    Gear,
     /// A point of the window, in pixels from its top left.
     At(f32, f32),
 }
@@ -681,6 +683,12 @@ enum Act {
     SaveSecret,
     /// Its Clear button pressed, as its click does.
     ClearSecret,
+    /// A page of the player's settings menu opened, as its line's click does.
+    Settings(crate::player::settings::Page),
+    /// A quality chosen in the settings menu, as its line's click does.
+    Quality(crate::player::settings::Quality),
+    /// A subtitle track chosen, as its line in the panel does.
+    Subtitle(i64),
     /// A touchpad gesture: its moves in pixels, from start to end.
     Swipe {
         over: Target,
@@ -710,6 +718,7 @@ impl Acts {
             over,
             moves: moves.to_vec(),
         };
+        use crate::player::settings::{Page, Quality::Cap};
         let steps = match name {
             "menu" => vec![
                 (0.5, "open audio", Click(Chip(crate::shell::Chip::Audio))),
@@ -797,12 +806,13 @@ impl Acts {
                 (15.5, "the film stops in fullscreen", Leave),
                 (18.5, "stopped", Mark),
             ],
-            // The Settings from the account menu: the quality menu, the switch, a secret field.
-            "settings" => vec![
+            // The Settings screen from the account menu: the quality menu, the switch, a secret
+            // field.
+            "settings-screen" => vec![
                 (0.5, "open the account menu", Click(Account)),
-                (1.5, "open the settings", Click(Settings)),
+                (1.5, "open the settings", Click(SettingsLine)),
                 (2.5, "settings", Mark),
-                (3.0, "open the quality menu", Click(Quality)),
+                (3.0, "open the quality menu", Click(QualityButton)),
                 (4.0, "quality menu", Mark),
                 (4.5, "choose 4 Mbps", Click(QualityChoice(4))),
                 (5.5, "chosen", Mark),
@@ -1048,6 +1058,27 @@ impl Acts {
                 (27.8, "", Hover(Picture)),
                 (28., "enter skips the credits", Key("enter")),
             ],
+            // The settings menu, opened by its gear: a page, the playback info, a quality cap
+            // that restarts the film through the server's conversion, the info again, Escape.
+            "settings" => vec![
+                (1.5, "click the gear", Click(Gear)),
+                (3.0, "the speed page", Settings(Page::Speed)),
+                (5.0, "the playback info", Settings(Page::Info)),
+                (7.0, "choose 4 Mbps", Quality(Cap(4_000_000))),
+                (14.0, "click the gear again", Click(Gear)),
+                (14.5, "the playback info again", Settings(Page::Info)),
+                (17.0, "escape closes the menu", Key("escape")),
+            ],
+            // A list of forty subtitles, the thirtieth shown: the panel opens on it.
+            "long-tracks" => vec![
+                (1.0, "show the thirtieth subtitle", Subtitle(30)),
+                (2.0, "click the tracks button", Click(TracksButton)),
+            ],
+            // The pointer keeps moving over the picture so the controls and the seek bar stay.
+            "segment-marks" => (0..12)
+                .map(|n| (1. + f64::from(n), "", Hover(Picture)))
+                .chain([(13., "the seek bar", Mark)])
+                .collect(),
             other => {
                 eprintln!("bobine harness: unknown scenario {other}");
                 std::process::exit(2);
@@ -1183,7 +1214,7 @@ fn position(target: Target, shell: &Shell, window: &Window) -> Point<Pixels> {
         Target::Account => center(shell.account_button_bounds()),
         // The menu opens under the button, its right edge on the button's: a gap, a border and
         // a padding, the header, the rule, then the line.
-        Target::Settings => shell.account_button_bounds().map(|button| {
+        Target::SettingsLine => shell.account_button_bounds().map(|button| {
             point(
                 button.right() - px(100.),
                 button.bottom() + px(menu::GAP + 7. + MENU_HEADER + MENU_RULE + menu::LINE / 2.),
@@ -1195,7 +1226,7 @@ fn position(target: Target, shell: &Shell, window: &Window) -> Point<Pixels> {
                 button.bottom() + px(menu::GAP + 7. + MENU_HEADER + MENU_RULE + menu::LINE * 1.5),
             )
         }),
-        Target::Quality => center(shell.settings_page.quality_button.get()),
+        Target::QualityButton => center(shell.settings_page.quality_button.get()),
         Target::QualityChoice(line) => shell.settings_page.quality_button.get().map(|button| {
             point(
                 button.right() - px(100.),
@@ -1204,6 +1235,11 @@ fn position(target: Target, shell: &Shell, window: &Window) -> Point<Pixels> {
         }),
         Target::Blank => Some(point(size.width * 0.75, size.height * 0.3)),
         Target::TracksButton => Some(point(size.width - px(127.), px(48.))),
+        // Two buttons 36 wide, 8 apart, at the right margin, in the middle of the 52 high row.
+        Target::Gear => Some(point(
+            size.width - px(EDGE + 36. + 8. + 18.),
+            size.height - px(EDGE + 26.),
+        )),
         Target::Picture => Some(point(size.width * 0.3, size.height * 0.5)),
         Target::Top => Some(point(size.width * 0.75, px(24.))),
         Target::Bottom => Some(point(size.width * 0.9, size.height * 0.97)),
@@ -1280,6 +1316,35 @@ fn send(act: &Act, shell: &Entity<Shell>, window: &mut Window, cx: &mut App) {
                     _ => field.clear(cx),
                 });
             }
+            Vec::new()
+        }
+        Act::Settings(page) => {
+            shell.update(cx, |shell, cx| {
+                if let Some(playback) = &mut shell.playback {
+                    playback.session.show_settings_page(*page);
+                }
+                cx.notify();
+            });
+            Vec::new()
+        }
+        Act::Quality(quality) => {
+            shell.update(cx, |shell, cx| {
+                let request = shell.playback.as_mut().and_then(|playback| {
+                    playback.session.clicked_outside_panel();
+                    playback.session.choose_quality(*quality)
+                });
+                shell.player_request(request, window, cx);
+                cx.notify();
+            });
+            Vec::new()
+        }
+        Act::Subtitle(id) => {
+            shell.update(cx, |shell, cx| {
+                if let Some(playback) = &mut shell.playback {
+                    playback.session.select_subtitle(Some(*id));
+                }
+                cx.notify();
+            });
             Vec::new()
         }
         Act::Type(text) => {
@@ -1429,8 +1494,15 @@ fn state(label: &str, shell: &Shell, cx: &App) -> String {
     }
     if let Some(playback) = &shell.playback {
         return format!(
-            "PANEL {label}: panel_open={} blackout={} offered={} screen={screen:?} position={:.0} skip={:?}",
+            "PANEL {label}: panel_open={} settings={:?} quality={:?} info={:?} chosen_line={} blackout={} offered={} screen={screen:?} position={:.0} skip={:?}",
             playback.session.panel_open(),
+            playback
+                .session
+                .settings_open()
+                .then(|| playback.session.settings_page()),
+            playback.session.quality(),
+            playback.session.playback_info(),
+            playback.session.chosen_line(),
             shell.settings.black_out_other_monitors,
             shell.blackout_offered(),
             playback.session.position,
@@ -1570,6 +1642,7 @@ fn play(mut args: Args, shell: &Entity<Shell>, window: &mut Window, cx: &mut App
                             let film = Film {
                                 title: "Second film".to_string(),
                                 subtitle: None,
+                                list: None,
                             };
                             let played = Libmpv::new(&[("ao", "null")])
                                 .map_err(|e| e.to_string())
@@ -1624,6 +1697,7 @@ fn play_file(
             .clone()
             .unwrap_or_else(|| "Test film".to_string()),
         subtitle: Some("local file · direct play".to_string()),
+        list: None,
     };
     let external = args.sub.as_deref().map(|url| ExternalSubtitle {
         url,

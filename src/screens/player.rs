@@ -8,21 +8,25 @@ use std::sync::Arc;
 
 use gpui_kit::{
     App, ClickEvent, Context, Div, FontWeight, IntoElement, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, ObjectFit, RenderImage, Rgba, Stateful, Window, div, img,
-    linear_color_stop, linear_gradient, px, rgb, rgba,
+    MouseMoveEvent, MouseUpEvent, ObjectFit, RenderImage, Rgba, ScrollHandle, Stateful, Window,
+    div, img, linear_color_stop, linear_gradient, px, rgb, rgba,
 };
 
 use super::empty_screen;
 use crate::icons::{IconName, icon};
 use crate::motion;
-use crate::player::controls::{BOTTOM_CONTROLS_HEIGHT, SKIP_SECONDS};
+use crate::player::Aspect;
+use crate::player::controls::{BOTTOM_CONTROLS_HEIGHT, SKIP_SECONDS, TOP_CONTROLS_HEIGHT};
 use crate::player::segments::Button;
 use crate::player::session::{Choice, Session};
+use crate::player::settings::{self, Page, Quality, SPEEDS};
 use crate::player::thumbnails::Crop;
 use crate::player::time;
 use crate::shell::Shell;
 use crate::theme;
 
+/// How wide each side of the buttons row is, so that the middle buttons sit in the middle.
+const SIDE_WIDTH: f32 = 320.;
 /// The margin of the controls from the edges of the window, after the design.
 pub const EDGE: f32 = 40.;
 /// How wide the box of a time alone is, so that the time sits centred under the pointer.
@@ -33,6 +37,12 @@ const PREVIEW_GAP: f32 = 14.;
 const SWITCH_WIDTH: f32 = 34.;
 const SWITCH_HEIGHT: f32 = 20.;
 const SWITCH_GAP: f32 = 2.;
+/// The settings menu: its width, one of its lines, and the room between it and the seek bar.
+const MENU_WIDTH: f32 = 300.;
+const MENU_LINE: f32 = 34.;
+const MENU_GAP: f32 = 8.;
+/// The room the track panel leaves free under it.
+const PANEL_TOP: f32 = 96.;
 
 /// The player screen with no film to play.
 pub fn empty(_cx: &mut Context<Shell>) -> impl IntoElement {
@@ -47,9 +57,18 @@ pub struct Shown {
     pub skip: Option<(Button, f32)>,
     /// "Conversion par le serveur".
     pub notice: f32,
+    /// "This quality could not be started."
+    pub refusal: f32,
     /// Where the "Black out other screens" switch is, from off (0) to on (1); `None` when the
     /// compositor cannot cover a monitor, and the switch is not offered.
     pub blackout: Option<f32>,
+    /// The settings menu.
+    pub settings: f32,
+    /// The "My list" button: whether the title is in the list, and why the last press failed;
+    /// `None` for a file of no server.
+    pub list: Option<(bool, Option<&'static str>)>,
+    /// The tracks of the panel scroll on this.
+    pub tracks_scroll: ScrollHandle,
     /// What floats over the seek bar where the pointer is.
     pub preview: Option<Preview>,
 }
@@ -90,14 +109,26 @@ pub fn render(
             .opacity(shown.controls)
             .child(shade(true))
             .child(shade(false))
-            .child(title_bar(session, window, cx))
+            .child(title_bar(session, shown.list, window, cx))
             .child(bottom_bar(session, window, cx))
             .children(shown.preview.map(preview))
     });
-    // Only an open panel closes on a click outside; one fading out is just drawn.
-    let outside = session.panel_open().then(|| outside_panel(cx));
-    let panel = (shown.panel > 0.).then(|| panel(session, shown.panel, shown.blackout, window, cx));
-    let notice = (shown.notice > 0.).then(|| conversion_notice(shown.notice));
+    // Only an open panel or menu closes on a click outside; one fading out is just drawn.
+    let outside = (session.panel_open() || session.settings_open()).then(|| outside_panel(cx));
+    let panel = (shown.panel > 0.).then(|| {
+        panel(
+            session,
+            shown.panel,
+            shown.blackout,
+            &shown.tracks_scroll,
+            window,
+            cx,
+        )
+    });
+    let menu = (shown.settings > 0.).then(|| settings_menu(session, shown.settings, window, cx));
+    let conversion = (shown.notice > 0.).then(|| notice("Converted by the server", shown.notice));
+    let refusal =
+        (shown.refusal > 0.).then(|| notice("This quality could not be started.", shown.refusal));
     div()
         .id("player")
         .size_full()
@@ -115,8 +146,18 @@ pub fn render(
             MouseButton::Left,
             cx.listener(|shell, _: &MouseUpEvent, _, cx| shell.seek_release(cx)),
         )
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(|shell, event: &MouseDownEvent, window, cx| {
+                // A button or a box over the picture keeps its clicks.
+                if event.click_count == 2 && !window.default_prevented() {
+                    shell.player_double_click(f32::from(event.position.y), window, cx);
+                }
+            }),
+        )
         .children(controls)
-        .children(notice)
+        .children(conversion)
+        .children(refusal)
         .children(
             shown.skip.map(|(button, level)| {
                 super::skip::button(button, level, shown.controls, window, cx)
@@ -124,6 +165,7 @@ pub fn render(
         )
         .children(outside)
         .children(panel)
+        .children(menu)
         .when_some(session.error(), |root, error| {
             root.child(
                 div()
@@ -132,21 +174,28 @@ pub fn render(
                     .flex()
                     .items_center()
                     .justify_center()
-                    .child(
+                    .child(keeps_clicks(
                         div()
+                            .id("player-error")
                             .px(px(20.))
                             .py(px(14.))
                             .rounded(px(theme::RADIUS_LARGE))
                             .bg(theme::panel())
                             .child(format!("Cannot play: {error}")),
-                    ),
+                    )),
             )
         })
 }
 
+/// A double click on `element` is not one on the picture: fullscreen stays as it is.
+pub fn keeps_clicks<E: InteractiveElement>(element: E) -> E {
+    element.on_mouse_down(MouseButton::Left, |_, window, _| window.prevent_default())
+}
+
 /// One line at the top, over the picture whether the controls show or not: the server
-/// converts the film, which the viewer may notice in its picture or its start.
-fn conversion_notice(shown: f32) -> Div {
+/// converts the film, which the viewer may notice in its picture or its start, or would not
+/// give the quality chosen.
+fn notice(text: &'static str, shown: f32) -> Div {
     div()
         .absolute()
         .top(px(30.))
@@ -162,7 +211,7 @@ fn conversion_notice(shown: f32) -> Div {
                 .rounded(px(theme::RADIUS_LARGE))
                 .bg(theme::panel())
                 .text_size(px(13.))
-                .child("Converted by the server"),
+                .child(text),
         )
 }
 
@@ -185,7 +234,12 @@ fn shade(top: bool) -> Div {
     }
 }
 
-fn title_bar(session: &Session, window: &mut Window, cx: &mut Context<Shell>) -> Div {
+fn title_bar(
+    session: &Session,
+    list: Option<(bool, Option<&'static str>)>,
+    window: &mut Window,
+    cx: &mut Context<Shell>,
+) -> Div {
     let back = round_button("player-back", 36., window, cx)
         .child(icon(IconName::ArrowLeft, 20.))
         .on_click(cx.listener(|shell, _, window, cx| {
@@ -199,6 +253,24 @@ fn title_bar(session: &Session, window: &mut Window, cx: &mut Context<Shell>) ->
             }
             cx.notify();
         }));
+    let list = list.map(|(on, error)| {
+        div()
+            .flex()
+            .items_center()
+            .gap(px(12.))
+            .children(error.map(|error| {
+                div()
+                    .text_size(px(13.))
+                    .text_color(theme::muted())
+                    .child(error)
+            }))
+            .child(super::film_detail::list_button(
+                "player-list",
+                on,
+                window,
+                cx,
+            ))
+    });
     div()
         .absolute()
         .top(px(30.))
@@ -228,7 +300,14 @@ fn title_bar(session: &Session, window: &mut Window, cx: &mut Context<Shell>) ->
                     }),
             ),
         )
-        .child(tracks)
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(12.))
+                .children(list)
+                .child(tracks),
+        )
 }
 
 fn bottom_bar(session: &Session, window: &mut Window, cx: &mut Context<Shell>) -> Div {
@@ -257,6 +336,39 @@ fn bottom_bar(session: &Session, window: &mut Window, cx: &mut Context<Shell>) -
     }));
     let forward_10 = text_button("player-forward-10", "+10s", window, cx)
         .on_click(cx.listener(skip(SKIP_SECONDS)));
+    let gear = round_button("player-settings", 36., window, cx)
+        .when(session.settings_open(), |button| button.bg(theme::line()))
+        .child(icon(IconName::Gear, 20.))
+        .on_click(cx.listener(|shell, _, _, cx| {
+            if let Some(playback) = &mut shell.playback {
+                playback.session.toggle_settings();
+            }
+            cx.notify();
+        }));
+    let fullscreen = round_button("player-fullscreen", 36., window, cx)
+        .child(icon(
+            if window.is_fullscreen() {
+                IconName::CornersIn
+            } else {
+                IconName::CornersOut
+            },
+            20.,
+        ))
+        .on_click(cx.listener(|shell, _, window, cx| {
+            let request = shell
+                .playback
+                .as_ref()
+                .and_then(|playback| playback.session.press_fullscreen());
+            shell.player_request(request, window, cx);
+        }));
+    // The segments the server marked: lighter stretches of the bar, cut from the rest by a
+    // notch at each end that shows over the played part too.
+    let marks = session.segment_marks();
+    let notches: Vec<f32> = marks
+        .iter()
+        .flat_map(|(start, width)| [*start, start + width])
+        .filter(|at| *at > 0. && *at < 1.)
+        .collect();
 
     div()
         .absolute()
@@ -295,6 +407,15 @@ fn bottom_bar(session: &Session, window: &mut Window, cx: &mut Context<Shell>) -
                         .h(px(5.))
                         .rounded(px(3.))
                         .bg(rgba(0xffffff33))
+                        .children(marks.iter().map(|(start, width)| {
+                            div()
+                                .absolute()
+                                .top_0()
+                                .h_full()
+                                .left(gpui_kit::relative(*start))
+                                .w(gpui_kit::relative(*width))
+                                .bg(rgba(0xffffff66))
+                        }))
                         .child(
                             div()
                                 .h_full()
@@ -302,6 +423,15 @@ fn bottom_bar(session: &Session, window: &mut Window, cx: &mut Context<Shell>) -
                                 .rounded(px(3.))
                                 .bg(rgb(0xffffff)),
                         )
+                        .children(notches.into_iter().map(|at| {
+                            div()
+                                .absolute()
+                                .top_0()
+                                .h_full()
+                                .left(px(at * bar_width - 1.))
+                                .w(px(2.))
+                                .bg(rgba(0x000000b3))
+                        }))
                         .child(
                             div()
                                 .absolute()
@@ -319,7 +449,7 @@ fn bottom_bar(session: &Session, window: &mut Window, cx: &mut Context<Shell>) -
                 .items_center()
                 .justify_between()
                 .text_size(px(13.))
-                .child(div().w(px(220.)).child(time::clock(session.position)))
+                .child(div().w(px(SIDE_WIDTH)).child(time::clock(session.position)))
                 .child(
                     div()
                         .flex()
@@ -331,15 +461,18 @@ fn bottom_bar(session: &Session, window: &mut Window, cx: &mut Context<Shell>) -
                 )
                 .child(
                     div()
-                        .w(px(220.))
+                        .w(px(SIDE_WIDTH))
                         .flex()
+                        .items_center()
                         .justify_end()
-                        .text_color(theme::muted())
-                        .child(format!(
+                        .gap(px(8.))
+                        .child(div().mr(px(8.)).text_color(theme::muted()).child(format!(
                             "{} · {}",
                             time::remaining(left),
                             time::end_clock(time::local_now(), left)
-                        )),
+                        )))
+                        .child(gear)
+                        .child(fullscreen),
                 ),
         )
 }
@@ -426,7 +559,7 @@ fn round_button(id: &'static str, side: f32, window: &mut Window, cx: &mut App) 
 }
 
 fn round(button: Stateful<Div>, side: f32) -> Stateful<Div> {
-    button
+    keeps_clicks(button)
         .size(px(side))
         .flex()
         .items_center()
@@ -441,7 +574,7 @@ fn text_button(
     window: &mut Window,
     cx: &mut App,
 ) -> Stateful<Div> {
-    theme::eased(id, theme::Shades::veil(), window, cx)
+    keeps_clicks(theme::eased(id, theme::Shades::veil(), window, cx))
         .px(px(12.))
         .py(px(8.))
         .rounded(px(theme::RADIUS))
@@ -468,11 +601,12 @@ fn outside_panel(cx: &mut Context<Shell>) -> Stateful<Div> {
 }
 
 /// Over the video at the right: the picture keeps its whole size under it. It slides in a little
-/// from the right as it fades in, `shown` of the way.
+/// from the right as it fades in, `shown` of the way. A list taller than the window scrolls.
 fn panel(
     session: &Session,
     shown: f32,
     blackout: Option<f32>,
+    scroll: &ScrollHandle,
     window: &mut Window,
     cx: &mut Context<Shell>,
 ) -> Stateful<Div> {
@@ -502,13 +636,32 @@ fn panel(
             }
         },
     );
+    let height = f32::from(window.viewport_size().height);
+    // One line after another, the titles included: `Session::chosen_line` counts them so.
+    let tracks = div()
+        .id("player-tracks-list")
+        .track_scroll(scroll)
+        .overflow_y_scroll()
+        // Shrinks, as flex items do, down to what the panel leaves it.
+        .min_h_0()
+        .flex()
+        .flex_col()
+        .gap(px(4.))
+        .text_size(px(14.))
+        .child(section_title("AUDIO").mb(px(8.)))
+        .children(audio)
+        .child(section_title("SUBTITLES").mt(px(22.)).mb(px(8.)))
+        .children(subtitles);
     div()
         .id("player-panel")
         .absolute()
-        .top(px(96.))
+        .top(px(PANEL_TOP))
         .right(px(EDGE - 16. * (1. - shown)))
         .opacity(shown)
         .w(px(340.))
+        .max_h(px(panel_height(height)))
+        .flex()
+        .flex_col()
         .pt(px(22.))
         .px(px(20.))
         .pb(px(14.))
@@ -519,13 +672,367 @@ fn panel(
         .bg(rgba(0x0e0e10e0))
         // A click in the panel never reaches the video's area.
         .when(open, |panel| panel.occlude())
-        .child(section_title("AUDIO"))
-        .child(audio.mb(px(26.)))
-        .child(section_title("SUBTITLES"))
-        .child(subtitles)
+        .child(tracks)
         .when_some(blackout, |panel, on| {
             panel.child(blackout_switch(on, open, window, cx))
         })
+}
+
+/// The most the panel may take of a window `window_height` high: down to the bottom margin.
+fn panel_height(window_height: f32) -> f32 {
+    (window_height - PANEL_TOP - EDGE).max(0.)
+}
+
+/// What a line of the menu does when clicked.
+type Act = fn(&mut Shell, &mut Window, &mut Context<Shell>);
+
+/// The settings menu, over the right of the seek bar, under its gear: the list of settings, or
+/// the one opened. It fades in rising a little toward its place, `shown` of the way, like the
+/// chip menus; only an open menu answers the mouse.
+fn settings_menu(
+    session: &Session,
+    shown: f32,
+    window: &mut Window,
+    cx: &mut Context<Shell>,
+) -> Stateful<Div> {
+    let open = session.settings_open();
+    let lines: Vec<Stateful<Div>> = match session.settings_page() {
+        Page::Main => main_page(session, open, window, cx),
+        Page::Speed => {
+            let mut lines = vec![back_line("Playback speed", open, window, cx)];
+            lines.extend(SPEEDS.iter().enumerate().map(|(index, speed)| {
+                let speed = *speed;
+                choice_line(
+                    ("speed", index),
+                    settings::speed_label(speed),
+                    session.speed() == speed,
+                    open,
+                    window,
+                    cx,
+                    move |shell, _, cx| {
+                        if let Some(playback) = &mut shell.playback {
+                            playback.session.set_speed(speed);
+                        }
+                        cx.notify();
+                    },
+                )
+            }));
+            lines
+        }
+        Page::Aspect => {
+            let mut lines = vec![back_line("Aspect ratio", open, window, cx)];
+            lines.extend(Aspect::ALL.iter().enumerate().map(|(index, aspect)| {
+                let aspect = *aspect;
+                choice_line(
+                    ("aspect", index),
+                    aspect.label().to_string(),
+                    session.aspect() == aspect,
+                    open,
+                    window,
+                    cx,
+                    move |shell, _, cx| {
+                        if let Some(playback) = &mut shell.playback {
+                            playback.session.set_aspect(aspect);
+                        }
+                        cx.notify();
+                    },
+                )
+            }));
+            lines
+        }
+        Page::Quality => {
+            let mut lines = vec![back_line("Quality", open, window, cx)];
+            lines.extend(Quality::ALL.iter().enumerate().map(|(index, quality)| {
+                let quality = *quality;
+                choice_line(
+                    ("quality", index),
+                    session.quality_label(quality),
+                    session.quality() == quality,
+                    open,
+                    window,
+                    cx,
+                    move |shell, window, cx| {
+                        let request = shell.playback.as_mut().and_then(|playback| {
+                            playback.session.clicked_outside_panel();
+                            playback.session.choose_quality(quality)
+                        });
+                        shell.player_request(request, window, cx);
+                        cx.notify();
+                    },
+                )
+            }));
+            lines
+        }
+        Page::Info => {
+            let mut lines = vec![back_line("Playback info", open, window, cx)];
+            lines.extend(session.playback_info().into_iter().enumerate().map(
+                |(index, (label, value))| {
+                    div()
+                        .id(("info", index))
+                        .h(px(MENU_LINE - 6.))
+                        .px(px(12.))
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .gap(px(16.))
+                        .child(div().text_color(theme::muted()).child(label))
+                        .child(value)
+                },
+            ));
+            lines
+        }
+    };
+    let height = f32::from(window.viewport_size().height);
+    let bottom = BOTTOM_CONTROLS_HEIGHT + MENU_GAP;
+    div()
+        .id("player-settings-menu")
+        .absolute()
+        .right(px(EDGE))
+        .bottom(px(bottom - 8. * (1. - shown)))
+        .opacity(shown)
+        .w(px(MENU_WIDTH))
+        .max_h(px((height - bottom - TOP_CONTROLS_HEIGHT).max(0.)))
+        .overflow_y_scroll()
+        .p(px(6.))
+        .flex()
+        .flex_col()
+        .rounded(px(theme::RADIUS_LARGE))
+        .border_1()
+        .border_color(theme::line())
+        .bg(theme::panel())
+        .text_size(px(13.))
+        .when(open, |menu| menu.occlude())
+        .children(lines)
+}
+
+/// The list of settings, each with what it is set to.
+fn main_page(
+    session: &Session,
+    open: bool,
+    window: &mut Window,
+    cx: &mut Context<Shell>,
+) -> Vec<Stateful<Div>> {
+    let page = |page: Page| -> Act {
+        match page {
+            Page::Speed => |shell, _, cx| show_page(shell, Page::Speed, cx),
+            Page::Aspect => |shell, _, cx| show_page(shell, Page::Aspect, cx),
+            Page::Quality => |shell, _, cx| show_page(shell, Page::Quality, cx),
+            Page::Info => |shell, _, cx| show_page(shell, Page::Info, cx),
+            Page::Main => |shell, _, cx| show_page(shell, Page::Main, cx),
+        }
+    };
+    let mut lines = vec![
+        setting_line(
+            "Playback speed",
+            Some(settings::speed_label(session.speed())),
+            open,
+            page(Page::Speed),
+            window,
+            cx,
+        ),
+        offset_line(session.subtitle_delay(), open, window, cx),
+        setting_line(
+            "Aspect ratio",
+            Some(session.aspect().label().to_string()),
+            open,
+            page(Page::Aspect),
+            window,
+            cx,
+        ),
+    ];
+    if session.quality_offered() {
+        lines.push(setting_line(
+            "Quality",
+            Some(session.quality().short_label()),
+            open,
+            page(Page::Quality),
+            window,
+            cx,
+        ));
+    }
+    lines.push(setting_line(
+        "Playback info",
+        None,
+        open,
+        page(Page::Info),
+        window,
+        cx,
+    ));
+    lines
+}
+
+fn show_page(shell: &mut Shell, page: Page, cx: &mut Context<Shell>) {
+    if let Some(playback) = &mut shell.playback {
+        playback.session.show_settings_page(page);
+    }
+    cx.notify();
+}
+
+/// A line of the menu: eased under the pointer, clickable while the menu is open.
+fn menu_line(
+    id: impl Into<gpui_kit::ElementId>,
+    open: bool,
+    act: impl Fn(&mut Shell, &mut Window, &mut Context<Shell>) + 'static,
+    window: &mut Window,
+    cx: &mut Context<Shell>,
+) -> Stateful<Div> {
+    theme::eased(id, theme::Shades::line(), window, cx)
+        .flex_none()
+        .h(px(MENU_LINE))
+        .px(px(12.))
+        .rounded(px(7.))
+        .flex()
+        .items_center()
+        .gap(px(10.))
+        .when(open, |line| {
+            line.cursor_pointer()
+                .on_click(cx.listener(move |shell, _, window, cx| act(shell, window, cx)))
+        })
+}
+
+/// A setting of the list, what it is set to, and the chevron to its page.
+fn setting_line(
+    label: &'static str,
+    value: Option<String>,
+    open: bool,
+    act: Act,
+    window: &mut Window,
+    cx: &mut Context<Shell>,
+) -> Stateful<Div> {
+    menu_line(label, open, act, window, cx)
+        .justify_between()
+        .child(label)
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(6.))
+                .text_color(theme::muted())
+                .children(value)
+                .child(icon(IconName::ChevronRight, 14.)),
+        )
+}
+
+/// The top of a setting's page: back to the list.
+fn back_line(
+    title: &'static str,
+    open: bool,
+    window: &mut Window,
+    cx: &mut Context<Shell>,
+) -> Stateful<Div> {
+    menu_line(
+        "settings-back",
+        open,
+        |shell, _, cx| show_page(shell, Page::Main, cx),
+        window,
+        cx,
+    )
+    .font_weight(FontWeight::SEMIBOLD)
+    .child(icon(IconName::ChevronLeft, 14.))
+    .child(title)
+}
+
+/// One choice of a setting's page, checked when it is the one set.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one line's look and what it does"
+)]
+fn choice_line(
+    id: impl Into<gpui_kit::ElementId>,
+    label: String,
+    current: bool,
+    open: bool,
+    window: &mut Window,
+    cx: &mut Context<Shell>,
+    act: impl Fn(&mut Shell, &mut Window, &mut Context<Shell>) + 'static,
+) -> Stateful<Div> {
+    menu_line(id, open, act, window, cx)
+        .child(
+            div()
+                .size(px(14.))
+                .when(current, |mark| mark.child(icon(IconName::Check, 14.))),
+        )
+        .child(label)
+}
+
+/// "Subtitle offset": earlier, the offset, later, and a reset once it is not zero.
+fn offset_line(
+    tenths: i32,
+    open: bool,
+    window: &mut Window,
+    cx: &mut Context<Shell>,
+) -> Stateful<Div> {
+    let step = |id: &'static str,
+                label: &'static str,
+                by: i32,
+                window: &mut Window,
+                cx: &mut Context<Shell>| {
+        theme::eased(id, theme::Shades::line(), window, cx)
+            .size(px(26.))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(6.))
+            .font_weight(FontWeight::BOLD)
+            .child(label)
+            .when(open, |button| {
+                button
+                    .cursor_pointer()
+                    .on_click(cx.listener(move |shell, _, _, cx| {
+                        if let Some(playback) = &mut shell.playback {
+                            playback.session.shift_subtitles(by);
+                        }
+                        cx.notify();
+                    }))
+            })
+    };
+    let earlier = step("subtitles-earlier", "−", -1, window, cx);
+    let later = step("subtitles-later", "+", 1, window, cx);
+    let reset = (tenths != 0).then(|| {
+        theme::eased("subtitles-reset", theme::Shades::line(), window, cx)
+            .size(px(26.))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(6.))
+            .child(icon(IconName::RotateCcw, 14.))
+            .when(open, |button| {
+                button
+                    .cursor_pointer()
+                    .on_click(cx.listener(|shell, _, _, cx| {
+                        if let Some(playback) = &mut shell.playback {
+                            playback.session.reset_subtitle_delay();
+                        }
+                        cx.notify();
+                    }))
+            })
+    });
+    div()
+        .id("subtitle-offset")
+        .flex_none()
+        .h(px(MENU_LINE))
+        .px(px(12.))
+        .flex()
+        .items_center()
+        .justify_between()
+        .child("Subtitle offset")
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(4.))
+                .children(reset)
+                .child(earlier)
+                .child(
+                    div()
+                        .w(px(52.))
+                        .flex()
+                        .justify_center()
+                        .text_color(theme::muted())
+                        .child(settings::offset_label(tenths)),
+                )
+                .child(later),
+        )
 }
 
 /// "Black out other screens", under the tracks: a line with a switch, `on` of the way to on.
@@ -624,8 +1131,8 @@ fn choices(
     window: &mut Window,
     cx: &mut Context<Shell>,
     select: fn(&mut Shell, Option<i64>),
-) -> Div {
-    let lines: Vec<Stateful<Div>> = choices
+) -> Vec<Stateful<Div>> {
+    choices
         .into_iter()
         .enumerate()
         .map(|(index, choice)| {
@@ -653,14 +1160,7 @@ fn choices(
                 }))
                 .child(choice.label)
         })
-        .collect();
-    div()
-        .mt(px(12.))
-        .flex()
-        .flex_col()
-        .gap(px(4.))
-        .text_size(px(14.))
-        .children(lines)
+        .collect()
 }
 
 #[cfg(test)]
@@ -693,6 +1193,13 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn a_long_track_list_scrolls_inside_the_window() {
+        // The panel stops above the bottom margin: what does not fit scrolls.
+        assert_eq!(panel_height(810.), 810. - 96. - 40.);
+        assert_eq!(panel_height(100.), 0.);
     }
 
     #[test]

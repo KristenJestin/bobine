@@ -2,14 +2,20 @@
 //! draws this and forwards the keys, the mouse and the layout to it; the tests drive it with a
 //! fake player, a fake display and their own clock.
 
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use bobine::provider::Segment;
 
-use super::controls::{Controls, KeyAction, key_action, subtitle_position};
+use super::controls::{Controls, KeyAction, key_action, on_picture, subtitle_position};
 use super::segments::{Button, Label, Press, Prompt, button_at};
-use super::{Media, Player, PlayerError, PlayerEvent, Seek, Track, TrackKind, tracks};
+use super::settings::{self, Page, Quality};
+use super::{
+    Aspect, Media, PlaybackInfo, Player, PlayerError, PlayerEvent, Seek, Track, TrackKind, tracks,
+};
 use crate::video::{Rect, VideoDisplay, placement};
+
+/// How often "Playback info" is read from the player.
+const INFO_EVERY: Duration = Duration::from_secs(1);
 
 /// What the session asks of the window.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -21,6 +27,8 @@ pub enum WindowRequest {
     EndPlayback,
     /// Likewise, and the next episode plays at once.
     NextEpisode,
+    /// The viewer chose another quality: the server is asked for it.
+    Quality(Quality),
 }
 
 /// One line of the audio and subtitles panel.
@@ -40,12 +48,30 @@ pub struct Session {
     pub subtitle: Option<String>,
     controls: Controls,
     panel_open: bool,
+    /// The settings menu, and its page: kept once it closes, as it fades out.
+    settings_open: bool,
+    settings_page: Page,
+    speed: f64,
+    /// In tenths of a second.
+    subtitle_delay: i32,
+    aspect: Aspect,
+    quality: Quality,
+    /// The server can convert the film: a quality can be chosen.
+    quality_offered: bool,
+    /// The server converts what plays.
+    converted: bool,
+    /// The file did not play as it is: "Original" is the server's conversion of it.
+    direct_failed: bool,
     pub position: f64,
     /// mpv sent a `time-pos`: before it, `position` is the 0 it starts at, not where the film is.
     position_known: bool,
     pub duration: f64,
     pub paused: bool,
     tracks: Vec<Track>,
+    /// What "Playback info" shows, and when it was read: mpv is asked once a second, not at
+    /// every frame drawn.
+    info: PlaybackInfo,
+    info_read_at: Option<Instant>,
     error: Option<PlayerError>,
     window_height: f32,
     /// Whether the controls showed at the last update, and mpv's `sub-pos` for it.
@@ -89,11 +115,22 @@ impl Session {
             subtitle,
             controls: Controls::default(),
             panel_open: false,
+            settings_open: false,
+            settings_page: Page::Main,
+            speed: 1.,
+            subtitle_delay: 0,
+            aspect: Aspect::Auto,
+            quality: Quality::Original,
+            quality_offered: false,
+            converted: false,
+            direct_failed: false,
             position: 0.,
             position_known: false,
             duration: 0.,
             paused: false,
             tracks: Vec::new(),
+            info: PlaybackInfo::default(),
+            info_read_at: None,
             error: None,
             window_height: 0.,
             controls_shown: false,
@@ -161,6 +198,11 @@ impl Session {
         self.has_next = has_next;
     }
 
+    /// Where the segments sit on the seek bar.
+    pub fn segment_marks(&self) -> Vec<(f32, f32)> {
+        super::segments::marks(&self.segments, self.duration)
+    }
+
     /// The skip button, while it shows (an intro, a recap, the credits).
     pub fn skip_button(&self) -> Option<Button> {
         self.skip
@@ -203,9 +245,11 @@ impl Session {
         fullscreen: bool,
     ) -> Option<WindowRequest> {
         let action = key_action(key, with_modifier, fullscreen)?;
-        // Escape closes the panel before it leaves fullscreen or the player.
-        if self.panel_open && matches!(action, KeyAction::ExitFullscreen | KeyAction::Leave) {
-            self.panel_open = false;
+        // Escape closes the panel or the menu before it leaves fullscreen or the player.
+        if (self.panel_open || self.settings_open)
+            && matches!(action, KeyAction::ExitFullscreen | KeyAction::Leave)
+        {
+            self.clicked_outside_panel();
             return None;
         }
         match action {
@@ -249,22 +293,149 @@ impl Session {
         self.prompt.mouse_moved(now);
     }
 
-    /// The controls stay while the panel is open: it is reached through them.
+    /// The controls stay while the panel or the menu is open: they are reached through them.
     pub fn controls_visible(&self, now: Instant) -> bool {
-        self.panel_open || self.controls.visible(now)
+        self.panel_open || self.settings_open || self.controls.visible(now)
     }
 
     pub fn panel_open(&self) -> bool {
         self.panel_open
     }
 
+    /// The panel and the settings menu never show together.
     pub fn toggle_panel(&mut self) {
         self.panel_open = !self.panel_open;
+        self.settings_open = false;
     }
 
-    /// A click anywhere but in the panel closes it, the button that opened it included.
+    /// A click anywhere but in the panel or the menu closes it, the button that opened it
+    /// included.
     pub fn clicked_outside_panel(&mut self) {
         self.panel_open = false;
+        self.settings_open = false;
+    }
+
+    /// The gear: the menu opens on its list of settings, or closes.
+    pub fn toggle_settings(&mut self) {
+        self.settings_open = !self.settings_open;
+        if self.settings_open {
+            self.settings_page = Page::Main;
+            self.panel_open = false;
+        }
+    }
+
+    pub fn settings_open(&self) -> bool {
+        self.settings_open
+    }
+
+    /// The page shown, or last shown while the menu fades out.
+    pub fn settings_page(&self) -> Page {
+        self.settings_page
+    }
+
+    pub fn show_settings_page(&mut self, page: Page) {
+        self.settings_page = page;
+    }
+
+    pub fn speed(&self) -> f64 {
+        self.speed
+    }
+
+    pub fn set_speed(&mut self, speed: f64) {
+        self.speed = speed;
+        self.player.set_speed(speed);
+    }
+
+    /// In tenths of a second.
+    pub fn subtitle_delay(&self) -> i32 {
+        self.subtitle_delay
+    }
+
+    /// Later by `tenths` of a second, earlier when negative.
+    pub fn shift_subtitles(&mut self, tenths: i32) {
+        self.delay_subtitles(self.subtitle_delay + tenths);
+    }
+
+    pub fn reset_subtitle_delay(&mut self) {
+        self.delay_subtitles(0);
+    }
+
+    fn delay_subtitles(&mut self, tenths: i32) {
+        self.subtitle_delay = tenths;
+        self.player.set_subtitle_delay(f64::from(tenths) / 10.);
+    }
+
+    pub fn aspect(&self) -> Aspect {
+        self.aspect
+    }
+
+    pub fn set_aspect(&mut self, aspect: Aspect) {
+        self.aspect = aspect;
+        self.player.set_aspect(aspect);
+    }
+
+    pub fn quality(&self) -> Quality {
+        self.quality
+    }
+
+    /// The film comes from a server that converts it: its quality can be chosen.
+    pub fn offer_quality(&mut self) {
+        self.quality_offered = true;
+    }
+
+    pub fn quality_offered(&self) -> bool {
+        self.quality_offered
+    }
+
+    /// The viewer chose `quality`: the window asks the server for it, unless it is what plays.
+    pub fn choose_quality(&mut self, quality: Quality) -> Option<WindowRequest> {
+        (self.quality_offered && quality != self.quality).then_some(WindowRequest::Quality(quality))
+    }
+
+    /// What plays now: `quality`, converted by the server or not.
+    pub fn playing_as(&mut self, quality: Quality, converted: bool) {
+        self.quality = quality;
+        self.converted = converted;
+    }
+
+    /// The file did not play as it is: the server converts it whatever the quality.
+    pub fn direct_play_failed(&mut self) {
+        self.direct_failed = true;
+    }
+
+    /// How the quality page names `quality`.
+    pub fn quality_label(&self, quality: Quality) -> String {
+        quality.label(!self.direct_failed)
+    }
+
+    /// The lines of "Playback info".
+    pub fn playback_info(&self) -> Vec<(&'static str, String)> {
+        settings::info_lines(self.converted, &self.info)
+    }
+
+    /// A double click `y` pixels from the top of the window: on the picture, it toggles
+    /// fullscreen.
+    pub fn double_clicked(&self, y: f32) -> Option<WindowRequest> {
+        on_picture(y, self.window_height, self.controls_shown)
+            .then_some(WindowRequest::ToggleFullscreen)
+    }
+
+    /// Which line of the panel to scroll into view as it opens: the subtitle shown, as the
+    /// panel lays them out (the audio title, the audio tracks, the subtitles title, "None",
+    /// then the subtitle tracks).
+    pub fn chosen_line(&self) -> usize {
+        let audio = self.tracks_of(TrackKind::Audio).count();
+        let shown = self
+            .subtitle_choices()
+            .iter()
+            .position(|choice| choice.current)
+            .unwrap_or(0);
+        1 + audio + 1 + shown
+    }
+
+    /// The fullscreen button of the controls.
+    pub fn press_fullscreen(&self) -> Option<WindowRequest> {
+        Some(WindowRequest::ToggleFullscreen)
     }
 
     pub fn audio_choices(&self) -> Vec<Choice> {
@@ -291,6 +462,11 @@ impl Session {
                 label: tracks::label(track),
                 current: track.selected,
             })
+    }
+
+    /// What mpv lists, as it said last.
+    pub fn tracks(&self) -> &[Track] {
+        &self.tracks
     }
 
     pub fn select_audio(&mut self, id: i64) {
@@ -343,6 +519,13 @@ impl Session {
                 // The film plays; a refused subtitle is simply not in the panel.
                 PlayerEvent::SubtitleFailed(_) => {}
             }
+        }
+        if self
+            .info_read_at
+            .is_none_or(|read| now.saturating_duration_since(read) >= INFO_EVERY)
+        {
+            self.info = self.player.info();
+            self.info_read_at = Some(now);
         }
         self.follow_segments(now);
         let shown = self.controls_visible(now);
@@ -417,6 +600,8 @@ mod tests {
             Box::new(FakePlayer {
                 calls: player.calls.clone(),
                 queued: player.queued.clone(),
+                info: player.info.clone(),
+                ..Default::default()
             }),
             Box::new(FakeDisplay {
                 placements: display.placements.clone(),
@@ -600,6 +785,211 @@ mod tests {
             f.session.key("escape", false, true),
             Some(WindowRequest::ExitFullscreen)
         );
+    }
+
+    #[test]
+    fn the_fullscreen_button_toggles_fullscreen() {
+        let f = fixture();
+        assert_eq!(
+            f.session.press_fullscreen(),
+            Some(WindowRequest::ToggleFullscreen)
+        );
+    }
+
+    #[test]
+    fn a_double_click_on_the_picture_toggles_fullscreen() {
+        let mut f = fixture();
+        let start = Instant::now();
+        f.session.layout((1440., 810.), whole(1440., 810.), 1.);
+        f.session.update(start);
+        assert_eq!(
+            f.session.double_clicked(750.),
+            Some(WindowRequest::ToggleFullscreen)
+        );
+        f.session.mouse_moved(start);
+        f.session.update(start);
+        assert_eq!(
+            f.session.double_clicked(400.),
+            Some(WindowRequest::ToggleFullscreen)
+        );
+        assert_eq!(f.session.double_clicked(750.), None, "on the controls");
+    }
+
+    #[test]
+    fn a_long_track_list_keeps_the_chosen_track_in_view() {
+        let mut f = fixture();
+        let mut tracks = vec![
+            track(TrackKind::Audio, 1, "fre", "eac3", true),
+            track(TrackKind::Audio, 2, "eng", "aac", false),
+        ];
+        tracks.extend((1..=40).map(|id| track(TrackKind::Subtitle, id, "eng", "ass", id == 30)));
+        f.queue(vec![PlayerEvent::Tracks(tracks)]);
+        f.session.update(Instant::now());
+        // AUDIO, 2 tracks, SUBTITLES, None, then subtitle 30 is the 30th.
+        assert_eq!(f.session.chosen_line(), 1 + 2 + 1 + 30);
+    }
+
+    #[test]
+    fn with_no_subtitle_shown_none_is_kept_in_view() {
+        let mut f = fixture();
+        f.queue(vec![PlayerEvent::Tracks(vec![
+            track(TrackKind::Audio, 1, "fre", "eac3", true),
+            track(TrackKind::Subtitle, 1, "fre", "ass", false),
+        ])]);
+        f.session.update(Instant::now());
+        assert_eq!(f.session.chosen_line(), 1 + 1 + 1);
+    }
+
+    #[test]
+    fn the_settings_menu_opens_on_its_list_and_keeps_the_controls_shown() {
+        let mut f = fixture();
+        let start = Instant::now();
+        f.session.show_settings_page(Page::Info);
+        f.session.toggle_settings();
+        assert!(f.session.settings_open());
+        assert_eq!(f.session.settings_page(), Page::Main);
+        assert!(f.session.controls_visible(start + Duration::from_secs(10)));
+        f.session.toggle_settings();
+        assert!(!f.session.settings_open());
+    }
+
+    #[test]
+    fn the_settings_menu_and_the_track_panel_never_show_together() {
+        let mut f = fixture();
+        f.session.toggle_panel();
+        f.session.toggle_settings();
+        assert!(f.session.settings_open() && !f.session.panel_open());
+        f.session.toggle_panel();
+        assert!(!f.session.settings_open() && f.session.panel_open());
+    }
+
+    #[test]
+    fn escape_or_a_click_outside_closes_the_settings_menu() {
+        let mut f = fixture();
+        f.session.toggle_settings();
+        assert_eq!(f.session.key("escape", false, true), None);
+        assert!(!f.session.settings_open());
+        f.session.toggle_settings();
+        f.session.clicked_outside_panel();
+        assert!(!f.session.settings_open());
+    }
+
+    #[test]
+    fn the_speed_setting_changes_the_player_speed() {
+        let mut f = fixture();
+        f.session.set_speed(1.5);
+        assert_eq!(f.session.speed(), 1.5);
+        assert_eq!(f.calls(), [Call::Speed(1.5)]);
+    }
+
+    #[test]
+    fn the_subtitle_offset_moves_by_tenths_and_resets() {
+        let mut f = fixture();
+        f.session.shift_subtitles(1);
+        f.session.shift_subtitles(1);
+        f.session.shift_subtitles(1);
+        f.session.shift_subtitles(-1);
+        assert_eq!(f.session.subtitle_delay(), 2);
+        f.session.reset_subtitle_delay();
+        assert_eq!(
+            f.calls(),
+            [
+                Call::SubtitleDelay(0.1),
+                Call::SubtitleDelay(0.2),
+                Call::SubtitleDelay(0.3),
+                Call::SubtitleDelay(0.2),
+                Call::SubtitleDelay(0.),
+            ]
+        );
+        assert_eq!(f.session.subtitle_delay(), 0);
+    }
+
+    #[test]
+    fn the_aspect_setting_changes_the_player_aspect() {
+        let mut f = fixture();
+        f.session.set_aspect(Aspect::Fill);
+        f.session.set_aspect(Aspect::Scope);
+        assert_eq!(f.session.aspect(), Aspect::Scope);
+        assert_eq!(
+            f.calls(),
+            [Call::Aspect(Aspect::Fill), Call::Aspect(Aspect::Scope)]
+        );
+    }
+
+    #[test]
+    fn a_quality_cap_asks_the_window_for_it_and_back_to_original() {
+        let mut f = fixture();
+        f.session.offer_quality();
+        let cap = Quality::Cap(4_000_000);
+        assert_eq!(
+            f.session.choose_quality(cap),
+            Some(WindowRequest::Quality(cap))
+        );
+        f.session.playing_as(cap, true);
+        assert_eq!(f.session.choose_quality(cap), None, "already playing");
+        assert_eq!(
+            f.session.choose_quality(Quality::Original),
+            Some(WindowRequest::Quality(Quality::Original))
+        );
+    }
+
+    #[test]
+    fn a_film_the_server_cannot_convert_offers_no_quality() {
+        let mut f = fixture();
+        assert_eq!(f.session.choose_quality(Quality::Cap(4_000_000)), None);
+    }
+
+    #[test]
+    fn playback_info_shows_the_method_and_the_codecs() {
+        let f = fixture();
+        *f.player.info.borrow_mut() = crate::player::PlaybackInfo {
+            container: Some("matroska,webm".into()),
+            video_codec: Some("hevc".into()),
+            audio_codec: Some("eac3".into()),
+            size: Some((3840, 2160)),
+            video_bitrate: Some(18_460_000.),
+            dropped_frames: Some(0),
+            hardware_decoder: Some("vaapi".into()),
+        };
+        let mut session = f.session;
+        session.update(Instant::now());
+        assert_eq!(
+            session.playback_info(),
+            [
+                ("Playback", "Direct play".to_string()),
+                ("Container", "MKV".into()),
+                ("Video", "HEVC".into()),
+                ("Audio", "E-AC-3".into()),
+                ("Resolution", "3840 × 2160".into()),
+                ("Bitrate", "18.5 Mbps".into()),
+                ("Dropped frames", "0".into()),
+                ("Hardware decoding", "vaapi".into()),
+            ]
+        );
+        session.playing_as(Quality::Cap(4_000_000), true);
+        assert_eq!(
+            session.playback_info()[0],
+            ("Playback", "Converted by the server".to_string())
+        );
+    }
+
+    #[test]
+    fn playback_info_is_read_once_a_second_and_kept() {
+        let mut f = fixture();
+        let container = |name: &str| crate::player::PlaybackInfo {
+            container: Some(name.into()),
+            ..Default::default()
+        };
+        let shown = |session: &Session| session.playback_info()[1].1.clone();
+        *f.player.info.borrow_mut() = container("matroska,webm");
+        let now = Instant::now();
+        f.session.update(now);
+        *f.player.info.borrow_mut() = container("mp4");
+        assert_eq!(shown(&f.session), "MKV", "kept between ticks");
+        f.session.update(now + Duration::from_millis(500));
+        assert_eq!(shown(&f.session), "MKV", "read once a second");
+        f.session.update(now + Duration::from_secs(1));
+        assert_eq!(shown(&f.session), "MP4");
     }
 
     #[test]

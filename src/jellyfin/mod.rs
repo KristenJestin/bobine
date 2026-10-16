@@ -179,11 +179,12 @@ const MAX_STREAMING_BITRATE: u64 = 1_000_000_000;
 
 /// What the player plays, sent only when it asks for a conversion. mpv plays nearly every
 /// container and codec: a direct play profile that names none of them covers them all. The
-/// conversion is the most common one: H.264 and AAC in MPEG-TS segments, over HLS.
-fn device_profile() -> serde_json::Value {
+/// conversion is the most common one: H.264 and AAC in MPEG-TS segments, over HLS, under
+/// `max_bitrate` bits per second.
+fn device_profile(max_bitrate: u64) -> serde_json::Value {
     json!({
         "Name": "Bobine",
-        "MaxStreamingBitrate": MAX_STREAMING_BITRATE,
+        "MaxStreamingBitrate": max_bitrate,
         "DirectPlayProfiles": [{ "Type": "Video" }, { "Type": "Audio" }],
         "TranscodingProfiles": [{
             "Type": "Video",
@@ -994,6 +995,7 @@ impl MediaServer for Jellyfin {
 
     fn transcode(&self, request: &TranscodeRequest) -> Result<Playback, ProviderError> {
         let (film, source) = (&request.film, &request.source);
+        let max_bitrate = request.max_bitrate.unwrap_or(MAX_STREAMING_BITRATE);
         let body = json!({
             "UserId": self.login.user_id,
             "MediaSourceId": source.0,
@@ -1001,8 +1003,8 @@ impl MediaServer for Jellyfin {
             "EnableDirectStream": false,
             "EnableTranscoding": true,
             "AutoOpenLiveStream": false,
-            "MaxStreamingBitrate": MAX_STREAMING_BITRATE,
-            "DeviceProfile": device_profile(),
+            "MaxStreamingBitrate": max_bitrate,
+            "DeviceProfile": device_profile(max_bitrate),
             "StartTimeTicks": dto::ticks(request.start),
             "AudioStreamIndex": request.audio_track,
             "SubtitleStreamIndex": request.subtitle_track,
