@@ -989,6 +989,25 @@ fn a_new_season_card_counts_the_episodes_left_in_that_season() {
 }
 
 #[test]
+fn a_lone_episode_in_the_latest_says_nothing_of_its_series_state() {
+    let s = Setup::new();
+    let latest = s
+        .signed_in()
+        .latest(&ItemId(SERIES_LIBRARY.into()), 10)
+        .unwrap();
+    let Title::Series(lights) = &latest[2] else {
+        panic!("a series: {:?}", latest[2])
+    };
+    assert_eq!(lights.title, "Harbour Lights");
+    // Whether the series is in the list or watched is not the episode's to say.
+    assert_eq!((lights.favourite, lights.watched), (None, None));
+    let Title::Series(tidewater) = &latest[0] else {
+        panic!("a series: {:?}", latest[0])
+    };
+    assert!(tidewater.favourite.is_some() && tidewater.watched.is_some());
+}
+
+#[test]
 fn a_series_and_its_own_new_season_in_the_latest_are_listed_once() {
     let s = Setup::new();
     let latest = s
@@ -2266,8 +2285,8 @@ fn a_title_in_a_list_says_whether_it_is_in_the_users_list() {
         .series(&series_library(), &query(FilmSort::Title, false, 0, 10))
         .unwrap();
     let tidewater = shows.items.iter().find(|s| s.id == series()).unwrap();
-    assert!(tidewater.favourite);
-    assert!(!shows.items[1].favourite);
+    assert_eq!(tidewater.favourite, Some(true));
+    assert_eq!(shows.items[1].favourite, Some(false));
 }
 
 #[test]
@@ -2284,8 +2303,8 @@ fn a_series_in_a_list_says_whether_all_of_it_is_watched() {
             .unwrap()
             .watched
     };
-    assert!(watched("Glass Orchard"));
-    assert!(!watched("Tidewater"));
+    assert_eq!(watched("Glass Orchard"), Some(true));
+    assert_eq!(watched("Tidewater"), Some(false));
 }
 
 #[test]

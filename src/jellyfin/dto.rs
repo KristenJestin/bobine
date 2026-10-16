@@ -308,8 +308,8 @@ impl Item {
                 .as_ref()
                 .and_then(|u| u.unplayed_item_count)
                 .unwrap_or(0),
-            watched: film.watched,
-            favourite: film.favourite,
+            watched: Some(film.watched),
+            favourite: Some(film.favourite),
             poster: film.poster,
             backdrop: film.backdrop,
             season: None,
@@ -343,8 +343,8 @@ impl Item {
             // What is left to watch in the new season, which is what the card is about.
             unwatched: season.unwatched,
             // The season's own state is not its series': the card offers no button for them.
-            watched: false,
-            favourite: false,
+            watched: None,
+            favourite: None,
             poster,
             backdrop: None,
             season: Some(season),
@@ -423,8 +423,8 @@ impl Item {
             community_rating: None,
             unwatched: 0,
             // The episode says nothing of its series' state: the series page reads it.
-            watched: false,
-            favourite: false,
+            watched: None,
+            favourite: None,
             poster,
             backdrop: None,
             season: None,

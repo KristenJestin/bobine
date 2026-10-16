@@ -222,6 +222,9 @@ mod tests {
         let season = FakeServer::new(0, true).seasons(&series.id).unwrap()[2].clone();
         let (server, window, cx) = home_with(cx, |state| {
             state.series[0].season = Some(season);
+            // A season says nothing of its series' state.
+            state.series[0].favourite = None;
+            state.series[0].watched = None;
         });
         let shell = window.root(cx).unwrap();
         let id = cx.read(|cx| {
@@ -269,6 +272,12 @@ mod tests {
         let selector: &'static str = Box::leak(format!("{what} {id}").into_boxed_str());
         cx.debug_bounds(selector)
             .unwrap_or_else(|| panic!("{selector} was not drawn"))
+    }
+
+    /// Where the element named `what` of the card `id` was drawn, if it was.
+    fn bounds_of(cx: &mut VisualTestContext, what: &str, id: &ElementId) -> Option<Bounds<Pixels>> {
+        let selector: &'static str = Box::leak(format!("{what} {id}").into_boxed_str());
+        cx.debug_bounds(selector)
     }
 
     /// The pointer over the card `id`, which brings its buttons.
@@ -617,6 +626,40 @@ mod tests {
         assert_eq!(plays.len(), 1);
         assert_eq!(plays[0].0, next.item.id, "the series' next up plays");
         assert_eq!(screen(&window, cx), Screen::Home, "the page was opened");
+    }
+
+    /// A series listed through a lone new episode: whether it is in the list or watched is not
+    /// known, so its card has the veil and the play button and no button in its corner.
+    #[gpui_kit::test]
+    fn a_card_of_a_lone_new_episode_has_no_corner_buttons(cx: &mut TestAppContext) {
+        let (_, window, cx) = home_with(cx, |state| {
+            state.series[0].favourite = None;
+            state.series[0].watched = None;
+        });
+        let shell = window.root(cx).unwrap();
+        let id = cx.read(|cx| {
+            let shell = shell.read(cx);
+            shell
+                .cards
+                .ids()
+                .into_iter()
+                .filter(|id| id.to_string().contains("home-poster"))
+                .find(|id| {
+                    shell.cards.offer(id).is_some_and(|offer| {
+                        matches!(offer.play, Play::Target(PlayTarget::Series(_)))
+                            && offer.quick.is_none()
+                    })
+                })
+                .expect("the card of the series of a lone episode")
+        });
+        let card = bounds(cx, "card-hover", &id);
+        cx.simulate_mouse_move(card.center(), None, Modifiers::none());
+        cx.run_until_parked();
+        assert_eq!(veil(&window, cx, &id), 1.);
+        assert!(bounds_of(cx, "card-play", &id).is_some());
+        for button in ["card-my-list", "card-watched"] {
+            assert!(bounds_of(cx, button, &id).is_none(), "{button} was drawn");
+        }
     }
 
     #[gpui_kit::test]
