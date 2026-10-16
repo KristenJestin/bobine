@@ -1399,6 +1399,7 @@ impl Shell {
         let playing = Playing {
             title: plan.title.clone(),
             subtitle: Some(parts.join(" · ")),
+            list: Some(plan.film.clone()),
         };
         let origin = Origin::Film(depth, page.id.clone());
         page.busy = true;
@@ -1505,14 +1506,19 @@ impl Shell {
         );
         let externals = plan.externals(&opened);
         let media = plan.media(&opened, &externals);
-        let fallback = Fallback::new(server.clone(), plan.clone());
+        let fallback = Fallback::new(server.clone(), plan.clone(), &opened);
+        let list = playing.list.clone();
         match self.play(mpv, media, playing, Some(reporting), window, cx) {
             Ok(()) => {
                 if let Some(playback) = &mut self.playback {
                     playback.fallback = Some(fallback);
+                    playback.session.offer_quality();
                 }
                 self.load_trickplay(opened.film.clone(), opened.source.clone(), cx);
                 self.playback_started(&opened.film, next, cx);
+                if let Some(item) = list {
+                    self.follow_list(item, cx);
+                }
             }
             Err(error) => {
                 // The words of the video surface or of mpv's error code: no address in them.
@@ -2290,6 +2296,284 @@ mod tests {
         assert_eq!(state.record.logouts, [state.record.reports.len()]);
     }
 
+    /// A film playing on the shell, its "My list" button following `film`.
+    fn playing_with_list(
+        server: &FakeServer,
+        window: &gpui_kit::WindowHandle<Shell>,
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        play_a_film(server, window, cx);
+        window
+            .update(cx, |shell, _, cx| {
+                shell.follow_list(ItemId(crate::fake::FILM.into()), cx);
+            })
+            .unwrap();
+        cx.run_until_parked();
+    }
+
+    fn player_list_on(
+        window: &gpui_kit::WindowHandle<Shell>,
+        cx: &mut gpui_kit::TestAppContext,
+    ) -> bool {
+        window
+            .update(cx, |shell, _, _| {
+                let list = shell.playback.as_ref().unwrap().list.as_ref();
+                list.expect("the player has a My list button").toggle.on()
+            })
+            .unwrap()
+    }
+
+    fn press_player_list(
+        window: &gpui_kit::WindowHandle<Shell>,
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        window
+            .update(cx, |shell, _, cx| shell.toggle_favourite(cx))
+            .unwrap();
+    }
+
+    #[gpui_kit::test]
+    fn the_favourite_button_adds_and_removes(cx: &mut gpui_kit::TestAppContext) {
+        let (server, window) = signed_in_window(cx);
+        let film = ItemId(crate::fake::FILM.into());
+        playing_with_list(&server, &window, cx);
+        assert!(!player_list_on(&window, cx));
+        press_player_list(&window, cx);
+        assert!(player_list_on(&window, cx), "shown at once");
+        cx.run_until_parked();
+        assert!(server.state.lock().unwrap().favourites.contains(&film));
+        press_player_list(&window, cx);
+        cx.run_until_parked();
+        assert!(!player_list_on(&window, cx));
+        assert!(!server.state.lock().unwrap().favourites.contains(&film));
+    }
+
+    #[gpui_kit::test]
+    fn the_favourite_button_shows_a_title_already_in_the_list(cx: &mut gpui_kit::TestAppContext) {
+        let (server, window) = signed_in_window(cx);
+        let film = ItemId(crate::fake::FILM.into());
+        server.state.lock().unwrap().favourites.push(film);
+        playing_with_list(&server, &window, cx);
+        assert!(player_list_on(&window, cx));
+    }
+
+    #[gpui_kit::test]
+    fn a_failed_favourite_press_in_the_player_goes_back_and_says_so(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        let (server, window) = signed_in_window(cx);
+        playing_with_list(&server, &window, cx);
+        server.state.lock().unwrap().favourite_fails = true;
+        press_player_list(&window, cx);
+        assert!(player_list_on(&window, cx));
+        cx.run_until_parked();
+        assert!(!player_list_on(&window, cx));
+        window
+            .update(cx, |shell, _, _| {
+                let list = shell.playback.as_ref().unwrap().list.as_ref().unwrap();
+                assert_eq!(list.error, Some(crate::favourite::FAILED));
+            })
+            .unwrap();
+    }
+
+    /// A quality chosen in the player: the film plays on until the server gives the conversion,
+    /// which starts where the film was; the direct playback is told stopped there.
+    #[gpui_kit::test]
+    fn a_quality_cap_restarts_the_playback_at_the_same_position(cx: &mut gpui_kit::TestAppContext) {
+        use crate::fake::Report;
+        use crate::fallback::Fallback;
+        use crate::player::PlayerEvent;
+        use crate::player::fake::{Call, FakePlayer};
+        use crate::player::session::Session;
+        use crate::player::settings::Quality;
+        use crate::reports::Reporting;
+        use crate::video::fake::FakeDisplay;
+
+        let (server, window) = signed_in_window(cx);
+        let id = ItemId(crate::fake::FILM.into());
+        let detail = server.film(&id).unwrap();
+        let choices = crate::film_page::Choices::new(&detail.versions);
+        let plan =
+            crate::film_page::plan(&detail.film, &detail.versions, &choices, From::Resume).unwrap();
+        let opened = server.play(&plan.film, &plan.source).unwrap();
+        let player = FakePlayer::default();
+        let (calls, queued) = (player.calls.clone(), player.queued.clone());
+        player.queued.borrow_mut().extend([
+            PlayerEvent::Loaded,
+            PlayerEvent::FirstFrame,
+            PlayerEvent::Position(4500.),
+        ]);
+        let cap = Quality::Cap(4_000_000);
+        window
+            .update(cx, |shell, window, cx| {
+                let mut session = Session::new(
+                    Box::new(player),
+                    Box::new(FakeDisplay::default()),
+                    "Le Dernier Hiver".into(),
+                    None,
+                );
+                session.offer_quality();
+                let mut reporting = Reporting::start(
+                    Arc::new(server.clone()),
+                    PlaybackReport {
+                        session: opened.session.clone(),
+                        film: opened.film.clone(),
+                        source: opened.source.clone(),
+                        position: plan.start,
+                        paused: false,
+                        audio_track: None,
+                        subtitle_track: None,
+                        method: PlayMethod::DirectPlay,
+                    },
+                );
+                let ended = session.update(Instant::now());
+                reporting.tick(Instant::now(), &session, ended);
+                shell.begin_playback(session, Some(reporting), window, cx);
+                let playback = shell.playback.as_mut().unwrap();
+                playback.fallback = Some(Fallback::new(
+                    Arc::new(server.clone()),
+                    plan.clone(),
+                    &opened,
+                ));
+                let request = playback.session.choose_quality(cap);
+                shell.player_request(request, window, cx);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        let transcodes = server.state.lock().unwrap().record.transcodes.clone();
+        assert_eq!(transcodes.len(), 1);
+        assert_eq!(transcodes[0].start, Duration::from_secs(4500));
+        assert_eq!(transcodes[0].max_bitrate, Some(4_000_000));
+        let converted = server.state.lock().unwrap().converted.clone();
+        let loads: Vec<(String, f64)> = calls
+            .borrow()
+            .iter()
+            .filter_map(|call| match call {
+                Call::Load { url, start, .. } => Some((url.clone(), *start)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(loads, [(converted, 4500.)]);
+        window
+            .update(cx, |shell, _, _| {
+                assert_eq!(shell.playback.as_ref().unwrap().session.quality(), cap);
+            })
+            .unwrap();
+        let stopped = (0..200).find_map(|_| {
+            let found =
+                server.state.lock().unwrap().record.reports.iter().find_map(
+                    |report| match report {
+                        Report::Stopped(report) => Some(report.clone()),
+                        _ => None,
+                    },
+                );
+            if found.is_none() {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            found
+        });
+        let stopped = stopped.expect("the direct playback is told stopped");
+        assert_eq!(stopped.method, PlayMethod::DirectPlay);
+        assert_eq!(stopped.position, Duration::from_secs(4500));
+        // The conversion opens: it is told started.
+        queued.borrow_mut().push(PlayerEvent::Loaded);
+        window
+            .update(cx, |shell, window, cx| shell.tick(window, cx))
+            .unwrap();
+        let converted_started = |report: &Report| matches!(report, Report::Started(r) if r.method == PlayMethod::Transcode);
+        let reports = (0..200)
+            .map(|_| {
+                let reports = server.state.lock().unwrap().record.reports.clone();
+                if !reports.iter().any(converted_started) {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                reports
+            })
+            .find(|reports| reports.iter().any(converted_started))
+            .expect("the conversion is told started");
+        let stopped = reports.iter().position(
+            |report| matches!(report, Report::Stopped(r) if r.method == PlayMethod::DirectPlay),
+        );
+        let started = reports.iter().position(converted_started);
+        assert!(
+            stopped.is_some() && stopped < started,
+            "the old stream stops before the new one starts: {reports:?}"
+        );
+    }
+
+    /// A double click on the skip button is two presses of the button, never a double click on
+    /// the picture.
+    #[gpui_kit::test]
+    fn a_double_click_on_skip_skips_once_and_keeps_the_window_as_it_is(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        use crate::player::fake::{Call, FakePlayer};
+        use crate::player::session::Session;
+        use crate::player::{PlayerEvent, Seek};
+        use crate::video::fake::FakeDisplay;
+        use bobine::provider::{Segment, SegmentKind};
+        use gpui_kit::{Modifiers, MouseButton, MouseDownEvent, MouseUpEvent};
+
+        let (_server, window) = signed_in_window(cx);
+        let player = FakePlayer::default();
+        let calls = player.calls.clone();
+        player.queued.borrow_mut().extend([
+            PlayerEvent::Loaded,
+            PlayerEvent::FirstFrame,
+            PlayerEvent::Duration(6000.),
+            PlayerEvent::Position(10.),
+        ]);
+        window
+            .update(cx, |shell, window, cx| {
+                let mut session = Session::new(
+                    Box::new(player),
+                    Box::new(FakeDisplay::default()),
+                    "Le Dernier Hiver".into(),
+                    None,
+                );
+                session.set_segments(vec![Segment {
+                    kind: SegmentKind::Intro,
+                    start: Duration::ZERO,
+                    end: Duration::from_secs(90),
+                }]);
+                session.update(Instant::now());
+                assert!(session.skip_button().is_some());
+                shell.begin_playback(session, None, window, cx);
+            })
+            .unwrap();
+        let mut visual = drawn(&window, cx);
+        let at = visual
+            .debug_bounds("player-skip")
+            .expect("the skip button")
+            .center();
+        for click_count in [1, 2] {
+            let (button, modifiers) = (MouseButton::Left, Modifiers::none());
+            visual.simulate_event(MouseDownEvent {
+                position: at,
+                modifiers,
+                button,
+                click_count,
+                first_mouse: false,
+            });
+            visual.simulate_event(MouseUpEvent {
+                position: at,
+                modifiers,
+                button,
+                click_count,
+            });
+        }
+        let seeks = calls
+            .borrow()
+            .iter()
+            .filter(|call| matches!(call, Call::Seek(Seek::To(_))))
+            .count();
+        assert_eq!(seeks, 1);
+        let fullscreen = window
+            .update(cx, |_, window, _| window.is_fullscreen())
+            .unwrap();
+        assert!(!fullscreen);
+    }
+
     /// The server answered "play" just before the sign out: the film must not start behind the
     /// login.
     #[gpui_kit::test]
@@ -2307,6 +2591,7 @@ mod tests {
                 let playing = super::super::Film {
                     title: plan.title.clone(),
                     subtitle: None,
+                    list: None,
                 };
                 shell.start_playback(Origin::Home, plan, opened, playing, None, window, cx);
                 assert!(shell.playback.is_none());

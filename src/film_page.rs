@@ -159,6 +159,10 @@ pub struct Plan {
     /// The subtitles of the version that may come as files: index, title, language. An embedded
     /// one does in a conversion.
     externals: Vec<(i32, String, Option<String>)>,
+    /// The server's indexes of the version's audio tracks and embedded subtitles, in the order
+    /// of the file: mpv numbers them so.
+    audio_tracks: Vec<i32>,
+    embedded: Vec<i32>,
 }
 
 /// The plan of a play button for a film or an episode and its versions, `None` when it has no
@@ -199,6 +203,13 @@ pub fn plan(film: &Film, versions: &[MediaSource], choices: &Choices, from: From
             .iter()
             .map(|t| (t.index, subtitle_label(Some(t)), t.language.clone()))
             .collect(),
+        audio_tracks: source.audio.iter().map(|t| t.index).collect(),
+        embedded: source
+            .subtitles
+            .iter()
+            .filter(|t| !t.external)
+            .map(|t| t.index)
+            .collect(),
     })
 }
 
@@ -231,6 +242,7 @@ impl Plan {
             subtitle_track: self
                 .subtitle_index
                 .filter(|_| matches!(self.subtitle, FirstShown::Embedded(_))),
+            max_bitrate: None,
         }
     }
 
@@ -251,6 +263,69 @@ impl Plan {
             start: from,
             audio: None,
             subtitle,
+            ..self.clone()
+        }
+    }
+
+    /// The server's indexes of the audio and the subtitle mpv shows in `tracks`, while this
+    /// plan plays with the external subtitles `externals` (the server's indexes, in the order
+    /// they were given): what the viewer chose in the panel.
+    pub fn shown(
+        &self,
+        tracks: &[Track],
+        externals: &[i32],
+        converted: bool,
+    ) -> (Option<i32>, Option<i32>) {
+        // mpv numbers each kind from 1: the embedded tracks in the order of the file, then the
+        // files added, in the order given.
+        let place = |kind: TrackKind, external: bool| {
+            let mut of_kind: Vec<&Track> = tracks
+                .iter()
+                .filter(|t| t.kind == kind && t.external == external)
+                .collect();
+            of_kind.sort_by_key(|t| t.id);
+            of_kind.iter().position(|t| t.selected)
+        };
+        if tracks.is_empty() {
+            return (self.audio_index, self.subtitle_index);
+        }
+        // A conversion holds only the audio track asked.
+        let audio = match place(TrackKind::Audio, false) {
+            Some(n) if !converted => self.audio_tracks.get(n).copied(),
+            _ => None,
+        }
+        .or(self.audio_index);
+        let subtitle = if let Some(n) = place(TrackKind::Subtitle, true) {
+            externals.get(n).copied().or(self.subtitle_index)
+        } else if let Some(n) = place(TrackKind::Subtitle, false) {
+            match converted {
+                false => self.embedded.get(n).copied().or(self.subtitle_index),
+                true => self.subtitle_index,
+            }
+        } else if converted && self.subtitle == FirstShown::Off {
+            // Drawn into the picture by the server, if any: mpv does not see it.
+            self.subtitle_index
+        } else {
+            None
+        };
+        (audio, subtitle)
+    }
+
+    /// The same plan with the server's tracks `audio` and `subtitle`.
+    pub fn with_tracks(&self, audio: Option<i32>, subtitle: Option<i32>) -> Plan {
+        let place = audio.and_then(|index| self.audio_tracks.iter().position(|&i| i == index));
+        let shown = match subtitle {
+            None => FirstShown::Off,
+            Some(index) => match self.embedded.iter().position(|&i| i == index) {
+                Some(place) => FirstShown::Embedded(place as i64 + 1),
+                None => FirstShown::External(index),
+            },
+        };
+        Plan {
+            audio_index: audio,
+            subtitle_index: subtitle,
+            audio: place.map(|place| place as i64 + 1),
+            subtitle: shown,
             ..self.clone()
         }
     }
@@ -626,6 +701,7 @@ mod tests {
                 start: from,
                 audio_track: Some(2),
                 subtitle_track: Some(4),
+                max_bitrate: None,
             }
         );
         let opened = server.transcode(&request).unwrap();

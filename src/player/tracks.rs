@@ -84,7 +84,8 @@ fn language_name(code: &str) -> Option<String> {
     Some(name.to_string())
 }
 
-fn codec_name(codec: &str) -> String {
+/// `E-AC-3`, `SRT`: a codec as people name it.
+pub fn codec_name(codec: &str) -> String {
     match codec {
         "eac3" => "E-AC-3",
         "ac3" => "AC-3",
