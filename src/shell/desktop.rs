@@ -103,7 +103,7 @@ impl Shell {
 mod tests {
     use std::sync::Arc;
 
-    use bobine::provider::{Episode, ItemId};
+    use bobine::provider::ItemId;
     use gpui_kit::{TestAppContext, WindowHandle};
 
     use super::*;
@@ -114,6 +114,7 @@ mod tests {
     use crate::player::fake::{Call, FakePlayer};
     use crate::player::session::Session;
     use crate::player::{PlayerEvent, Seek};
+    use crate::series_page::Next;
     use crate::video::fake::FakeDisplay;
 
     const PLANTED: &str = "PLANTED-TOKEN";
@@ -154,7 +155,7 @@ mod tests {
         window: &WindowHandle<Shell>,
         cx: &mut TestAppContext,
         title: Option<Title>,
-        next: Option<Episode>,
+        next: Option<Next>,
     ) -> FakePlayer {
         let player = FakePlayer::default();
         player.queued.borrow_mut().extend([
@@ -285,7 +286,7 @@ mod tests {
             &window,
             cx,
             Some(Title::episode(&first)),
-            Some(second.clone()),
+            Some(Next::Episode(second.clone())),
         );
         tick(&window, cx);
         assert!(controls.last().can_go_next);

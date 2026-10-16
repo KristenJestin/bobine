@@ -1,0 +1,9 @@
+{
+  "Items": [
+    { "Name": "Rainy Sundays", "Id": "p0000000000000000000000000000001", "Type": "Playlist", "MediaType": "Video", "ChildCount": 3, "ImageTags": { "Primary": "mosaic-rs" } },
+    { "Name": "Sea Shanties", "Id": "p0000000000000000000000000000003", "Type": "Playlist", "MediaType": "Audio", "ChildCount": 12, "ImageTags": {} },
+    { "Name": "Watchlist", "Id": "p0000000000000000000000000000002", "Type": "Playlist", "MediaType": "Video", "ChildCount": 0, "ImageTags": {} }
+  ],
+  "TotalRecordCount": 3,
+  "StartIndex": 0
+}

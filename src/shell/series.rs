@@ -19,7 +19,7 @@ use crate::motion::{self, Presence};
 use crate::navigation::Screen;
 use crate::poster_actions::Action;
 use crate::scroll;
-use crate::series_page::{self, Refreshes};
+use crate::series_page::{self, Next, Refreshes};
 
 /// How often the "Next episode" card checks its countdown.
 const UP_NEXT_TICK: Duration = Duration::from_millis(250);
@@ -423,6 +423,7 @@ impl Shell {
         cx.spawn_in(window, async move |this, cx| {
             let (opened, after) = task.await;
             this.update_in(cx, |shell, window, cx| {
+                let after = after.map(Next::Episode);
                 shell.start_playback(origin, plan, opened, playing, after, window, cx);
                 cx.notify();
             })
@@ -432,26 +433,26 @@ impl Shell {
         cx.notify();
     }
 
-    /// The end of an episode: the card counts down over the series page, then plays the next.
+    /// The end of an episode: the card counts down over the series page, then plays the next;
+    /// the end of a playlist's title: over the playlist's page, the title after.
     pub(super) fn start_up_next(
         &mut self,
-        episode: Episode,
+        next: Next,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(page) = self.series_pages.last() else {
+        let Some(at) = self.card_page(&next) else {
             return;
         };
-        let at = (self.series_pages.len() - 1, page.id.clone());
-        self.up_next.start(episode, at, Instant::now());
+        self.up_next.start(next, at, Instant::now());
         let ticker: Task<()> = cx.spawn_in(window, async move |this, cx| {
             loop {
                 cx.background_executor().timer(UP_NEXT_TICK).await;
                 let counting = this.update_in(cx, |shell, window, cx| {
                     cx.notify();
                     match shell.take_up_next(false) {
-                        Some(episode) => {
-                            shell.play_episode(episode, window, cx);
+                        Some(next) => {
+                            shell.play_next(next, window, cx);
                             false
                         }
                         None => shell.up_next.episode().is_some(),
@@ -468,25 +469,55 @@ impl Shell {
 
     /// "Play" on the card: the next episode at once.
     pub fn play_up_next_now(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(episode) = self.take_up_next(true) {
+        if let Some(next) = self.take_up_next(true) {
             self.up_next_ticker = None;
-            self.play_episode(episode, window, cx);
+            self.play_next(next, window, cx);
         }
     }
 
-    /// The card's episode, when it is time to play it on the page it belongs to.
-    fn take_up_next(&mut self, now_asked: bool) -> Option<Episode> {
-        let depth = self.series_pages.len().wrapping_sub(1);
-        let top = self
-            .series_pages
-            .last()
-            .filter(|_| self.navigator.current() == Screen::SeriesDetail);
-        self.up_next.take(
-            Instant::now(),
-            now_asked,
-            top.map(|page| (depth, &page.id)),
-            top.is_some_and(SeriesPage::waiting),
-        )
+    /// What the card offered plays, on its page.
+    fn play_next(&mut self, next: Next, window: &mut Window, cx: &mut Context<Self>) {
+        match next {
+            Next::Episode(episode) => self.play_episode(episode, window, cx),
+            Next::Entry(entry) => self.play_entry(entry, true, window, cx),
+        }
+    }
+
+    /// The page on top the card of `next` belongs to: its depth, and what it shows.
+    fn card_page(&self, next: &Next) -> Option<(usize, ItemId)> {
+        match next {
+            Next::Episode(_) => {
+                let page = self.series_pages.last()?;
+                Some((self.series_pages.len() - 1, page.id.clone()))
+            }
+            Next::Entry(_) => {
+                let page = self.playlist_pages.last()?;
+                Some((self.playlist_pages.len() - 1, page.id.clone()))
+            }
+        }
+    }
+
+    /// The card's title, when it is time to play it on the page it belongs to: the series page
+    /// or the playlist's page shown, unless it waits.
+    fn take_up_next(&mut self, now_asked: bool) -> Option<Next> {
+        let (top, waiting) = match self.navigator.current() {
+            Screen::SeriesDetail => {
+                let page = self.series_pages.last();
+                (
+                    page.map(|page| (self.series_pages.len() - 1, &page.id)),
+                    page.is_some_and(SeriesPage::waiting),
+                )
+            }
+            Screen::Playlist => {
+                let page = self.playlist_pages.last();
+                (
+                    page.map(|page| (self.playlist_pages.len() - 1, &page.id)),
+                    page.is_some_and(|page| page.busy),
+                )
+            }
+            _ => (None, false),
+        };
+        self.up_next.take(Instant::now(), now_asked, top, waiting)
     }
 
     /// "Cancel" on the card, or Escape. Whether there was a card to cancel.

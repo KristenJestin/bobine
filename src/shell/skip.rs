@@ -5,7 +5,7 @@ use bobine::provider::ItemId;
 use gpui_kit::{Context, Window};
 
 use super::Shell;
-use bobine::provider::Episode;
+use crate::series_page::Next;
 
 impl Shell {
     /// The player started: the episode after it is known, and the server is asked for the
@@ -14,7 +14,7 @@ impl Shell {
     pub(super) fn playback_started(
         &mut self,
         item: &ItemId,
-        next: Option<Episode>,
+        next: Option<Next>,
         cx: &mut Context<Self>,
     ) {
         let generation = self.next_generation();
@@ -22,7 +22,11 @@ impl Shell {
             return;
         };
         playback.next = next;
-        playback.session.set_next_episode(playback.next.is_some());
+        // The credits offer "Next episode" for an episode only: a playlist's next title waits
+        // for the card.
+        playback
+            .session
+            .set_next_episode(matches!(playback.next, Some(Next::Episode(_))));
         playback.generation = generation;
         let item = item.clone();
         self.ask(

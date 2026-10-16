@@ -60,6 +60,13 @@ pub struct QueryResult {
     pub total_record_count: Option<u32>,
 }
 
+/// What `POST /Playlists` answers.
+#[derive(Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct PlaylistCreated {
+    pub id: String,
+}
+
 /// What `/MediaSegments/{id}` lists.
 #[derive(Deserialize)]
 #[serde(rename_all = "PascalCase")]
@@ -153,6 +160,10 @@ pub struct Item {
     pub season_id: Option<String>,
     /// A collection's films, when asked for.
     pub child_count: Option<u32>,
+    /// A playlist's: `Video`, `Audio`.
+    pub media_type: Option<String>,
+    /// An item's place in the playlist it was listed from.
+    pub playlist_item_id: Option<String>,
     /// The trickplay images, when asked for (`fields=Trickplay`): by version, then by width.
     #[serde(default)]
     pub trickplay: HashMap<String, HashMap<String, TrickplayInfo>>,
@@ -461,6 +472,18 @@ impl Item {
             logo: self.logo(),
             resume: film.resume.filter(|_| !series),
         }
+    }
+
+    /// The poster a list shows for the item: an episode's series' poster, not its wide still.
+    pub fn list_poster(&self) -> Option<ImageRef> {
+        if self.kind.as_deref() != Some("Episode") {
+            return self.primary();
+        }
+        Some(ImageRef {
+            item: ItemId(self.series_id.clone()?),
+            kind: ImageKind::Primary,
+            tag: self.series_primary_image_tag.clone()?,
+        })
     }
 
     /// The title drawn as an image, when the server has one.

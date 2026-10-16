@@ -522,6 +522,67 @@ fn only_the_literal_of_an_expect_a_panic_a_lint_reason_or_an_id_is_left_out() {
     assert_eq!(seen, ["film", "films", "this film", "films"]);
 }
 
+/// What the interface no longer says: the list is "Favorites" (#60), in US English. A name
+/// joined by `-` or `_` (`my-list`, `--favourite-fails`) is an identifier, not a word shown.
+fn old_wording_in(literal: &str) -> Option<&'static str> {
+    let words: Vec<String> = literal
+        .split(|c: char| !(c.is_alphabetic() || c == '-' || c == '_'))
+        .filter(|word| !word.is_empty() && !word.contains(['-', '_']))
+        .map(str::to_lowercase)
+        .collect();
+    if words.windows(2).any(|run| run == ["my", "list"]) {
+        return Some("My list");
+    }
+    words
+        .iter()
+        .any(|word| word == "favourite" || word == "favourites")
+        .then_some("the UK Favourite")
+}
+
+#[test]
+fn no_string_of_the_program_says_my_list_or_the_uk_favourite() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut files = Vec::new();
+    sources(&root.join("src"), &mut files);
+    let mut old = Vec::new();
+    for file in files {
+        let name = file
+            .strip_prefix(root)
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        if SERVER_DATA.contains(&name.as_str()) {
+            continue;
+        }
+        let source = fs::read_to_string(&file).unwrap();
+        for (line, literal) in interface_literals(&source) {
+            if let Some(why) = old_wording_in(&literal) {
+                old.push(format!("{name}:{line}: {why} in {literal:?}"));
+            }
+        }
+    }
+    assert!(
+        old.is_empty(),
+        "Old wording left in the interface:\n{}",
+        old.join("\n")
+    );
+}
+
+#[test]
+fn the_old_wording_is_seen_whatever_its_case() {
+    assert_eq!(old_wording_in("Add to My list"), Some("My list"));
+    assert_eq!(old_wording_in("MY LIST"), Some("My list"));
+    assert_eq!(old_wording_in("Favourite"), Some("the UK Favourite"));
+    assert_eq!(
+        old_wording_in("No favourites yet."),
+        Some("the UK Favourite")
+    );
+    assert_eq!(old_wording_in("Favorite"), None);
+    assert_eq!(old_wording_in("my listing"), None);
+    assert_eq!(old_wording_in("my-list"), None);
+    assert_eq!(old_wording_in("--favourite-fails"), None);
+}
+
 #[test]
 fn the_reader_of_literals_skips_comments_chars_and_lifetimes() {
     let code = "// été\nlet a = 'é'; let q = '\"'; fn f<'a>(x: &'a str) {} /* Lecture */\n\

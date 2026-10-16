@@ -24,7 +24,8 @@ use crate::icons::{IconName, icon};
 use crate::images;
 use crate::motion;
 use crate::navigation::NavEntry;
-use crate::series_page;
+use crate::playlists;
+use crate::series_page::{self, Next};
 use crate::shell::{Loadable, SeriesPage, Shell};
 use crate::theme;
 use crate::trailer;
@@ -200,7 +201,14 @@ fn hero(
                         trailer::choose(&detail.trailers, shell.ytdlp)
                             .map(|_| trailer_button(SERIES_TRAILER, window, cx)),
                     )
-                    .child(list_button("series-list", shown.favourite, window, cx)),
+                    .child(list_button("series-list", shown.favourite, window, cx))
+                    .child(super::playlist::playlist_button(
+                        "series-playlist",
+                        series.id.clone(),
+                        true,
+                        window,
+                        cx,
+                    )),
             )
             .children(started)
             .children(shown.error.map(|why| {
@@ -480,13 +488,24 @@ pub fn up_next_card(
     let now = Instant::now();
     let pending = shell.up_next.episode().cloned();
     let counting = pending.is_some();
-    let (episode, shown) = shell.up_next_fade.follow(pending, now)?;
+    let (next, shown) = shell.up_next_fade.follow(pending, now)?;
     let left = shell.up_next.seconds_left(now);
     let fraction = shell.up_next.fraction_left(now);
     // The bar empties smoothly; nothing asks for frames once the card is gone.
     window.request_animation_frame();
-    let still = shell.image(episode.item.poster.as_ref(), images::CARD, cx);
-    let (_, subtitle) = series_page::player_title(&episode);
+    let (picture_of, heading, subtitle) = match &next {
+        Next::Episode(episode) => (
+            episode.item.poster.as_ref(),
+            "NEXT EPISODE",
+            series_page::player_title(episode).1,
+        ),
+        Next::Entry(entry) => (
+            playlists::still(&entry.title),
+            "Up next",
+            playlists::name(&entry.title),
+        ),
+    };
+    let still = shell.image(picture_of, images::CARD, cx);
     let play = theme::primary_button("up-next-play", Some(IconName::Play), "Play", window, cx)
         .px(px(16.))
         .on_click(cx.listener(|shell, _, window, cx| shell.play_up_next_now(window, cx)));
@@ -538,7 +557,7 @@ pub fn up_next_card(
                             .text_size(px(11.))
                             .font_weight(FontWeight::BOLD)
                             .text_color(theme::dim())
-                            .child("NEXT EPISODE"),
+                            .child(heading),
                     )
                     .child(
                         div()
