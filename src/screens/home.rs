@@ -17,6 +17,7 @@ use gpui_kit::{
 
 use super::film_detail::{EDGE, ROW_POSTER, hero_frame, meta_line};
 use super::{note, picture, poster, progress_bar, row_heading, series_poster};
+use crate::grid::Grid;
 use crate::hero::{self, Headline};
 use crate::home_page::{self, ListKind, PlayTarget};
 use crate::icons::{IconName, icon};
@@ -623,7 +624,19 @@ fn titles_row(
             let cards: Vec<_> = (0..titles.len())
                 .map(|at| {
                     let id = (name.clone(), at);
-                    wide_card(shell, titles, at, WIDE, id, range.contains(&at), window, cx)
+                    let image = range
+                        .contains(&at)
+                        .then(|| shell.image(card_picture(&titles[at]), images::CARD, cx))
+                        .flatten();
+                    wide_card(
+                        &titles[at],
+                        image,
+                        Pick::Row(Rc::clone(titles), at),
+                        WIDE,
+                        id,
+                        window,
+                        cx,
+                    )
                 })
                 .collect();
             cards_row(index, scroll, WIDE * 9. / 16. + WIDE_CAPTION, cards).into_any_element()
@@ -711,45 +724,54 @@ fn poster_card(
 /// How much the pointer is over an element, eased.
 struct Over(Fade);
 
+/// Where a card's title is read from when it is clicked: the card holds no copy of it, which
+/// would be made again at every frame.
+#[derive(Clone)]
+pub(super) enum Pick {
+    /// The `at`th title of a row of the Home.
+    Row(Rc<[Title]>, usize),
+    /// The `at`th title of the full list.
+    Listed(usize),
+}
+
+impl Pick {
+    pub(super) fn title(&self, list: Option<&Grid<Title>>) -> Option<Title> {
+        match self {
+            Self::Row(titles, at) => titles.get(*at).cloned(),
+            Self::Listed(at) => list?.film(*at).cloned(),
+        }
+    }
+}
+
+/// The picture of a wide card: the backdrop, else the poster.
+pub(super) fn card_picture(title: &Title) -> Option<&ImageRef> {
+    match title {
+        Title::Film(film) => film.backdrop.as_ref().or(film.poster.as_ref()),
+        Title::Episode(episode) => episode
+            .item
+            .backdrop
+            .as_ref()
+            .or(episode.item.poster.as_ref()),
+        Title::Series(series) => series.backdrop.as_ref().or(series.poster.as_ref()),
+    }
+}
+
 /// A wide card: the picture, how far the viewer went, the title and a line; the pointer over it
 /// brings a veil and a play button. A click opens the page of the title, the button plays it.
-#[allow(
-    clippy::too_many_arguments,
-    reason = "one card's state, read once per frame"
-)]
 pub(super) fn wide_card(
-    shell: &mut Shell,
-    titles: &Rc<[Title]>,
-    at: usize,
+    title: &Title,
+    image: Option<Arc<RenderImage>>,
+    pick: Pick,
     width: f32,
     id: (SharedString, usize),
-    near: bool,
     window: &mut Window,
     cx: &mut Context<Shell>,
 ) -> Stateful<Div> {
     let height = width * 9. / 16.;
-    let title = &titles[at];
-    let item = match title {
-        Title::Film(film) => (film.backdrop.as_ref().or(film.poster.as_ref()), Some(film)),
-        Title::Episode(episode) => (
-            episode
-                .item
-                .backdrop
-                .as_ref()
-                .or(episode.item.poster.as_ref()),
-            Some(&episode.item),
-        ),
-        Title::Series(series) => (series.backdrop.as_ref().or(series.poster.as_ref()), None),
-    };
-    let image = near
-        .then(|| shell.image(item.0, images::CARD, cx))
-        .flatten();
     let (heading, detail) = home_page::card_lines(title);
     let left = home_page::time_left(title);
     let progress = home_page::progress(title);
-    // The click reads the title from the row when it comes: no copy of it is made per frame.
-    let opened = Rc::clone(titles);
-    let played = Rc::clone(titles);
+    let (opened, played) = (pick.clone(), pick);
 
     let over_id: ElementId = (id.0.clone(), id.1 + 100_000).into();
     let over = window.use_keyed_state(over_id, cx, |_, _| Over(Fade::new(motion::quick())));
@@ -788,7 +810,7 @@ pub(super) fn wide_card(
                 .bottom(px(14.))
                 .child(progress_bar(fraction, width - 28.))
         }))
-        .child(hover_layer(&id, &over, level, played, at, window, cx));
+        .child(hover_layer(&id, &over, level, played, window, cx));
 
     div()
         .id(id)
@@ -798,7 +820,11 @@ pub(super) fn wide_card(
         .flex_col()
         .gap(px(10.))
         .cursor_pointer()
-        .on_click(cx.listener(move |shell, _, _, cx| shell.open_title(&opened[at], cx)))
+        .on_click(cx.listener(move |shell, _, _, cx| {
+            if let Some(title) = opened.title(shell.list.as_ref().map(|list| &list.grid)) {
+                shell.open_title(&title, cx);
+            }
+        }))
         .child(picture_box)
         .child(
             div()
@@ -841,8 +867,7 @@ fn hover_layer(
     id: &(SharedString, usize),
     over: &Entity<Over>,
     level: f32,
-    titles: Rc<[Title]>,
-    at: usize,
+    pick: Pick,
     window: &mut Window,
     cx: &mut Context<Shell>,
 ) -> Stateful<Div> {
@@ -867,7 +892,9 @@ fn hover_layer(
     // A click on the button plays; it never opens the page behind it.
     .on_click(cx.listener(move |shell, _, window, cx| {
         cx.stop_propagation();
-        shell.play_from_home(PlayTarget::of(&titles[at]), window, cx)
+        if let Some(title) = pick.title(shell.list.as_ref().map(|list| &list.grid)) {
+            shell.play_from_home(PlayTarget::of(&title), window, cx);
+        }
     }))
     .child(icon(IconName::Play, 22.));
     div()
@@ -886,4 +913,42 @@ fn hover_layer(
             });
         })
         .child(play.opacity(level))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::fake::films;
+    use bobine::provider::Page;
+
+    fn titles(count: usize) -> Vec<Title> {
+        films(count).into_iter().map(Title::Film).collect()
+    }
+
+    #[test]
+    fn a_click_on_a_card_of_a_row_reads_its_title_from_the_row() {
+        let row: Rc<[Title]> = Rc::from(titles(3));
+        assert_eq!(
+            Pick::Row(Rc::clone(&row), 1).title(None),
+            Some(row[1].clone())
+        );
+        assert_eq!(Pick::Row(row, 3).title(None), None);
+    }
+
+    #[test]
+    fn a_click_on_a_card_of_the_full_list_reads_its_title_from_the_list() {
+        let mut grid: Grid<Title> = Grid::default();
+        let all = titles(3);
+        grid.loaded(
+            grid.epoch(),
+            0,
+            Page {
+                items: all.clone(),
+                total: 3,
+            },
+        );
+        assert_eq!(Pick::Listed(2).title(Some(&grid)), Some(all[2].clone()));
+        assert_eq!(Pick::Listed(3).title(Some(&grid)), None);
+        assert_eq!(Pick::Listed(0).title(None), None);
+    }
 }

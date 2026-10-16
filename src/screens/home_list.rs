@@ -2,7 +2,6 @@
 //! theirs. Only the rows in view are built, and only their pages are asked of the server.
 
 use std::ops::Range;
-use std::rc::Rc;
 
 use bobine::provider::Title;
 use gpui_kit::prelude::*;
@@ -10,10 +9,11 @@ use gpui_kit::{
     AnyElement, Context, FontWeight, IntoElement, SharedString, Window, div, px, uniform_list,
 };
 
-use super::home::{error_pill, wide_card};
+use super::home::{Pick, card_picture, error_pill, wide_card};
 use super::{centered, note, poster, series_poster};
 use crate::grid::{self, GAP, MARGIN};
 use crate::home_page::ListKind;
+use crate::images;
 use crate::shell::Shell;
 use crate::theme;
 
@@ -59,17 +59,8 @@ pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -
             shell.ask_list(range.start * columns..range.end * columns, cx);
             range
                 .map(|row| {
-                    let cards = (row * columns..(row + 1) * columns).map(|index| {
-                        let found = shell
-                            .list
-                            .as_ref()
-                            .and_then(|list| list.grid.film(index).cloned());
-                        match found {
-                            Some(title) => card(shell, &title, card_width, index, wide, window, cx),
-                            // Not here yet, or past the last one: the same room, empty.
-                            None => div().w(px(card_width)).flex_none().into_any_element(),
-                        }
-                    });
+                    let cards = (row * columns..(row + 1) * columns)
+                        .map(|index| card(shell, card_width, index, wide, window, cx));
                     div()
                         .flex()
                         .gap(px(GAP))
@@ -121,9 +112,15 @@ pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -
         .into_any_element()
 }
 
+fn listed(shell: &Shell, index: usize) -> Option<&Title> {
+    shell.list.as_ref()?.grid.film(index)
+}
+
+/// The `index`th card of the list. A wide card reads its title where it stands in the list and
+/// copies nothing: an episode carries all its versions. A poster takes a copy of its film or
+/// series, which is small, since drawing it needs the shell again.
 fn card(
     shell: &mut Shell,
-    title: &Title,
     width: f32,
     index: usize,
     wide: bool,
@@ -131,13 +128,22 @@ fn card(
     cx: &mut Context<Shell>,
 ) -> AnyElement {
     let id = (SharedString::from("home-list-card"), index);
-    let alone = || Rc::<[Title]>::from([title.clone()]);
-    match title {
-        _ if wide => wide_card(shell, &alone(), 0, width, id, true, window, cx).into_any_element(),
-        Title::Film(film) => poster(shell, film, width, id, false, cx).into_any_element(),
-        Title::Series(series) => series_poster(shell, series, width, id, cx).into_any_element(),
-        Title::Episode(_) => {
-            wide_card(shell, &alone(), 0, width, id, true, window, cx).into_any_element()
+    match listed(shell, index) {
+        // Not here yet, or past the last one: the same room, empty.
+        None => div().w(px(width)).flex_none().into_any_element(),
+        Some(Title::Film(film)) if !wide => {
+            let film = film.clone();
+            poster(shell, &film, width, id, false, cx).into_any_element()
+        }
+        Some(Title::Series(series)) if !wide => {
+            let series = series.clone();
+            series_poster(shell, &series, width, id, cx).into_any_element()
+        }
+        Some(title) => {
+            let picture = card_picture(title).cloned();
+            let image = shell.image(picture.as_ref(), images::CARD, cx);
+            let title = listed(shell, index).expect("the card was just found");
+            wide_card(title, image, Pick::Listed(index), width, id, window, cx).into_any_element()
         }
     }
 }
