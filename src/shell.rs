@@ -129,6 +129,9 @@ pub struct Shell {
     /// The "Épisode suivant" card over the series page, after an episode ended.
     pub up_next: UpNext,
     up_next_ticker: Option<Task<()>>,
+    /// The numbers of the series pages' refreshes, counted over every page: an answer on its way
+    /// for a page that closed never matches the page that opens in its place.
+    refreshes_asked: u64,
     /// The card fades in and out; the episode it showed stays drawn while it fades out.
     pub up_next_fade: Presence<Episode>,
     /// The episode ended in fullscreen: the window stays so while the card counts down, and
@@ -199,6 +202,7 @@ impl Shell {
             series_pages: Vec::new(),
             up_next: UpNext::default(),
             up_next_ticker: None,
+            refreshes_asked: 0,
             up_next_fade: Presence::new(motion::quick()),
             fullscreen_kept: false,
             people: Vec::new(),

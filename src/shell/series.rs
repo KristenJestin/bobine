@@ -109,7 +109,7 @@ impl Shell {
         cx: &mut Context<Self>,
     ) {
         let page = &mut self.series_pages[depth];
-        let refresh = page.refreshes.ask();
+        let refresh = page.refreshes.ask(&mut self.refreshes_asked);
         let id = page.id.clone();
         let asked = id.clone();
         self.ask(
@@ -201,10 +201,16 @@ impl Shell {
                     Ok(episodes) => Loadable::Ready(episodes),
                     Err(error) => Loadable::Failed(shell.failed(error, cx)),
                 };
-                if let Some(page) = shell.series_page(depth, &id)
-                    && page.refreshes.landed(refresh)
-                {
-                    page.episodes.insert(season, episodes);
+                if let Some(page) = shell.series_page(depth, &id) {
+                    // `again` is the refresh's own question; a tab click does not release.
+                    series_page::land_episodes(
+                        &mut page.episodes,
+                        &mut page.refreshes,
+                        refresh,
+                        again,
+                        season,
+                        episodes,
+                    );
                 }
             },
         );
@@ -314,15 +320,16 @@ impl Shell {
     /// chips' choices, any other with its defaults. The episode after it is looked for at the
     /// same time, for the end.
     pub fn play_episode(&mut self, episode: Episode, window: &mut Window, cx: &mut Context<Self>) {
-        // Another episode chosen while the card counts down: the card goes.
-        self.cancel_up_next(cx);
         let depth = self.series_pages.len().wrapping_sub(1);
         let Some(page) = self.series_pages.last_mut() else {
             return;
         };
-        if page.waiting() {
+        // Another episode chosen while the card counts down: the card goes, unless the page
+        // ignores the click.
+        if !series_page::starts_episode(page.waiting(), &mut self.up_next) {
             return;
         }
+        self.up_next_ticker = None;
         let choices = series_page::choices_for(page.next.as_ref(), page.choices.as_ref(), &episode);
         let Some(plan) = film_page::plan(&episode.item, &episode.versions, &choices, From::Resume)
         else {
