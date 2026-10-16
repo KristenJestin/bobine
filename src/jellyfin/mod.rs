@@ -337,6 +337,7 @@ impl MediaServer for Jellyfin {
                 "collection",
                 &[
                     ("parentId", boxset.id.clone()),
+                    ("includeItemTypes", "Movie".into()),
                     ("imageTypeLimit", "1".into()),
                     ("enableImageTypes", "Primary,Backdrop".into()),
                 ],
@@ -638,6 +639,7 @@ impl MediaServer for Jellyfin {
             "collection films",
             &[
                 ("parentId", collection.0.clone()),
+                ("includeItemTypes", "Movie".into()),
                 ("sortBy", "ProductionYear,PremiereDate,SortName".into()),
                 ("imageTypeLimit", "1".into()),
                 ("enableImageTypes", "Primary,Backdrop".into()),

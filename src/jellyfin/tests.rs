@@ -1365,6 +1365,27 @@ fn a_collection_lists_its_films_by_release_year() {
 }
 
 #[test]
+fn a_series_in_a_collection_is_not_listed_as_a_film() {
+    let s = Setup::new();
+    let collection = s
+        .signed_in()
+        .collection(&ItemId(HARBOUR_TRILOGY.into()))
+        .unwrap();
+    let titles: Vec<&str> = collection.films.iter().map(|f| f.title.as_str()).collect();
+    assert!(!titles.contains(&"Harbour Keepers"), "{titles:?}");
+    assert_eq!(titles.len(), 3);
+}
+
+#[test]
+fn the_other_films_of_a_collection_leave_out_its_series() {
+    let s = Setup::new();
+    let collection = s.signed_in().collection_of(&film()).unwrap().unwrap();
+    let titles: Vec<&str> = collection.others.iter().map(|f| f.title.as_str()).collect();
+    assert!(!titles.contains(&"Harbour Keepers"), "{titles:?}");
+    assert_eq!(titles.len(), 2);
+}
+
+#[test]
 fn a_collection_the_server_does_not_know_is_not_found() {
     let s = Setup::new();
     let missing = s
