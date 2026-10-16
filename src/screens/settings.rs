@@ -5,8 +5,9 @@ use std::time::Instant;
 
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    Bounds, Context, Div, FontWeight, IntoElement, MouseButton, MouseDownEvent, Pixels, Stateful,
-    Window, anchored, canvas, deferred, div, point, px,
+    Animation, AnimationExt, Bounds, Context, Div, FontWeight, IntoElement, KeyDownEvent,
+    MouseButton, MouseDownEvent, Pixels, Stateful, Window, anchored, canvas, deferred, div, point,
+    px,
 };
 
 use super::library::GRID_TOP;
@@ -14,7 +15,8 @@ use super::player::switch;
 use crate::config::Quality;
 use crate::icons::{IconName, icon};
 use crate::menu;
-use crate::shell::{QualityMenu, Shell};
+use crate::motion;
+use crate::shell::{Loadable, QualityMenu, Shell};
 use crate::theme;
 
 /// The widest the column goes: the sections stay readable on a wide window.
@@ -68,14 +70,25 @@ pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -
                 .child("This compositor cannot cover other screens.")
         }));
 
-    let fields: Vec<_> = shell.settings_page.secrets.clone();
+    let seerr_key = shell.seerr.key.clone();
+    let fields: Vec<_> = shell
+        .settings_page
+        .secrets
+        .iter()
+        .filter(|field| Some(*field) != seerr_key.as_ref())
+        .cloned()
+        .collect();
+    let seerr = seerr_block(shell, window, cx);
     let integrations = section("settings-integrations", IconName::Plug, "Integrations")
-        .children(fields.is_empty().then(|| {
-            div()
-                .px(px(12.))
-                .py(px(10.))
-                .child(super::note("No integration yet."))
-        }))
+        .children(seerr)
+        .children(
+            (fields.is_empty() && shell.seerr.address.is_none()).then(|| {
+                div()
+                    .px(px(12.))
+                    .py(px(10.))
+                    .child(super::note("No integration yet."))
+            }),
+        )
         .children(
             fields
                 .into_iter()
@@ -125,6 +138,131 @@ pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -
                 .child(integrations)
                 .child(about),
         )
+}
+
+/// Seerr's address, its API key, and the test of the connection, with what it found.
+fn seerr_block(shell: &Shell, window: &mut Window, cx: &mut Context<Shell>) -> Option<Div> {
+    let address = shell.seerr.address.clone()?;
+    let key = shell.seerr.key.clone()?;
+    let save = theme::eased("seerr-address-save", theme::Shades::line(), window, cx)
+        .px(px(12.))
+        .py(px(10.))
+        .rounded(px(theme::RADIUS))
+        .border_1()
+        .border_color(theme::line())
+        .text_size(px(13.))
+        .cursor_pointer()
+        .on_click(cx.listener(|shell, _, _, cx| shell.save_seerr_address(cx)))
+        .child("Save");
+    let address_row = div()
+        .debug_selector(|| "seerr-address".into())
+        .flex()
+        .items_center()
+        .justify_between()
+        .gap(px(16.))
+        .px(px(12.))
+        .py(px(10.))
+        .text_size(px(14.))
+        .child("Address")
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(8.))
+                .on_key_down(cx.listener(|shell, event: &KeyDownEvent, _, cx| {
+                    if event.keystroke.key == "enter" {
+                        shell.save_seerr_address(cx);
+                        cx.stop_propagation();
+                    }
+                }))
+                .child(div().w(px(240.)).child(address))
+                .child(save),
+        );
+    let test = theme::eased("seerr-test", theme::Shades::line(), window, cx)
+        .debug_selector(|| "seerr-test".into())
+        .flex()
+        .items_center()
+        .gap(px(8.))
+        .px(px(12.))
+        .py(px(7.))
+        .rounded(px(theme::RADIUS))
+        .border_1()
+        .border_color(theme::line())
+        .text_size(px(13.))
+        .cursor_pointer()
+        .on_click(cx.listener(|shell, _, _, cx| shell.test_seerr(cx)))
+        .child(icon(IconName::Plug, 14.).text_color(theme::muted()))
+        .child("Test");
+    let (said, failed) = match &shell.seerr.check {
+        None => (None, false),
+        Some(Loadable::Loading) => (Some("Testing…".to_string()), false),
+        Some(Loadable::Ready(line)) => (Some(line.clone()), false),
+        Some(Loadable::Failed(why)) => (Some(why.to_string()), true),
+    };
+    let check = said.map(|said| {
+        div()
+            .debug_selector(|| "seerr-check".into())
+            .text_size(px(13.))
+            .text_color(if failed {
+                theme::danger()
+            } else {
+                theme::muted()
+            })
+            .child(said.clone())
+            .with_animation(
+                gpui_kit::ElementId::Name(format!("seerr-check-{said}").into()),
+                Animation::new(motion::quick()).with_easing(motion::ease_out),
+                |line, t| line.opacity(t),
+            )
+    });
+    let owner = shell.seerr.owner_line.clone().map(|line| {
+        div()
+            .debug_selector(|| "seerr-owner".into())
+            .px(px(12.))
+            .pb(px(10.))
+            .text_size(px(12.))
+            .text_color(theme::dim())
+            .child(line)
+    });
+    Some(
+        div()
+            .flex()
+            .flex_col()
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.))
+                    .px(px(12.))
+                    .pt(px(6.))
+                    .pb(px(4.))
+                    .child(
+                        div()
+                            .text_size(px(14.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child("Seerr"),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .text_color(theme::dim())
+                            .child("Request movies and series that are not in the library."),
+                    ),
+            )
+            .child(address_row)
+            .child(div().px(px(12.)).py(px(10.)).child(key))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(14.))
+                    .px(px(12.))
+                    .py(px(10.))
+                    .child(test)
+                    .children(check),
+            )
+            .children(owner),
+    )
 }
 
 /// A card: its icon and title, then what the caller puts in it.

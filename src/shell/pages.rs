@@ -501,6 +501,7 @@ impl Shell {
         });
         self.login_focus_due = true;
         self.server = None;
+        self.seerr = Default::default();
         self.details.clear();
         self.series_pages.clear();
         self.up_next.cancel();
@@ -593,6 +594,7 @@ impl Shell {
         self.server = Some(server);
         self.login = None;
         self.reset_session(cx);
+        self.set_up_seerr(cx);
         self.navigator.switch_root(Screen::Home);
         self.load_home(cx);
     }
@@ -603,6 +605,7 @@ impl Shell {
         self.settings_page.menus.close();
         // Their keyring entries stay: the next session of the same user finds them again.
         self.settings_page.secrets.clear();
+        self.seerr = Default::default();
         self.home = HomePage::default();
         self.library = LibraryPage::default();
         self.series = LibraryPage::default();

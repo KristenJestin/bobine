@@ -1,5 +1,6 @@
 //! The root view: the screen the navigator points at, framed by the pill bar or the back link.
 
+mod discover;
 mod home;
 mod lists;
 mod pages;
@@ -10,6 +11,7 @@ mod series;
 mod settings;
 mod skip;
 
+pub use discover::{OpenSeerr, Seerr};
 pub use home::{HomePage, ListPage};
 pub use lists::{CollectionPage, CollectionsPage, MyListPage, PlayerList};
 pub use pages::{Chip, DetailPage, GONE, LibraryPage, Loadable, LoginForm, OpenConnector, Tool};
@@ -134,6 +136,9 @@ pub struct Shell {
     /// Where the secrets the settings hold are kept: the system keyring.
     secrets: Arc<dyn TokenStore>,
     pub settings_page: SettingsPage,
+    /// The request server, when one is configured (#63), and how its client is made.
+    pub seerr: Seerr,
+    pub open_seerr: OpenSeerr,
     /// What turns the other monitors black, from the first film on; `None` after that when the
     /// compositor cannot (no layer shell): the switch is not offered.
     screens: Option<Screens>,
@@ -310,6 +315,8 @@ impl Shell {
             settings_path,
             secrets,
             settings_page: SettingsPage::default(),
+            seerr: Seerr::default(),
+            open_seerr: discover::real_seerr(),
             screens: None,
             screens_tried: false,
             window_seen: blackout::Steady::default(),
