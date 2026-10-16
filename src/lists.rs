@@ -9,7 +9,7 @@ pub const EMPTY_LIST: &str =
     "Your list is empty. Open a film or a series and choose “My list” to add it here.";
 
 /// What the page says when the server has no collection.
-pub const NO_COLLECTION: &str = "No collection on this server.";
+pub const NO_COLLECTION: &str = "No collections on this server.";
 
 /// How many poster requests of bare collections are in flight at once: few enough to leave the
 /// server and the connections to what the user is looking at, enough to not wait on each round
@@ -138,6 +138,11 @@ mod tests {
 
     fn all_cards() -> Vec<CollectionCard> {
         FakeServer::new(12, false).collections().unwrap()
+    }
+
+    #[test]
+    fn the_empty_messages_are_plural_english() {
+        assert_eq!(NO_COLLECTION, "No collections on this server.");
     }
 
     #[test]

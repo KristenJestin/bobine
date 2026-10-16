@@ -111,7 +111,7 @@ pub fn start(server: &dyn MediaServer, target: &PlayTarget) -> Result<Started, S
                 subtitle.push_str(&format!(" · {}", film_page::version_label(source)));
             }
             // No card for the episode after: it counts down over a series page, and the Home has
-            // none. The Home shows it under "Next Up" when it is back.
+            // none. The Home shows it under "Next up" when it is back.
             Ok(Started {
                 opened: server.play(&plan.film, &plan.source),
                 plan,
@@ -122,7 +122,7 @@ pub fn start(server: &dyn MediaServer, target: &PlayTarget) -> Result<Started, S
     }
 }
 
-/// The rows of the Home that list titles, and so have a full grid behind "Tout voir".
+/// The rows of the Home that list titles, and so have a full grid behind "See all".
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ListKind {
     /// Films and episodes started.
@@ -136,9 +136,9 @@ pub enum ListKind {
 impl ListKind {
     pub fn heading(&self) -> &'static str {
         match self {
-            Self::Resume => "Continue Watching",
-            Self::NextUp => "Next Up",
-            Self::Latest(..) => "Recently Added",
+            Self::Resume => "Continue watching",
+            Self::NextUp => "Next up",
+            Self::Latest(..) => "Recently added",
         }
     }
 }
@@ -159,13 +159,13 @@ impl Asks {
     }
 }
 
-/// How many titles a row of the Home holds; "Tout voir" shows them all.
+/// How many titles a row of the Home holds; "See all" shows them all.
 pub const ROW: u32 = 16;
 
-/// The most that "Continue Watching" and "Next Up" hold in their full list.
+/// The most that "Continue watching" and "Next up" hold in their full list.
 const WHOLE_LIST: u32 = grid::PAGE;
 
-/// One page of the full list behind "Tout voir". Resume and next up come whole in the first
+/// One page of the full list behind "See all". Resume and next up come whole in the first
 /// page (a person has a few dozen at most); the latest of a library are paged like its grid.
 pub fn fetch(
     server: &dyn MediaServer,
@@ -216,7 +216,7 @@ pub fn latest_query(kind: LibraryKind, page: u32) -> FilmQuery {
     }
 }
 
-/// What "Next Up" lists: the next episodes, less those already under "Continue Watching"
+/// What "Next up" lists: the next episodes, less those already under "Continue watching"
 /// (the server counts an episode started as the next of its series).
 pub fn next_up_row(next: Vec<Episode>, started: &[Title]) -> Vec<Episode> {
     next.into_iter()
@@ -525,11 +525,11 @@ mod tests {
 
     #[test]
     fn the_rows_are_named_in_english() {
-        assert_eq!(ListKind::Resume.heading(), "Continue Watching");
-        assert_eq!(ListKind::NextUp.heading(), "Next Up");
+        assert_eq!(ListKind::Resume.heading(), "Continue watching");
+        assert_eq!(ListKind::NextUp.heading(), "Next up");
         assert_eq!(
             ListKind::Latest(ItemId("films".into()), LibraryKind::Films).heading(),
-            "Recently Added"
+            "Recently added"
         );
     }
 

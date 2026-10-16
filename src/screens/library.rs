@@ -29,7 +29,7 @@ pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -
         shell,
         Grid {
             title: "Films",
-            empty: "No film in this library.",
+            empty: "No films in this library.",
             page: |shell| &mut shell.library,
             ask: Shell::ask_films,
             cell: |shell, film, width, index, cx| {
@@ -269,7 +269,7 @@ fn grid_screen<T: Listed + 'static>(
 }
 
 /// What the grid says when the filters leave nothing.
-const NO_MATCH: &str = "No title matches these filters.";
+const NO_MATCH: &str = "No titles match these filters.";
 
 /// Genre, decade, unwatched only and the order, right of the title.
 fn tool_chips(

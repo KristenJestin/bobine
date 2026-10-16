@@ -718,7 +718,7 @@ fn poster_row(
             .text_size(px(13.))
             .text_color(theme::muted())
             .cursor_pointer()
-            .child("See the collection")
+            .child("View collection")
             .child(icon(IconName::ChevronRight, 13.))
             .on_click(cx.listener(move |shell, _, _, cx| {
                 shell.open_collection(target.clone(), cx);

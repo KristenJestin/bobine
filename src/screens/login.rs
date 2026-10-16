@@ -69,13 +69,13 @@ pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -
                         div()
                             .text_size(px(22.))
                             .font_weight(FontWeight::SEMIBOLD)
-                            .child("Connect a server"),
+                            .child("Connect to a server"),
                     )
                     .child(
                         div()
                             .text_size(px(13.))
                             .text_color(theme::muted())
-                            .child("Start with Jellyfin."),
+                            .child("Jellyfin for now."),
                     ),
             )
             .child(

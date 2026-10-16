@@ -58,7 +58,7 @@ pub fn render(shell: &mut Shell, _: &mut Window, cx: &mut Context<Shell>) -> imp
                 sections.push(section("Series", cards));
             }
             if sections.is_empty() {
-                sections.push(div().child(note("No title for this person.")));
+                sections.push(div().child(note("No titles for this person.")));
             }
             (Some(counts), sections)
         }

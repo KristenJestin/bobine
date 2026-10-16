@@ -1,5 +1,5 @@
 //! The Home: what its header and rows hold, how it comes from the server, what its buttons
-//! start, and the full list behind "Tout voir". Like every page, each call to the server runs
+//! start, and the full list behind "See all". Like every page, each call to the server runs
 //! off the window's thread, and an answer that comes after a newer ask is dropped.
 
 use std::ops::Range;
@@ -54,7 +54,7 @@ pub struct HomePage {
     pub hovered: bool,
     pub resume: Option<Loadable<Rc<[Title]>>>,
     pub next_up: Option<Loadable<Vec<Episode>>>,
-    /// What "Next Up" shows, worked out when `resume` or `next_up` changes rather than
+    /// What "Next up" shows, worked out when `resume` or `next_up` changes rather than
     /// at every frame.
     pub next_row: Rc<[Title]>,
     /// One row for each library of films or of series, in the server's order.
@@ -218,7 +218,7 @@ impl HomePage {
         true
     }
 
-    /// The row under "Continue Watching" worked out again: what is started is not asked as next.
+    /// The row under "Continue watching" worked out again: what is started is not asked as next.
     fn work_out_next_row(&mut self) {
         self.next_row = match &self.next_up {
             Some(Loadable::Ready(next)) => {
@@ -242,7 +242,7 @@ impl HomePage {
     }
 }
 
-/// A full list: all of "Continue Watching", of "Next Up", or of what a library gained.
+/// A full list: all of "Continue watching", of "Next up", or of what a library gained.
 pub struct ListPage {
     pub kind: ListKind,
     /// The library a list of the latest belongs to.
@@ -539,7 +539,7 @@ impl Shell {
     }
 
     /// Back from the player: once "stopped" reached the server, the Home is asked anew, so that
-    /// what was watched leaves the header and "Continue Watching" shows where the viewer is now.
+    /// what was watched leaves the header and "Continue watching" shows where the viewer is now.
     pub(super) fn reload_home_after(&mut self, reports: JoinHandle<()>, cx: &mut Context<Self>) {
         self.ask(
             cx,
@@ -554,7 +554,7 @@ impl Shell {
         );
     }
 
-    /// "Tout voir" on a row.
+    /// "See all" on a row.
     pub fn open_list(&mut self, kind: ListKind, library: Option<String>, cx: &mut Context<Self>) {
         self.list = Some(ListPage {
             kind,

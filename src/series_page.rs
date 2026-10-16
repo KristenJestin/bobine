@@ -102,7 +102,7 @@ pub fn player_title(episode: &Episode) -> (String, String) {
     (episode.series_title.clone(), subtitle)
 }
 
-/// The episode the main button plays: Next Up (the one started, else the one after the last
+/// The episode the main button plays: "Next up" (the one started, else the one after the last
 /// watched), else the first of the series, watched again: of its first season, not of its
 /// specials (season 0), unless it has nothing else. Blocks on the server.
 pub fn next_to_play(
@@ -927,7 +927,7 @@ mod tests {
             stale,
             false,
             season.clone(),
-            Loadable::Failed("The server is not answering."),
+            Loadable::Failed("The server is not responding."),
         );
         assert!(matches!(episodes.get(&season), Some(Loadable::Ready(_))));
     }
@@ -936,7 +936,7 @@ mod tests {
     fn a_failed_season_is_asked_again_when_its_tab_is_chosen() {
         assert!(asks_episodes(None, false));
         assert!(asks_episodes(
-            Some(&Loadable::Failed("The server is not answering.")),
+            Some(&Loadable::Failed("The server is not responding.")),
             false
         ));
         assert!(!asks_episodes(Some(&Loadable::Loading), false));

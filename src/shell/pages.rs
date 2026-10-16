@@ -1350,7 +1350,7 @@ impl Shell {
                     return;
                 };
                 shell.library.grid.update(&detail.film);
-                // Continue Watching is asked again when Home shows.
+                // Continue watching is asked again when Home shows.
                 if let Some(page) = shell.detail_numbered(depth, generation)
                     && let Loadable::Ready(shown) = &mut page.detail
                 {
@@ -1496,15 +1496,15 @@ mod tests {
     #[test]
     fn a_read_that_fails_on_a_film_page_that_is_showing_keeps_the_page() {
         let mut page = shown_film();
-        page.load_failed("Hors ligne");
+        page.load_failed("Offline");
         assert!(matches!(page.detail, Loadable::Ready(_)));
     }
 
     #[test]
     fn a_first_load_that_fails_shows_the_failure() {
         let mut page = DetailPage::new(ItemId(crate::fake::FILM.into()), 1);
-        page.load_failed("Hors ligne");
-        assert!(matches!(page.detail, Loadable::Failed("Hors ligne")));
+        page.load_failed("Offline");
+        assert!(matches!(page.detail, Loadable::Failed("Offline")));
     }
 
     /// A films page whose first page of a 1284-film library has arrived.
@@ -1625,13 +1625,13 @@ mod tests {
         for _ in 0..=crate::grid::MAX_RETRIES {
             page.grid.failed(page.grid.epoch(), 0, at(t, 400));
         }
-        page.error = Some("Hors ligne");
+        page.error = Some("Offline");
         assert!(page.gave_up());
         page.follow_list(at(t, 500));
         assert!(page.grid.has_stale());
         assert!(page.cells_visible(at(t, 600)));
         assert_eq!(opacity(&page, at(t, 1000)), 1.);
-        // "Réessayer": the list goes away again while the new one is awaited.
+        // "Retry": the list goes away again while the new one is awaited.
         page.retry();
         page.follow_list(at(t, 1100));
         assert_eq!(opacity(&page, at(t, 1500)), 0.);
@@ -1724,7 +1724,7 @@ mod tests {
     }
 
     #[test]
-    fn ma_liste_is_asked_again_each_time_it_shows() {
+    fn my_list_is_asked_again_each_time_it_shows() {
         assert_eq!(arrival(Screen::MyList, true, true), Arrival::MyList);
         assert_eq!(arrival(Screen::Home, true, true), Arrival::Home);
         assert_eq!(arrival(Screen::HomeList, true, true), Arrival::HomeList);

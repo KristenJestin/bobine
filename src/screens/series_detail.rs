@@ -268,7 +268,7 @@ fn seasons(shell: &mut Shell, shown: &Shown, window: &mut Window, cx: &mut Conte
         None => note("Loading…").into_any_element(),
         Some(Err(why)) => note(*why).into_any_element(),
         Some(Ok(episodes)) if episodes.is_empty() => {
-            note("No episode in this season.").into_any_element()
+            note("No episodes in this season.").into_any_element()
         }
         Some(Ok(episodes)) => {
             let next = shown.next.as_ref().map(|e| e.item.id.clone());
@@ -443,7 +443,7 @@ fn episode_row(
 }
 
 /// "Next episode", bottom right over the series page: the still, the episode, the seconds
-/// left with a bar that empties, "Lire" and "Annuler". Fades in and out.
+/// left with a bar that empties, "Play" and "Cancel". Fades in and out.
 pub fn up_next_card(
     shell: &mut Shell,
     window: &mut Window,

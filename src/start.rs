@@ -44,15 +44,15 @@ pub fn server_line(info: &ServerInfo) -> String {
 pub fn error_message(error: &ProviderError) -> &'static str {
     match error {
         ProviderError::InvalidAddress => "The address must start with http:// or https://.",
-        ProviderError::NotAMediaServer => "No Jellyfin server answers at this address.",
+        ProviderError::NotAMediaServer => "No Jellyfin server responds at this address.",
         ProviderError::WrongCredentials => "Wrong username or password.",
         ProviderError::AccountDisabled => "This account is disabled on the server.",
         ProviderError::SessionExpired => "The session has expired: sign in again.",
         ProviderError::Forbidden => "The server refuses access to this content.",
-        ProviderError::NotFound => "The server does not know this content.",
-        ProviderError::Unreachable(_) => "The server is not answering.",
+        ProviderError::NotFound => "This item was not found on the server.",
+        ProviderError::Unreachable(_) => "The server is not responding.",
         ProviderError::Server(_) | ProviderError::BadAnswer(_) => {
-            "The server gave an unexpected answer."
+            "The server gave an unexpected response."
         }
         ProviderError::Keyring(_) => "The system keyring cannot be reached.",
         ProviderError::Storage(_) => "The account file cannot be written.",
@@ -69,6 +69,26 @@ pub fn brings_the_login_back(error: &ProviderError, login_shown: bool) -> bool {
 mod tests {
     use super::*;
     use crate::fake::{FakeServer, PASSWORD, USER};
+
+    #[test]
+    fn the_errors_are_told_in_plain_english() {
+        assert_eq!(
+            error_message(&ProviderError::NotAMediaServer),
+            "No Jellyfin server responds at this address."
+        );
+        assert_eq!(
+            error_message(&ProviderError::Unreachable(String::new())),
+            "The server is not responding."
+        );
+        assert_eq!(
+            error_message(&ProviderError::NotFound),
+            "This item was not found on the server."
+        );
+        assert_eq!(
+            error_message(&ProviderError::BadAnswer(String::new())),
+            "The server gave an unexpected response."
+        );
+    }
 
     #[test]
     fn one_expired_session_shows_the_login_once() {

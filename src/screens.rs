@@ -89,7 +89,7 @@ fn note(text: impl Into<gpui_kit::SharedString>) -> Div {
         .child(text.into())
 }
 
-/// A row's heading: `Continue Watching`, `Cast`, `Similar titles`.
+/// A row's heading: `Continue watching`, `Cast`, `Similar titles`.
 fn row_heading(title: impl Into<gpui_kit::SharedString>) -> Div {
     div()
         .text_size(px(18.))
