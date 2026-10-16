@@ -51,6 +51,7 @@ use crate::video::Rect;
 use crate::video::blackout::{self, layer::Screens};
 use crate::video::subsurface::{VideoSurface, Wayland};
 use preview::SeekPreview;
+use uuid::Uuid;
 
 /// How often the player is asked what changed, and the controls checked for hiding.
 const PLAYER_TICK: Duration = Duration::from_millis(100);
@@ -128,6 +129,7 @@ pub struct Shell {
     /// compositor cannot (no layer shell): the switch is not offered.
     screens: Option<Screens>,
     screens_tried: bool,
+    window_seen: blackout::Steady<(bool, Option<Uuid>)>,
     /// The "Black out other screens" switch slides from one side to the other.
     pub blackout_switch: Fade,
     /// The kept session is being looked for: nothing to show yet.
@@ -247,6 +249,7 @@ impl Shell {
             settings_path,
             screens: None,
             screens_tried: false,
+            window_seen: blackout::Steady::default(),
             blackout_switch,
             starting: true,
             connector: None,
@@ -423,12 +426,16 @@ impl Shell {
         let Some(screens) = &mut self.screens else {
             return;
         };
-        let wanted = blackout::wanted(
-            self.settings.black_out_other_monitors,
-            self.playback.is_some(),
-            window.is_fullscreen(),
-        );
+        let fullscreen = window.is_fullscreen();
         let window_on = window.display(cx).and_then(|display| display.uuid().ok());
+        // Not on the tick the fullscreen starts: GPUI may still name the old monitor then.
+        let steady = self.window_seen.settles((fullscreen, window_on));
+        let wanted = steady
+            && blackout::wanted(
+                self.settings.black_out_other_monitors,
+                self.playback.is_some(),
+                fullscreen,
+            );
         screens.want(wanted, window_on);
         screens.beat();
     }

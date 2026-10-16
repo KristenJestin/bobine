@@ -43,6 +43,27 @@ pub fn monitor_with_id(outputs: &[String], id: Uuid) -> Option<String> {
         .cloned()
 }
 
+/// Seen twice in a row: a window that just went fullscreen can be reported on its old monitor
+/// by GPUI for a tick, and covering that one would black out the film itself.
+pub struct Steady<T> {
+    last: Option<T>,
+}
+
+impl<T> Default for Steady<T> {
+    fn default() -> Self {
+        Steady { last: None }
+    }
+}
+
+impl<T: PartialEq> Steady<T> {
+    /// What is seen now. Whether it is what was seen on the previous call too.
+    pub fn settles(&mut self, seen: T) -> bool {
+        let same = self.last.as_ref() == Some(&seen);
+        self.last = Some(seen);
+        same
+    }
+}
+
 /// Where the wish to cover goes: the adapter's thread, or a fake.
 pub trait Wish {
     fn want(&mut self, wanted: bool, window_on: Option<Uuid>);
@@ -300,5 +321,23 @@ mod tests {
             heartbeat.until_lapse(start + Duration::from_secs(5)),
             Duration::ZERO
         );
+    }
+
+    #[test]
+    fn what_is_seen_twice_in_a_row_is_steady() {
+        let mut steady = Steady::default();
+        assert!(!steady.settles((true, "DP-1")));
+        assert!(steady.settles((true, "DP-1")));
+        assert!(steady.settles((true, "DP-1")));
+    }
+
+    #[test]
+    fn a_change_is_not_steady_until_seen_again() {
+        let mut steady = Steady::default();
+        steady.settles((false, "DP-1"));
+        // Fullscreen, but GPUI still says the old monitor.
+        assert!(!steady.settles((true, "DP-1")));
+        assert!(!steady.settles((true, "DP-2")));
+        assert!(steady.settles((true, "DP-2")));
     }
 }
