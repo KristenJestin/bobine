@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use bobine::provider::{
     Collection, Connector, Episode, FilmDetail, FilmQuery, FilterChoices, ItemId, LibraryKind,
-    MediaServer, MediaSource, Page, Playback as Opened, PlaybackReport, ProviderError,
+    MediaServer, MediaSource, Page, PlayMethod, Playback as Opened, PlaybackReport, ProviderError,
 };
 use gpui_kit::prelude::*;
 use gpui_kit::{
@@ -1259,6 +1259,11 @@ impl Shell {
             }
         };
         self.tried(&origin, None);
+        // A version the server only converts holds the tracks the server chose, not the file's.
+        let plan = match opened.method {
+            PlayMethod::DirectPlay => plan,
+            PlayMethod::Transcode => plan.converted(plan.start),
+        };
         let options = self.mpv_options.clone();
         let Some(server) = self.server.clone() else {
             return;
