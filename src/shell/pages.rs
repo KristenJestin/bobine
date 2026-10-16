@@ -3448,4 +3448,54 @@ mod tests {
             }
         }
     }
+
+    #[gpui_kit::test]
+    fn a_movie_or_series_with_a_logo_shows_it_in_place_of_its_title(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        let (_server, window) = signed_in_window(cx);
+        let pages: [fn(&mut Shell, &mut Context<Shell>); 2] = [
+            |shell, cx| shell.open_film(ItemId(crate::fake::FILM.into()), cx),
+            |shell, cx| shell.open_series(ItemId(crate::fake::SERIES.into()), cx),
+        ];
+        for open in pages {
+            window
+                .update(cx, |shell, _, cx| {
+                    shell.select(NavEntry::Home, cx);
+                    open(shell, cx);
+                })
+                .unwrap();
+            let mut visual = drawn(&window, cx);
+            let screen = current(&window, cx);
+            let logo = visual.debug_bounds("detail-logo").expect("the logo");
+            assert!(visual.debug_bounds("detail-title").is_none(), "{screen:?}");
+            let (width, height) = crate::hero::PAGE_LOGO;
+            assert!(
+                logo.size.width <= px(width) && logo.size.height <= px(height),
+                "{screen:?}: {:?}",
+                logo.size
+            );
+        }
+    }
+
+    #[gpui_kit::test]
+    fn a_movie_or_series_without_a_logo_shows_its_title(cx: &mut gpui_kit::TestAppContext) {
+        let (_server, window) = signed_in_window(cx);
+        let pages: [fn(&mut Shell, &mut Context<Shell>); 2] = [
+            |shell, cx| shell.open_film(ItemId("film-1".into()), cx),
+            |shell, cx| shell.open_series(ItemId("series-1".into()), cx),
+        ];
+        for open in pages {
+            window
+                .update(cx, |shell, _, cx| {
+                    shell.select(NavEntry::Home, cx);
+                    open(shell, cx);
+                })
+                .unwrap();
+            let mut visual = drawn(&window, cx);
+            let screen = current(&window, cx);
+            assert!(visual.debug_bounds("detail-title").is_some(), "{screen:?}");
+            assert!(visual.debug_bounds("detail-logo").is_none(), "{screen:?}");
+        }
+    }
 }

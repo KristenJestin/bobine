@@ -8,16 +8,17 @@ use std::cell::Cell;
 use std::rc::Rc;
 use std::time::Instant;
 
-use bobine::provider::{CastMember, Film, FilmDetail, ItemId, MediaSource, PersonHit};
+use bobine::provider::{CastMember, Film, FilmDetail, ImageRef, ItemId, MediaSource, PersonHit};
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    AnyElement, Bounds, Context, Div, FontWeight, IntoElement, MouseButton, MouseDownEvent, Pixels,
-    Point, ScrollHandle, SharedString, Stateful, Window, anchored, canvas, deferred, div,
-    linear_color_stop, linear_gradient, point, px, rgb, rgba,
+    AnyElement, Bounds, Context, Div, FontWeight, IntoElement, MouseButton, MouseDownEvent,
+    ObjectFit, Pixels, Point, ScrollHandle, SharedString, Stateful, Window, anchored, canvas,
+    deferred, div, img, linear_color_stop, linear_gradient, point, px, rgb, rgba,
 };
 
 use super::{centered, note, picture, poster, progress_bar, row_heading};
 use crate::film_page::{self, Choices, Fact, From};
+use crate::hero;
 use crate::icons::{IconName, icon, with_stars};
 use crate::images;
 use crate::menu;
@@ -218,8 +219,9 @@ fn hero(
 
     let meta_line = facts_line(film_page::meta(detail), NavEntry::Films, window, cx);
 
+    let title = heading(shell, &film.title, detail.logo.as_ref(), window, cx);
     hero_frame(backdrop, height).child(
-        hero_text(film.title.clone())
+        hero_text_under(title)
             .child(meta_line)
             .children((!detail.directors.is_empty()).then(|| {
                 div()
@@ -325,6 +327,11 @@ pub(super) fn hero_frame(
 
 /// The column of text at the bottom left of the hero, under its title.
 pub(super) fn hero_text(title: String) -> Div {
+    hero_text_under(title_text(title))
+}
+
+/// The column of text at the bottom left of the hero, under `heading`: a title or its logo.
+pub(super) fn hero_text_under(heading: impl IntoElement) -> Div {
     div()
         .absolute()
         .left(px(EDGE))
@@ -333,13 +340,60 @@ pub(super) fn hero_text(title: String) -> Div {
         .flex()
         .flex_col()
         .gap(px(14.))
+        .child(heading)
+}
+
+fn title_text(title: String) -> Div {
+    div()
+        .debug_selector(|| "detail-title".to_string())
+        .text_size(px(44.))
+        .line_height(px(50.))
+        .font_weight(FontWeight::BOLD)
+        .child(title)
+}
+
+/// The title of a film or series page: its logo, at the size it fits in the room, once the
+/// picture is here, fading in; its name in text until then, and when the server has no logo, so
+/// that the page is never without a title.
+pub(super) fn heading(
+    shell: &mut Shell,
+    title: &str,
+    logo: Option<&ImageRef>,
+    window: &mut Window,
+    cx: &mut Context<Shell>,
+) -> AnyElement {
+    let drawn = logo
+        .zip(shell.image(logo, images::LOGO, cx))
+        .and_then(|(logo, image)| {
+            let size = image.size(0);
+            let fit =
+                hero::logo_fit_in((size.width.0 as f32, size.height.0 as f32), hero::PAGE_LOGO)?;
+            Some((logo, image, fit))
+        });
+    let Some((logo, image, (width, height))) = drawn else {
+        return title_text(title.to_string()).into_any_element();
+    };
+    let fade = window.use_keyed_state(
+        SharedString::from(format!("page-logo-{}", logo.item.0)),
+        cx,
+        |_, _| Fade::new(motion::page()),
+    );
+    let now = Instant::now();
+    fade.update(cx, |fade, _| fade.set(true, now));
+    let fade = *fade.read(cx);
+    if fade.moving(now) {
+        window.request_animation_frame();
+    }
+    div()
+        .opacity(fade.level(now))
         .child(
-            div()
-                .text_size(px(44.))
-                .line_height(px(50.))
-                .font_weight(FontWeight::BOLD)
-                .child(title),
+            img(image)
+                .debug_selector(|| "detail-logo".to_string())
+                .w(px(width))
+                .h(px(height))
+                .object_fit(ObjectFit::Contain),
         )
+        .into_any_element()
 }
 
 /// `2025 | ★ 6.0 | 2 h 11`: the facts under a title, apart.
