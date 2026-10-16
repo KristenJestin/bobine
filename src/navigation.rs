@@ -235,7 +235,7 @@ mod tests {
         nav.open(Screen::Settings);
         assert_eq!(nav.current(), Screen::Settings);
         assert!(Screen::Settings.shows_pill_bar());
-        assert_eq!(nav.back_label(), Some("Films"));
+        assert_eq!(nav.back_label(), Some("Movies"));
         // The pill of the screen the settings were reached from stays the one highlighted.
         assert_eq!(nav.section(), Screen::Library);
         assert!(nav.back());
