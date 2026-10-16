@@ -1,12 +1,14 @@
 //! The root view: the screen the navigator points at, framed by the pill bar or the back link.
 
 mod home;
+mod lists;
 mod pages;
 mod palette;
 mod series;
 
 pub use home::{HomePage, ListPage};
-pub use pages::{Chip, DetailPage, LibraryPage, Loadable, LoginForm, OpenConnector};
+pub use lists::{CollectionPage, CollectionsPage, MyListPage};
+pub use pages::{Chip, DetailPage, GONE, LibraryPage, Loadable, LoginForm, OpenConnector, Tool};
 pub use palette::{PersonPage, SearchState};
 pub use series::SeriesPage;
 
@@ -134,6 +136,9 @@ pub struct Shell {
     /// The numbers of the series pages' refreshes, counted over every page: an answer on its way
     /// for a page that closed never matches the page that opens in its place.
     refreshes_asked: u64,
+    /// The film and series pages opened so far: each takes the next number, so that an answer on
+    /// its way for a page that closed never reaches the page that opens in its place.
+    pages_opened: u64,
     /// The card fades in and out; the episode it showed stays drawn while it fades out.
     pub up_next_fade: Presence<Episode>,
     /// The episode ended in fullscreen: the window stays so while the card counts down, and
@@ -141,6 +146,10 @@ pub struct Shell {
     fullscreen_kept: bool,
     /// The person pages open, the last one on top: one per `Screen::Person` of the navigator.
     pub people: Vec<PersonPage>,
+    pub collections: CollectionsPage,
+    /// The collection pages open, the last one on top: one per `Screen::CollectionDetail`.
+    pub collection_pages: Vec<CollectionPage>,
+    pub my_list: MyListPage,
     /// The search palette, while it shows (it stays fading out after it closed).
     pub search: Option<SearchState>,
     pub images: Images,
@@ -208,9 +217,13 @@ impl Shell {
             up_next: UpNext::default(),
             up_next_ticker: None,
             refreshes_asked: 0,
+            pages_opened: 0,
             up_next_fade: Presence::new(motion::quick()),
             fullscreen_kept: false,
             people: Vec::new(),
+            collections: Default::default(),
+            collection_pages: Vec::new(),
+            my_list: Default::default(),
             search: None,
             images: Images::default(),
             image_wake: None,
@@ -241,6 +254,12 @@ impl Shell {
 
     /// Opens the player on `media`. Its addresses go straight to mpv: nothing here keeps or
     /// prints them.
+    /// The number of the film or series page about to open.
+    fn next_generation(&mut self) -> u64 {
+        self.pages_opened += 1;
+        self.pages_opened
+    }
+
     pub fn play(
         &mut self,
         mpv: Arc<Libmpv>,
@@ -441,6 +460,8 @@ impl Render for Shell {
             for page in &mut self.series_pages {
                 page.menus.close();
             }
+            self.library.menus.close();
+            self.series.menus.close();
         }
         #[cfg(feature = "harness")]
         self.note_frame();
@@ -488,7 +509,8 @@ impl Render for Shell {
             self.details.len()
                 + self.series_pages.len()
                 + self.people.len()
-                + usize::from(self.list.is_some()),
+                + usize::from(self.list.is_some())
+                + self.collection_pages.len(),
         );
         if page != self.page {
             self.turned_forward = page.1 > self.page.1;

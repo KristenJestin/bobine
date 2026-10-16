@@ -9,6 +9,7 @@ use bobine::provider::{
 
 use crate::film_page::{self, Choices, Plan};
 use crate::grid;
+use crate::library_tools::Tools;
 use crate::series_page;
 
 /// What a play button of the Home starts.
@@ -205,7 +206,7 @@ pub fn fetch(
 /// The order of the full list of what a library gained: the one of its row. The row follows
 /// when episodes came in, so a series that gained one now is first, not the one added long ago.
 pub fn latest_query(kind: LibraryKind, page: u32) -> FilmQuery {
-    let query = grid::query(page);
+    let query = Tools::default().query(page);
     match kind {
         LibraryKind::Series => FilmQuery {
             sort: FilmSort::LastAdded,
@@ -383,7 +384,7 @@ mod tests {
         };
         assert_eq!(PlayTarget::of(&films[0]), PlayTarget::Film(film.id.clone()));
         let station = server
-            .series(&ItemId(FILMS_LIBRARY.into()), &grid::query(0))
+            .series(&ItemId(FILMS_LIBRARY.into()), &Tools::default().query(0))
             .unwrap();
         assert_eq!(
             PlayTarget::of(&Title::Series(station.items[0].clone())),
@@ -608,7 +609,7 @@ mod tests {
     fn a_series_card_says_its_years() {
         let server = server();
         let page = server
-            .series(&ItemId("series".into()), &grid::query(0))
+            .series(&ItemId("series".into()), &Tools::default().query(0))
             .unwrap();
         let title = Title::Series(page.items[0].clone());
         let (heading, detail) = card_lines(&title);
@@ -636,7 +637,7 @@ mod tests {
         let title = Title::Episode(episode(&server, "series-0-s3-e1"));
         assert_eq!((time_left(&title), progress(&title)), (None, None));
         let page = server
-            .series(&ItemId("series".into()), &grid::query(0))
+            .series(&ItemId("series".into()), &Tools::default().query(0))
             .unwrap();
         let title = Title::Series(page.items[0].clone());
         assert_eq!((time_left(&title), progress(&title)), (None, None));

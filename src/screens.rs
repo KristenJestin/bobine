@@ -1,10 +1,12 @@
 //! The screens, and the pieces several of them show: posters, the rows under a heading, the
 //! messages of a page that is loading or failed.
 
+mod collection_detail;
 mod film_detail;
 mod home;
 mod home_list;
 mod library;
+mod lists;
 mod login;
 mod person;
 pub mod player;
@@ -45,6 +47,9 @@ pub fn render(
         Screen::Series => library::render_series(shell, window, cx).into_any_element(),
         Screen::SeriesDetail => series_detail::render(shell, window, cx).into_any_element(),
         Screen::HomeList => home_list::render(shell, window, cx).into_any_element(),
+        Screen::Collections => lists::render_collections(shell, window, cx).into_any_element(),
+        Screen::CollectionDetail => collection_detail::render(shell, window, cx).into_any_element(),
+        Screen::MyList => lists::render_my_list(shell, window, cx).into_any_element(),
     }
 }
 
@@ -138,6 +143,29 @@ fn poster(
     outlined: bool,
     cx: &mut Context<Shell>,
 ) -> Stateful<Div> {
+    film_card(shell, film, width, id, outlined, false, cx)
+}
+
+/// A film with, over the foot of its poster, how far the viewer went when it is started.
+fn started_poster(
+    shell: &mut Shell,
+    film: &Film,
+    width: f32,
+    id: impl Into<ElementId>,
+    cx: &mut Context<Shell>,
+) -> Stateful<Div> {
+    film_card(shell, film, width, id, false, true, cx)
+}
+
+fn film_card(
+    shell: &mut Shell,
+    film: &Film,
+    width: f32,
+    id: impl Into<ElementId>,
+    outlined: bool,
+    with_progress: bool,
+    cx: &mut Context<Shell>,
+) -> Stateful<Div> {
     let image = shell.image(film.poster.as_ref(), images::POSTER, cx);
     let opened = film.id.clone();
     let mut caption: Vec<String> = film.year.iter().map(i32::to_string).collect();
@@ -162,13 +190,20 @@ fn poster(
                 shell.open_film(opened.clone(), cx);
             }))
         })
-        .child(poster_image(
-            image,
-            film_page::rating(film),
-            corner,
-            width,
-            outlined,
-        ))
+        .child(
+            poster_image(image, film_page::rating(film), corner, width, outlined).children(
+                with_progress
+                    .then(|| film_page::progress(film))
+                    .flatten()
+                    .map(|fraction| {
+                        div()
+                            .absolute()
+                            .left(px(8.))
+                            .bottom(px(8.))
+                            .child(progress_bar(fraction, width - 20.))
+                    }),
+            ),
+        )
         .child(poster_caption(film.title.clone(), caption.join(" · ")))
 }
 

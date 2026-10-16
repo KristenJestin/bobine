@@ -10,9 +10,10 @@
 //! [--measure-from S] --quit-at S`
 //!
 //! `bobine --screen login|home|home-rows|home-list-resume|home-list-next|home-list-latest|library|detail|
-//! detail-rows|detail-cast|playing|series|series-page|series-rows|up-next [--films N]
-//! [--media FILE] [--image-delay-ms N] [--photos-fail-once] [--scenario menu|scroll|select|panel|search|search-slow|search-keys|home-rotate|home-hover|home-jump|home-scroll|home-lists|home-play]
-//! [--search-delay-ms N] [--slower N] --quit-at S`
+//! detail-rows|detail-cast|playing|series|series-page|series-rows|up-next|collections|collection-page|
+//! my-list|my-list-empty|film-list|series-list [--films N]
+//! [--media FILE] [--image-delay-ms N] [--photos-fail-once] [--scenario menu|scroll|select|panel|search|search-slow|search-keys|tools|tools-keys|home-rotate|home-hover|home-jump|home-scroll|home-lists|home-play]
+//! [--search-delay-ms N] [--favourite-delay-ms N] [--favourite-fails] [--slower N] --quit-at S`
 //!
 //! A scenario sends clicks, keys and scroll events to the window as the compositor would, at set
 //! times, and prints what they did (`MENU`, `SCROLL`, `SELECT`, `PANEL` lines) and the frame times
@@ -31,8 +32,10 @@ use gpui_kit::{
 use crate::fake::{FILM, FakeServer, SERIES};
 use crate::film_page::From;
 use crate::home_page::ListKind;
+use crate::library_tools::LETTERS;
+use crate::menu;
 use crate::navigation::{NavEntry, Screen};
-use crate::shell::Chip;
+use crate::shell::{Chip, Tool};
 
 use crate::player::libmpv::Libmpv;
 use crate::player::mpv::MpvClient;
@@ -71,6 +74,10 @@ struct Args {
     search_delay: u64,
     /// Input sent to the window as a user would give it, once the screen shows.
     scenario: Option<String>,
+    /// How long the fake server takes to change the user's list, in milliseconds.
+    favourite_delay: u64,
+    /// The fake server fails when the user's list is changed.
+    favourite_fails: bool,
 }
 
 fn parse(mut args: impl Iterator<Item = String>) -> Result<Option<Args>, String> {
@@ -133,6 +140,13 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Option<Args>, String>
                     .ok_or("--search-delay-ms needs a number")?;
             }
             "--scenario" => parsed.scenario = args.next(),
+            "--favourite-fails" => parsed.favourite_fails = true,
+            "--favourite-delay-ms" => {
+                parsed.favourite_delay = args
+                    .next()
+                    .and_then(|n| n.parse().ok())
+                    .ok_or("--favourite-delay-ms needs a number")?;
+            }
             "--slower" => {
                 let times: u32 = args
                     .next()
@@ -198,6 +212,11 @@ impl Harness {
             state.image_delay = Duration::from_millis(args.image_delay);
             state.photos_fail_once = args.photos_fail_once;
             state.search_delay = Duration::from_millis(args.search_delay);
+            state.favourite_delay = Duration::from_millis(args.favourite_delay);
+            state.favourite_fails = args.favourite_fails;
+            if args.screen.as_deref() == Some("my-list-empty") {
+                state.favourites.clear();
+            }
             if args.scenario.as_deref() == Some("home-play") {
                 // The file played is seconds long: what was started resumes near its start.
                 let started = Duration::from_secs(1);
@@ -250,12 +269,36 @@ fn show_screen(
     let handle = window.window_handle();
     let begun = Instant::now();
     let wants = |names: &[&str]| names.contains(&screen.as_str());
-    let to_library = wants(&["library", "detail", "detail-rows", "detail-cast", "playing"]);
-    let to_film = wants(&["detail", "detail-rows", "detail-cast", "playing"]);
+    let to_library = wants(&[
+        "library",
+        "detail",
+        "detail-rows",
+        "detail-cast",
+        "playing",
+        "film-list",
+    ]);
+    let to_film = wants(&[
+        "detail",
+        "detail-rows",
+        "detail-cast",
+        "playing",
+        "film-list",
+    ]);
     let (scroll, play) = (wants(&["detail-rows"]), wants(&["playing"]));
     let to_cast = wants(&["detail-cast"]);
-    let to_series = wants(&["series", "series-page", "series-rows", "up-next"]);
-    let to_series_page = wants(&["series-page", "series-rows", "up-next"]);
+    let to_series = wants(&[
+        "series",
+        "series-page",
+        "series-rows",
+        "up-next",
+        "series-list",
+    ]);
+    let to_series_page = wants(&["series-page", "series-rows", "up-next", "series-list"]);
+    let to_collections = wants(&["collections", "collection-page"]);
+    let to_collection = wants(&["collection-page"]);
+    let to_list = wants(&["my-list", "my-list-empty"]);
+    // The "Ma liste" button pressed on the page that shows.
+    let press_list = wants(&["film-list", "series-list"]);
     let (series_rows, up_next) = (wants(&["series-rows"]), wants(&["up-next"]));
     let home_rows = wants(&["home-rows"]);
     let list = match screen.as_str() {
@@ -272,7 +315,7 @@ fn show_screen(
     };
     let mut done_steps = 0;
     // A scenario starts once the screen is reached: the login at once, a film page after it opened.
-    let ready_after = if to_film || to_series_page || list.is_some() {
+    let ready_after = if to_film || to_series_page || list.is_some() || to_collection {
         3
     } else {
         1
@@ -314,6 +357,12 @@ fn show_screen(
                                 if to_series {
                                     shell.select(NavEntry::Series, cx);
                                 }
+                                if to_collections {
+                                    shell.select(NavEntry::Collections, cx);
+                                }
+                                if to_list {
+                                    shell.select(NavEntry::MyList, cx);
+                                }
                                 true
                             }
                             1 if elapsed >= 1.5 => {
@@ -326,6 +375,10 @@ fn show_screen(
                                 if let Some((kind, library)) = list.clone() {
                                     shell.open_list(kind, library, cx);
                                 }
+                                if to_collection {
+                                    // Three films, one watched and one started.
+                                    shell.open_collection(ItemId("collection-1".into()), cx);
+                                }
                                 true
                             }
                             2 if elapsed >= 3. => {
@@ -335,6 +388,9 @@ fn show_screen(
                                 }
                                 if to_cast && let Some(page) = shell.details.last() {
                                     page.scroll.set_offset(point(px(0.), px(-420.)));
+                                }
+                                if press_list {
+                                    shell.toggle_favourite(cx);
                                 }
                                 if play {
                                     // The local file is shorter than the fake film's resume point.
@@ -450,6 +506,16 @@ enum Target {
     SeeAll(usize),
     /// The card of this index in the row of that index, of this width: its middle.
     Card(usize, usize, f32),
+    /// A chip above the library grid.
+    Tool(Tool),
+    /// The "Non vus" chip.
+    Unwatched,
+    /// A line of the open tool menu, from the first.
+    MenuLine(Tool, usize),
+    /// A letter of the alphabet bar.
+    Letter(char),
+    /// The empty top left, over no chip and no poster.
+    Corner,
 }
 
 #[derive(Clone, Debug)]
@@ -704,6 +770,49 @@ impl Acts {
                 (5.0, "escape leaves the player", Key("escape")),
                 (8.0, "the Home is back", Mark),
             ],
+            // The tools of the Films or Séries grid: a genre, unwatched only, an order, a letter,
+            // a decade; the menus close by Escape and by a click outside.
+            "tools" => vec![
+                (0.5, "open genre", Click(Tool(crate::shell::Tool::Genre))),
+                (
+                    1.5,
+                    "choose the third genre",
+                    Click(MenuLine(crate::shell::Tool::Genre, 2)),
+                ),
+                (3.0, "unwatched only", Click(Unwatched)),
+                (4.0, "open the order", Click(Tool(crate::shell::Tool::Sort))),
+                (
+                    5.0,
+                    "sort by title",
+                    Click(MenuLine(crate::shell::Tool::Sort, 1)),
+                ),
+                (6.5, "jump to F", Click(Letter('F'))),
+                (8.5, "jump to Z", Click(Letter('Z'))),
+                (10.0, "jump to hash", Click(Letter('#'))),
+                (
+                    11.5,
+                    "open the year",
+                    Click(Tool(crate::shell::Tool::Decade)),
+                ),
+                (12.5, "escape closes the menu", Key("escape")),
+                (
+                    13.5,
+                    "open the year",
+                    Click(Tool(crate::shell::Tool::Decade)),
+                ),
+                (14.5, "click outside", Click(Corner)),
+                (
+                    15.5,
+                    "open the order",
+                    Click(Tool(crate::shell::Tool::Sort)),
+                ),
+                (
+                    16.5,
+                    "sort by rating",
+                    Click(MenuLine(crate::shell::Tool::Sort, 3)),
+                ),
+                (18.0, "unwatched off", Click(Unwatched)),
+            ],
             other => {
                 eprintln!("bobine harness: unknown scenario {other}");
                 std::process::exit(2);
@@ -783,6 +892,14 @@ fn hero_height(size: gpui_kit::Size<Pixels>) -> Pixels {
     (size.height * 0.72).clamp(px(460.), px(760.))
 }
 
+/// Where a tool's chip was last drawn, on the grid shown.
+fn tool_chip(shell: &Shell, tool: Tool) -> Option<Bounds<Pixels>> {
+    match shell.navigator.current() {
+        Screen::Series => shell.series.chips[tool as usize].get(),
+        _ => shell.library.chips[tool as usize].get(),
+    }
+}
+
 /// Where `target` is in the window now.
 fn position(target: Target, shell: &Shell, window: &Window) -> Point<Pixels> {
     let size = window.viewport_size();
@@ -791,6 +908,27 @@ fn position(target: Target, shell: &Shell, window: &Window) -> Point<Pixels> {
     match target {
         Target::Chip(chip) => center(page.and_then(|p| p.chips[chip as usize].get())),
         Target::CastRow => center(page.map(|p| p.rows[0].bounds())),
+        Target::Tool(tool) => center(tool_chip(shell, tool)),
+        // Between the year and the order.
+        Target::Unwatched => tool_chip(shell, Tool::Decade)
+            .zip(tool_chip(shell, Tool::Sort))
+            .map(|(year, order)| point((year.right() + order.left()) / 2., year.center().y)),
+        // The menu opens under its chip: a six-pixel gap, a border and a padding, then lines.
+        Target::MenuLine(tool, line) => tool_chip(shell, tool).map(|chip| {
+            point(
+                chip.left() + px(60.),
+                chip.bottom() + px(menu::GAP + 7. + menu::LINE * (line as f32 + 0.5)),
+            )
+        }),
+        // The bar runs from 150 px down to 24 px above the bottom, its letters spread evenly.
+        Target::Letter(letter) => LETTERS.iter().position(|l| *l == letter).map(|n| {
+            let span = f32::from(size.height) - 150. - 24. - 16.;
+            point(
+                size.width - px(18.),
+                px(150. + 8. + span * n as f32 / (LETTERS.len() - 1) as f32),
+            )
+        }),
+        Target::Corner => Some(point(px(40.), px(30.))),
         Target::Blank => Some(point(size.width * 0.75, size.height * 0.3)),
         Target::TracksButton => Some(point(size.width - px(127.), px(48.))),
         Target::Picture => Some(point(size.width * 0.3, size.height * 0.5)),
@@ -980,6 +1118,24 @@ fn state(label: &str, shell: &Shell, cx: &App) -> String {
                 .collect::<Vec<_>>(),
             home.busy,
         );
+    }
+    let grid = |tools: &crate::library_tools::Tools, menu, total, jump| {
+        format!(
+            "LIBRARY {label}: genre={:?} decade={:?} unwatched={} sort={:?} menu={menu:?} \
+             total={total:?} jump={jump:?} screen={screen:?}",
+            tools.filters.genre, tools.filters.decade, tools.filters.unwatched, tools.sort,
+        )
+    };
+    match screen {
+        Screen::Library => {
+            let p = &shell.library;
+            return grid(&p.tools, p.menus.open(), p.grid.total, p.jump);
+        }
+        Screen::Series => {
+            let p = &shell.series;
+            return grid(&p.tools, p.menus.open(), p.grid.total, p.jump);
+        }
+        _ => {}
     }
     match shell.details.last() {
         Some(page) if screen == Screen::FilmDetail => format!(

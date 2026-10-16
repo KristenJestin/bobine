@@ -47,6 +47,8 @@ pub trait MediaServer: Send + Sync {
 
     fn libraries(&self) -> Result<Vec<Library>, ProviderError>;
     fn films(&self, library: &ItemId, query: &FilmQuery) -> Result<Page<Film>, ProviderError>;
+    /// The genres and decades of a library's titles, to filter its grid by.
+    fn filter_choices(&self, library: &ItemId) -> Result<FilterChoices, ProviderError>;
     /// The films and episodes the user started and did not finish, the latest first.
     fn continue_watching(&self) -> Result<Vec<Title>, ProviderError>;
     fn film(&self, film: &ItemId) -> Result<FilmDetail, ProviderError>;
@@ -93,6 +95,15 @@ pub trait MediaServer: Send + Sync {
     /// A few recent titles the user has not watched, films and series, each with a backdrop:
     /// what the top of the Home shows in turn. At most `limit`.
     fn featured(&self, limit: u32) -> Result<Vec<Feature>, ProviderError>;
+
+    /// Every collection of the user, by name. One call, not pages: a server holds tens of them.
+    fn collections(&self) -> Result<Vec<CollectionCard>, ProviderError>;
+    /// A collection and its films, oldest release first.
+    fn collection(&self, collection: &ItemId) -> Result<CollectionDetail, ProviderError>;
+    /// The films and series the user put in their list, by title.
+    fn favourites(&self) -> Result<Vec<Favourite>, ProviderError>;
+    /// Puts a film or a series in the user's list, or takes it out.
+    fn set_favourite(&self, item: &ItemId, favourite: bool) -> Result<(), ProviderError>;
 }
 
 /// A film, a series or an episode, as a row of the Home lists it.
@@ -163,6 +174,8 @@ pub struct SeriesDetail {
     pub official_rating: Option<String>,
     pub cast: Vec<CastMember>,
     pub similar: Vec<Series>,
+    /// In the user's list.
+    pub favourite: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -261,6 +274,17 @@ pub enum FilmSort {
     /// When the latest content came in: for a series, its newest episode.
     LastAdded,
     ReleaseYear,
+    Rating,
+}
+
+/// What narrows a library's films or series: the server applies it, over the whole library.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Filters {
+    pub genre: Option<String>,
+    /// The first year of a decade (`1990` for the nineties).
+    pub decade: Option<i32>,
+    /// Only what the user has not watched.
+    pub unwatched: bool,
 }
 
 /// One page of the films of a library, in an order.
@@ -268,9 +292,21 @@ pub enum FilmSort {
 pub struct FilmQuery {
     pub sort: FilmSort,
     pub descending: bool,
+    pub filters: Filters,
+    /// Only the titles that sort before this letter's: the `total` of such a query, with a
+    /// `limit` of one, is the index of the first title of the letter.
+    pub before: Option<char>,
     /// The index of the first film of the page.
     pub start: u32,
     pub limit: u32,
+}
+
+/// What a library offers to filter by.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FilterChoices {
+    pub genres: Vec<String>,
+    /// The first year of each decade that holds a title, the latest first.
+    pub decades: Vec<i32>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -323,6 +359,8 @@ pub struct FilmDetail {
     pub cast: Vec<CastMember>,
     pub similar: Vec<Film>,
     pub versions: Vec<MediaSource>,
+    /// In the user's list.
+    pub favourite: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -339,6 +377,33 @@ pub struct Collection {
     pub id: ItemId,
     pub name: String,
     pub others: Vec<Film>,
+}
+
+/// A collection as the grid lists it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CollectionCard {
+    pub id: ItemId,
+    pub name: String,
+    /// How many films it holds, when the server says.
+    pub films: Option<u32>,
+    pub poster: Option<ImageRef>,
+}
+
+/// A collection with its films, oldest release first.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CollectionDetail {
+    pub id: ItemId,
+    pub name: String,
+    pub overview: Option<String>,
+    pub backdrop: Option<ImageRef>,
+    pub films: Vec<Film>,
+}
+
+/// What the user's list holds: films and series together.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Favourite {
+    Film(Film),
+    Series(Series),
 }
 
 /// One version of a film: one file, with its tracks.

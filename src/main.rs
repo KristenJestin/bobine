@@ -4,6 +4,7 @@ mod chrome;
 mod config;
 #[cfg(any(test, feature = "harness"))]
 mod fake;
+mod favourite;
 mod film_page;
 mod grid;
 #[cfg(feature = "harness")]
@@ -13,6 +14,8 @@ mod home_page;
 mod icons;
 mod images;
 mod input;
+mod library_tools;
+mod lists;
 mod menu;
 mod motion;
 mod navigation;

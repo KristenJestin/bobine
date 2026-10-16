@@ -65,6 +65,8 @@ fn query(sort: FilmSort, descending: bool, start: u32, limit: u32) -> FilmQuery 
     FilmQuery {
         sort,
         descending,
+        filters: Filters::default(),
+        before: None,
         start,
         limit,
     }
@@ -353,7 +355,7 @@ fn films_are_sorted_by_date_added() {
     );
     let asked = s.fake.last("GET", "/Items");
     assert_eq!(asked.param("SortBy"), Some("DateCreated,SortName"));
-    assert_eq!(asked.param("SortOrder"), Some("Descending"));
+    assert_eq!(asked.param("SortOrder"), Some("Descending,Ascending"));
 }
 
 #[test]
@@ -371,7 +373,403 @@ fn films_are_sorted_by_release_year() {
     );
     let asked = s.fake.last("GET", "/Items");
     assert_eq!(asked.param("SortBy"), Some("ProductionYear,SortName"));
+    assert_eq!(asked.param("SortOrder"), Some("Ascending,Ascending"));
+}
+
+fn filtered(sort: FilmSort, descending: bool, filters: Filters) -> FilmQuery {
+    FilmQuery {
+        filters,
+        ..query(sort, descending, 0, 10)
+    }
+}
+
+fn genre(name: &str) -> Filters {
+    Filters {
+        genre: Some(name.into()),
+        ..Filters::default()
+    }
+}
+
+#[test]
+fn films_are_filtered_by_genre() {
+    let s = Setup::new();
+    let page = s
+        .signed_in()
+        .films(
+            &ItemId(FILMS_LIBRARY.into()),
+            &filtered(FilmSort::Title, false, genre("Mystery")),
+        )
+        .unwrap();
+    assert_eq!(titles(&page), ["Copper Sky", "The Quiet Harbour"]);
+    assert_eq!(page.total, 2);
+    assert_eq!(
+        s.fake.last("GET", "/Items").param("Genres"),
+        Some("Mystery")
+    );
+}
+
+#[test]
+fn films_are_filtered_by_decade() {
+    let s = Setup::new();
+    let page = s
+        .signed_in()
+        .films(
+            &ItemId(FILMS_LIBRARY.into()),
+            &filtered(
+                FilmSort::Title,
+                false,
+                Filters {
+                    decade: Some(2010),
+                    ..Filters::default()
+                },
+            ),
+        )
+        .unwrap();
+    assert_eq!(titles(&page), ["Amber Fields"]);
+    assert_eq!(
+        s.fake.last("GET", "/Items").param("Years"),
+        Some("2010,2011,2012,2013,2014,2015,2016,2017,2018,2019")
+    );
+}
+
+#[test]
+fn only_the_films_not_watched_are_asked_for() {
+    let s = Setup::new();
+    let page = s
+        .signed_in()
+        .films(
+            &ItemId(FILMS_LIBRARY.into()),
+            &filtered(
+                FilmSort::Title,
+                false,
+                Filters {
+                    unwatched: true,
+                    ..Filters::default()
+                },
+            ),
+        )
+        .unwrap();
+    assert_eq!(
+        titles(&page),
+        ["Copper Sky", "Lanterns", "Northbound", "The Quiet Harbour"]
+    );
+    assert_eq!(page.total, 4);
+    assert_eq!(
+        s.fake.last("GET", "/Items").param("IsPlayed"),
+        Some("false")
+    );
+}
+
+#[test]
+fn no_filter_sends_no_filter_parameter() {
+    let s = Setup::new();
+    s.signed_in()
+        .films(
+            &ItemId(FILMS_LIBRARY.into()),
+            &query(FilmSort::Title, false, 0, 10),
+        )
+        .unwrap();
+    let asked = s.fake.last("GET", "/Items");
+    for key in ["Genres", "Years", "IsPlayed", "NameLessThan"] {
+        assert_eq!(asked.param(key), None, "{key}");
+    }
+}
+
+#[test]
+fn films_are_sorted_by_rating_best_first() {
+    let s = Setup::new();
+    let page = s
+        .signed_in()
+        .films(
+            &ItemId(FILMS_LIBRARY.into()),
+            &filtered(FilmSort::Rating, true, Filters::default()),
+        )
+        .unwrap();
+    // The film nobody rated comes last.
+    assert_eq!(
+        titles(&page),
+        [
+            "Copper Sky",
+            "The Quiet Harbour",
+            "Amber Fields",
+            "Lanterns",
+            "Northbound"
+        ]
+    );
+    let asked = s.fake.last("GET", "/Items");
+    assert_eq!(asked.param("SortBy"), Some("CommunityRating,SortName"));
+    assert_eq!(asked.param("SortOrder"), Some("Descending,Ascending"));
+}
+
+#[test]
+fn titles_that_tie_in_a_descending_sort_still_read_a_to_z() {
+    // "Gale" and "Éclipse" are both from 2016: the newest year first, and between them the
+    // titles in their own order, as one order per sorted field asks.
+    let s = Setup::new();
+    let server = s.signed_in();
+    let page = server
+        .films(&letters(), &query(FilmSort::ReleaseYear, true, 0, 100))
+        .unwrap();
+    let years: Vec<Option<i32>> = page.items.iter().map(|f| f.year).collect();
+    assert_eq!(years[3..6], [Some(2017), Some(2016), Some(2016)]);
+    assert_eq!(titles(&page)[4..6], ["Gale", "Éclipse"]);
+    let asked = s.fake.last("GET", "/Items");
+    assert_eq!(asked.param("SortBy"), Some("ProductionYear,SortName"));
+    assert_eq!(asked.param("SortOrder"), Some("Descending,Ascending"));
+}
+
+#[test]
+fn filters_and_sort_apply_together_and_the_total_counts_the_filtered_list() {
+    let s = Setup::new();
+    let page = s
+        .signed_in()
+        .films(
+            &ItemId(FILMS_LIBRARY.into()),
+            &FilmQuery {
+                limit: 1,
+                ..filtered(
+                    FilmSort::ReleaseYear,
+                    true,
+                    Filters {
+                        genre: Some("Drama".into()),
+                        decade: None,
+                        unwatched: true,
+                    },
+                )
+            },
+        )
+        .unwrap();
+    // Drama not watched: Lanterns (2003) and The Quiet Harbour (1998).
+    assert_eq!(titles(&page), ["Lanterns"]);
+    assert_eq!(page.total, 2);
+}
+
+#[test]
+fn series_are_filtered_by_genre_decade_and_unwatched() {
+    let s = Setup::new();
+    let server = s.signed_in();
+    let names = |page: &Page<Series>| -> Vec<String> {
+        page.items.iter().map(|s| s.title.clone()).collect()
+    };
+    let drama = server
+        .series(
+            &series_library(),
+            &filtered(FilmSort::Title, false, genre("Drama")),
+        )
+        .unwrap();
+    assert_eq!(names(&drama), ["Bramble Line", "Tidewater"]);
+    assert_eq!(s.fake.last("GET", "/Items").param("Genres"), Some("Drama"));
+    let twenties = server
+        .series(
+            &series_library(),
+            &filtered(
+                FilmSort::Title,
+                false,
+                Filters {
+                    decade: Some(2020),
+                    ..Filters::default()
+                },
+            ),
+        )
+        .unwrap();
+    assert_eq!(names(&twenties), ["Glass Orchard", "Tidewater"]);
+    let unwatched = server
+        .series(
+            &series_library(),
+            &filtered(
+                FilmSort::Rating,
+                true,
+                Filters {
+                    unwatched: true,
+                    ..Filters::default()
+                },
+            ),
+        )
+        .unwrap();
+    assert_eq!(names(&unwatched), ["Tidewater", "Bramble Line"]);
+    assert_eq!(
+        s.fake.last("GET", "/Items").param("IsPlayed"),
+        Some("false")
+    );
+}
+
+#[test]
+fn a_library_offers_its_genres_and_its_decades() {
+    let s = Setup::new();
+    let choices = s
+        .signed_in()
+        .filter_choices(&ItemId(FILMS_LIBRARY.into()))
+        .unwrap();
+    assert_eq!(choices.genres, ["Drama", "Mystery", "Thriller"]);
+    // 1987, 1998, 2003, 2011 and 2020: the latest decade first.
+    assert_eq!(choices.decades, [2020, 2010, 2000, 1990, 1980]);
+    let genres = s.fake.last("GET", "/Genres");
+    assert_eq!(genres.param("ParentId"), Some(FILMS_LIBRARY));
+    assert_eq!(genres.param("userId"), Some(USER_ID));
+    assert_eq!(
+        s.fake.last("GET", "/Items/Filters").param("ParentId"),
+        Some(FILMS_LIBRARY)
+    );
+}
+
+/// The choices of the films library while `path` answers `status`.
+fn choices_with(path: &str, status: u16) -> Result<FilterChoices, ProviderError> {
+    let s = Setup::new();
+    let server = s.signed_in();
+    s.fake
+        .state
+        .lock()
+        .unwrap()
+        .broken
+        .push((path.into(), status));
+    server.filter_choices(&ItemId(FILMS_LIBRARY.into()))
+}
+
+#[test]
+fn the_decades_stay_when_the_genres_cannot_be_had() {
+    let choices = choices_with("/Genres", 500).unwrap();
+    assert_eq!(choices.genres, Vec::<String>::new());
+    assert_eq!(choices.decades, [2020, 2010, 2000, 1990, 1980]);
+}
+
+#[test]
+fn the_genres_stay_when_the_decades_cannot_be_had() {
+    let choices = choices_with("/Items/Filters", 404).unwrap();
+    assert_eq!(choices.genres, ["Drama", "Mystery", "Thriller"]);
+    assert_eq!(choices.decades, Vec::<i32>::new());
+}
+
+#[test]
+fn a_lookup_refused_to_the_user_leaves_the_other_one() {
+    let choices = choices_with("/Genres", 403).unwrap();
+    assert_eq!(choices.decades, [2020, 2010, 2000, 1990, 1980]);
+}
+
+#[test]
+fn an_expired_session_on_one_lookup_is_the_usual_expired_session() {
+    // Not swallowed as a missing lookup, not another error: the one that asks to sign in again.
+    assert_eq!(
+        choices_with("/Genres", 401),
+        Err(ProviderError::SessionExpired)
+    );
+    assert_eq!(
+        choices_with("/Items/Filters", 401),
+        Err(ProviderError::SessionExpired)
+    );
+}
+
+#[test]
+fn both_lookups_failing_is_a_failure() {
+    let s = Setup::new();
+    let server = s.signed_in();
+    s.fake.state.lock().unwrap().forbidden = true;
+    assert_eq!(
+        server.filter_choices(&ItemId(FILMS_LIBRARY.into())),
+        Err(ProviderError::Forbidden)
+    );
+}
+
+fn letters() -> ItemId {
+    ItemId(LETTERS_LIBRARY.into())
+}
+
+/// The index of the first title of `letter`, as the server counts it.
+fn first_of(server: &dyn MediaServer, letter: char, filters: Filters) -> u32 {
+    server
+        .films(
+            &letters(),
+            &FilmQuery {
+                filters,
+                before: Some(letter),
+                ..query(FilmSort::Title, false, 0, 1)
+            },
+        )
+        .unwrap()
+        .total
+}
+
+#[test]
+fn the_index_of_a_letter_is_the_count_of_the_titles_before_it() {
+    let s = Setup::new();
+    let server = s.signed_in();
+    // "(untitled)" and "1984 remix" come first, then "amber road", "brume"…
+    assert_eq!(first_of(&*server, 'A', Filters::default()), 2);
+    assert_eq!(first_of(&*server, 'B', Filters::default()), 3);
+    assert_eq!(first_of(&*server, 'G', Filters::default()), 6);
+    assert_eq!(first_of(&*server, 'Z', Filters::default()), 7);
+    let asked = s.fake.last("GET", "/Items");
+    assert_eq!(asked.param("ParentId"), Some(LETTERS_LIBRARY));
+    assert_eq!(asked.param("SortBy"), Some("SortName"));
     assert_eq!(asked.param("SortOrder"), Some("Ascending"));
+}
+
+#[test]
+fn the_letter_is_sent_in_lowercase_as_sort_names_are_stored() {
+    // Jellyfin keeps SortName in lowercase and compares the bytes: "Z" would sort before
+    // every one of them.
+    let s = Setup::new();
+    first_of(&*s.signed_in(), 'Z', Filters::default());
+    assert_eq!(
+        s.fake.last("GET", "/Items").param("NameLessThan"),
+        Some("z")
+    );
+}
+
+#[test]
+fn the_index_of_a_letter_asks_for_one_title_never_for_none() {
+    // Jellyfin reads a limit of 0 as no limit: the whole library would come back.
+    let s = Setup::new();
+    first_of(&*s.signed_in(), 'C', Filters::default());
+    assert_eq!(s.fake.last("GET", "/Items").param("Limit"), Some("1"));
+}
+
+#[test]
+fn the_jump_to_a_letter_matches_the_order_the_server_lists_in() {
+    // Whatever the server does with accents, the count and the list are its own: the titles
+    // before the index are the ones that sort before the letter, the others are not.
+    let s = Setup::new();
+    let server = s.signed_in();
+    let listed = server
+        .films(&letters(), &query(FilmSort::Title, false, 0, 100))
+        .unwrap()
+        .items;
+    for letter in 'A'..='Z' {
+        let index = first_of(&*server, letter, Filters::default()) as usize;
+        let before = |title: &str| title.to_lowercase() < letter.to_lowercase().to_string();
+        assert!(listed[..index].iter().all(|f| before(&f.title)), "{letter}");
+        assert!(
+            listed[index..].iter().all(|f| !before(&f.title)),
+            "{letter}"
+        );
+    }
+}
+
+#[test]
+fn an_accented_title_is_wherever_the_server_puts_it() {
+    // The fake server keeps accents and compares bytes, as Jellyfin is believed to: "Éclipse"
+    // and "Écume" come after "Zèbre", so the jump to E lands on "Eden", not on them. What a
+    // real server does is not verified.
+    let s = Setup::new();
+    let server = s.signed_in();
+    let listed = server
+        .films(&letters(), &query(FilmSort::Title, false, 0, 100))
+        .unwrap()
+        .items;
+    let titles: Vec<&str> = listed.iter().map(|f| f.title.as_str()).collect();
+    assert_eq!(titles[7..], ["Zèbre", "Éclipse", "Écume"]);
+    assert_eq!(
+        titles[first_of(&*server, 'E', Filters::default()) as usize],
+        "Eden"
+    );
+}
+
+#[test]
+fn the_index_of_a_letter_counts_within_the_filtered_list() {
+    let s = Setup::new();
+    let server = s.signed_in();
+    // Drama only: "1984 Remix", "Amber Road", "Gale", "Éclipse", "Écume": two before F.
+    assert_eq!(first_of(&*server, 'F', genre("Drama")), 2);
+    assert_eq!(s.fake.last("GET", "/Items").param("Genres"), Some("Drama"));
 }
 
 #[test]
@@ -1327,7 +1725,7 @@ fn series_can_be_sorted_by_when_their_latest_episode_came_in() {
         .unwrap();
     let asked = s.fake.last("GET", "/Items");
     assert_eq!(asked.param("SortBy"), Some("DateLastContentAdded,SortName"));
-    assert_eq!(asked.param("SortOrder"), Some("Descending"));
+    assert_eq!(asked.param("SortOrder"), Some("Descending,Ascending"));
 }
 
 #[test]
@@ -1493,4 +1891,193 @@ fn an_episode_or_a_whole_season_is_marked_watched_and_unwatched() {
         server.set_watched(&ItemId(id.into()), false).unwrap();
         assert_eq!(s.fake.last("DELETE", &path).param("userId"), Some(USER_ID));
     }
+}
+
+const HARBOUR_TRILOGY: &str = "b0000000000000000000000000000002";
+
+#[test]
+fn the_collections_of_the_server_with_their_posters() {
+    let s = Setup::new();
+    let cards = s.signed_in().collections().unwrap();
+    let names: Vec<&str> = cards.iter().map(|c| c.name.as_str()).collect();
+    assert_eq!(names, ["Sea Stories", "Harbour Trilogy", "Lone Wolves"]);
+    assert_eq!(cards[1].id, ItemId(HARBOUR_TRILOGY.into()));
+    assert_eq!(cards[1].films, Some(3));
+    assert_eq!(
+        cards[1].poster.as_ref().map(|p| p.tag.as_str()),
+        Some("poster-ht")
+    );
+    // A collection with no poster and no count says so rather than inventing them.
+    assert_eq!((cards[2].films, cards[2].poster.clone()), (None, None));
+}
+
+#[test]
+fn the_collections_are_asked_by_name_for_the_user() {
+    let s = Setup::new();
+    s.signed_in().collections().unwrap();
+    let asked = boxset_lookups(&s);
+    assert_eq!(asked.len(), 1, "{asked:?}");
+    let asked = &asked[0];
+    assert_eq!(asked.param("recursive"), Some("true"));
+    assert_eq!(asked.param("sortBy"), Some("SortName"));
+    assert_eq!(asked.param("userId"), Some(USER_ID));
+    assert_eq!(asked.param("fields"), Some("ChildCount"));
+    assert_eq!(asked.param("enableImageTypes"), Some("Primary"));
+}
+
+#[test]
+fn a_collection_lists_its_films_by_release_year() {
+    let s = Setup::new();
+    let collection = s
+        .signed_in()
+        .collection(&ItemId(HARBOUR_TRILOGY.into()))
+        .unwrap();
+    assert_eq!(collection.name, "Harbour Trilogy");
+    assert_eq!(
+        collection.overview.as_deref(),
+        Some("A lighthouse, a return, and the lights that follow.")
+    );
+    assert_eq!(
+        collection
+            .backdrop
+            .as_ref()
+            .map(|b| (b.kind, b.tag.as_str())),
+        Some((ImageKind::Backdrop, "backdrop-ht"))
+    );
+    let films: Vec<(&str, Option<i32>)> = collection
+        .films
+        .iter()
+        .map(|f| (f.title.as_str(), f.year))
+        .collect();
+    assert_eq!(
+        films,
+        [
+            ("The Quiet Harbour", Some(1998)),
+            ("Return to the Harbour", Some(2002)),
+            ("Harbour Lights", Some(2006)),
+        ]
+    );
+    assert!(collection.films[1].watched);
+    let asked = s
+        .fake
+        .seen()
+        .into_iter()
+        .find(|r| r.param("parentId") == Some(HARBOUR_TRILOGY))
+        .expect("the films were asked");
+    assert_eq!(
+        asked.param("sortBy"),
+        Some("ProductionYear,PremiereDate,SortName")
+    );
+    assert_eq!(asked.param("userId"), Some(USER_ID));
+}
+
+#[test]
+fn a_series_in_a_collection_is_not_listed_as_a_film() {
+    let s = Setup::new();
+    let collection = s
+        .signed_in()
+        .collection(&ItemId(HARBOUR_TRILOGY.into()))
+        .unwrap();
+    let titles: Vec<&str> = collection.films.iter().map(|f| f.title.as_str()).collect();
+    assert!(!titles.contains(&"Harbour Keepers"), "{titles:?}");
+    assert_eq!(titles.len(), 3);
+}
+
+#[test]
+fn the_other_films_of_a_collection_leave_out_its_series() {
+    let s = Setup::new();
+    let collection = s.signed_in().collection_of(&film()).unwrap().unwrap();
+    let titles: Vec<&str> = collection.others.iter().map(|f| f.title.as_str()).collect();
+    assert!(!titles.contains(&"Harbour Keepers"), "{titles:?}");
+    assert_eq!(titles.len(), 2);
+}
+
+#[test]
+fn a_collection_the_server_does_not_know_is_not_found() {
+    let s = Setup::new();
+    let missing = s
+        .signed_in()
+        .collection(&ItemId("b0000000000000000000000000000099".into()));
+    assert_eq!(missing, Err(ProviderError::NotFound));
+}
+
+#[test]
+fn the_list_holds_films_and_series_together_by_title() {
+    let s = Setup::new();
+    let list = s.signed_in().favourites().unwrap();
+    let titles: Vec<&str> = list
+        .iter()
+        .map(|favourite| match favourite {
+            Favourite::Film(film) => film.title.as_str(),
+            Favourite::Series(series) => series.title.as_str(),
+        })
+        .collect();
+    assert_eq!(
+        titles,
+        ["Harbour Lights", "Return to the Harbour", "Tidewater"]
+    );
+    assert!(matches!(list[2], Favourite::Series(_)));
+    assert!(matches!(list[0], Favourite::Film(_)));
+}
+
+#[test]
+fn the_list_is_asked_as_the_users_favourites_of_both_kinds() {
+    let s = Setup::new();
+    s.signed_in().favourites().unwrap();
+    let asked = s
+        .fake
+        .seen()
+        .into_iter()
+        .find(|r| r.param("filters") == Some("IsFavorite"))
+        .expect("the favourites were asked");
+    assert_eq!(asked.param("includeItemTypes"), Some("Movie,Series"));
+    assert_eq!(asked.param("recursive"), Some("true"));
+    assert_eq!(asked.param("sortBy"), Some("SortName"));
+    assert_eq!(asked.param("userId"), Some(USER_ID));
+}
+
+#[test]
+fn a_film_and_a_series_say_whether_they_are_in_the_list() {
+    let s = Setup::new();
+    let server = s.signed_in();
+    assert!(!server.film(&film()).unwrap().favourite);
+    assert!(
+        !server
+            .series_detail(&ItemId(SERIES.into()))
+            .unwrap()
+            .favourite
+    );
+    s.fake.state.lock().unwrap().favourites = vec![FILM.into(), SERIES.into()];
+    assert!(server.film(&film()).unwrap().favourite);
+    assert!(
+        server
+            .series_detail(&ItemId(SERIES.into()))
+            .unwrap()
+            .favourite
+    );
+}
+
+#[test]
+fn an_item_is_put_in_the_list_and_taken_out_for_the_user() {
+    let s = Setup::new();
+    let server = s.signed_in();
+    let path = format!("/UserFavoriteItems/{FILM}");
+    server.set_favourite(&film(), true).unwrap();
+    assert_eq!(s.fake.last("POST", &path).param("userId"), Some(USER_ID));
+    assert!(server.film(&film()).unwrap().favourite);
+    server.set_favourite(&film(), false).unwrap();
+    assert_eq!(s.fake.last("DELETE", &path).param("userId"), Some(USER_ID));
+    assert!(!server.film(&film()).unwrap().favourite);
+}
+
+#[test]
+fn the_list_with_a_revoked_token_asks_to_sign_in_again() {
+    let s = Setup::new();
+    let server = s.signed_in();
+    s.fake.state.lock().unwrap().revoked = true;
+    assert_eq!(server.favourites(), Err(ProviderError::SessionExpired));
+    assert_eq!(
+        server.set_favourite(&film(), true),
+        Err(ProviderError::SessionExpired)
+    );
 }

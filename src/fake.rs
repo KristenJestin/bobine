@@ -6,11 +6,12 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use bobine::provider::{
-    AudioTrack, CastMember, Collection, Connector, Episode, ExternalSubtitle, Feature, FeatureKind,
-    Film, FilmDetail, FilmQuery, ImageKind, ImageRef, ItemId, Library, LibraryKind, MediaServer,
-    MediaSource, MediaSourceId, Page, PersonHit, PersonTitles, PlaySessionId, Playback,
-    PlaybackReport, ProviderError, SearchResults, Season, Series, SeriesDetail, SeriesHit,
-    ServerInfo, StreamUrl, SubtitleTrack, Title, VideoRange, VideoTrack,
+    AudioTrack, CastMember, Collection, CollectionCard, CollectionDetail, Connector, Episode,
+    ExternalSubtitle, Favourite, Feature, FeatureKind, Film, FilmDetail, FilmQuery, FilmSort,
+    FilterChoices, ImageKind, ImageRef, ItemId, Library, LibraryKind, MediaServer, MediaSource,
+    MediaSourceId, Page, PersonHit, PersonTitles, PlaySessionId, Playback, PlaybackReport,
+    ProviderError, SearchResults, Season, Series, SeriesDetail, SeriesHit, ServerInfo, StreamUrl,
+    SubtitleTrack, Title, VideoRange, VideoTrack,
 };
 
 pub const USER: &str = "camille";
@@ -41,6 +42,10 @@ pub struct Record {
     pub film_pages: Vec<ItemId>,
     /// The queries searched, in the order they came.
     pub searches: Vec<String>,
+    /// Every call that put an item in the list (`true`) or took it out, answered or failed.
+    pub favourite_calls: Vec<(ItemId, bool)>,
+    /// How many times the list of favourites was asked.
+    pub list_loads: u32,
 }
 
 /// What the fake server holds, shared by the connector and its sessions.
@@ -62,6 +67,12 @@ pub struct State {
     pub people: Vec<PersonHit>,
     /// How long a search takes to answer: the headless harness shows the palette waiting.
     pub search_delay: std::time::Duration,
+    /// What is in the user's list.
+    pub favourites: Vec<ItemId>,
+    /// Changing the list fails (a server that does not answer).
+    pub favourite_fails: bool,
+    /// How long changing the list takes, so that a double click or the optimistic state shows.
+    pub favourite_delay: std::time::Duration,
 }
 
 #[derive(Clone)]
@@ -88,6 +99,74 @@ const TITLES: [&str; 16] = [
     "Canopée",
     "Velours",
 ];
+
+/// The genres of the invented titles: each title has one, by its number.
+const GENRES: [&str; 4] = ["Drame", "Science-fiction", "Thriller", "Comédie"];
+
+fn genre_of(id: &ItemId) -> &'static str {
+    let number =
+        id.0.rsplit('-')
+            .next()
+            .and_then(|n| n.parse::<usize>().ok());
+    GENRES[number.unwrap_or(0) % GENRES.len()]
+}
+
+/// A title in lowercase, accents kept: the way the fake Jellyfin server orders names, as raw
+/// strings.
+fn folded(title: &str) -> String {
+    title.to_lowercase()
+}
+
+/// What a title is filtered and sorted by.
+struct Facts {
+    title: String,
+    year: Option<i32>,
+    rating: Option<f32>,
+    watched: bool,
+    genre: &'static str,
+}
+
+/// The titles that pass `query`'s filters, in its order, and how many they are; `before` keeps
+/// the ones that sort before a letter. Newest first is how `items` already come.
+fn select<T: Clone>(items: &[T], query: &FilmQuery, facts: impl Fn(&T) -> Facts) -> (Vec<T>, u32) {
+    use std::cmp::Ordering;
+    let filters = &query.filters;
+    let mut kept: Vec<(usize, Facts, &T)> = items
+        .iter()
+        .enumerate()
+        .map(|(n, item)| (items.len() - n, facts(item), item))
+        .filter(|(_, f, _)| {
+            filters.genre.as_deref().is_none_or(|g| f.genre == g)
+                && filters
+                    .decade
+                    .is_none_or(|d| f.year.is_some_and(|y| (d..d + 10).contains(&y)))
+                && (!filters.unwatched || !f.watched)
+                && query
+                    .before
+                    .is_none_or(|letter| folded(&f.title) < letter.to_lowercase().to_string())
+        })
+        .collect();
+    let total = kept.len() as u32;
+    kept.sort_by(|(added_a, a, _), (added_b, b, _)| {
+        let by = match query.sort {
+            FilmSort::DateAdded | FilmSort::LastAdded => added_a.cmp(added_b),
+            FilmSort::Title => Ordering::Equal,
+            FilmSort::ReleaseYear => a.year.cmp(&b.year),
+            FilmSort::Rating => a.rating.partial_cmp(&b.rating).unwrap_or(Ordering::Equal),
+        };
+        by.then_with(|| folded(&a.title).cmp(&folded(&b.title)))
+    });
+    if query.descending {
+        kept.reverse();
+    }
+    let page = kept
+        .into_iter()
+        .skip(query.start as usize)
+        .take(query.limit as usize)
+        .map(|(_, _, item)| item.clone())
+        .collect();
+    (page, total)
+}
 
 fn image(item: &str, kind: ImageKind) -> Option<ImageRef> {
     Some(ImageRef {
@@ -371,6 +450,11 @@ impl FakeServer {
                 photos_fail_once: false,
                 people: people(),
                 search_delay: std::time::Duration::ZERO,
+                favourites: ["film-2", "film-7", "series-1", "series-4"]
+                    .map(|id| ItemId(id.into()))
+                    .to_vec(),
+                favourite_fails: false,
+                favourite_delay: std::time::Duration::ZERO,
             })),
             info: ServerInfo {
                 id: "server-1".into(),
@@ -479,17 +563,24 @@ impl MediaServer for FakeServer {
         ])
     }
 
-    fn films(&self, _: &ItemId, query: &FilmQuery) -> Result<Page<Film>, ProviderError> {
-        let films = &self.state().films;
-        Ok(Page {
-            items: films
-                .iter()
-                .skip(query.start as usize)
-                .take(query.limit as usize)
-                .cloned()
-                .collect(),
-            total: films.len() as u32,
+    fn filter_choices(&self, _: &ItemId) -> Result<FilterChoices, ProviderError> {
+        let mut genres: Vec<String> = GENRES.iter().map(|g| (*g).into()).collect();
+        genres.sort();
+        Ok(FilterChoices {
+            genres,
+            decades: vec![2020, 2010],
         })
+    }
+
+    fn films(&self, _: &ItemId, query: &FilmQuery) -> Result<Page<Film>, ProviderError> {
+        let (items, total) = select(&self.state().films, query, |film| Facts {
+            title: film.title.clone(),
+            year: film.year,
+            rating: film.community_rating,
+            watched: film.watched,
+            genre: genre_of(&film.id),
+        });
+        Ok(Page { items, total })
     }
 
     fn continue_watching(&self) -> Result<Vec<Title>, ProviderError> {
@@ -536,6 +627,7 @@ impl MediaServer for FakeServer {
             } else {
                 versions().split_off(1)
             },
+            favourite: self.state().favourites.contains(&found.id),
             film: found,
         })
     }
@@ -544,14 +636,11 @@ impl MediaServer for FakeServer {
         if film.0 != FILM {
             return Ok(None);
         }
-        let mut first = self.find(&ItemId("film-6".into()))?;
-        first.title = "Le Premier Hiver".into();
-        first.year = Some(2019);
-        first.watched = true;
+        let saga = self.collection(&ItemId("saga".into()))?;
         Ok(Some(Collection {
-            id: ItemId("saga".into()),
-            name: "Saga Hiver".into(),
-            others: vec![first],
+            id: saga.id,
+            name: saga.name,
+            others: saga.films.into_iter().filter(|f| &f.id != film).collect(),
         }))
     }
 
@@ -673,16 +762,19 @@ impl MediaServer for FakeServer {
 
     fn series(&self, _: &ItemId, query: &FilmQuery) -> Result<Page<Series>, ProviderError> {
         let state = self.state();
-        Ok(Page {
-            items: state
-                .series
-                .iter()
-                .skip(query.start as usize)
-                .take(query.limit as usize)
-                .map(|series| Self::counted(&state, series))
-                .collect(),
-            total: state.series.len() as u32,
-        })
+        let counted: Vec<Series> = state
+            .series
+            .iter()
+            .map(|series| Self::counted(&state, series))
+            .collect();
+        let (items, total) = select(&counted, query, |series| Facts {
+            title: series.title.clone(),
+            year: series.year,
+            rating: series.community_rating,
+            watched: series.unwatched == 0,
+            genre: genre_of(&series.id),
+        });
+        Ok(Page { items, total })
     }
 
     fn series_detail(&self, series: &ItemId) -> Result<SeriesDetail, ProviderError> {
@@ -694,6 +786,7 @@ impl MediaServer for FakeServer {
             .ok_or(ProviderError::NotFound)?;
         Ok(SeriesDetail {
             series: Self::counted(&state, found),
+            favourite: state.favourites.contains(series),
             overview: Some(SERIES_OVERVIEW.into()),
             genres: vec!["Science-fiction".into(), "Drame".into()],
             official_rating: Some("12+".into()),
@@ -921,6 +1014,117 @@ impl MediaServer for FakeServer {
                 .collect(),
         })
     }
+
+    fn collections(&self) -> Result<Vec<CollectionCard>, ProviderError> {
+        let state = self.state();
+        let mut cards: Vec<CollectionCard> = (0..COLLECTION_NAMES.len())
+            .map(|n| {
+                let collection = collection(&state, n);
+                CollectionCard {
+                    films: Some(collection.films.len() as u32),
+                    poster: image(&collection.id.0, ImageKind::Primary),
+                    id: collection.id,
+                    name: collection.name,
+                }
+            })
+            .collect();
+        cards.sort_by(|a, b| a.name.cmp(&b.name));
+        Ok(cards)
+    }
+
+    fn collection(&self, id: &ItemId) -> Result<CollectionDetail, ProviderError> {
+        let state = self.state();
+        (0..COLLECTION_NAMES.len())
+            .map(|n| collection(&state, n))
+            .find(|collection| &collection.id == id)
+            .ok_or(ProviderError::NotFound)
+    }
+
+    fn favourites(&self) -> Result<Vec<Favourite>, ProviderError> {
+        let mut state = self.state();
+        state.record.list_loads += 1;
+        let mut found: Vec<Favourite> = state
+            .films
+            .iter()
+            .filter(|f| state.favourites.contains(&f.id))
+            .cloned()
+            .map(Favourite::Film)
+            .chain(
+                state
+                    .series
+                    .iter()
+                    .filter(|s| state.favourites.contains(&s.id))
+                    .map(|s| Favourite::Series(Self::counted(&state, s))),
+            )
+            .collect();
+        found.sort_by_key(|favourite| match favourite {
+            Favourite::Film(film) => film.title.to_lowercase(),
+            Favourite::Series(series) => series.title.to_lowercase(),
+        });
+        Ok(found)
+    }
+
+    fn set_favourite(&self, item: &ItemId, favourite: bool) -> Result<(), ProviderError> {
+        let delay = self.state().favourite_delay;
+        std::thread::sleep(delay);
+        let mut state = self.state();
+        state.record.favourite_calls.push((item.clone(), favourite));
+        if state.favourite_fails {
+            return Err(ProviderError::Unreachable("timed out".into()));
+        }
+        state.favourites.retain(|id| id != item);
+        if favourite {
+            state.favourites.push(item.clone());
+        }
+        Ok(())
+    }
+}
+
+const COLLECTION_NAMES: [&str; 10] = [
+    "Saga Hiver",
+    "Trilogie du Phare",
+    "Les Voyageurs",
+    "Cycle des Marées",
+    "Tétralogie Sable",
+    "Mémoires d'Orbite",
+    "Les Veilleurs du Nord",
+    "Diptyque Brume",
+    "Chroniques de Lagune",
+    "Série Noire",
+];
+
+/// The collection number `n`. The first, "Saga Hiver", holds the film of the tests with the
+/// film before it; the others take films by their place in the list.
+fn collection(state: &State, n: usize) -> CollectionDetail {
+    let id = if n == 0 {
+        "saga".to_string()
+    } else {
+        format!("collection-{n}")
+    };
+    let pick = |i: usize| state.films.get(i % state.films.len().max(1)).cloned();
+    let mut films: Vec<Film> = if n == 0 {
+        let first = pick(6).map(|film| Film {
+            title: "Le Premier Hiver".into(),
+            year: Some(2019),
+            watched: true,
+            ..film
+        });
+        pick(0).into_iter().chain(first).collect()
+    } else {
+        (0..2 + n % 3).filter_map(|k| pick(n * 3 + k)).collect()
+    };
+    films.sort_by_key(|film| film.year);
+    CollectionDetail {
+        name: COLLECTION_NAMES[n].into(),
+        overview: Some(
+            "Des films qui se répondent d'un bout à l'autre, réunis dans l'ordre où ils \
+             sont sortis."
+                .into(),
+        ),
+        backdrop: image(&id, ImageKind::Backdrop),
+        films,
+        id: ItemId(id),
+    }
 }
 
 /// A BMP image: a diagonal gradient whose colours come from `seed`, so each film has its own.
@@ -957,4 +1161,63 @@ pub fn gradient(seed: &str, width: u32, height: u32) -> Vec<u8> {
         bmp.resize(bmp.len() + (row - width * 3) as usize, 0);
     }
     bmp
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::library_tools::{Sort, Tools};
+    use bobine::provider::Filters;
+
+    fn titles(page: &Page<Series>) -> Vec<&str> {
+        page.items.iter().map(|s| s.title.as_str()).collect()
+    }
+
+    #[test]
+    fn the_fake_filters_and_sorts_like_the_server() {
+        let server = FakeServer::new(40, true);
+        let library = ItemId(FILMS_LIBRARY.into());
+        let drama = Tools {
+            filters: Filters {
+                genre: Some("Drame".into()),
+                decade: Some(2020),
+                unwatched: true,
+            },
+            sort: Sort::Rating,
+        };
+        let page = server.films(&library, &drama.query(0)).unwrap();
+        assert!(page.total > 0 && page.total < 40);
+        assert!(
+            page.items
+                .iter()
+                .all(|f| !f.watched && f.year >= Some(2020))
+        );
+        assert!(
+            page.items
+                .windows(2)
+                .all(|w| w[0].community_rating >= w[1].community_rating)
+        );
+    }
+
+    #[test]
+    fn the_fake_counts_the_titles_before_a_letter_in_its_own_order() {
+        let server = FakeServer::new(1, true);
+        let tools = Tools {
+            sort: Sort::Title,
+            ..Tools::default()
+        };
+        let id = ItemId("series".into());
+        let all = server.series(&id, &tools.query(0)).unwrap();
+        let all = titles(&all);
+        for letter in 'A'..='Z' {
+            let before = server
+                .series(&id, &tools.letter_query(letter).unwrap())
+                .unwrap()
+                .total as usize;
+            let sorts_before =
+                |title: &&str| title.to_lowercase() < letter.to_lowercase().to_string();
+            assert!(all[..before].iter().all(sorts_before), "{letter}");
+            assert!(!all[before..].iter().any(sorts_before), "{letter}");
+        }
+    }
 }

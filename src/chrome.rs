@@ -9,8 +9,7 @@ use crate::navigation::{NavEntry, Screen};
 use crate::shell::Shell;
 use crate::theme;
 
-/// Centred at the top, over the screen. Collections and Ma liste are visible but inert until
-/// their screens exist; the search field opens the palette.
+/// Centred at the top, over the screen; the search field opens the palette.
 pub fn pill_bar(current: Screen, window: &mut Window, cx: &mut Context<Shell>) -> impl IntoElement {
     let entries = NavEntry::ALL.into_iter().enumerate().map(|(index, entry)| {
         let active = entry.is_current(current);

@@ -33,6 +33,14 @@ impl Listed for Title {
     fn id(&self) -> &ItemId {
         Title::id(self)
     }
+
+    fn title(&self) -> &str {
+        match self {
+            Title::Film(film) => &film.title,
+            Title::Series(series) => &series.title,
+            Title::Episode(episode) => &episode.series_title,
+        }
+    }
 }
 
 /// What a library gained lately: one row of the Home.
@@ -508,6 +516,7 @@ impl Shell {
             return;
         };
         let kind = list.kind.clone();
+        let epoch = list.grid.epoch();
         for page in list.grid.pages_to_ask(items.clone(), Instant::now()) {
             let kind = kind.clone();
             self.ask(
@@ -516,7 +525,7 @@ impl Shell {
                     let kind = kind.clone();
                     move |server| home_page::fetch(server, &kind, page)
                 },
-                move |shell, found, cx| shell.listed(&kind, page, found, cx),
+                move |shell, found, cx| shell.listed(&kind, (epoch, page), found, cx),
             );
         }
     }
@@ -524,7 +533,7 @@ impl Shell {
     fn listed(
         &mut self,
         kind: &ListKind,
-        page: u32,
+        (epoch, page): (u64, u32),
         found: Result<bobine::provider::Page<Title>, ProviderError>,
         cx: &mut Context<Self>,
     ) {
@@ -535,13 +544,13 @@ impl Shell {
         match found {
             Ok(found) => {
                 if let Some(list) = &mut self.list {
-                    list.grid.loaded(page, found);
+                    list.grid.loaded(epoch, page, found);
                 }
             }
             Err(error) => {
                 let said = self.failed(error, cx);
                 if let Some(list) = &mut self.list {
-                    list.grid.failed(page, Instant::now());
+                    list.grid.failed(epoch, page, Instant::now());
                     if list.grid.total.is_none() {
                         list.error = Some(said);
                     }
@@ -559,6 +568,7 @@ impl Shell {
             return;
         }
         let kind = list.kind.clone();
+        let epoch = list.grid.epoch();
         self.ask(
             cx,
             {
@@ -569,7 +579,7 @@ impl Shell {
                 if let (Ok(found), Some(list)) = (found, &mut shell.list)
                     && list.kind == kind
                 {
-                    list.grid.loaded(0, found);
+                    list.grid.loaded(epoch, 0, found);
                 }
             },
         );

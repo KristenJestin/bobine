@@ -44,6 +44,7 @@ icons! {
     Pause => "pause",
     RotateCcw => "rotate-ccw",
     Check => "check",
+    CheckCircle => "check-circle",
     ArrowLeft => "arrow-left",
     ArrowRight => "arrow-right",
     ChevronDown => "chevron-down",
@@ -59,6 +60,7 @@ icons! {
     Maximize => "maximize",
     Minimize => "minimize",
     Star => "star",
+    Circle => "circle",
 }
 
 /// The asset source of the window: the icons above and nothing else.
