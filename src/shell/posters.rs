@@ -772,6 +772,40 @@ mod tests {
         );
     }
 
+    /// A film changed from a poster, then changed again elsewhere: the collection row of a film
+    /// page, asked after, says what the server holds now, not what the old mark says.
+    #[gpui_kit::test]
+    fn the_collection_row_of_a_film_page_shows_what_the_server_says_over_an_old_mark(
+        cx: &mut TestAppContext,
+    ) {
+        // Enough films for the saga to hold another than the one of the page.
+        let (server, window, cx) = home_with(cx, |state| state.films = crate::fake::films(10));
+        let saga = server.collection(&ItemId("saga".into())).unwrap();
+        let watched = saga
+            .films
+            .iter()
+            .find(|film| film.watched)
+            .unwrap()
+            .id
+            .clone();
+        window
+            .update(cx, |shell, _, _| {
+                shell.marks.follow(&watched, Action::Watched, false)
+            })
+            .unwrap();
+        let film = server.state.lock().unwrap().films[0].id.clone();
+        window
+            .update(cx, |shell, _, cx| shell.open_film(film, cx))
+            .unwrap();
+        cx.run_until_parked();
+        let shown = window
+            .read_with(cx, |shell, _| {
+                shell.marks.shown(&watched, Action::Watched, true)
+            })
+            .unwrap();
+        assert!(shown, "the old mark still hides what the server says");
+    }
+
     #[gpui_kit::test]
     fn a_series_of_a_person_page_has_my_list_and_watched(cx: &mut TestAppContext) {
         let (server, window, cx) = home(cx);

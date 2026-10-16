@@ -1211,13 +1211,18 @@ impl Shell {
 
     fn load_collection(&mut self, depth: usize, id: ItemId, cx: &mut Context<Self>) {
         let asked = id.clone();
+        let stamp = self.marks.stamp();
         self.ask(
             cx,
             move |server| server.collection_of(&asked),
             move |shell, collection, _| {
+                let collection = collection.ok().flatten();
+                if let Some(collection) = &collection {
+                    shell.marks.listed(stamp, &collection.others);
+                }
                 if let Some(page) = shell.detail_page(depth, &id) {
                     // A failed lookup hides the row: the page is whole without it.
-                    page.collection = collection.ok().flatten();
+                    page.collection = collection;
                 }
             },
         );
