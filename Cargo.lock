@@ -700,10 +700,12 @@ dependencies = [
  "tiny_http",
  "toml 1.1.8+spec-1.1.0",
  "ureq",
+ "uuid",
  "wayland-backend",
  "wayland-client",
  "wayland-egl",
  "wayland-protocols",
+ "wayland-protocols-wlr",
 ]
 
 [[package]]

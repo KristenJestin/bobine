@@ -1,0 +1,205 @@
+//! "Black out other screens": while a film plays fullscreen, every other monitor is covered by
+//! a black surface (not switched off), which goes when the film leaves fullscreen or stops.
+//! What is covered is decided here, from the monitors and the window's; drawing the black is the
+//! adapter's (`layer`), behind `Covers`, so the decisions are tested with a fake.
+
+pub mod layer;
+
+use std::collections::BTreeSet;
+
+use uuid::Uuid;
+
+/// The other monitors are wanted black: the option is on and a film plays fullscreen.
+pub fn wanted(option: bool, playing: bool, fullscreen: bool) -> bool {
+    option && playing && fullscreen
+}
+
+/// The monitors to cover: all but the one the window is fullscreen on. When that one is not
+/// known, none: covering the film itself would be worse than covering nothing.
+pub fn covered(outputs: &[String], window_on: Option<&str>, wanted: bool) -> BTreeSet<String> {
+    match window_on {
+        Some(on) if wanted && outputs.iter().any(|output| output == on) => outputs
+            .iter()
+            .filter(|output| *output != on)
+            .cloned()
+            .collect(),
+        _ => BTreeSet::new(),
+    }
+}
+
+/// What puts a black surface on a monitor and takes it away again, by the monitor's name.
+pub trait Covers {
+    fn cover(&mut self, output: &str);
+    fn uncover(&mut self, output: &str);
+}
+
+/// The monitor GPUI says the window is on, from GPUI's id for it: a v5 UUID of the output's
+/// name.
+pub fn monitor_with_id(outputs: &[String], id: Uuid) -> Option<String> {
+    outputs
+        .iter()
+        .find(|name| Uuid::new_v5(&Uuid::NAMESPACE_DNS, name.as_bytes()) == id)
+        .cloned()
+}
+
+/// Follows the monitors and the wish, and covers or uncovers only what changed.
+#[derive(Default)]
+pub struct Blackout {
+    covered: BTreeSet<String>,
+}
+
+impl Blackout {
+    /// `outputs`: the monitors now plugged in, by name; `wanted`: the other monitors are wanted
+    /// black; `window_on`: the monitor the window is on.
+    pub fn follow(
+        &mut self,
+        outputs: &[String],
+        wanted: bool,
+        window_on: Option<&str>,
+        covers: &mut dyn Covers,
+    ) {
+        let next = covered(outputs, window_on, wanted);
+        for gone in self.covered.difference(&next) {
+            covers.uncover(gone);
+        }
+        for new in next.difference(&self.covered) {
+            covers.cover(new);
+        }
+        self.covered = next;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn names(names: &[&str]) -> Vec<String> {
+        names.iter().map(|name| name.to_string()).collect()
+    }
+
+    fn set(names: &[&str]) -> BTreeSet<String> {
+        names.iter().map(|name| name.to_string()).collect()
+    }
+
+    /// Records what was covered and uncovered, in order.
+    #[derive(Default)]
+    struct FakeCovers {
+        calls: Vec<String>,
+    }
+
+    impl Covers for FakeCovers {
+        fn cover(&mut self, output: &str) {
+            self.calls.push(format!("cover {output}"));
+        }
+        fn uncover(&mut self, output: &str) {
+            self.calls.push(format!("uncover {output}"));
+        }
+    }
+
+    const THREE: [&str; 3] = ["DP-1", "DP-2", "HDMI-A-1"];
+
+    #[test]
+    fn every_monitor_but_the_fullscreen_one_is_covered() {
+        let outputs = names(&THREE);
+        assert_eq!(
+            covered(&outputs, Some("DP-2"), true),
+            set(&["DP-1", "HDMI-A-1"])
+        );
+    }
+
+    #[test]
+    fn the_option_off_covers_nothing() {
+        assert!(!wanted(false, true, true));
+        let outputs = names(&THREE);
+        assert!(covered(&outputs, Some("DP-1"), wanted(false, true, true)).is_empty());
+    }
+
+    #[test]
+    fn nothing_is_covered_while_the_film_is_not_fullscreen_or_not_playing() {
+        assert!(wanted(true, true, true));
+        assert!(!wanted(true, true, false));
+        assert!(!wanted(true, false, true));
+    }
+
+    #[test]
+    fn an_unknown_window_monitor_covers_nothing() {
+        let outputs = names(&THREE);
+        assert!(covered(&outputs, None, true).is_empty());
+        assert!(covered(&outputs, Some("HDMI-A-9"), true).is_empty());
+    }
+
+    #[test]
+    fn a_single_monitor_gets_no_cover() {
+        assert!(covered(&names(&["DP-1"]), Some("DP-1"), true).is_empty());
+    }
+
+    #[test]
+    fn the_window_monitor_is_found_from_gpui_s_id_for_it() {
+        let outputs = names(&THREE);
+        let id = Uuid::new_v5(&Uuid::NAMESPACE_DNS, b"DP-2");
+        assert_eq!(monitor_with_id(&outputs, id).as_deref(), Some("DP-2"));
+        let unknown = Uuid::new_v5(&Uuid::NAMESPACE_DNS, b"DP-9");
+        assert_eq!(monitor_with_id(&outputs, unknown), None);
+    }
+
+    #[test]
+    fn the_covers_come_with_fullscreen_and_go_when_it_ends() {
+        let (mut covers, mut blackout) = (FakeCovers::default(), Blackout::default());
+        let outputs = names(&THREE);
+        blackout.follow(&outputs, false, Some("DP-2"), &mut covers);
+        assert!(covers.calls.is_empty());
+        blackout.follow(&outputs, true, Some("DP-2"), &mut covers);
+        assert_eq!(covers.calls, ["cover DP-1", "cover HDMI-A-1"]);
+        covers.calls.clear();
+        blackout.follow(&outputs, false, Some("DP-2"), &mut covers);
+        assert_eq!(covers.calls, ["uncover DP-1", "uncover HDMI-A-1"]);
+    }
+
+    #[test]
+    fn the_same_wish_again_changes_nothing() {
+        let (mut covers, mut blackout) = (FakeCovers::default(), Blackout::default());
+        let outputs = names(&THREE);
+        blackout.follow(&outputs, true, Some("DP-2"), &mut covers);
+        covers.calls.clear();
+        blackout.follow(&outputs, true, Some("DP-2"), &mut covers);
+        assert!(covers.calls.is_empty());
+    }
+
+    #[test]
+    fn a_monitor_plugged_in_during_the_film_is_covered() {
+        let (mut covers, mut blackout) = (FakeCovers::default(), Blackout::default());
+        blackout.follow(&names(&THREE), true, Some("DP-2"), &mut covers);
+        covers.calls.clear();
+        let four = names(&["DP-1", "DP-2", "HDMI-A-1", "DP-3"]);
+        blackout.follow(&four, true, Some("DP-2"), &mut covers);
+        assert_eq!(covers.calls, ["cover DP-3"]);
+    }
+
+    #[test]
+    fn a_monitor_unplugged_during_the_film_is_uncovered() {
+        let (mut covers, mut blackout) = (FakeCovers::default(), Blackout::default());
+        blackout.follow(&names(&THREE), true, Some("DP-2"), &mut covers);
+        covers.calls.clear();
+        blackout.follow(&names(&["DP-1", "DP-2"]), true, Some("DP-2"), &mut covers);
+        assert_eq!(covers.calls, ["uncover HDMI-A-1"]);
+    }
+
+    #[test]
+    fn a_monitor_plugged_in_while_windowed_stays_uncovered() {
+        let (mut covers, mut blackout) = (FakeCovers::default(), Blackout::default());
+        blackout.follow(&names(&THREE), false, Some("DP-2"), &mut covers);
+        let four = names(&["DP-1", "DP-2", "HDMI-A-1", "DP-3"]);
+        blackout.follow(&four, false, Some("DP-2"), &mut covers);
+        assert!(covers.calls.is_empty());
+    }
+
+    #[test]
+    fn the_window_moving_to_another_monitor_uncovers_that_one_and_covers_the_one_left() {
+        let (mut covers, mut blackout) = (FakeCovers::default(), Blackout::default());
+        let outputs = names(&THREE);
+        blackout.follow(&outputs, true, Some("DP-2"), &mut covers);
+        covers.calls.clear();
+        blackout.follow(&outputs, true, Some("DP-1"), &mut covers);
+        assert_eq!(covers.calls, ["uncover DP-1", "cover DP-2"]);
+    }
+}

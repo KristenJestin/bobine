@@ -1,6 +1,7 @@
 //! The display port: the surface the video is drawn into, under the window, and where it goes.
 //! On Wayland it is a subsurface under GPUI's surface (`subsurface`); in the tests, a fake.
 
+pub mod blackout;
 mod gl;
 pub mod subsurface;
 
