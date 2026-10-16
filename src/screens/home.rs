@@ -10,19 +10,20 @@ use std::time::Instant;
 use bobine::provider::{Feature, ImageRef, ItemId, Title};
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    Animation, AnimationExt, AnyElement, App, Context, Div, ElementId, Entity, FontWeight,
-    IntoElement, ObjectFit, Render, RenderImage, ScrollHandle, SharedString, Stateful, WeakEntity,
-    Window, div, img, linear_color_stop, linear_gradient, px, relative, rgb, rgba,
+    Animation, AnimationExt, AnyElement, App, Context, Div, FontWeight, IntoElement, ObjectFit,
+    Render, RenderImage, ScrollHandle, SharedString, Stateful, WeakEntity, Window, div, img,
+    linear_color_stop, linear_gradient, px, relative, rgba,
 };
 
+use super::card::{Offer, Open, Play};
 use super::film_detail::{EDGE, ROW_POSTER, hero_frame, meta_line};
-use super::{note, picture, poster, progress_bar, row_heading, series_poster};
+use super::{card, note, picture, poster, progress_bar, row_heading, series_poster};
 use crate::grid::Grid;
 use crate::hero::{self, Headline};
-use crate::home_page::{self, ListKind, PlayTarget};
+use crate::home_page::{self, ListKind};
 use crate::icons::{IconName, icon};
 use crate::images;
-use crate::motion::{self, Fade};
+use crate::motion;
 use crate::shell::{Loadable, Shell};
 use crate::theme;
 
@@ -204,8 +205,16 @@ pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -
 
 /// What went wrong with the last play button, over the page, fading in.
 pub(super) fn error_pill(why: &'static str) -> impl IntoElement {
+    pill(why).id(("home-error", why.len())).with_animation(
+        ("home-error-in", why.len()),
+        Animation::new(motion::quick()).with_easing(motion::ease_out),
+        |pill, t| pill.opacity(t),
+    )
+}
+
+/// What went wrong, in a pill at the foot of the page.
+pub fn pill(why: &'static str) -> Div {
     div()
-        .id(("home-error", why.len()))
         .absolute()
         .bottom(px(28.))
         .left(px(EDGE))
@@ -218,11 +227,6 @@ pub(super) fn error_pill(why: &'static str) -> impl IntoElement {
         .text_size(px(13.))
         .text_color(theme::danger())
         .child(why)
-        .with_animation(
-            ("home-error-in", why.len()),
-            Animation::new(motion::quick()).with_easing(motion::ease_out),
-            |pill, t| pill.opacity(t),
-        )
 }
 
 // The header.
@@ -638,15 +642,9 @@ fn titles_row(
                         .contains(&at)
                         .then(|| shell.image(card_picture(&titles[at]), images::CARD, cx))
                         .flatten();
-                    wide_card(
-                        &titles[at],
-                        image,
-                        Pick::Row(Rc::clone(titles), at),
-                        WIDE,
-                        id,
-                        window,
-                        cx,
-                    )
+                    let pick = Pick::Row(Rc::clone(titles), at);
+                    let offer = wide_offer(&titles[at], image, pick, WIDE);
+                    card(shell, id.into(), offer, cx)
                 })
                 .collect();
             cards_row(index, scroll, WIDE * 9. / 16. + WIDE_CAPTION, cards).into_any_element()
@@ -731,13 +729,10 @@ fn poster_card(
     }
 }
 
-/// How much the pointer is over an element, eased.
-struct Over(Fade);
-
 /// Where a card's title is read from when it is clicked: the card holds no copy of it, which
 /// would be made again at every frame.
 #[derive(Clone)]
-pub(super) enum Pick {
+pub enum Pick {
     /// The `at`th title of a row of the Home.
     Row(Rc<[Title]>, usize),
     /// The `at`th title of the full list, which must still be `id`: the list may have been
@@ -746,7 +741,7 @@ pub(super) enum Pick {
 }
 
 impl Pick {
-    pub(super) fn title(&self, list: Option<&Grid<Title>>) -> Option<Title> {
+    pub fn title(&self, list: Option<&Grid<Title>>) -> Option<Title> {
         match self {
             Self::Row(titles, at) => titles.get(*at).cloned(),
             Self::Listed(at, id) => list?.film(*at).filter(|title| title.id() == id).cloned(),
@@ -767,163 +762,96 @@ pub(super) fn card_picture(title: &Title) -> Option<&ImageRef> {
     }
 }
 
-/// A wide card: the picture, how far the viewer went, the title and a line; the pointer over it
-/// brings a veil and a play button. A click opens the page of the title, the button plays it.
-pub(super) fn wide_card(
+/// A wide card: the picture, how far the viewer went, the title and a line; the pointer over the
+/// picture brings a veil and a play button. A click opens the page of the title, the button
+/// plays it. Neither reads the title from the card, which holds no copy of it: they read it
+/// where `pick` says.
+pub(super) fn wide_offer(
     title: &Title,
     image: Option<Arc<RenderImage>>,
     pick: Pick,
     width: f32,
-    id: (SharedString, usize),
-    window: &mut Window,
-    cx: &mut Context<Shell>,
-) -> Stateful<Div> {
+) -> Offer {
     let height = width * 9. / 16.;
     let (heading, detail) = home_page::card_lines(title);
     let left = home_page::time_left(title);
     let progress = home_page::progress(title);
-    let (opened, played) = (pick.clone(), pick);
-
-    let over_id: ElementId = (id.0.clone(), id.1 + 100_000).into();
-    let over = window.use_keyed_state(over_id, cx, |_, _| Over(Fade::new(motion::quick())));
-    let now = Instant::now();
-    let level = over.read(cx).0.level(now);
-    if over.read(cx).0.moving(now) {
-        window.request_animation_frame();
+    let draw = move |layer: Stateful<Div>| {
+        let picture_box = div()
+            .relative()
+            .w(px(width))
+            .h(px(height))
+            .rounded(px(theme::RADIUS_LARGE))
+            .overflow_hidden()
+            .bg(theme::panel())
+            .children(picture(image.clone(), theme::RADIUS_LARGE))
+            .child(
+                div()
+                    .absolute()
+                    .left_0()
+                    .right_0()
+                    .bottom_0()
+                    .h(px(70.))
+                    .bg(linear_gradient(
+                        0.,
+                        linear_color_stop(rgba(0x000000b3), 0.),
+                        linear_color_stop(rgba(0x00000000), 1.),
+                    )),
+            )
+            .children(progress.map(|fraction| {
+                div()
+                    .absolute()
+                    .left(px(14.))
+                    .bottom(px(14.))
+                    .child(progress_bar(fraction, width - 28.))
+            }))
+            .child(layer);
+        div()
+            .w(px(width))
+            .flex()
+            .flex_col()
+            .gap(px(10.))
+            .child(picture_box)
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.))
+                    .child(
+                        div()
+                            .flex()
+                            .justify_between()
+                            .gap(px(12.))
+                            .child(
+                                div()
+                                    .text_size(px(14.))
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .truncate()
+                                    .child(heading.clone()),
+                            )
+                            .children(left.clone().map(|left| {
+                                div()
+                                    .flex_none()
+                                    .text_size(px(12.))
+                                    .text_color(theme::muted())
+                                    .child(left)
+                            })),
+                    )
+                    .children(detail.clone().map(|detail| {
+                        div()
+                            .text_size(px(12.))
+                            .text_color(theme::dim())
+                            .truncate()
+                            .child(detail)
+                    })),
+            )
+    };
+    Offer {
+        open: Open::Pick(pick.clone()),
+        play: Play::Pick(pick),
+        quick: None,
+        draw: Rc::new(draw),
     }
-
-    let picture_box = div()
-        .id(("wide-picture", id.1 + id.0.len() * 1000))
-        .relative()
-        .w(px(width))
-        .h(px(height))
-        .rounded(px(theme::RADIUS_LARGE))
-        .overflow_hidden()
-        .bg(theme::panel())
-        .children(picture(image, theme::RADIUS_LARGE))
-        .child(
-            div()
-                .absolute()
-                .left_0()
-                .right_0()
-                .bottom_0()
-                .h(px(70.))
-                .bg(linear_gradient(
-                    0.,
-                    linear_color_stop(rgba(0x000000b3), 0.),
-                    linear_color_stop(rgba(0x00000000), 1.),
-                )),
-        )
-        .children(progress.map(|fraction| {
-            div()
-                .absolute()
-                .left(px(14.))
-                .bottom(px(14.))
-                .child(progress_bar(fraction, width - 28.))
-        }))
-        .child(hover_layer(&id, &over, level, played, window, cx));
-
-    div()
-        .id(id)
-        .w(px(width))
-        .flex_none()
-        .flex()
-        .flex_col()
-        .gap(px(10.))
-        .cursor_pointer()
-        .on_click(cx.listener(move |shell, _, _, cx| {
-            if let Some(title) = opened.title(shell.list.as_ref().map(|list| &list.grid)) {
-                shell.open_title(&title, cx);
-            }
-        }))
-        .child(picture_box)
-        .child(
-            div()
-                .flex()
-                .flex_col()
-                .gap(px(2.))
-                .child(
-                    div()
-                        .flex()
-                        .justify_between()
-                        .gap(px(12.))
-                        .child(
-                            div()
-                                .text_size(px(14.))
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .truncate()
-                                .child(heading),
-                        )
-                        .children(left.map(|left| {
-                            div()
-                                .flex_none()
-                                .text_size(px(12.))
-                                .text_color(theme::muted())
-                                .child(left)
-                        })),
-                )
-                .children(detail.map(|detail| {
-                    div()
-                        .text_size(px(12.))
-                        .text_color(theme::dim())
-                        .truncate()
-                        .child(detail)
-                })),
-        )
-}
-
-/// The veil and the play button over a picture, `level` of the way in; it hears the pointer
-/// come and go.
-fn hover_layer(
-    id: &(SharedString, usize),
-    over: &Entity<Over>,
-    level: f32,
-    pick: Pick,
-    window: &mut Window,
-    cx: &mut Context<Shell>,
-) -> Stateful<Div> {
-    let hovered = over.clone();
-    let play = theme::eased(
-        (id.0.clone(), id.1 + 200_000),
-        theme::Shades {
-            rest: rgb(0xffffff),
-            hover: rgb(0xe4e4e7),
-            press: rgb(0xd4d4d8),
-        },
-        window,
-        cx,
-    )
-    .size(px(48.))
-    .rounded_full()
-    .flex()
-    .items_center()
-    .justify_center()
-    .text_color(rgb(0x000000))
-    .cursor_pointer()
-    // A click on the button plays; it never opens the page behind it.
-    .on_click(cx.listener(move |shell, _, window, cx| {
-        cx.stop_propagation();
-        if let Some(title) = pick.title(shell.list.as_ref().map(|list| &list.grid)) {
-            shell.play_from_home(PlayTarget::of(&title), window, cx);
-        }
-    }))
-    .child(icon(IconName::Play, 22.));
-    div()
-        .id((id.0.clone(), id.1 + 300_000))
-        .absolute()
-        .inset_0()
-        .flex()
-        .items_center()
-        .justify_center()
-        // A veil of black that comes with the pointer.
-        .bg(rgba((0x66 as f32 * level) as u32))
-        .on_hover(move |hover, _, cx: &mut App| {
-            hovered.update(cx, |over, cx| {
-                over.0.set(*hover, Instant::now());
-                cx.notify();
-            });
-        })
-        .child(play.opacity(level))
 }
 
 #[cfg(test)]

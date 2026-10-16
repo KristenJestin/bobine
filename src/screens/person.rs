@@ -3,10 +3,14 @@
 
 use bobine::provider::SeriesHit;
 use gpui_kit::prelude::*;
+use std::rc::Rc;
+
 use gpui_kit::{Context, Div, FontWeight, IntoElement, Stateful, Window, div, px};
 
-use super::{note, picture, poster, row_heading};
+use super::card::{Offer, Open, Play};
+use super::{card, note, picture, poster, row_heading};
 use crate::film_page;
+use crate::home_page::PlayTarget;
 use crate::images;
 use crate::lists::plural;
 use crate::shell::{Loadable, Shell};
@@ -141,7 +145,8 @@ fn section(title: &'static str, cards: Vec<gpui_kit::AnyElement>) -> Div {
         )
 }
 
-/// A series as a poster: it opens the series page.
+/// A series as a poster: it opens the series page, its layer plays its next episode. A person's
+/// titles do not say whether they are in the list or watched: the layer has no other button.
 fn series_card(
     shell: &mut Shell,
     series: &SeriesHit,
@@ -149,45 +154,52 @@ fn series_card(
     cx: &mut Context<Shell>,
 ) -> Stateful<Div> {
     let image = shell.image(series.poster.as_ref(), images::POSTER, cx);
-    let opened = series.id.clone();
-    div()
-        .id(("person-series", index))
-        .w(px(POSTER))
-        .flex_none()
-        .flex()
-        .flex_col()
-        .gap(px(8.))
-        .cursor_pointer()
-        .on_click(cx.listener(move |shell, _, _, cx| {
-            shell.open_series(opened.clone(), cx);
-        }))
-        .child(
-            div()
-                .relative()
-                .w(px(POSTER))
-                .h(px(POSTER * 1.5))
-                .rounded(px(theme::RADIUS))
-                .overflow_hidden()
-                .bg(theme::panel())
-                .children(picture(image, theme::RADIUS)),
-        )
-        .child(
-            div()
-                .flex()
-                .flex_col()
-                .gap(px(2.))
-                .child(
-                    div()
-                        .text_size(px(13.))
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .truncate()
-                        .child(series.title.clone()),
-                )
-                .child(
-                    div()
-                        .text_size(px(12.))
-                        .text_color(theme::dim())
-                        .child(series.year.map(|year| year.to_string()).unwrap_or_default()),
-                ),
-        )
+    let (title, year) = (
+        series.title.clone(),
+        series.year.map(|year| year.to_string()).unwrap_or_default(),
+    );
+    let draw = move |layer: Stateful<Div>| {
+        div()
+            .w(px(POSTER))
+            .flex()
+            .flex_col()
+            .gap(px(8.))
+            .child(
+                div()
+                    .relative()
+                    .w(px(POSTER))
+                    .h(px(POSTER * 1.5))
+                    .rounded(px(theme::RADIUS))
+                    .overflow_hidden()
+                    .bg(theme::panel())
+                    .children(picture(image.clone(), theme::RADIUS))
+                    .child(layer),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.))
+                    .child(
+                        div()
+                            .text_size(px(13.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .truncate()
+                            .child(title.clone()),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .text_color(theme::dim())
+                            .child(year.clone()),
+                    ),
+            )
+    };
+    let offer = Offer {
+        open: Open::Series(series.id.clone()),
+        play: Play::Target(PlayTarget::Series(series.id.clone())),
+        quick: None,
+        draw: Rc::new(draw),
+    };
+    card(shell, ("person-series", index).into(), offer, cx)
 }

@@ -31,6 +31,7 @@ use crate::menu::Menus;
 use crate::motion::{self, Fade, Glide, Presence};
 use crate::navigation::{NavEntry, Screen};
 use crate::player::libmpv::Libmpv;
+use crate::poster_actions::Action;
 use crate::reports::Reporting;
 use crate::scroll::{self, Move, Phase, Wheel};
 use crate::start::{self, Start};
@@ -1242,6 +1243,7 @@ impl Shell {
                 let film = film.map_err(|error| shell.failed(error, cx));
                 if let Ok(film) = &film {
                     shell.library.grid.update(film);
+                    shell.marks.follow(&film.id, Action::Watched, film.watched);
                 }
                 let Some(page) = shell.detail_page(depth, &id) else {
                     return;
@@ -1310,7 +1312,17 @@ impl Shell {
     }
 
     /// The page a play button was pressed on: no longer busy, and why it did not play.
-    pub(super) fn tried(&mut self, origin: &Origin, error: Option<&'static str>) {
+    pub(super) fn tried(
+        &mut self,
+        origin: &Origin,
+        error: Option<&'static str>,
+        cx: &mut Context<Self>,
+    ) {
+        // A poster plays from any page: away from the Home, the window says what went wrong.
+        let away = !matches!(self.navigator.current(), Screen::Home | Screen::HomeList);
+        if let (Origin::Home, Some(said), true) = (origin, error, away) {
+            self.show_notice(said, cx);
+        }
         let (busy, shown) = match origin {
             Origin::Film(depth, id) => match self.detail_page(*depth, id) {
                 Some(page) => (&mut page.busy, &mut page.error),
@@ -1348,11 +1360,11 @@ impl Shell {
             Ok(opened) => opened,
             Err(error) => {
                 let said = self.failed(error, cx);
-                self.tried(&origin, Some(said));
+                self.tried(&origin, Some(said), cx);
                 return;
             }
         };
-        self.tried(&origin, None);
+        self.tried(&origin, None, cx);
         let options = self.mpv_options.clone();
         let Some(server) = self.server.clone() else {
             return;
@@ -1361,7 +1373,7 @@ impl Shell {
             Ok(mpv) => Arc::new(mpv),
             Err(error) => {
                 eprintln!("bobine: the player cannot start: {error}");
-                self.tried(&origin, Some("The player cannot start."));
+                self.tried(&origin, Some("The player cannot start."), cx);
                 return;
             }
         };
@@ -1392,7 +1404,7 @@ impl Shell {
             Err(error) => {
                 // The words of the video surface or of mpv's error code: no address in them.
                 eprintln!("bobine: the film does not play: {error}");
-                self.tried(&origin, Some("Cannot play."));
+                self.tried(&origin, Some("Cannot play."), cx);
             }
         }
     }

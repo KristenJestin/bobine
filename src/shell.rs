@@ -4,6 +4,7 @@ mod home;
 mod lists;
 mod pages;
 mod palette;
+mod posters;
 mod preview;
 mod series;
 mod skip;
@@ -43,6 +44,7 @@ use crate::player::mpv::MpvPlayer;
 use crate::player::segments::{Button, Label, offered};
 use crate::player::session::{Session, WindowRequest};
 use crate::player::{Media, Player};
+use crate::poster_actions::Marks;
 use crate::reports::{self, Reporting};
 use crate::screens;
 use crate::search;
@@ -181,6 +183,15 @@ pub struct Shell {
     /// The search palette, while it shows (it stays fading out after it closed).
     pub search: Option<SearchState>,
     pub images: Images,
+    /// The cards drawn that answer the pointer, each a view of its own.
+    pub cards: screens::Cards,
+    /// What the buttons of the posters changed that their lists do not say yet.
+    pub marks: Marks,
+    /// What the window says over the page for a moment (a poster's button the server refused),
+    /// fading in and out; the wait before it goes.
+    notice: Option<&'static str>,
+    notice_fade: Presence<&'static str>,
+    notice_timer: Option<Task<()>>,
     /// The wake-up planned for an image to ask again, and when.
     image_wake: Option<(Instant, Task<()>)>,
     /// The page shown at the last draw, and how many times it changed: each change slides the
@@ -207,6 +218,8 @@ pub struct Shell {
 pub struct Draws {
     pub shell: Vec<Instant>,
     pub hero: Vec<Instant>,
+    /// The cards that answer the pointer, whichever card.
+    pub cards: Vec<Instant>,
     #[cfg(feature = "harness")]
     pub notified: Vec<Instant>,
 }
@@ -301,6 +314,11 @@ impl Shell {
             my_list: Default::default(),
             search: None,
             images: Images::default(),
+            cards: Default::default(),
+            marks: Marks::default(),
+            notice: None,
+            notice_fade: Presence::new(motion::quick()),
+            notice_timer: None,
             image_wake: None,
             page: (Screen::Login, 0),
             page_turns: 0,
@@ -712,6 +730,7 @@ impl Shell {
 impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.images.new_frame();
+        self.cards.new_frame();
         if window.viewport_size() != self.viewport {
             self.viewport = window.viewport_size();
             for page in &mut self.details {
@@ -886,6 +905,7 @@ impl Render for Shell {
                 back_label.filter(|_| screen.shows_back_link()),
                 |root, label| root.child(back_link(label, window, cx)),
             )
+            .children(self.notice_pill(screen, window))
             .children(screens::search::palette(self, window, cx))
     }
 }

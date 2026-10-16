@@ -540,10 +540,10 @@ impl Shell {
             }
             Err(StartError::Server(error)) => {
                 let said = self.failed(error, cx);
-                self.tried(&Origin::Home, Some(said));
+                self.tried(&Origin::Home, Some(said), cx);
             }
             Err(StartError::NothingToPlay) => {
-                self.tried(&Origin::Home, Some("Nothing to play for this title."));
+                self.tried(&Origin::Home, Some("Nothing to play for this title."), cx);
             }
         }
     }

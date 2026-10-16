@@ -72,6 +72,9 @@ pub struct State {
     pub stream: String,
     /// What `transcode` gives as the stream, as the server's conversion would be.
     pub converted: String,
+    /// `play` fails with this once it was asked: a test sees what was asked to play, and no
+    /// player starts.
+    pub play_error: Option<ProviderError>,
     pub record: Record,
     /// How long an image takes to come: a real server makes the fetches overlap.
     pub image_delay: std::time::Duration,
@@ -500,6 +503,7 @@ impl FakeServer {
                 episodes: episodes(),
                 stream: "file:///nowhere.mkv".into(),
                 converted: "file:///nowhere-converted.m3u8".into(),
+                play_error: None,
                 record: Record::default(),
                 image_delay: std::time::Duration::ZERO,
                 photos_fail_once: false,
@@ -740,6 +744,9 @@ impl MediaServer for FakeServer {
         let external_subtitles = self.external_subtitles(film, source)?;
         let mut state = self.state();
         state.record.plays.push((film.clone(), source.clone()));
+        if let Some(error) = state.play_error.clone() {
+            return Err(error);
+        }
         Ok(Playback {
             session: PlaySessionId(PLAY_SESSION.into()),
             film: film.clone(),

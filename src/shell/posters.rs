@@ -1,0 +1,500 @@
+//! The buttons a poster shows under the pointer: "My list" and "Watched" change at once and ask
+//! the server; a refusal puts them back and the window says so for a moment.
+
+use std::time::{Duration, Instant};
+
+use bobine::provider::{ItemId, ProviderError};
+use gpui_kit::prelude::*;
+use gpui_kit::{AnyElement, Context, ElementId, Entity, Window};
+
+use super::Shell;
+use super::pages::Loadable;
+use crate::favourite::ListPage;
+use crate::navigation::Screen;
+use crate::poster_actions::{self, Action};
+use crate::screens::{self, Card, Offer};
+
+/// How long a message of the window stays before it fades out.
+const NOTICE_FOR: Duration = Duration::from_secs(4);
+
+impl Shell {
+    /// The card `id`, a view of its own.
+    pub fn card(&mut self, id: &ElementId, offer: Offer, cx: &mut Context<Self>) -> Entity<Card> {
+        self.cards.view(id, offer, cx)
+    }
+
+    /// A press on "My list" or "Watched" of a poster; `listed`: what the poster's list says.
+    pub fn press_poster(
+        &mut self,
+        item: ItemId,
+        action: Action,
+        listed: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(wanted) = self.marks.press(&item, action, listed) else {
+            return;
+        };
+        cx.notify();
+        let asked = item.clone();
+        self.ask(
+            cx,
+            move |server| poster_actions::ask(server, &asked, action, wanted),
+            move |shell, answer, cx| shell.poster_answered(&item, action, wanted, answer, cx),
+        );
+    }
+
+    fn poster_answered(
+        &mut self,
+        item: &ItemId,
+        action: Action,
+        wanted: bool,
+        answer: Result<(), ProviderError>,
+        cx: &mut Context<Self>,
+    ) {
+        if let Err(error) = &answer {
+            // An expired session brings the login back.
+            self.failed(error.clone(), cx);
+        }
+        if let Some(said) = self.marks.answered(item, action, wanted, &answer) {
+            self.show_notice(said, cx);
+            return;
+        }
+        // The pages of the same title show the change too.
+        match action {
+            Action::MyList => {
+                for page in &mut self.details {
+                    if &page.id == item {
+                        page.button().0.follow(wanted);
+                    }
+                }
+                for page in &mut self.series_pages {
+                    if &page.id == item {
+                        page.button().0.follow(wanted);
+                    }
+                }
+                if self.navigator.current() == Screen::MyList {
+                    self.load_my_list(cx);
+                }
+            }
+            Action::Watched => {
+                for page in &mut self.details {
+                    if &page.id == item
+                        && let Loadable::Ready(detail) = &mut page.detail
+                    {
+                        detail.film.watched = wanted;
+                        if wanted {
+                            detail.film.resume = None;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Says `said` over the page for a moment, then fades it out.
+    pub fn show_notice(&mut self, said: &'static str, cx: &mut Context<Self>) {
+        self.notice = Some(said);
+        let timer = cx.background_executor().timer(NOTICE_FOR);
+        self.notice_timer = Some(cx.spawn(async move |this, cx| {
+            timer.await;
+            this.update(cx, |shell, cx| {
+                shell.notice = None;
+                cx.notify();
+            })
+            .ok();
+        }));
+        cx.notify();
+    }
+
+    /// The message of the window, over a page, as much of it as shows now.
+    pub(super) fn notice_pill(
+        &mut self,
+        screen: Screen,
+        window: &mut Window,
+    ) -> Option<AnyElement> {
+        let now = Instant::now();
+        let wanted = self.notice.filter(|_| screen.shows_pill_bar());
+        let drawn = self.notice_fade.follow(wanted, now);
+        if self.notice_fade.moving(now) {
+            window.request_animation_frame();
+        }
+        let (said, level) = drawn?;
+        Some(screens::notice_pill(said).opacity(level).into_any_element())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::rc::Rc;
+    use std::sync::Arc;
+
+    use bobine::provider::Connector;
+    use gpui_kit::{
+        Bounds, Modifiers, Pixels, TestAppContext, VisualTestContext, WindowHandle, point, px, size,
+    };
+
+    use super::*;
+    use crate::fake::FakeServer;
+    use crate::home_page::{self, PlayTarget};
+    use crate::navigation::NavEntry;
+    use crate::screens::{Play, Quick};
+    use crate::series_page;
+
+    /// The Home of a server whose playbacks are refused once asked (no player starts), in a
+    /// window tall enough for its rows of posters to be drawn.
+    fn home(
+        cx: &mut TestAppContext,
+    ) -> (
+        FakeServer,
+        WindowHandle<Shell>,
+        &'static mut VisualTestContext,
+    ) {
+        let server = FakeServer::new(6, true);
+        server.state.lock().unwrap().play_error =
+            Some(ProviderError::Unreachable("refused".into()));
+        let connector: Arc<dyn Connector> = Arc::new(server.clone());
+        let window =
+            cx.add_window(|_, cx| Shell::new(None, Box::new(move || Ok(connector)), None, cx));
+        cx.run_until_parked();
+        let cx = VisualTestContext::from_window(*window, cx).into_mut();
+        cx.simulate_resize(size(px(1600.), px(3000.)));
+        cx.run_until_parked();
+        (server, window, cx)
+    }
+
+    /// The first poster of a Home row whose play button starts what `wanted` accepts.
+    fn poster(
+        window: &WindowHandle<Shell>,
+        cx: &mut VisualTestContext,
+        wanted: impl Fn(&PlayTarget) -> bool,
+    ) -> (ElementId, ItemId) {
+        let shell = window.root(cx).unwrap();
+        cx.read(|cx| {
+            let shell = shell.read(cx);
+            let mut found: Vec<(ElementId, ItemId)> = shell
+                .cards
+                .ids()
+                .into_iter()
+                .filter(|id| id.to_string().contains("home-poster"))
+                .filter_map(|id| {
+                    let offer = shell.cards.offer(&id)?;
+                    match (offer.play, offer.quick) {
+                        (Play::Target(target), Some(quick)) if wanted(&target) => {
+                            Some((id, quick.item))
+                        }
+                        _ => None,
+                    }
+                })
+                .collect();
+            found.sort_by_key(|(id, _)| id.to_string());
+            found.into_iter().next().expect("a poster on the Home")
+        })
+    }
+
+    fn film_with_resume(server: &FakeServer) -> impl Fn(&PlayTarget) -> bool {
+        let started: Vec<ItemId> = server
+            .state
+            .lock()
+            .unwrap()
+            .films
+            .iter()
+            .filter(|f| f.resume.is_some())
+            .map(|f| f.id.clone())
+            .collect();
+        move |target| matches!(target, PlayTarget::Film(id) if started.contains(id))
+    }
+
+    fn film_out_of_the_list(server: &FakeServer) -> impl Fn(&PlayTarget) -> bool {
+        let listed = server.state.lock().unwrap().favourites.clone();
+        move |target| matches!(target, PlayTarget::Film(id) if !listed.contains(id))
+    }
+
+    fn a_series(target: &PlayTarget) -> bool {
+        matches!(target, PlayTarget::Series(_))
+    }
+
+    /// Where the element named `what` of the card `id` was drawn.
+    fn bounds(cx: &mut VisualTestContext, what: &str, id: &ElementId) -> Bounds<Pixels> {
+        let selector: &'static str = Box::leak(format!("{what} {id}").into_boxed_str());
+        cx.debug_bounds(selector)
+            .unwrap_or_else(|| panic!("{selector} was not drawn"))
+    }
+
+    fn click(cx: &mut VisualTestContext, what: &str, id: &ElementId) {
+        let at = bounds(cx, what, id).center();
+        cx.simulate_mouse_move(at, None, Modifiers::none());
+        cx.simulate_click(at, Modifiers::none());
+        cx.run_until_parked();
+    }
+
+    /// How much the layer of the card `id` shows once its fade is over.
+    fn veil(window: &WindowHandle<Shell>, cx: &mut VisualTestContext, id: &ElementId) -> f32 {
+        let shell = window.root(cx).unwrap();
+        cx.read(|cx| {
+            let view = shell.read(cx).cards.find(id).unwrap();
+            view.read(cx)
+                .hovered(Instant::now() + Duration::from_secs(5))
+        })
+    }
+
+    fn quick(window: &WindowHandle<Shell>, cx: &mut VisualTestContext, id: &ElementId) -> Quick {
+        let shell = window.root(cx).unwrap();
+        cx.read(|cx| shell.read(cx).cards.offer(id).unwrap().quick.unwrap())
+    }
+
+    fn screen(window: &WindowHandle<Shell>, cx: &mut VisualTestContext) -> Screen {
+        window
+            .read_with(cx, |shell, _| shell.navigator.current())
+            .unwrap()
+    }
+
+    fn draws(window: &WindowHandle<Shell>, cx: &mut VisualTestContext) -> (usize, usize) {
+        window
+            .read_with(cx, |shell, _| {
+                let draws = shell.draws.borrow();
+                (draws.shell.len(), draws.cards.len())
+            })
+            .unwrap()
+    }
+
+    #[gpui_kit::test]
+    fn the_pointer_over_a_poster_shows_the_veil_and_the_buttons_and_leaving_hides_them(
+        cx: &mut TestAppContext,
+    ) {
+        let (_, window, cx) = home(cx);
+        let (id, _) = poster(&window, cx, |_| true);
+        assert_eq!(veil(&window, cx, &id), 0.);
+        let card = bounds(cx, "card-hover", &id);
+        // The play button in the middle, the two buttons in the top right corner.
+        let play = bounds(cx, "card-play", &id);
+        assert!(card.contains(&play.center()));
+        for button in ["card-my-list", "card-watched"] {
+            let button = bounds(cx, button, &id);
+            assert!(button.top() < card.top() + px(40.) && button.right() > card.right() - px(80.));
+        }
+
+        cx.simulate_mouse_move(card.center(), None, Modifiers::none());
+        cx.run_until_parked();
+        assert_eq!(veil(&window, cx, &id), 1.);
+
+        cx.simulate_mouse_move(point(px(5.), px(5.)), None, Modifiers::none());
+        cx.run_until_parked();
+        assert_eq!(veil(&window, cx, &id), 0.);
+    }
+
+    #[gpui_kit::test]
+    fn only_the_card_under_the_pointer_is_drawn_again(cx: &mut TestAppContext) {
+        let (_, window, cx) = home(cx);
+        let (id, _) = poster(&window, cx, |_| true);
+        let card = bounds(cx, "card-hover", &id);
+        // Between two posters of the row.
+        let aside = point(card.right() + px(8.), card.center().y);
+        cx.simulate_mouse_move(aside, None, Modifiers::none());
+        cx.run_until_parked();
+        let notified = Rc::new(std::cell::Cell::new(0));
+        let shell = window.root(cx).unwrap();
+        cx.update(|_, cx| {
+            let notified = Rc::clone(&notified);
+            cx.observe(&shell, move |_, _| notified.set(notified.get() + 1))
+                .detach();
+        });
+        let (shell_before, cards_before) = draws(&window, cx);
+
+        // In, over the play button and the corner's buttons, and out.
+        for at in [
+            card.center(),
+            bounds(cx, "card-my-list", &id).center(),
+            bounds(cx, "card-watched", &id).center(),
+            aside,
+        ] {
+            cx.simulate_mouse_move(at, None, Modifiers::none());
+            cx.run_until_parked();
+        }
+
+        let (shell_after, cards_after) = draws(&window, cx);
+        assert!(
+            cards_after - cards_before >= 4,
+            "the card must have been drawn"
+        );
+        assert_eq!(notified.get(), 0, "the shell was notified");
+        assert_eq!(shell_after - shell_before, 0, "the shell was built again");
+    }
+
+    #[gpui_kit::test]
+    fn the_play_button_of_a_film_plays_it_from_its_resume_point(cx: &mut TestAppContext) {
+        let (server, window, cx) = home(cx);
+        let (id, film) = poster(&window, cx, film_with_resume(&server));
+        click(cx, "card-play", &id);
+        let plays = server.state.lock().unwrap().record.plays.clone();
+        assert_eq!(plays.len(), 1);
+        assert_eq!(plays[0].0, film);
+        // What the button started plays from where the viewer stopped.
+        let resume = server
+            .state
+            .lock()
+            .unwrap()
+            .films
+            .iter()
+            .find(|f| f.id == film)
+            .and_then(|f| f.resume)
+            .unwrap();
+        let started = home_page::start(&server, &PlayTarget::Film(film)).unwrap();
+        assert_eq!(started.plan.start, resume);
+        assert_eq!(screen(&window, cx), Screen::Home, "the page was opened");
+    }
+
+    #[gpui_kit::test]
+    fn the_play_button_of_a_series_plays_its_next_episode(cx: &mut TestAppContext) {
+        let (server, window, cx) = home(cx);
+        let (id, series) = poster(&window, cx, a_series);
+        let next = series_page::next_to_play(&server, &series)
+            .unwrap()
+            .expect("a next episode");
+        click(cx, "card-play", &id);
+        let plays = server.state.lock().unwrap().record.plays.clone();
+        assert_eq!(plays.len(), 1);
+        assert_eq!(plays[0].0, next.item.id);
+        assert_eq!(screen(&window, cx), Screen::Home, "the page was opened");
+    }
+
+    #[gpui_kit::test]
+    fn my_list_adds_and_removes(cx: &mut TestAppContext) {
+        let (server, window, cx) = home(cx);
+        let (id, film) = poster(&window, cx, film_out_of_the_list(&server));
+        assert!(!quick(&window, cx, &id).my_list.now);
+
+        click(cx, "card-my-list", &id);
+        assert!(quick(&window, cx, &id).my_list.now);
+        assert!(server.state.lock().unwrap().favourites.contains(&film));
+
+        click(cx, "card-my-list", &id);
+        assert!(!quick(&window, cx, &id).my_list.now);
+        assert!(!server.state.lock().unwrap().favourites.contains(&film));
+        assert_eq!(
+            server.state.lock().unwrap().record.favourite_calls,
+            [(film.clone(), true), (film, false)]
+        );
+        assert_eq!(screen(&window, cx), Screen::Home, "the page was opened");
+    }
+
+    #[gpui_kit::test]
+    fn a_refused_my_list_change_is_put_back_and_told(cx: &mut TestAppContext) {
+        let (server, window, cx) = home(cx);
+        let (id, film) = poster(&window, cx, film_out_of_the_list(&server));
+        server.state.lock().unwrap().favourite_fails = true;
+
+        click(cx, "card-my-list", &id);
+
+        assert!(!quick(&window, cx, &id).my_list.now);
+        assert!(!server.state.lock().unwrap().favourites.contains(&film));
+        let said = window.read_with(cx, |shell, _| shell.notice).unwrap();
+        assert_eq!(said, Some("My list could not be changed."));
+        // It goes by itself.
+        cx.executor()
+            .advance_clock(NOTICE_FOR + Duration::from_millis(10));
+        cx.run_until_parked();
+        assert_eq!(window.read_with(cx, |shell, _| shell.notice).unwrap(), None);
+    }
+
+    #[gpui_kit::test]
+    fn watched_marks_and_unmarks_and_the_mark_on_the_card_follows(cx: &mut TestAppContext) {
+        let (server, window, cx) = home(cx);
+        let (id, film) = poster(&window, cx, film_with_resume(&server));
+        assert!(!quick(&window, cx, &id).watched.now);
+        assert!(cx.debug_bounds(watched_mark(&id)).is_none());
+
+        click(cx, "card-watched", &id);
+        assert!(quick(&window, cx, &id).watched.now);
+        let watched = |server: &FakeServer| {
+            let state = server.state.lock().unwrap();
+            state.films.iter().find(|f| f.id == film).unwrap().watched
+        };
+        assert!(watched(&server));
+        // The check of a watched film, top right, drawn without the row being asked again.
+        assert!(cx.debug_bounds(watched_mark(&id)).is_some());
+
+        click(cx, "card-watched", &id);
+        assert!(!quick(&window, cx, &id).watched.now);
+        assert!(!watched(&server));
+        assert!(cx.debug_bounds(watched_mark(&id)).is_none());
+        assert_eq!(screen(&window, cx), Screen::Home, "the page was opened");
+    }
+
+    fn watched_mark(id: &ElementId) -> &'static str {
+        Box::leak(format!("watched-mark {id}").into_boxed_str())
+    }
+
+    #[gpui_kit::test]
+    fn watched_on_a_series_marks_the_whole_series(cx: &mut TestAppContext) {
+        let (server, window, cx) = home(cx);
+        let (id, series) = poster(&window, cx, a_series);
+        click(cx, "card-watched", &id);
+        assert!(quick(&window, cx, &id).watched.now);
+        assert_eq!(
+            server.state.lock().unwrap().record.watched,
+            [(series.clone(), true)]
+        );
+        let state = server.state.lock().unwrap();
+        assert!(
+            state
+                .episodes
+                .iter()
+                .filter(|e| e.series == series)
+                .all(|e| e.item.watched)
+        );
+    }
+
+    #[gpui_kit::test]
+    fn a_poster_of_a_library_plays_and_a_refusal_is_told_there(cx: &mut TestAppContext) {
+        let (server, window, cx) = home(cx);
+        window
+            .update(cx, |shell, _, cx| shell.select(NavEntry::Films, cx))
+            .unwrap();
+        cx.run_until_parked();
+        let id = ElementId::from(("film", 0_usize));
+        let film = window
+            .read_with(cx, |shell, _| {
+                let offer = shell.cards.offer(&id).expect("the first film of the grid");
+                offer.quick.unwrap().item
+            })
+            .unwrap();
+
+        click(cx, "card-play", &id);
+
+        let plays = server.state.lock().unwrap().record.plays.clone();
+        assert_eq!(plays.len(), 1);
+        assert_eq!(plays[0].0, film);
+        assert_eq!(screen(&window, cx), Screen::Library);
+        let said = window.read_with(cx, |shell, _| shell.notice).unwrap();
+        assert!(said.is_some(), "the refusal was not told");
+    }
+
+    #[gpui_kit::test]
+    fn a_click_on_a_button_never_opens_the_page_and_a_click_elsewhere_does(
+        cx: &mut TestAppContext,
+    ) {
+        let (_, window, cx) = home(cx);
+        let (id, film) = poster(&window, cx, |target| matches!(target, PlayTarget::Film(_)));
+        for button in ["card-my-list", "card-watched"] {
+            click(cx, button, &id);
+            assert_eq!(
+                screen(&window, cx),
+                Screen::Home,
+                "{button} opened the page"
+            );
+        }
+        // On the veil, away from the buttons.
+        let card = bounds(cx, "card-hover", &id);
+        let at = point(card.left() + px(12.), card.bottom() - px(12.));
+        cx.simulate_mouse_move(at, None, Modifiers::none());
+        cx.simulate_click(at, Modifiers::none());
+        cx.run_until_parked();
+        assert_eq!(screen(&window, cx), Screen::FilmDetail);
+        let opened = window
+            .read_with(cx, |shell, _| {
+                shell.details.last().map(|page| page.id.clone())
+            })
+            .unwrap();
+        assert_eq!(opened, Some(film));
+    }
+}

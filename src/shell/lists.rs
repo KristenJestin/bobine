@@ -11,6 +11,7 @@ use super::pages::Loadable;
 use crate::favourite::{self, ListPage};
 use crate::lists::PosterQueue;
 use crate::navigation::Screen;
+use crate::poster_actions::Action;
 use crate::series_page::Refreshes;
 
 /// The collections of the server.
@@ -105,6 +106,11 @@ impl Shell {
                             .map(|page| page as &mut dyn ListPage),
                     );
                 let current = shell.navigator.current();
+                if answer.is_ok() {
+                    shell
+                        .marks
+                        .follow(&pressed.item, Action::MyList, pressed.wanted);
+                }
                 if favourite::answered(pages, current, &pressed, &answer) {
                     shell.load_my_list(cx);
                 }
