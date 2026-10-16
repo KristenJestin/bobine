@@ -692,11 +692,7 @@ impl Acts {
                     Click(Card(0, 0, 340.)),
                 ),
                 (9.0, "escape back to the Home", Key("escape")),
-                (
-                    10.0,
-                    "click the same card again",
-                    Click(Card(0, 0, 340.)),
-                ),
+                (10.0, "click the same card again", Click(Card(0, 0, 340.))),
                 (12.0, "escape back to the Home again", Key("escape")),
             ],
             // The header's "Lecture" plays the first title, Escape leaves, the Home is asked anew.
