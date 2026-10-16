@@ -475,7 +475,7 @@ mod tests {
         assert!(!quick(&window, cx, &id).my_list.now);
         assert!(!server.state.lock().unwrap().favourites.contains(&film));
         let said = window.read_with(cx, |shell, _| shell.notice).unwrap();
-        assert_eq!(said, Some("My list could not be changed."));
+        assert_eq!(said, Some("Favorite could not be changed."));
         // It goes by itself.
         cx.executor()
             .advance_clock(NOTICE_FOR + Duration::from_millis(10));

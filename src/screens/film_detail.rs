@@ -17,6 +17,7 @@ use gpui_kit::{
 };
 
 use super::{centered, note, picture, poster, progress_bar, row_heading};
+use crate::favourite;
 use crate::film_page::{self, Choices, Fact, From};
 use crate::icons::{IconName, icon, with_stars};
 use crate::images;
@@ -258,7 +259,7 @@ fn hero(
     )
 }
 
-/// "My list": a plus while the item is out of the list, a check once it is in, the green of
+/// "Favorite": a plus while the item is out of the list, a check once it is in, the green of
 /// the other states of the page; the change eases from one to the other.
 pub(super) fn list_button(
     id: &'static str,
@@ -293,10 +294,16 @@ pub(super) fn list_button(
                 .inset_0()
                 .opacity(level),
         );
-    theme::ghost_button_with(id, Some(icons.into_any_element()), "My list", window, cx)
-        .text_color(motion::mix(theme::text(), theme::accent(), level))
-        .border_color(motion::mix(rgb(0x3a3a40), theme::accent(), level))
-        .on_click(cx.listener(|shell, _, _, cx| shell.toggle_favourite(cx)))
+    theme::ghost_button_with(
+        id,
+        Some(icons.into_any_element()),
+        favourite::LABEL,
+        window,
+        cx,
+    )
+    .text_color(motion::mix(theme::text(), theme::accent(), level))
+    .border_color(motion::mix(rgb(0x3a3a40), theme::accent(), level))
+    .on_click(cx.listener(|shell, _, _, cx| shell.toggle_favourite(cx)))
 }
 
 /// The backdrop over the whole width, darkened towards the text and the page below.

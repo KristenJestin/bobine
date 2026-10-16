@@ -303,7 +303,7 @@ impl Card {
         .child(icon(IconName::Play, 22.))
     }
 
-    /// "My list" and "Watched", side by side in the top right corner.
+    /// "Favorite" and "Watched", side by side in the top right corner.
     fn corner(&self, quick: Quick, window: &mut Window, cx: &mut Context<Self>) -> Div {
         let my_list = self.quick_button(
             Action::MyList,

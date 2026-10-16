@@ -1,4 +1,4 @@
-//! The "My list" button of a film or a series page. Pressing it changes what the button shows
+//! The "Favorite" button of a film or a series page. Pressing it changes what the button shows
 //! at once and asks the server; if the server fails, the button goes back and says so. While a
 //! request is on its way the button asks nothing more, so that two presses never leave the
 //! server and the page disagreeing about the order they came in.
@@ -7,8 +7,11 @@ use bobine::provider::{ItemId, MediaServer, ProviderError};
 
 use crate::navigation::Screen;
 
+/// What the button says.
+pub const LABEL: &str = "Favorite";
+
 /// What the page says when the server did not take the change.
-pub const FAILED: &str = "My list could not be changed.";
+pub const FAILED: &str = "Favorite could not be changed.";
 
 /// Whether the item is in the list, and whether the server is being asked to change it.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -166,6 +169,12 @@ mod tests {
         let wanted = toggle.press()?;
         let answer = ask(server, &film(), wanted);
         toggle.answered(wanted, &answer)
+    }
+
+    #[test]
+    fn the_favourite_button_reads_favorite_in_us_english() {
+        assert_eq!(LABEL, "Favorite");
+        assert_eq!(FAILED, "Favorite could not be changed.");
     }
 
     #[test]
