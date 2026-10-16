@@ -1,8 +1,9 @@
 //! A card that answers the pointer: a poster, or a wide card of the Home. The pointer over its
 //! picture brings a veil, a play button in the middle and, on a poster, the "Favorite",
-//! "Watched" and "Add to playlist" buttons in a corner; a click anywhere else opens the title's page. Each card is a
-//! view of its own, kept by the shell for each card drawn: the pointer coming, going and moving
-//! over it redraws that card alone, not the page around it, however long the rows.
+//! "Watched" and "Add to playlist" buttons in a corner; a click anywhere else opens the title's
+//! page. Each card is a view of its own, kept by the shell for each card drawn: the pointer
+//! coming, going and moving over it redraws that card alone, not the page around it, however
+//! long the rows.
 
 use std::cell::Cell;
 use std::collections::HashMap;
