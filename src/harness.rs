@@ -11,8 +11,8 @@
 //!
 //! `bobine --screen login|home|home-rows|home-list-resume|home-list-next|home-list-latest|home-list-empty|library|detail|
 //! detail-rows|detail-cast|playing|series|series-page|series-rows|up-next|collections|collection-page|
-//! my-list|my-list-empty|film-list|series-list|discover|request|seasons|similar|settings-seerr [--films N]
-//! [--media FILE] [--segments SECONDS] [--direct-fails] [--trailer] [--image-delay-ms N] [--photos-fail-once] [--scenario menu|scroll|select|panel|blackout|search|search-slow|search-keys|tools|tools-keys|home-rotate|home-hover|home-jump|home-scroll|home-lists|home-play|home-poster-hover|grid-poster-hover|cast-hover|genre-hover|episode-hover|skip|settings|settings-screen|long-tracks|segment-marks]
+//! my-list|my-list-empty|lists|playlist|film-list|series-list|discover|request|seasons|similar|settings-seerr [--films N]
+//! [--media FILE] [--segments SECONDS] [--direct-fails] [--trailer] [--image-delay-ms N] [--photos-fail-once] [--scenario menu|scroll|select|panel|blackout|search|search-slow|search-keys|tools|tools-keys|home-rotate|home-hover|home-jump|home-scroll|home-lists|home-play|home-poster-hover|grid-poster-hover|playlist-menu|cast-hover|genre-hover|episode-hover|skip|settings|settings-screen|long-tracks|segment-marks]
 //! [--search-delay-ms N] [--favourite-delay-ms N] [--logout-delay-ms N] [--favourite-fails] [--slower N] --quit-at S`
 //!
 //! A scenario sends clicks, keys and scroll events to the window as the compositor would, at set
@@ -437,7 +437,8 @@ fn show_screen(
     let to_series_page = wants(&["series-page", "series-rows", "up-next", "series-list"]);
     let to_collections = wants(&["collections", "collection-page"]);
     let to_collection = wants(&["collection-page"]);
-    let to_list = wants(&["my-list", "my-list-empty"]);
+    let to_list = wants(&["my-list", "my-list-empty", "lists", "playlist"]);
+    let to_playlist = wants(&["playlist"]);
     // The "My list" button pressed on the page that shows.
     let press_list = wants(&["film-list", "series-list"]);
     let (series_rows, up_next) = (wants(&["series-rows"]), wants(&["up-next"]));
@@ -464,7 +465,8 @@ fn show_screen(
     };
     let mut done_steps = 0;
     // A scenario starts once the screen is reached: the login at once, a film page after it opened.
-    let ready_after = if to_film || to_series_page || list.is_some() || to_collection {
+    let ready_after = if to_film || to_series_page || list.is_some() || to_collection || to_playlist
+    {
         3
     } else {
         1
@@ -535,6 +537,9 @@ fn show_screen(
                                 if to_collection {
                                     // Three films, one watched and one started.
                                     shell.open_collection(ItemId("collection-1".into()), cx);
+                                }
+                                if to_playlist {
+                                    shell.open_playlist(ItemId("playlist-late".into()), cx);
                                 }
                                 true
                             }
@@ -1066,6 +1071,9 @@ impl Acts {
                 (1.0, "the pointer over a poster", Hover(At(290., 300.))),
                 (3.0, "the pointer leaves it", Hover(Bottom)),
             ],
+            // "Add to playlist" pressed on the film page (`--screen detail`, a window of
+            // 1440 × 810): the menu opens under the button.
+            "playlist-menu" => vec![(1.0, "add to playlist", Click(At(764., 562.)))],
             // The pointer over the second person of the cast (`--screen detail-cast`, a window of
             // 1440 × 810): their cell lights up, then goes dark when it leaves.
             "cast-hover" => vec![

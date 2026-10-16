@@ -1,0 +1,11 @@
+{
+  "Items": [
+    { "Name": "Northbound", "Id": "f0000000000000000000000000000003", "PlaylistItemId": "a1000000000000000000000000000001", "Type": "Movie", "ProductionYear": 2011, "UserData": { "Played": false, "IsFavorite": false }, "ImageTags": {} },
+    { "Name": "Low Water", "Id": "e0000000000000000000000000000021", "PlaylistItemId": "a1000000000000000000000000000002", "Type": "Episode", "IndexNumber": 1, "ParentIndexNumber": 1, "SeriesId": "50000000000000000000000000000001", "SeriesName": "Tidewater", "SeriesPrimaryImageTag": "poster-tw", "SeasonId": "5e000000000000000000000000000002", "UserData": { "Played": false, "IsFavorite": false }, "ImageTags": { "Primary": "still-lw" },
+      "MediaSources": [ { "Id": "5a000000000000000000000000000021", "Name": "Low Water", "Container": "mkv", "MediaStreams": [] } ] },
+    { "Name": "The Quiet Harbour", "Id": "f0000000000000000000000000000001", "PlaylistItemId": "a1000000000000000000000000000003", "Type": "Movie", "ProductionYear": 2019, "UserData": { "Played": true, "IsFavorite": false }, "ImageTags": { "Primary": "poster-qh" } },
+    { "Name": "Harbour Song", "Id": "a0000000000000000000000000000009", "PlaylistItemId": "a1000000000000000000000000000004", "Type": "Audio", "ImageTags": {} }
+  ],
+  "TotalRecordCount": 4,
+  "StartIndex": 0
+}

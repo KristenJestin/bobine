@@ -26,6 +26,10 @@ pub const SERIES_LIBRARY: &str = "22222222222222222222222222222222";
 pub const SERIES: &str = "50000000000000000000000000000001";
 pub const SEASON: &str = "5e000000000000000000000000000002";
 pub const EPISODE: &str = "e0000000000000000000000000000021";
+/// The playlist that holds titles; the others hold none, or music.
+pub const PLAYLIST: &str = "p0000000000000000000000000000001";
+/// The id the server gives the playlist it makes.
+pub const NEW_PLAYLIST: &str = "p0000000000000000000000000000009";
 /// The trailer file the server holds for the film and for the series.
 pub const TRAILER: &str = "7a000000000000000000000000000001";
 /// The version of that file: not its id, as it is on a real server for some files.
@@ -66,6 +70,8 @@ fn fixture(name: &str) -> Value {
         "featured" => include_str!("fixtures/featured.json"),
         "media_segments" => include_str!("fixtures/media_segments.json"),
         "tmdb_index" => include_str!("fixtures/tmdb_index.json"),
+        "playlists" => include_str!("fixtures/playlists.json"),
+        "playlist_items" => include_str!("fixtures/playlist_items.json"),
         _ => panic!("no fixture {name}"),
     };
     serde_json::from_str(text).unwrap()
@@ -132,11 +138,19 @@ pub struct State {
     pub no_transcoding: bool,
     /// The extracted subtitle comes from another host, as an absolute address.
     pub absolute_delivery: bool,
+    /// The entries put in the playlist that holds titles so far: a series goes in as its
+    /// episodes, as Jellyfin 10.9 and later do.
+    pub playlist_added: usize,
+    /// The entries the playlist made last holds.
+    pub playlist_made: usize,
     /// The film and the series have a trailer file of their own.
     pub local_trailer: bool,
     /// The trailers hosted elsewhere that the film and the series list, in order.
     pub remote_trailers: Vec<String>,
 }
+
+/// How many episodes the series of the pages puts in a playlist.
+pub const SERIES_EPISODES: usize = 3;
 
 /// How long a held search request waits for the others before it is let go anyway.
 const GATE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
@@ -501,6 +515,7 @@ fn answer(state: &State, seen: &Seen) -> Answer {
             (Some(LETTERS_LIBRARY), _) => Answer::Json(200, films(seen, "letters")),
             (Some(SERIES_LIBRARY), Some("Series")) => Answer::Json(200, films(seen, "series")),
             (None, Some("BoxSet")) => Answer::Json(200, fixture("boxsets")),
+            (None, Some("Playlist")) => Answer::Json(200, fixture("playlists")),
             (None, Some("Movie,Series")) => Answer::Json(200, limited(fixture("featured"), seen)),
             (Some("b0000000000000000000000000000001"), _) => {
                 Answer::Json(200, of_types(fixture("boxset_sea_stories"), seen))
@@ -631,6 +646,22 @@ fn answer(state: &State, seen: &Seen) -> Answer {
             )
         }
         ("GET", path) if path.starts_with(&images) => Answer::Bytes(IMAGE.to_vec()),
+        ("GET", path) if path == format!("/Playlists/{PLAYLIST}/Items") => {
+            let mut items = limited(fixture("playlist_items"), seen);
+            let total = items["TotalRecordCount"].as_u64().unwrap() as usize;
+            items["TotalRecordCount"] = json!(total + state.playlist_added);
+            Answer::Json(200, items)
+        }
+        ("GET", path) if path == format!("/Playlists/{NEW_PLAYLIST}/Items") => Answer::Json(
+            200,
+            json!({ "Items": [], "TotalRecordCount": state.playlist_made }),
+        ),
+        ("GET", path) if path.starts_with("/Playlists/") && path.ends_with("/Items") => {
+            Answer::Json(200, json!({ "Items": [], "TotalRecordCount": 0 }))
+        }
+        ("POST", "/Playlists") => Answer::Json(200, json!({ "Id": NEW_PLAYLIST })),
+        ("POST", path) if path == format!("/Playlists/{PLAYLIST}/Items") => Answer::Empty(204),
+        ("DELETE", path) if path == format!("/Playlists/{PLAYLIST}/Items") => Answer::Empty(204),
         _ => Answer::Empty(404),
     }
 }
@@ -752,7 +783,23 @@ impl FakeServer {
                         if gated {
                             state.gate_arrivals += 1;
                         }
-                        (answer(&state, &seen), state.image_delay, gated)
+                        let answer = answer(&state, &seen);
+                        if seen.method == "POST"
+                            && seen.path == format!("/Playlists/{PLAYLIST}/Items")
+                            && matches!(answer, Answer::Empty(204))
+                        {
+                            state.playlist_added += match seen.param("ids") {
+                                Some(SERIES) => SERIES_EPISODES,
+                                _ => 1,
+                            };
+                        }
+                        if seen.method == "POST" && seen.path == "/Playlists" {
+                            state.playlist_made = match seen.json()["Ids"][0].as_str() {
+                                Some(SERIES) => SERIES_EPISODES,
+                                _ => 1,
+                            };
+                        }
+                        (answer, state.image_delay, gated)
                     };
                     if gated {
                         let state = Arc::clone(&state);

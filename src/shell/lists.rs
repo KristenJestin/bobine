@@ -1,8 +1,9 @@
-//! The user's list ("My list") and the collections: what the pages show of them, and how it
-//! comes from the server. Every call runs off the window's thread, like the others.
+//! The Lists (the favorites and the playlists) and the collections: what the pages show of
+//! them, and how it comes from the server. Every call runs off the window's thread, like the
+//! others.
 
 use bobine::provider::{
-    CollectionCard, CollectionDetail, Favourite, ImageRef, ItemId, ProviderError,
+    CollectionCard, CollectionDetail, Favourite, ImageRef, ItemId, Playlist, ProviderError,
 };
 use gpui_kit::{Context, ScrollHandle, UniformListScrollHandle};
 
@@ -11,6 +12,7 @@ use super::pages::Loadable;
 use crate::favourite::{self, ListPage, Toggle};
 use crate::lists::PosterQueue;
 use crate::navigation::Screen;
+use crate::playlists;
 use crate::poster_actions::Action;
 use crate::series_page::Refreshes;
 
@@ -57,6 +59,47 @@ impl MyListPage {
             self.items = Some(items);
         }
         newest
+    }
+}
+
+/// The Lists: a row of the favorites, then a card for each playlist.
+#[derive(Default)]
+pub struct ListsPage {
+    /// Each with its first titles only, those its card draws.
+    pub playlists: Option<Loadable<Vec<Playlist>>>,
+    pub scroll: ScrollHandle,
+    /// The row of the favorites scrolls sideways.
+    pub favorites: ScrollHandle,
+    /// Each time the playlists are asked, numbered like the favorites.
+    asked: Refreshes,
+}
+
+/// A playlist's card of the Lists, as it is drawn: a mosaic of its first posters, its name and
+/// its count.
+#[derive(Clone, Debug)]
+pub struct ListCard {
+    pub id: ItemId,
+    pub name: String,
+    pub caption: String,
+    pub posters: Vec<ImageRef>,
+}
+
+impl ListsPage {
+    /// The playlists' cards, by name, as the server gave them.
+    pub fn cards(&self) -> Vec<ListCard> {
+        let found = match &self.playlists {
+            Some(Loadable::Ready(found)) => found.as_slice(),
+            _ => &[],
+        };
+        found
+            .iter()
+            .map(|playlist| ListCard {
+                id: playlist.id.clone(),
+                name: playlist.name.clone(),
+                caption: playlists::titles(playlist.count),
+                posters: playlists::playlist_mosaic(&playlist.entries),
+            })
+            .collect()
     }
 }
 
@@ -304,6 +347,35 @@ impl Shell {
         );
     }
 
+    /// The Lists, each time they show: the favorites, and the playlists.
+    pub fn load_lists(&mut self, cx: &mut Context<Self>) {
+        self.load_my_list(cx);
+        Loadable::asking(&mut self.lists.playlists);
+        let number = self.lists.asked.ask(&mut self.refreshes_asked);
+        self.ask(
+            cx,
+            // A card draws its first posters and its count: only those are asked.
+            |server| server.playlists(Some(playlists::MOSAIC)),
+            move |shell, found, cx| {
+                let found = match found {
+                    Ok(found) => Loadable::Ready(found),
+                    Err(error) => Loadable::Failed(shell.failed(error, cx)),
+                };
+                if shell.lists.asked.is_newest(number) {
+                    shell.lists.playlists = Some(found);
+                }
+            },
+        );
+    }
+
+    /// "See all" on the favorites' row of the Lists.
+    pub fn open_favorites(&mut self, cx: &mut Context<Self>) {
+        self.forward.clear();
+        self.navigator.open(Screen::Favorites);
+        self.load_my_list(cx);
+        cx.notify();
+    }
+
     pub fn open_collection(&mut self, id: ItemId, cx: &mut Context<Self>) {
         self.forward.clear();
         self.collection_pages.push(CollectionPage {
@@ -360,6 +432,85 @@ impl Shell {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::fake::FakeServer;
+    use crate::navigation::NavEntry;
+    use gpui_kit::{TestAppContext, WindowHandle};
+    use std::sync::Arc;
+
+    /// The Home of a fake server, signed in.
+    fn signed_in(cx: &mut TestAppContext) -> (FakeServer, WindowHandle<Shell>) {
+        let server = FakeServer::new(12, true);
+        let connector: Arc<dyn bobine::provider::Connector> = Arc::new(server.clone());
+        let window = cx.add_window(|_, cx| {
+            Shell::new(
+                None,
+                Box::new(move || Ok(connector)),
+                None,
+                Arc::new(crate::fake::MemoryKeyring::default()),
+                cx,
+            )
+        });
+        cx.run_until_parked();
+        (server, window)
+    }
+
+    #[gpui_kit::test]
+    fn favorites_and_playlists_are_listed_on_the_lists_page(cx: &mut TestAppContext) {
+        let (_server, window) = signed_in(cx);
+        window
+            .update(cx, |shell, _, cx| shell.select(NavEntry::MyList, cx))
+            .unwrap();
+        cx.run_until_parked();
+        window
+            .update(cx, |shell, _, _| {
+                assert_eq!(shell.navigator.current(), Screen::MyList);
+                let cards = shell.lists.cards();
+                let names: Vec<&str> = cards.iter().map(|card| card.name.as_str()).collect();
+                // Each playlist by name.
+                assert_eq!(names, ["Late night", "Watchlist"]);
+                assert_eq!(cards[0].caption, "5 titles");
+                assert_eq!(cards[0].posters.len(), 4, "a two by two mosaic");
+                assert_eq!(cards[1].caption, "4 titles");
+                assert_eq!(cards[0].id, ItemId("playlist-late".into()));
+            })
+            .unwrap();
+        // The favorites first, as a row of posters, above the playlists' cards.
+        let mut visual = gpui_kit::VisualTestContext::from_window(window.into(), cx);
+        visual.run_until_parked();
+        let row = visual
+            .debug_bounds("lists-favorites")
+            .expect("the favorites' row");
+        let card = visual.debug_bounds("list-card Late night").expect("a card");
+        assert!(row.bottom() <= card.top(), "the favorites come first");
+        assert!(
+            visual.debug_bounds("list-card Favorites").is_none(),
+            "not a card"
+        );
+        // "See all" opens them all.
+        let at = visual.debug_bounds("lists-see-all").unwrap().center();
+        visual.simulate_click(at, gpui_kit::Modifiers::none());
+        visual.run_until_parked();
+        let screen = window.read_with(cx, |shell, _| shell.navigator.current());
+        assert_eq!(screen.unwrap(), Screen::Favorites);
+    }
+
+    #[gpui_kit::test]
+    fn a_playlist_card_reads_only_its_first_titles_and_counts_them_all(cx: &mut TestAppContext) {
+        let (_server, window) = signed_in(cx);
+        window
+            .update(cx, |shell, _, cx| shell.select(NavEntry::MyList, cx))
+            .unwrap();
+        cx.run_until_parked();
+        window
+            .read_with(cx, |shell, _| {
+                let Some(Loadable::Ready(found)) = &shell.lists.playlists else {
+                    panic!("the playlists are not shown");
+                };
+                assert_eq!(found[0].entries.len(), playlists::MOSAIC);
+                assert_eq!(found[0].count, 5);
+            })
+            .unwrap();
+    }
 
     fn shown(page: &MyListPage) -> Option<usize> {
         match &page.items {

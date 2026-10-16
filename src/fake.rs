@@ -8,13 +8,13 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use bobine::provider::{
-    AudioTrack, CastMember, Collection, CollectionCard, CollectionDetail, Connector, Episode,
-    ExternalSubtitle, Favourite, Feature, FeatureKind, Film, FilmDetail, FilmQuery, FilmSort,
-    FilterChoices, ImageKind, ImageRef, ItemId, Library, LibraryKind, MediaServer, MediaSource,
-    MediaSourceId, Page, PersonHit, PersonTitles, PlaySessionId, Playback, PlaybackReport,
-    ProviderError, SearchResults, Season, Segment, Series, SeriesDetail, SeriesHit, ServerInfo,
-    StreamUrl, SubtitleTrack, Title, TmdbIndex, Token, TokenStore, Trailers, TranscodeRequest,
-    Trickplay, VideoRange, VideoTrack,
+    AudioTrack, CastMember, Collection, CollectionCard, CollectionDetail, Connector, EntryId,
+    Episode, ExternalSubtitle, Favourite, Feature, FeatureKind, Film, FilmDetail, FilmQuery,
+    FilmSort, FilterChoices, ImageKind, ImageRef, ItemId, Library, LibraryKind, MediaServer,
+    MediaSource, MediaSourceId, Page, PersonHit, PersonTitles, PlaySessionId, Playback,
+    PlaybackReport, Playlist, PlaylistEntry, ProviderError, SearchResults, Season, Segment, Series,
+    SeriesDetail, SeriesHit, ServerInfo, StreamUrl, SubtitleTrack, Title, TmdbIndex, Token,
+    TokenStore, Trailers, TranscodeRequest, Trickplay, VideoRange, VideoTrack,
 };
 
 pub const USER: &str = "camille";
@@ -115,10 +115,58 @@ pub struct Record {
     pub transcodes: Vec<TranscodeRequest>,
     /// Each logout, with how many playback reports the server had by then.
     pub logouts: Vec<usize>,
+    /// Every change asked of a playlist, answered or failed.
+    pub playlist_calls: Vec<PlaylistCall>,
+    /// How many times the playlists were listed.
+    pub playlists_listed: u32,
+    /// The playlists read whole, in the order they were asked.
+    pub playlist_reads: Vec<ItemId>,
     /// The titles whose trailer file was asked for, in order.
     pub trailer_asks: Vec<ItemId>,
     /// How many times the library was indexed by TMDb id.
     pub tmdb_indexes: u32,
+}
+
+/// A change asked of a playlist.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PlaylistCall {
+    Create(String, ItemId),
+    Add(ItemId, ItemId),
+    Remove(ItemId, EntryId),
+}
+
+/// A playlist as the fake server keeps it: its id, its name, and its entries with what each is.
+#[derive(Clone, Debug)]
+pub struct KeptPlaylist {
+    pub id: ItemId,
+    pub name: String,
+    pub entries: Vec<(EntryId, ItemId)>,
+}
+
+/// The playlists the fake server starts with: films, and episodes in the second. A series put
+/// in a playlist is put in as its episodes, as Jellyfin does, so none holds a series.
+pub fn playlists() -> Vec<KeptPlaylist> {
+    let kept = |id: &str, name: &str, items: &[&str]| KeptPlaylist {
+        id: ItemId(id.into()),
+        name: name.into(),
+        entries: items
+            .iter()
+            .enumerate()
+            .map(|(n, item)| (EntryId(format!("{id}-entry-{n}")), ItemId((*item).into())))
+            .collect(),
+    };
+    vec![
+        kept(
+            "playlist-late",
+            "Late night",
+            &["film-5", "film-3", "film-8", "film-4", "film-9"],
+        ),
+        kept(
+            "playlist-watchlist",
+            "Watchlist",
+            &["film-1", "series-1-s1-e2", "series-2-s1-e1", "film-0"],
+        ),
+    ]
 }
 
 /// What the fake server holds, shared by the connector and its sessions.
@@ -174,6 +222,15 @@ pub struct State {
     /// The logout fails with this, after the server forgot the session (a keyring that cannot
     /// be reached).
     pub logout_error: Option<ProviderError>,
+    pub playlists: Vec<KeptPlaylist>,
+    /// Changing a playlist fails with this (a server that refuses it).
+    pub playlist_refusal: Option<ProviderError>,
+    /// Taking out these entries is refused, as a playlist the user may not change.
+    pub refused_entries: Vec<EntryId>,
+    /// Reading these playlists is refused, as one shared and then taken away.
+    pub unreadable_playlists: Vec<ItemId>,
+    /// How many playlists were made so far, for the ids of the next.
+    pub playlists_made: usize,
     /// The id of the user the next login or restore gives a session to.
     pub user_id: String,
     /// The trailers every film and every series has.
@@ -614,6 +671,11 @@ impl FakeServer {
                 stop_delay: std::time::Duration::ZERO,
                 logout_delay: std::time::Duration::ZERO,
                 logout_error: None,
+                playlists: playlists(),
+                playlist_refusal: None,
+                refused_entries: Vec::new(),
+                unreadable_playlists: Vec::new(),
+                playlists_made: 0,
                 user_id: USER_ID.into(),
                 tmdb: vec![
                     (ItemId(FILM.into()), IN_LIBRARY_FILM),
@@ -709,6 +771,54 @@ impl FakeServer {
             user_id: self.state().user_id.clone(),
             ..self.clone()
         })
+    }
+
+    /// What a playlist holds, as the server shows it now; what it no longer knows is left out.
+    fn entries(state: &State, playlist: &KeptPlaylist) -> Vec<PlaylistEntry> {
+        playlist
+            .entries
+            .iter()
+            .filter_map(|(entry, item)| {
+                let (title, poster) = if let Some(film) = state.films.iter().find(|f| &f.id == item)
+                {
+                    (Title::Film(film.clone()), film.poster.clone())
+                } else {
+                    let episode = state.episodes.iter().find(|e| &e.item.id == item)?;
+                    let series = state.series.iter().find(|s| s.id == episode.series);
+                    let poster = series.and_then(|series| series.poster.clone());
+                    (Title::Episode(episode.clone()), poster)
+                };
+                Some(PlaylistEntry {
+                    id: entry.clone(),
+                    title,
+                    poster,
+                })
+            })
+            .collect()
+    }
+
+    /// A change of a playlist: recorded, and refused when the server refuses them.
+    fn change_playlist(state: &mut State, call: PlaylistCall) -> Result<(), ProviderError> {
+        if let PlaylistCall::Remove(_, entry) = &call
+            && state.refused_entries.contains(entry)
+        {
+            state.record.playlist_calls.push(call);
+            return Err(ProviderError::Forbidden);
+        }
+        state.record.playlist_calls.push(call);
+        match &state.playlist_refusal {
+            Some(error) => Err(error.clone()),
+            None => Ok(()),
+        }
+    }
+
+    /// What putting `item` in a playlist puts in: a series' episodes, in order; else the item.
+    fn put_in(state: &State, item: &ItemId) -> Vec<ItemId> {
+        if state.series.iter().any(|series| &series.id == item) {
+            let episodes = state.episodes.iter().filter(|e| &e.series == item);
+            return episodes.map(|episode| episode.item.id.clone()).collect();
+        }
+        vec![item.clone()]
     }
 }
 
@@ -1332,6 +1442,103 @@ impl MediaServer for FakeServer {
         for found in state.series.iter_mut().filter(|s| &s.id == item) {
             found.favourite = Some(favourite);
         }
+        Ok(())
+    }
+
+    fn playlists(&self, first: Option<usize>) -> Result<Vec<Playlist>, ProviderError> {
+        let mut state = self.state();
+        state.record.playlists_listed += 1;
+        let mut found: Vec<Playlist> = state
+            .playlists
+            .iter()
+            .map(|playlist| {
+                let mut entries = Self::entries(&state, playlist);
+                let count = entries.len();
+                entries.truncate(first.unwrap_or(count));
+                Playlist {
+                    id: playlist.id.clone(),
+                    name: playlist.name.clone(),
+                    entries,
+                    count,
+                }
+            })
+            .collect();
+        found.sort_by_key(|playlist| playlist.name.to_lowercase());
+        Ok(found)
+    }
+
+    fn playlist(&self, playlist: &ItemId) -> Result<Vec<PlaylistEntry>, ProviderError> {
+        let mut state = self.state();
+        state.record.playlist_reads.push(playlist.clone());
+        if state.unreadable_playlists.contains(playlist) {
+            return Err(ProviderError::Forbidden);
+        }
+        let found = state
+            .playlists
+            .iter()
+            .find(|p| &p.id == playlist)
+            .ok_or(ProviderError::NotFound)?;
+        Ok(Self::entries(&state, found))
+    }
+
+    fn create_playlist(&self, name: &str, item: &ItemId) -> Result<(ItemId, usize), ProviderError> {
+        let mut state = self.state();
+        Self::change_playlist(&mut state, PlaylistCall::Create(name.into(), item.clone()))?;
+        state.playlists_made += 1;
+        let id = ItemId(format!("playlist-new-{}", state.playlists_made));
+        let entries: Vec<_> = Self::put_in(&state, item)
+            .into_iter()
+            .enumerate()
+            .map(|(n, item)| (EntryId(format!("{}-entry-{n}", id.0)), item))
+            .collect();
+        let count = entries.len();
+        state.playlists.push(KeptPlaylist {
+            id: id.clone(),
+            name: name.into(),
+            entries,
+        });
+        Ok((id, count))
+    }
+
+    fn add_to_playlist(&self, playlist: &ItemId, item: &ItemId) -> Result<usize, ProviderError> {
+        let mut state = self.state();
+        Self::change_playlist(
+            &mut state,
+            PlaylistCall::Add(playlist.clone(), item.clone()),
+        )?;
+        let added = Self::put_in(&state, item);
+        let found = state
+            .playlists
+            .iter_mut()
+            .find(|p| &p.id == playlist)
+            .ok_or(ProviderError::NotFound)?;
+        for item in &added {
+            let entry = EntryId(format!(
+                "{}-entry-{}",
+                playlist.0,
+                found.entries.len() + 100
+            ));
+            found.entries.push((entry, item.clone()));
+        }
+        Ok(added.len())
+    }
+
+    fn remove_from_playlist(
+        &self,
+        playlist: &ItemId,
+        entry: &EntryId,
+    ) -> Result<(), ProviderError> {
+        let mut state = self.state();
+        Self::change_playlist(
+            &mut state,
+            PlaylistCall::Remove(playlist.clone(), entry.clone()),
+        )?;
+        let found = state
+            .playlists
+            .iter_mut()
+            .find(|p| &p.id == playlist)
+            .ok_or(ProviderError::NotFound)?;
+        found.entries.retain(|(id, _)| id != entry);
         Ok(())
     }
 

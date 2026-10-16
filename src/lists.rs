@@ -6,7 +6,7 @@ use bobine::provider::{CollectionCard, CollectionDetail, Film, ImageRef, ItemId,
 
 /// What the page says when the list holds nothing: where the list comes from.
 pub const EMPTY_LIST: &str =
-    "Your list is empty. Open a movie or a series and choose “My list” to add it here.";
+    "No favorites yet. Open a movie or a series and choose “Favorite” to add it here.";
 
 /// What the page says when the server has no collection.
 pub const NO_COLLECTION: &str = "No collections on this server.";
@@ -398,7 +398,7 @@ mod tests {
 
     #[test]
     fn the_empty_list_says_how_to_add_a_title() {
-        assert!(EMPTY_LIST.contains("My list"));
+        assert!(EMPTY_LIST.contains("“Favorite”"));
         assert!(EMPTY_LIST.contains("movie") && EMPTY_LIST.contains("series"));
     }
 

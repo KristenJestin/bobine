@@ -264,7 +264,7 @@ mod tests {
         let mut marks = Marks::default();
         assert_eq!(
             press_and_ask(&mut marks, &server, &film(), Action::MyList, false),
-            Some("My list could not be changed.")
+            Some("Favorite could not be changed.")
         );
         assert!(!marks.shown(&film(), Action::MyList, false));
         // Back as it was, it takes the next press.

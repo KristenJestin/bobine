@@ -16,7 +16,12 @@ pub enum Screen {
     HomeList,
     Collections,
     CollectionDetail,
+    /// The Lists: the favorites and each playlist, as cards.
     MyList,
+    /// The favorites, opened from the Lists.
+    Favorites,
+    /// One playlist, opened from the Lists.
+    Playlist,
     /// The viewer's choices, reached from the account menu.
     Settings,
     /// What the request server offers beyond the library: shown only when one is configured.
@@ -41,6 +46,8 @@ impl Screen {
                 | Screen::SeriesDetail
                 | Screen::Person
                 | Screen::CollectionDetail
+                | Screen::Favorites
+                | Screen::Playlist
                 | Screen::Settings
                 | Screen::Request
         )
@@ -67,7 +74,9 @@ impl Screen {
             Screen::HomeList => "List",
             Screen::Collections => "Collections",
             Screen::CollectionDetail => "Collection",
-            Screen::MyList => "My list",
+            Screen::MyList => "Lists",
+            Screen::Favorites => "Favorites",
+            Screen::Playlist => "Playlist",
             Screen::Settings => "Settings",
             Screen::Discover => "Discover",
         }
@@ -102,7 +111,7 @@ impl NavEntry {
             NavEntry::Films => "Movies",
             NavEntry::Series => "Series",
             NavEntry::Collections => "Collections",
-            NavEntry::MyList => "My list",
+            NavEntry::MyList => "Lists",
             NavEntry::Discover => "Discover",
         }
     }
@@ -234,6 +243,8 @@ mod tests {
             Screen::Collections,
             Screen::CollectionDetail,
             Screen::MyList,
+            Screen::Favorites,
+            Screen::Playlist,
             Screen::Settings,
             Screen::Discover,
         ]
@@ -468,10 +479,10 @@ mod tests {
         let mut nav = on_library();
         assert!(nav.select(NavEntry::MyList));
         nav.open(Screen::FilmDetail);
-        assert_eq!(nav.back_label(), Some("My list"));
+        assert_eq!(nav.back_label(), Some("Lists"));
         assert!(nav.back());
         nav.open(Screen::SeriesDetail);
-        assert_eq!(nav.back_label(), Some("My list"));
+        assert_eq!(nav.back_label(), Some("Lists"));
     }
 
     #[test]
@@ -541,9 +552,30 @@ mod tests {
                 "Movies",
                 "Series",
                 "Collections",
-                "My list",
+                "Lists",
                 "Discover"
             ]
         );
+    }
+
+    #[test]
+    fn the_favorites_and_a_playlist_open_from_the_lists_and_go_back_to_them() {
+        let mut nav = on_library();
+        assert!(nav.select(NavEntry::MyList));
+        for screen in [Screen::Favorites, Screen::Playlist] {
+            nav.open(screen);
+            assert!(screen.shows_pill_bar() && screen.shows_back_link());
+            assert_eq!(nav.back_label(), Some("Lists"));
+            assert_eq!(nav.section(), Screen::MyList, "the Lists pill stays lit");
+            nav.open(Screen::FilmDetail);
+            let back = if screen == Screen::Playlist {
+                "Playlist"
+            } else {
+                "Favorites"
+            };
+            assert_eq!(nav.back_label(), Some(back));
+            assert!(nav.back() && nav.back());
+            assert_eq!(nav.current(), Screen::MyList);
+        }
     }
 }
