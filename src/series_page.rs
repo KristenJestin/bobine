@@ -530,7 +530,10 @@ mod tests {
     fn a_series_poster_shows_its_unwatched_episodes() {
         let server = FakeServer::new(1, true);
         let page = server
-            .series(&ItemId("series".into()), &crate::grid::query(0))
+            .series(
+                &ItemId("series".into()),
+                &crate::library_tools::Tools::default().query(0),
+            )
             .unwrap();
         // Season 2 from its fourth episode, and season 3.
         assert_eq!(badge(&page.items[0]).as_deref(), Some("8"));

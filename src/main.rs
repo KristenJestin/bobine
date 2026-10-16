@@ -12,6 +12,7 @@ mod harness;
 mod icons;
 mod images;
 mod input;
+mod library_tools;
 mod lists;
 mod menu;
 mod motion;

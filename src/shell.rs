@@ -6,7 +6,7 @@ mod palette;
 mod series;
 
 pub use lists::{CollectionPage, CollectionsPage, MyListPage};
-pub use pages::{Chip, DetailPage, LibraryPage, Loadable, LoginForm, OpenConnector};
+pub use pages::{Chip, DetailPage, GONE, LibraryPage, Loadable, LoginForm, OpenConnector, Tool};
 pub use palette::{PersonPage, SearchState};
 pub use series::SeriesPage;
 
@@ -434,6 +434,8 @@ impl Render for Shell {
             for page in &mut self.series_pages {
                 page.menus.close();
             }
+            self.library.menus.close();
+            self.series.menus.close();
         }
         #[cfg(feature = "harness")]
         self.frames.push(Instant::now());

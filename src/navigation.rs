@@ -34,12 +34,6 @@ impl Screen {
         )
     }
 
-    /// A root screen whose content moves under the user's hands elsewhere (a film watched, a
-    /// title put in the list): it is asked again each time it shows.
-    pub fn reloads_on_arrival(self) -> bool {
-        matches!(self, Screen::Home | Screen::MyList)
-    }
-
     /// The word the back link of a detail page uses for the screen it goes back to.
     fn name(self) -> &'static str {
         match self {
@@ -301,14 +295,6 @@ mod tests {
             assert!(entry.is_current(nav.current()));
             assert!(!nav.back(), "{entry:?} is a root");
         }
-    }
-
-    #[test]
-    fn ma_liste_is_asked_again_each_time_it_shows() {
-        assert!(Screen::MyList.reloads_on_arrival());
-        assert!(Screen::Home.reloads_on_arrival());
-        assert!(!Screen::Library.reloads_on_arrival());
-        assert!(!Screen::Collections.reloads_on_arrival());
     }
 
     #[test]

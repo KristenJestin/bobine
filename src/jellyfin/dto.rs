@@ -59,6 +59,13 @@ pub struct QueryResult {
     pub total_record_count: Option<u32>,
 }
 
+/// What `/Items/Filters` lists of a library; only its years are read.
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "PascalCase", default)]
+pub struct QueryFilters {
+    pub years: Vec<i32>,
+}
+
 #[derive(Deserialize, Default)]
 #[serde(rename_all = "PascalCase", default)]
 pub struct UserData {

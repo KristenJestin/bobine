@@ -12,7 +12,8 @@
 //! `bobine --screen login|home|library|detail|detail-rows|detail-cast|playing|series|series-page|
 //! series-rows|up-next|collections|collection-page|my-list|my-list-empty|film-list|series-list
 //! [--films N]
-//! [--media FILE] [--image-delay-ms N] [--photos-fail-once] [--scenario menu|scroll|select|panel|search|search-slow|search-keys]
+//! [--media FILE] [--image-delay-ms N] [--photos-fail-once]
+//! [--scenario menu|scroll|select|panel|search|search-slow|search-keys|tools|tools-keys]
 //! [--search-delay-ms N] [--favourite-delay-ms N] [--favourite-fails] [--slower N] --quit-at S`
 //!
 //! A scenario sends clicks, keys and scroll events to the window as the compositor would, at set
@@ -31,8 +32,10 @@ use gpui_kit::{
 
 use crate::fake::{FILM, FakeServer, SERIES};
 use crate::film_page::From;
+use crate::library_tools::LETTERS;
+use crate::menu;
 use crate::navigation::{NavEntry, Screen};
-use crate::shell::Chip;
+use crate::shell::{Chip, Tool};
 
 use crate::player::libmpv::Libmpv;
 use crate::player::mpv::MpvClient;
@@ -441,6 +444,16 @@ enum Target {
     Top,
     /// The login's address field, this many pixels into its text.
     Address(f32),
+    /// A chip above the library grid.
+    Tool(Tool),
+    /// The "Non vus" chip.
+    Unwatched,
+    /// A line of the open tool menu, from the first.
+    MenuLine(Tool, usize),
+    /// A letter of the alphabet bar.
+    Letter(char),
+    /// The empty top left, over no chip and no poster.
+    Corner,
 }
 
 #[derive(Clone, Debug)]
@@ -581,6 +594,49 @@ impl Acts {
                 (6.2, "up", Key("up")),
                 (7.0, "ctrl-k closes", Key("ctrl-k")),
             ],
+            // The tools of the Films or Séries grid: a genre, unwatched only, an order, a letter,
+            // a decade; the menus close by Escape and by a click outside.
+            "tools" => vec![
+                (0.5, "open genre", Click(Tool(crate::shell::Tool::Genre))),
+                (
+                    1.5,
+                    "choose the third genre",
+                    Click(MenuLine(crate::shell::Tool::Genre, 2)),
+                ),
+                (3.0, "unwatched only", Click(Unwatched)),
+                (4.0, "open the order", Click(Tool(crate::shell::Tool::Sort))),
+                (
+                    5.0,
+                    "sort by title",
+                    Click(MenuLine(crate::shell::Tool::Sort, 1)),
+                ),
+                (6.5, "jump to F", Click(Letter('F'))),
+                (8.5, "jump to Z", Click(Letter('Z'))),
+                (10.0, "jump to hash", Click(Letter('#'))),
+                (
+                    11.5,
+                    "open the year",
+                    Click(Tool(crate::shell::Tool::Decade)),
+                ),
+                (12.5, "escape closes the menu", Key("escape")),
+                (
+                    13.5,
+                    "open the year",
+                    Click(Tool(crate::shell::Tool::Decade)),
+                ),
+                (14.5, "click outside", Click(Corner)),
+                (
+                    15.5,
+                    "open the order",
+                    Click(Tool(crate::shell::Tool::Sort)),
+                ),
+                (
+                    16.5,
+                    "sort by rating",
+                    Click(MenuLine(crate::shell::Tool::Sort, 3)),
+                ),
+                (18.0, "unwatched off", Click(Unwatched)),
+            ],
             other => {
                 eprintln!("bobine harness: unknown scenario {other}");
                 std::process::exit(2);
@@ -639,6 +695,14 @@ impl Acts {
     }
 }
 
+/// Where a tool's chip was last drawn, on the grid shown.
+fn tool_chip(shell: &Shell, tool: Tool) -> Option<Bounds<Pixels>> {
+    match shell.navigator.current() {
+        Screen::Series => shell.series.chips[tool as usize].get(),
+        _ => shell.library.chips[tool as usize].get(),
+    }
+}
+
 /// Where `target` is in the window now.
 fn position(target: Target, shell: &Shell, window: &Window) -> Point<Pixels> {
     let size = window.viewport_size();
@@ -647,6 +711,27 @@ fn position(target: Target, shell: &Shell, window: &Window) -> Point<Pixels> {
     match target {
         Target::Chip(chip) => center(page.and_then(|p| p.chips[chip as usize].get())),
         Target::CastRow => center(page.map(|p| p.rows[0].bounds())),
+        Target::Tool(tool) => center(tool_chip(shell, tool)),
+        // Between the year and the order.
+        Target::Unwatched => tool_chip(shell, Tool::Decade)
+            .zip(tool_chip(shell, Tool::Sort))
+            .map(|(year, order)| point((year.right() + order.left()) / 2., year.center().y)),
+        // The menu opens under its chip: a six-pixel gap, a border and a padding, then lines.
+        Target::MenuLine(tool, line) => tool_chip(shell, tool).map(|chip| {
+            point(
+                chip.left() + px(60.),
+                chip.bottom() + px(menu::GAP + 7. + menu::LINE * (line as f32 + 0.5)),
+            )
+        }),
+        // The bar runs from 150 px down to 24 px above the bottom, its letters spread evenly.
+        Target::Letter(letter) => LETTERS.iter().position(|l| *l == letter).map(|n| {
+            let span = f32::from(size.height) - 150. - 24. - 16.;
+            point(
+                size.width - px(18.),
+                px(150. + 8. + span * n as f32 / (LETTERS.len() - 1) as f32),
+            )
+        }),
+        Target::Corner => Some(point(px(40.), px(30.))),
         Target::Blank => Some(point(size.width * 0.75, size.height * 0.3)),
         Target::TracksButton => Some(point(size.width - px(127.), px(48.))),
         Target::Picture => Some(point(size.width * 0.3, size.height * 0.5)),
@@ -785,6 +870,24 @@ fn state(label: &str, shell: &Shell, cx: &App) -> String {
             "PANEL {label}: panel_open={} screen={screen:?}",
             playback.session.panel_open()
         );
+    }
+    let grid = |tools: &crate::library_tools::Tools, menu, total, jump| {
+        format!(
+            "LIBRARY {label}: genre={:?} decade={:?} unwatched={} sort={:?} menu={menu:?} \
+             total={total:?} jump={jump:?} screen={screen:?}",
+            tools.filters.genre, tools.filters.decade, tools.filters.unwatched, tools.sort,
+        )
+    };
+    match screen {
+        Screen::Library => {
+            let p = &shell.library;
+            return grid(&p.tools, p.menus.open(), p.grid.total, p.jump);
+        }
+        Screen::Series => {
+            let p = &shell.series;
+            return grid(&p.tools, p.menus.open(), p.grid.total, p.jump);
+        }
+        _ => {}
     }
     match shell.details.last() {
         Some(page) if screen == Screen::FilmDetail => format!(

@@ -59,6 +59,7 @@ icons! {
     VolumeX => "volume-x",
     Maximize => "maximize",
     Minimize => "minimize",
+    Circle => "circle",
 }
 
 /// The asset source of the window: the icons above and nothing else.
