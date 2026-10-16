@@ -128,11 +128,15 @@ impl HomePage {
     }
 
     /// The header's titles came: the one shown stays shown when it is still among them.
-    pub fn features_landed(&mut self, asked: u64, features: Loadable<Rc<[Feature]>>) -> bool {
+    pub fn features_landed(
+        &mut self,
+        asked: u64,
+        features: Loadable<Rc<[Feature]>>,
+        now: Instant,
+    ) -> bool {
         if !self.is_latest(asked) {
             return false;
         }
-        let now = Instant::now();
         let shown = self
             .featured()
             .get(self.carousel.current())
@@ -268,7 +272,9 @@ impl Shell {
                     Ok(features) => Loadable::Ready(Rc::from(features)),
                     Err(error) => Loadable::Failed(shell.failed(error, cx)),
                 };
-                shell.home.features_landed(asked, features);
+                shell
+                    .home
+                    .features_landed(asked, features, cx.background_executor().now());
             },
         );
         self.ask(
@@ -358,7 +364,7 @@ impl Shell {
             loop {
                 cx.background_executor().timer(HERO_TICK).await;
                 let going = this.update_in(cx, |shell, window, cx| {
-                    shell.tick_hero(Instant::now(), window, cx)
+                    shell.tick_hero(cx.background_executor().now(), window, cx)
                 });
                 if !matches!(going, Ok(true)) {
                     break;
@@ -412,13 +418,13 @@ impl Shell {
         self.home.hovered = hovered;
         self.home
             .carousel
-            .pause(self.header_holds(window), Instant::now());
+            .pause(self.header_holds(window), cx.background_executor().now());
         cx.notify();
     }
 
     /// A click on one of the marks under the header.
     pub fn jump_hero(&mut self, to: usize, cx: &mut Context<Self>) {
-        self.home.carousel.jump(to, Instant::now());
+        self.home.carousel.jump(to, cx.background_executor().now());
         self.ask_hero_images(cx);
         self.notify_hero(cx);
     }
@@ -434,7 +440,11 @@ impl Shell {
             .carousel
             .current()
             .min(features.len().saturating_sub(1));
-        let leaving = self.home.carousel.blend(Instant::now()).leaving;
+        let leaving = self
+            .home
+            .carousel
+            .blend(cx.background_executor().now())
+            .leaving;
         for (image, width) in hero::pictures(&features, current, leaving) {
             let _ = self.image(Some(&image), width, cx);
         }
@@ -681,7 +691,11 @@ mod tests {
 
     /// The answers reach the page as the shell hands them over, for the load `asked`.
     fn deliver(home: &mut HomePage, asked: u64, answers: &Answers) {
-        home.features_landed(asked, Loadable::Ready(Rc::from(answers.features.clone())));
+        home.features_landed(
+            asked,
+            Loadable::Ready(Rc::from(answers.features.clone())),
+            Instant::now(),
+        );
         home.resume_landed(asked, Loadable::Ready(Rc::from(answers.started.clone())));
         home.next_up_landed(asked, Loadable::Ready(answers.next.clone()));
         let rows = home.libraries_landed(asked, answers.libraries.clone());

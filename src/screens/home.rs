@@ -262,7 +262,8 @@ impl Render for HeroView {
             return div().into_any_element();
         };
         let height = hero_height(f32::from(window.viewport_size().height));
-        let now = Instant::now();
+        // The header's time is the executor's, the one that ticks it: the same one the tests drive.
+        let now = cx.background_executor().now();
         let (features, frame) = {
             let shell = shell.read(cx);
             #[cfg(feature = "harness")]
