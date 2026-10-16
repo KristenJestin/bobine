@@ -257,6 +257,8 @@ impl Render for HeroView {
             let shell = shell.read(cx);
             #[cfg(feature = "harness")]
             shell.note_frame();
+            #[cfg(any(test, feature = "harness"))]
+            shell.draws.borrow_mut().hero.push(now);
             let Some(features) = shell.home.shared_features().filter(|f| !f.is_empty()) else {
                 return div().into_any_element();
             };

@@ -187,8 +187,22 @@ pub struct Shell {
     /// When each draw started: the harness reads the frame times of a move from it.
     #[cfg(feature = "harness")]
     pub frames: std::cell::RefCell<Vec<Instant>>,
+    /// When the shell and its header were drawn: the tests and the harness tell from them whether
+    /// the whole window is built again while only the header moves.
+    #[cfg(any(test, feature = "harness"))]
+    pub draws: std::cell::RefCell<Draws>,
     /// Given to every mpv: the headless harness silences the sound.
     pub mpv_options: Vec<(&'static str, &'static str)>,
+}
+
+/// When the shell and its header were drawn, and, for the harness, when the shell was notified.
+#[cfg(any(test, feature = "harness"))]
+#[derive(Default)]
+pub struct Draws {
+    pub shell: Vec<Instant>,
+    pub hero: Vec<Instant>,
+    #[cfg(feature = "harness")]
+    pub notified: Vec<Instant>,
 }
 
 /// The film being played and what keeps it in step with the window.
@@ -285,6 +299,8 @@ impl Shell {
             viewport: Size::default(),
             #[cfg(feature = "harness")]
             frames: Default::default(),
+            #[cfg(any(test, feature = "harness"))]
+            draws: Default::default(),
             mpv_options: Vec::new(),
         };
         shell.begin(open, cx);
@@ -665,6 +681,8 @@ impl Render for Shell {
         }
         #[cfg(feature = "harness")]
         self.note_frame();
+        #[cfg(any(test, feature = "harness"))]
+        self.draws.borrow_mut().shell.push(Instant::now());
         // Escape needs the focus; a click on a button must not lose it for good. A text field
         // keeps it while it has it; the login's first field takes it when nothing has.
         let login_shown = self.login.is_some() && self.navigator.current() == Screen::Login;
