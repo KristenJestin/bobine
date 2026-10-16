@@ -189,6 +189,14 @@ impl<T: Listed> LibraryPage<T> {
         self.grid.pages_to_ask(items, now)
     }
 
+    /// The letter jump to make now: not while the old list is leaving, it would scroll that one.
+    pub fn take_jump(&mut self) -> Option<usize> {
+        if self.grid.has_stale() {
+            return None;
+        }
+        self.jump.take()
+    }
+
     /// A page of the list asked under `epoch` came back.
     pub fn loaded(&mut self, epoch: u64, page: u32, items: Page<T>) {
         self.grid.loaded(epoch, page, items);
@@ -1619,5 +1627,18 @@ mod tests {
         let (mut page, t) = fading(Instant::now());
         assert_eq!(page.pages_wanted(400..440, t), [0]);
         assert_eq!(page.pages_wanted(400..440, t), Vec::<u32>::new());
+    }
+
+    #[test]
+    fn a_letter_found_during_the_fade_out_waits_for_the_swap() {
+        let (mut page, t) = fading(Instant::now());
+        let epoch = page.grid.epoch();
+        page.loaded(epoch, 0, answer(&page, 0));
+        page.found_letter(epoch, 412);
+        // The old list is still leaving: the jump is kept, not taken and dropped.
+        assert_eq!(page.take_jump(), None);
+        page.follow_list(at(t, 400));
+        assert!(!page.grid.has_stale());
+        assert_eq!(page.take_jump(), Some(412));
     }
 }

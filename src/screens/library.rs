@@ -94,7 +94,7 @@ fn grid_screen<T: Listed + 'static>(
     let leaving = shown.grid.has_stale();
     let rows = shown.grid.shown_rows(columns);
     let total = shown.grid.shown_total();
-    if let Some(index) = shown.jump.take().filter(|_| !leaving) {
+    if let Some(index) = shown.take_jump() {
         shown
             .scroll
             .scroll_to_item_strict(index / columns, ScrollStrategy::Top);
