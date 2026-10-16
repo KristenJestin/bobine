@@ -40,6 +40,15 @@ pub fn subtitle_position(window_height: f32, controls_shown: bool) -> f64 {
     (100. - lifted).round().max(0.)
 }
 
+/// How far down from the top of the window the title bar reaches, with its buttons.
+pub const TOP_CONTROLS_HEIGHT: f32 = 96.;
+
+/// Whether a click `y` pixels from the top of a window `window_height` high falls on the
+/// picture: anywhere while the controls hide, between the two bars while they show.
+pub fn on_picture(y: f32, window_height: f32, controls_shown: bool) -> bool {
+    !controls_shown || (TOP_CONTROLS_HEIGHT..window_height - BOTTOM_CONTROLS_HEIGHT).contains(&y)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum KeyAction {
     TogglePause,
@@ -168,6 +177,19 @@ mod tests {
         );
         assert_eq!(key_action("enter", false, true), Some(KeyAction::PressSkip));
         assert_eq!(key_action("enter", true, false), None);
+    }
+
+    #[test]
+    fn a_click_between_the_bars_is_on_the_picture() {
+        assert!(on_picture(400., 810., true));
+        assert!(!on_picture(50., 810., true), "the title bar");
+        assert!(!on_picture(750., 810., true), "the bottom controls");
+    }
+
+    #[test]
+    fn with_the_controls_hidden_the_whole_window_is_the_picture() {
+        assert!(on_picture(50., 810., false));
+        assert!(on_picture(750., 810., false));
     }
 
     #[test]

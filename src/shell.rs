@@ -10,7 +10,7 @@ mod series;
 mod skip;
 
 pub use home::{HomePage, ListPage};
-pub use lists::{CollectionPage, CollectionsPage, MyListPage};
+pub use lists::{CollectionPage, CollectionsPage, MyListPage, PlayerList};
 pub use pages::{Chip, DetailPage, GONE, LibraryPage, Loadable, LoginForm, OpenConnector, Tool};
 pub use palette::{PersonPage, SearchState};
 pub use series::SeriesPage;
@@ -30,12 +30,11 @@ use gpui_kit::{
 
 use bobine::provider::{
     Connector, Episode, Film as FilmItem, MediaServer, Playback as Opened, ProviderError, Series,
-    TranscodeRequest,
 };
 
 use crate::chrome::{Account, AccountView, ButtonBounds, back_link, bar_fade, pill_bar};
 use crate::config::Settings;
-use crate::fallback::Fallback;
+use crate::fallback::{Fallback, Reopen};
 use crate::images::Images;
 use crate::menu::Menus;
 use crate::motion::{self, Fade, Presence};
@@ -235,6 +234,9 @@ pub struct Playback {
     /// The controls and the panel fade in and out.
     controls_fade: Fade,
     panel_fade: Fade,
+    settings_fade: Fade,
+    /// The tracks of the panel scroll on this, so that a long list opens on the one shown.
+    pub tracks_scroll: gpui_kit::ScrollHandle,
     controls_shown: bool,
     had_error: bool,
     /// What the server is told; `None` for a local file.
@@ -255,6 +257,11 @@ pub struct Playback {
     fallback: Option<Fallback>,
     notice_fade: Fade,
     notice_shown: bool,
+    /// "This quality could not be started."
+    refusal_fade: Fade,
+    refusal_shown: bool,
+    /// The "My list" button of the player.
+    pub list: Option<PlayerList>,
     _ticker: Task<()>,
     _bounds: Subscription,
 }
@@ -263,6 +270,9 @@ pub struct Playback {
 pub struct Film {
     pub title: String,
     pub subtitle: Option<String>,
+    /// What the player's "My list" button puts in the list: the film, or the series of the
+    /// episode; `None` for a file of no server.
+    pub list: Option<bobine::provider::ItemId>,
 }
 
 impl Shell {
@@ -422,6 +432,8 @@ impl Shell {
             session,
             controls_fade: Fade::new(motion::quick()),
             panel_fade: Fade::new(motion::quick()),
+            settings_fade: Fade::new(motion::quick()),
+            tracks_scroll: gpui_kit::ScrollHandle::new(),
             controls_shown: false,
             had_error: false,
             reporting,
@@ -434,6 +446,9 @@ impl Shell {
             fallback: None,
             notice_fade: Fade::new(motion::quick()),
             notice_shown: false,
+            refusal_fade: Fade::new(motion::quick()),
+            refusal_shown: false,
+            list: None,
             _ticker: ticker,
             _bounds: bounds,
         });
@@ -581,7 +596,7 @@ impl Shell {
             .as_mut()
             .and_then(|f| f.tick(&mut playback.session, now));
         if let Some(request) = ask {
-            self.convert(request, cx);
+            self.reopen(Reopen::Convert(request), true, cx);
         }
         let Some(playback) = &mut self.playback else {
             return;
@@ -595,17 +610,23 @@ impl Shell {
             .fallback
             .as_ref()
             .is_some_and(|f| f.notice_shown(&playback.session, now));
+        let refusal = playback
+            .fallback
+            .as_ref()
+            .is_some_and(|f| f.refusal_shown(now));
         let skip_label = playback.session.skip_button().map(|button| button.label);
         // Hidden controls have nothing to redraw: the video is not GPUI's.
         if shown
             || shown != playback.controls_shown
             || has_error != playback.had_error
             || notice != playback.notice_shown
+            || refusal != playback.refusal_shown
             || skip_label != playback.skip_label
         {
             playback.controls_shown = shown;
             playback.had_error = has_error;
             playback.notice_shown = notice;
+            playback.refusal_shown = refusal;
             playback.skip_label = skip_label;
             cx.notify();
         }
@@ -629,22 +650,23 @@ impl Shell {
         })
     }
 
-    /// The film of the server does not play as it is: the server is asked to convert it. The
-    /// playback that did not play is told stopped first.
-    fn convert(&mut self, request: TranscodeRequest, cx: &mut Context<Self>) {
+    /// The server is asked for a new playback of the film: its conversion when the file does
+    /// not play as it is, which is told stopped first, or the quality the viewer chose, while
+    /// the film plays on until it comes.
+    fn reopen(&mut self, request: Reopen, stop_first: bool, cx: &mut Context<Self>) {
         let Some(playback) = &mut self.playback else {
             return;
         };
         let Some(fallback) = &playback.fallback else {
             return;
         };
-        if let Some(reporting) = playback.reporting.take() {
+        if stop_first && let Some(reporting) = playback.reporting.take() {
             playback.stopping = Some(reporting.finish(&playback.session));
         }
         let (server, id) = (fallback.server.clone(), fallback.id());
         let task = cx
             .background_executor()
-            .spawn(async move { server.transcode(&request) });
+            .spawn(async move { request.open(&*server) });
         cx.spawn(async move |this, cx| {
             let opened = task.await;
             this.update(cx, |shell, cx| shell.converted(id, opened, cx))
@@ -667,7 +689,11 @@ impl Shell {
         let Some(fallback) = &mut playback.fallback else {
             return;
         };
-        if let Some(report) = fallback.answered(id, &mut playback.session, opened) {
+        if let Some(report) = fallback.answered(id, &mut playback.session, opened, Instant::now()) {
+            // The playback the viewer left for another quality ends here.
+            if let Some(reporting) = playback.reporting.take() {
+                playback.stopping = Some(reporting.finish(&playback.session));
+            }
             playback.reporting = Some(Reporting::start_after(
                 fallback.server.clone(),
                 report,
@@ -708,8 +734,17 @@ impl Shell {
         cx.notify();
     }
 
+    /// A double click on the player: on the picture, fullscreen comes or goes.
+    pub fn player_double_click(&mut self, y: f32, window: &mut Window, cx: &mut Context<Self>) {
+        let request = self
+            .playback
+            .as_ref()
+            .and_then(|playback| playback.session.double_clicked(y));
+        self.player_request(request, window, cx);
+    }
+
     /// What the session asks of the window after a key or a click.
-    fn player_request(
+    pub fn player_request(
         &mut self,
         request: Option<WindowRequest>,
         window: &mut Window,
@@ -725,6 +760,18 @@ impl Shell {
             Some(WindowRequest::NextEpisode) => {
                 self.tick(window, cx);
                 self.play_up_next_now(window, cx);
+            }
+            Some(WindowRequest::Quality(quality)) => {
+                let Some(playback) = &mut self.playback else {
+                    return;
+                };
+                let reopen = playback
+                    .fallback
+                    .as_mut()
+                    .and_then(|fallback| fallback.choose(quality, &mut playback.session));
+                if let Some(reopen) = reopen {
+                    self.reopen(reopen, false, cx);
+                }
             }
             None => {}
         }
@@ -868,6 +915,12 @@ impl Render for Shell {
                         .controls_fade
                         .set(session.controls_visible(now), now);
                     playback.panel_fade.set(session.panel_open(), now);
+                    // A long list opens where the subtitle shown is. Asked at each frame of the
+                    // fade in: GPUI drops the ask of the first, where the list has no place yet.
+                    if session.panel_open() && playback.panel_fade.moving(now) {
+                        playback.tracks_scroll.scroll_to_item(session.chosen_line());
+                    }
+                    playback.settings_fade.set(session.settings_open(), now);
                     let preview = playback.seek.draw(session.duration, now);
                     let skip = playback
                         .skip_fade
@@ -877,9 +930,16 @@ impl Render for Shell {
                         .as_ref()
                         .is_some_and(|f| f.notice_shown(session, now));
                     playback.notice_fade.set(notice, now);
+                    let refusal = playback
+                        .fallback
+                        .as_ref()
+                        .is_some_and(|f| f.refusal_shown(now));
+                    playback.refusal_fade.set(refusal, now);
                     if playback.controls_fade.moving(now)
                         || playback.panel_fade.moving(now)
+                        || playback.settings_fade.moving(now)
                         || playback.notice_fade.moving(now)
+                        || playback.refusal_fade.moving(now)
                         || playback.skip_fade.moving(now)
                         || playback.seek.moving(now)
                     {
@@ -895,8 +955,15 @@ impl Render for Shell {
                         panel: playback.panel_fade.level(now),
                         preview,
                         notice: playback.notice_fade.level(now),
+                        refusal: playback.refusal_fade.level(now),
                         blackout: self.screens.is_some().then(|| switch.level(now)),
                         skip,
+                        settings: playback.settings_fade.level(now),
+                        list: playback
+                            .list
+                            .as_ref()
+                            .map(|list| (list.toggle.on(), list.error)),
+                        tracks_scroll: playback.tracks_scroll.clone(),
                     };
                     screens::player::render(session, shown, window, cx).into_any_element()
                 }

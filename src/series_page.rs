@@ -656,6 +656,8 @@ mod tests {
             Box::new(FakePlayer {
                 calls: player.calls.clone(),
                 queued: player.queued.clone(),
+                info: player.info.clone(),
+                ..Default::default()
             }),
             Box::new(FakeDisplay::default()),
             "Station Nord".into(),

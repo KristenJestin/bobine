@@ -1586,6 +1586,7 @@ fn transcoding_asks_the_server_without_direct_play_from_the_position() {
             start: Duration::from_secs(1200),
             audio_track: Some(2),
             subtitle_track: Some(4),
+            max_bitrate: None,
         })
         .unwrap();
     assert_eq!(playback.session, PlaySessionId(TRANSCODE_SESSION.into()));
@@ -1621,6 +1622,7 @@ fn transcoded(s: &Setup, subtitle_track: Option<i32>) -> Playback {
             start: Duration::ZERO,
             audio_track: None,
             subtitle_track,
+            max_bitrate: None,
         })
         .unwrap()
 }
@@ -1649,6 +1651,27 @@ fn an_embedded_text_subtitle_chosen_comes_as_a_file_beside_the_conversion() {
 }
 
 #[test]
+fn a_quality_cap_asks_the_server_for_that_bitrate() {
+    let s = Setup::new();
+    s.signed_in()
+        .transcode(&TranscodeRequest {
+            film: film(),
+            source: MediaSourceId(SOURCE.into()),
+            start: Duration::ZERO,
+            audio_track: None,
+            subtitle_track: None,
+            max_bitrate: Some(4_000_000),
+        })
+        .unwrap();
+    let body = s
+        .fake
+        .last("POST", &format!("/Items/{FILM}/PlaybackInfo"))
+        .json();
+    assert_eq!(body["MaxStreamingBitrate"], 4_000_000);
+    assert_eq!(body["DeviceProfile"]["MaxStreamingBitrate"], 4_000_000);
+}
+
+#[test]
 fn the_transcode_request_carries_the_device_profile_with_the_embedded_subtitles() {
     let s = Setup::new();
     s.signed_in()
@@ -1658,6 +1681,7 @@ fn the_transcode_request_carries_the_device_profile_with_the_embedded_subtitles(
             start: Duration::ZERO,
             audio_track: None,
             subtitle_track: None,
+            max_bitrate: None,
         })
         .unwrap();
     let body = s
@@ -1731,6 +1755,7 @@ fn a_version_the_server_cannot_convert_says_so() {
             start: Duration::ZERO,
             audio_track: None,
             subtitle_track: None,
+            max_bitrate: None,
         })
         .unwrap_err();
     assert!(matches!(error, ProviderError::BadAnswer(_)), "{error:?}");
@@ -2156,6 +2181,7 @@ fn the_token_never_in_debug_or_error_output() {
             start: Duration::ZERO,
             audio_track: None,
             subtitle_track: None,
+            max_bitrate: None,
         })
         .unwrap();
     shown += &format!("{transcoded:?} {transcoded:#?}");

@@ -545,6 +545,7 @@ impl Shell {
                 let playing = Playing {
                     title: started.title,
                     subtitle: Some(started.subtitle),
+                    list: Some(started.list),
                 };
                 self.start_playback(
                     Origin::Home,
