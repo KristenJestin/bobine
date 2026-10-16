@@ -1,11 +1,11 @@
 //! The buttons a poster shows under the pointer: "My list" and "Watched" change at once and ask
 //! the server; a refusal puts them back and the window says so for a moment.
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use bobine::provider::{ItemId, ProviderError};
 use gpui_kit::prelude::*;
-use gpui_kit::{AnyElement, Context, ElementId, Entity, Window};
+use gpui_kit::{AnyElement, App, Context, ElementId, Entity, Window};
 
 use super::Shell;
 use super::pages::Loadable;
@@ -111,8 +111,10 @@ impl Shell {
         &mut self,
         screen: Screen,
         window: &mut Window,
+        cx: &App,
     ) -> Option<AnyElement> {
-        let now = Instant::now();
+        // The executor's clock, which the tests drive with `advance_clock`.
+        let now = cx.background_executor().now();
         let wanted = self
             .notice
             .filter(|_| !matches!(screen, Screen::Login | Screen::Player));
@@ -129,6 +131,7 @@ impl Shell {
 mod tests {
     use std::rc::Rc;
     use std::sync::Arc;
+    use std::time::Instant;
 
     use bobine::provider::{Connector, MediaServer};
     use gpui_kit::SharedString;
@@ -169,8 +172,15 @@ mod tests {
             Some(ProviderError::Unreachable("refused".into()));
         change(&mut server.state.lock().unwrap());
         let connector: Arc<dyn Connector> = Arc::new(server.clone());
-        let window =
-            cx.add_window(|_, cx| Shell::new(None, Box::new(move || Ok(connector)), None, cx));
+        let window = cx.add_window(|_, cx| {
+            Shell::new(
+                None,
+                Box::new(move || Ok(connector)),
+                None,
+                Arc::new(crate::fake::MemoryKeyring::default()),
+                cx,
+            )
+        });
         cx.run_until_parked();
         let cx = VisualTestContext::from_window(*window, cx).into_mut();
         cx.simulate_resize(size(px(1600.), px(3000.)));

@@ -763,8 +763,15 @@ mod tests {
         cx: &mut gpui_kit::TestAppContext,
     ) {
         let server: Arc<dyn Connector> = Arc::new(FakeServer::new(6, true));
-        let window =
-            cx.add_window(|_, cx| Shell::new(None, Box::new(move || Ok(server)), None, cx));
+        let window = cx.add_window(|_, cx| {
+            Shell::new(
+                None,
+                Box::new(move || Ok(server)),
+                None,
+                Arc::new(crate::fake::MemoryKeyring::default()),
+                cx,
+            )
+        });
         cx.run_until_parked();
         let shell = window.root(cx).unwrap();
         cx.read(|cx| {
@@ -810,8 +817,15 @@ mod tests {
     #[gpui_kit::test]
     fn a_card_of_a_new_season_opens_its_series_on_that_season(cx: &mut gpui_kit::TestAppContext) {
         let server: Arc<dyn Connector> = Arc::new(FakeServer::new(6, true));
-        let window =
-            cx.add_window(|_, cx| Shell::new(None, Box::new(move || Ok(server)), None, cx));
+        let window = cx.add_window(|_, cx| {
+            Shell::new(
+                None,
+                Box::new(move || Ok(server)),
+                None,
+                Arc::new(crate::fake::MemoryKeyring::default()),
+                cx,
+            )
+        });
         cx.run_until_parked();
         let shell = window.root(cx).unwrap();
         // The first series is begun in its second season: that is where the page lands unasked.

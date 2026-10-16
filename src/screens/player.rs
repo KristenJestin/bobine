@@ -1042,8 +1042,6 @@ fn blackout_switch(
     window: &mut Window,
     cx: &mut Context<Shell>,
 ) -> Stateful<Div> {
-    let track = switch_track(on, theme::accent());
-    let knob = switch_knob(on, theme::accent());
     theme::eased("player-blackout", theme::Shades::line(), window, cx)
         .mt(px(18.))
         .px(px(12.))
@@ -1060,22 +1058,27 @@ fn blackout_switch(
         .justify_between()
         .text_size(px(14.))
         .child("Black out other screens")
+        .child(switch(on))
+}
+
+/// A switch, `on` of the way from off to on: the knob slides and the track eases to the accent.
+pub(super) fn switch(on: f32) -> Div {
+    let track = switch_track(on, theme::accent());
+    let knob = switch_knob(on, theme::accent());
+    div()
+        .relative()
+        .w(px(SWITCH_WIDTH))
+        .h(px(SWITCH_HEIGHT))
+        .rounded_full()
+        .bg(track)
         .child(
             div()
-                .relative()
-                .w(px(SWITCH_WIDTH))
-                .h(px(SWITCH_HEIGHT))
+                .absolute()
+                .top(px(SWITCH_GAP))
+                .left(px(SWITCH_GAP + on * (SWITCH_WIDTH - SWITCH_HEIGHT)))
+                .size(px(SWITCH_HEIGHT - 2. * SWITCH_GAP))
                 .rounded_full()
-                .bg(track)
-                .child(
-                    div()
-                        .absolute()
-                        .top(px(SWITCH_GAP))
-                        .left(px(SWITCH_GAP + on * (SWITCH_WIDTH - SWITCH_HEIGHT)))
-                        .size(px(SWITCH_HEIGHT - 2. * SWITCH_GAP))
-                        .rounded_full()
-                        .bg(knob),
-                ),
+                .bg(knob),
         )
 }
 

@@ -47,7 +47,7 @@ pub const BACK_LINK_TOP: f32 = 76.;
 /// Where the account menu goes and how tall it is: under the button, its right edge on the
 /// button's (the button is at the bar's end), and above it when there is no room below.
 pub fn account_menu_place(button: Bounds<Pixels>, window_height: f32) -> (Point<Pixels>, f32) {
-    let wanted = menu::height(1) + MENU_HEADER + MENU_RULE;
+    let wanted = menu::height(2) + MENU_HEADER + MENU_RULE;
     let (at, height) = menu::place(button, wanted, window_height);
     (point(button.right() - px(MENU_WIDTH), at.y), height)
 }
@@ -123,6 +123,7 @@ fn account_button(
         press: rgb(0x2e2e33),
     };
     let button = theme::eased("nav-account", shades, window, cx)
+        .debug_selector(|| "nav-account".into())
         .size(px(32.))
         .flex_none()
         .flex()
@@ -176,21 +177,14 @@ fn account_menu(
     // It comes into place from a little nearer its button.
     let toward_button = if at.y > button.top() { -8. } else { 8. };
     let rise = point(px(0.), px(toward_button * (1. - shown)));
-    let sign_out = theme::eased("sign-out", theme::Shades::line(), window, cx)
-        .flex()
-        .items_center()
-        .gap(px(10.))
-        .flex_none()
-        .h(px(menu::LINE))
-        .px(px(12.))
-        .rounded(px(7.))
-        .text_size(px(13.))
-        .cursor_pointer()
+    let settings = menu_line("account-settings", IconName::Gear, "Settings", window, cx)
+        .when(open, |line| {
+            line.on_click(cx.listener(|shell, _, _, cx| shell.open_settings(cx)))
+        });
+    let sign_out = menu_line("sign-out", IconName::SignOut, "Sign out", window, cx)
         .when(open, |line| {
             line.on_click(cx.listener(|shell, _, window, cx| shell.sign_out(window, cx)))
-        })
-        .child(icon(IconName::SignOut, 14.).text_color(theme::muted()))
-        .child("Sign out");
+        });
     deferred(
         anchored()
             .position(at + rise)
@@ -251,9 +245,33 @@ fn account_menu(
                             .my(px(6.))
                             .bg(theme::line()),
                     )
+                    .child(settings)
                     .child(sign_out),
             ),
     )
+}
+
+/// One choice of the account menu: an icon and a word.
+fn menu_line(
+    id: &'static str,
+    glyph: IconName,
+    label: &'static str,
+    window: &mut Window,
+    cx: &mut Context<Shell>,
+) -> Stateful<Div> {
+    theme::eased(id, theme::Shades::line(), window, cx)
+        .debug_selector(|| id.into())
+        .flex()
+        .items_center()
+        .gap(px(10.))
+        .flex_none()
+        .h(px(menu::LINE))
+        .px(px(12.))
+        .rounded(px(7.))
+        .text_size(px(13.))
+        .cursor_pointer()
+        .child(icon(glyph, 14.).text_color(theme::muted()))
+        .child(label)
 }
 
 /// The Bobine mark: a letter on a tile, until there is a drawn logo.
@@ -371,7 +389,7 @@ mod tests {
     fn the_account_menu_opens_under_its_button_with_the_same_right_edge() {
         let (at, height) = account_menu_place(button_at(16.), 810.);
         assert_eq!(at, point(px(932. - MENU_WIDTH), px(54.)));
-        assert_eq!(height, menu::height(1) + MENU_HEADER + MENU_RULE);
+        assert_eq!(height, menu::height(2) + MENU_HEADER + MENU_RULE);
     }
 
     #[test]
