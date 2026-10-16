@@ -1,7 +1,7 @@
 //! Direct play first; when the file does not play, once, the server's conversion. A file does
 //! not play when its load ends with an error, or when no picture comes within a few seconds of
-//! its opening. A file that showed a picture plays: an error later is not one a conversion
-//! mends, and is shown as it is.
+//! the start of its playback, even if the player never says it is open. A file that showed a
+//! picture plays: an error later is not one a conversion mends, and is shown as it is.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -15,8 +15,8 @@ use crate::film_page::Plan;
 use crate::player::PlayerError;
 use crate::player::session::Session;
 
-/// How long an open file may go without a picture: the seek to a resume point over a slow
-/// network comes first.
+/// How long a file may go without a picture from the start of its playback: the seek to a
+/// resume point over a slow network comes first.
 pub const FIRST_PICTURE_WAIT: Duration = Duration::from_secs(20);
 
 /// The same for a conversion: a slow server encodes its first segment after the resume point,
@@ -48,8 +48,8 @@ fn step(method: PlayMethod, session: &Session, planned: Duration, now: Instant) 
         PlayMethod::Transcode => FIRST_CONVERTED_PICTURE_WAIT,
     };
     let late = session
-        .loaded_at()
-        .is_some_and(|loaded| now.duration_since(loaded) >= wait);
+        .opened_at()
+        .is_some_and(|opened| now.duration_since(opened) >= wait);
     match method {
         PlayMethod::DirectPlay if failed || late => Step::Convert {
             from: if session.position_known() {
@@ -335,6 +335,26 @@ mod tests {
                 from: Duration::from_secs(4330)
             }
         );
+    }
+
+    #[test]
+    fn a_file_that_never_opens_and_never_fails_is_converted_after_the_wait() {
+        let mut f = Fixture::new();
+        assert_eq!(f.after(1, vec![]), Step::Nothing);
+        assert_eq!(f.after(19, vec![]), Step::Nothing, "still within the wait");
+        let Step::Convert { from } = f.after(1, vec![]) else {
+            panic!("a black screen for ever");
+        };
+        assert_eq!(from, f.plan.start);
+    }
+
+    #[test]
+    fn a_conversion_that_never_opens_cannot_play_after_the_wait() {
+        let mut f = Fixture::new();
+        f.convert(Duration::from_secs(60));
+        assert_eq!(f.after(1, vec![]), Step::Nothing);
+        assert_eq!(f.after(59, vec![]), Step::Nothing);
+        assert_eq!(f.after(1, vec![]), Step::CannotPlay);
     }
 
     #[test]
