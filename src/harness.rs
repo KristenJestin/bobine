@@ -9,9 +9,9 @@
 //! [--fullscreen-at S] [--windowed-at S] [--next FILE --next-at S] [--leave-at S]
 //! [--measure-from S] --quit-at S`
 //!
-//! `bobine --screen login|home|library|detail|detail-rows|detail-cast|playing|series|series-page|
-//! series-rows|up-next [--films N]
-//! [--media FILE] [--image-delay-ms N] [--photos-fail-once] [--scenario menu|scroll|select|panel|search|search-slow|search-keys]
+//! `bobine --screen login|home|home-rows|home-list-resume|home-list-next|home-list-latest|library|detail|
+//! detail-rows|detail-cast|playing|series|series-page|series-rows|up-next [--films N]
+//! [--media FILE] [--image-delay-ms N] [--photos-fail-once] [--scenario menu|scroll|select|panel|search|search-slow|search-keys|home-rotate|home-hover|home-jump|home-scroll|home-lists|home-play]
 //! [--search-delay-ms N] [--slower N] --quit-at S`
 //!
 //! A scenario sends clicks, keys and scroll events to the window as the compositor would, at set
@@ -30,6 +30,7 @@ use gpui_kit::{
 
 use crate::fake::{FILM, FakeServer, SERIES};
 use crate::film_page::From;
+use crate::home_page::ListKind;
 use crate::navigation::{NavEntry, Screen};
 use crate::shell::Chip;
 
@@ -197,6 +198,14 @@ impl Harness {
             state.image_delay = Duration::from_millis(args.image_delay);
             state.photos_fail_once = args.photos_fail_once;
             state.search_delay = Duration::from_millis(args.search_delay);
+            if args.scenario.as_deref() == Some("home-play") {
+                // The file played is seconds long: what was started resumes near its start.
+                let started = Duration::from_secs(1);
+                let films = state.films.iter_mut();
+                for film in films.filter(|film| film.resume.is_some()) {
+                    film.resume = Some(started);
+                }
+            }
             drop(state);
             fake
         });
@@ -248,9 +257,26 @@ fn show_screen(
     let to_series = wants(&["series", "series-page", "series-rows", "up-next"]);
     let to_series_page = wants(&["series-page", "series-rows", "up-next"]);
     let (series_rows, up_next) = (wants(&["series-rows"]), wants(&["up-next"]));
+    let home_rows = wants(&["home-rows"]);
+    let list = match screen.as_str() {
+        "home-list-resume" => Some((ListKind::Resume, None)),
+        "home-list-next" => Some((ListKind::NextUp, None)),
+        "home-list-latest" => Some((
+            ListKind::Latest(
+                ItemId(crate::fake::FILMS_LIBRARY.into()),
+                bobine::provider::LibraryKind::Films,
+            ),
+            Some("Films".to_string()),
+        )),
+        _ => None,
+    };
     let mut done_steps = 0;
     // A scenario starts once the screen is reached: the login at once, a film page after it opened.
-    let ready_after = if to_film || to_series_page { 3 } else { 1 };
+    let ready_after = if to_film || to_series_page || list.is_some() {
+        3
+    } else {
+        1
+    };
     let mut ready_at: Option<f64> = None;
     let mut acts = scenario.map(|name| Acts::new(&name));
     cx.spawn(async move |cx| {
@@ -297,6 +323,9 @@ fn show_screen(
                                 if to_series_page {
                                     shell.open_series(ItemId(SERIES.into()), cx);
                                 }
+                                if let Some((kind, library)) = list.clone() {
+                                    shell.open_list(kind, library, cx);
+                                }
                                 true
                             }
                             2 if elapsed >= 3. => {
@@ -310,6 +339,10 @@ fn show_screen(
                                 if play {
                                     // The local file is shorter than the fake film's resume point.
                                     shell.play_film(From::Beginning, window, cx);
+                                }
+                                if home_rows {
+                                    let bottom = shell.home.scroll.max_offset().y;
+                                    shell.home.scroll.set_offset(point(px(0.), -bottom));
                                 }
                                 if series_rows && let Some(page) = shell.series_pages.last() {
                                     let bottom = page.scroll.max_offset().y;
@@ -356,6 +389,26 @@ fn show_screen(
                 println!("IMAGES asked={} persons={persons}", images.len());
                 let searches = fake.state.lock().unwrap().record.searches.clone();
                 println!("SEARCHES asked={searches:?}");
+                let record = &fake.state.lock().unwrap().record;
+                println!(
+                    "PLAYS asked={:?} reports={:?}",
+                    record
+                        .plays
+                        .iter()
+                        .map(|(film, _)| film.0.as_str())
+                        .collect::<Vec<_>>(),
+                    record
+                        .reports
+                        .iter()
+                        .map(|report| match report {
+                            crate::fake::Report::Started(r) => format!("started:{}", r.film.0),
+                            crate::fake::Report::Progress(r) => format!("progress:{}", r.film.0),
+                            crate::fake::Report::Stopped(r) => {
+                                format!("stopped:{}@{}", r.film.0, r.position.as_secs())
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                );
                 cx.quit();
                 true
             });
@@ -381,8 +434,22 @@ enum Target {
     TracksButton,
     /// The top of the window, right of the back link: the page, never a row.
     Top,
+    /// The bottom of the window, right: under the Home's header.
+    Bottom,
     /// The login's address field, this many pixels into its text.
     Address(f32),
+    /// The Home's header, away from its buttons.
+    Hero,
+    /// The mark under the Home's header for this title.
+    HeroMark(usize),
+    /// The Home header's "Lecture" button.
+    HeroPlay,
+    /// The Home's row of this index, in its middle.
+    HomeRow(usize),
+    /// "Tout voir" on the row of this index.
+    SeeAll(usize),
+    /// The card of this index in the row of that index, of this width: its middle.
+    Card(usize, usize, f32),
 }
 
 #[derive(Clone, Debug)]
@@ -399,6 +466,10 @@ enum Act {
     },
     /// Text typed into the search palette's field.
     Type(&'static str),
+    /// The pointer moved to a target, no button.
+    Hover(Target),
+    /// Nothing is done: the frames that follow are counted under this name.
+    Mark,
     /// A touchpad gesture: its moves in pixels, from start to end.
     Swipe {
         over: Target,
@@ -523,6 +594,120 @@ impl Acts {
                 (6.2, "up", Key("up")),
                 (7.0, "ctrl-k closes", Key("ctrl-k")),
             ],
+            // Nothing but the pointer put away: the header runs.
+            "home-idle" => vec![(0.0, "", Hover(Bottom))],
+            // The header changes title by itself, twice, with no input.
+            "home-rotate" => vec![
+                // Before any move the window takes the pointer for being at its corner, over
+                // the header: it goes where it is out of the way.
+                (0.0, "", Hover(Bottom)),
+                (7.8, "title one shows, the change is next", Mark),
+                (15.8, "title two shows, the change is next", Mark),
+                (20., "title three shows", Mark),
+            ],
+            // The pointer over the header stops the time; away from it, it goes on.
+            "home-hover" => vec![
+                // Before any move the window takes the pointer for being at its corner, over
+                // the header: it goes where it is out of the way.
+                (0.0, "", Hover(Bottom)),
+                (1.0, "the pointer comes over the header", Hover(Hero)),
+                (9.0, "eight seconds later, still held", Mark),
+                (9.5, "the pointer leaves the header", Hover(Bottom)),
+                (10.5, "a second later, going again", Mark),
+                (18.0, "the next title came", Mark),
+            ],
+            // A click on a mark shows that title.
+            "home-jump" => vec![
+                // Before any move the window takes the pointer for being at its corner, over
+                // the header: it goes where it is out of the way.
+                (0.0, "", Hover(Bottom)),
+                (1.0, "click the fourth mark", Click(HeroMark(3))),
+                (3.0, "click the first mark", Click(HeroMark(0))),
+                (5.0, "click the first mark again", Click(HeroMark(0))),
+            ],
+            // The wheel over a row goes sideways, over the header it goes down.
+            "home-scroll" => vec![
+                // Before any move the window takes the pointer for being at its corner, over
+                // the header: it goes where it is out of the way.
+                (0.0, "", Hover(Bottom)),
+                (
+                    1.0,
+                    "wheel down over the header",
+                    Wheel {
+                        over: Hero,
+                        lines: -3.,
+                        shift: false,
+                    },
+                ),
+                (
+                    1.5,
+                    "wheel down over the header",
+                    Wheel {
+                        over: Hero,
+                        lines: -3.,
+                        shift: false,
+                    },
+                ),
+                (
+                    2.0,
+                    "wheel over the first row",
+                    Wheel {
+                        over: HomeRow(0),
+                        lines: -3.,
+                        shift: false,
+                    },
+                ),
+                (
+                    2.5,
+                    "shift+wheel over the first row",
+                    Wheel {
+                        over: HomeRow(0),
+                        lines: -3.,
+                        shift: true,
+                    },
+                ),
+                (
+                    3.0,
+                    "swipe sideways over the first row",
+                    swipe(HomeRow(0), &[(-24., 3.), (-30., 6.), (-20., 8.)]),
+                ),
+                (
+                    3.5,
+                    "swipe down over the first row",
+                    swipe(HomeRow(0), &[(2., -12.), (9., -3.), (9., 0.), (1., -10.)]),
+                ),
+            ],
+            // "Tout voir" opens the full grid; Escape goes back to the Home.
+            "home-lists" => vec![
+                // Before any move the window takes the pointer for being at its corner, over
+                // the header: it goes where it is out of the way.
+                (0.0, "", Hover(Bottom)),
+                (1.0, "click Tout voir on the first row", Click(SeeAll(0))),
+                (3.0, "escape back to the Home", Key("escape")),
+                (4.0, "click Tout voir on the second row", Click(SeeAll(1))),
+                (6.0, "escape back to the Home", Key("escape")),
+                (
+                    7.0,
+                    "click a card of the first row",
+                    Click(Card(0, 0, 340.)),
+                ),
+                (9.0, "escape back to the Home", Key("escape")),
+                (
+                    10.0,
+                    "click the same card again",
+                    Click(Card(0, 0, 340.)),
+                ),
+                (12.0, "escape back to the Home again", Key("escape")),
+            ],
+            // The header's "Lecture" plays the first title, Escape leaves, the Home is asked anew.
+            "home-play" => vec![
+                // Before any move the window takes the pointer for being at its corner, over
+                // the header: it goes where it is out of the way.
+                (0.0, "", Hover(Bottom)),
+                (1.0, "click Lecture on the header", Click(HeroPlay)),
+                (5.0, "escape leaves the player", Key("escape")),
+                (8.0, "the Home is back", Mark),
+            ],
             other => {
                 eprintln!("bobine harness: unknown scenario {other}");
                 std::process::exit(2);
@@ -581,6 +766,11 @@ impl Acts {
     }
 }
 
+/// The Home's header is this tall, as the screen draws it.
+fn hero_height(size: gpui_kit::Size<Pixels>) -> Pixels {
+    (size.height * 0.72).clamp(px(460.), px(760.))
+}
+
 /// Where `target` is in the window now.
 fn position(target: Target, shell: &Shell, window: &Window) -> Point<Pixels> {
     let size = window.viewport_size();
@@ -593,6 +783,31 @@ fn position(target: Target, shell: &Shell, window: &Window) -> Point<Pixels> {
         Target::TracksButton => Some(point(size.width - px(127.), px(48.))),
         Target::Picture => Some(point(size.width * 0.3, size.height * 0.5)),
         Target::Top => Some(point(size.width * 0.75, px(24.))),
+        Target::Bottom => Some(point(size.width * 0.9, size.height * 0.97)),
+        Target::Hero => Some(point(size.width * 0.7, hero_height(size) * 0.3)),
+        Target::HeroMark(n) => {
+            let count = shell.home.featured().len().max(1) as f32;
+            let each = (f32::from(size.width) - 80. - 8. * (count - 1.)) / count;
+            Some(point(
+                px(40. + n as f32 * (each + 8.) + each / 2.),
+                hero_height(size) - px(20.),
+            ))
+        }
+        Target::HeroPlay => Some(point(px(220.), hero_height(size) - px(94.))),
+        Target::HomeRow(row) => center(shell.home.rows.get(row).map(|r| r.bounds())),
+        Target::SeeAll(row) => shell
+            .home
+            .rows
+            .get(row)
+            .map(|r| point(size.width - px(80.), r.bounds().top() - px(30.))),
+        Target::Card(row, at, width) => shell.home.rows.get(row).map(|r| {
+            let bounds = r.bounds();
+            point(
+                // Off the middle: there the hover shows the play button.
+                bounds.left() + px(40. + at as f32 * (width + 16.) + 30.),
+                bounds.top() + px(width * 9. / 32.),
+            )
+        }),
         // The login card is centred; its address field's text starts 152 pixels left of the
         // middle, 38 pixels above it.
         Target::Address(x) => Some(point(
@@ -663,6 +878,15 @@ fn send(act: &Act, shell: &Entity<Shell>, window: &mut Window, cx: &mut App) {
                 }),
             ]
         }
+        Act::Hover(target) => {
+            let position = at(*target, cx, window);
+            vec![PlatformInput::MouseMove(MouseMoveEvent {
+                position,
+                pressed_button: None,
+                modifiers: Modifiers::default(),
+            })]
+        }
+        Act::Mark => Vec::new(),
         Act::Key(key) => vec![PlatformInput::KeyDown(KeyDownEvent {
             keystroke: Keystroke::parse(key).expect("a key the harness knows"),
             is_held: false,
@@ -726,6 +950,23 @@ fn state(label: &str, shell: &Shell, cx: &App) -> String {
         return format!(
             "PANEL {label}: panel_open={} screen={screen:?}",
             playback.session.panel_open()
+        );
+    }
+    if screen == Screen::Home {
+        let home = &shell.home;
+        let now = Instant::now();
+        return format!(
+            "HOME {label}: title={} of {} progress={:.2} paused={} page_y={} rows_x={:?} busy={}",
+            home.carousel.current(),
+            home.carousel.len(),
+            home.carousel.progress(now),
+            home.carousel.paused(),
+            f32::from(home.scroll.offset().y),
+            home.rows
+                .iter()
+                .map(|row| f32::from(row.offset().x))
+                .collect::<Vec<_>>(),
+            home.busy,
         );
     }
     match shell.details.last() {
