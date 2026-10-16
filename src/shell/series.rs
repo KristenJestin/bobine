@@ -12,7 +12,7 @@ use gpui_kit::{Bounds, Context, Pixels, ScrollHandle, ScrollWheelEvent, Task, Wi
 
 use super::pages::{Chip, Loadable, Origin, route_wheel};
 use super::{Film as Playing, Shell};
-use crate::favourite::Toggle;
+use crate::favourite::{ListPage, Toggle};
 use crate::film_page::{self, Choices, From};
 use crate::menu::Menus;
 use crate::motion::{self, Presence};
@@ -25,6 +25,8 @@ const UP_NEXT_TICK: Duration = Duration::from_millis(250);
 
 pub struct SeriesPage {
     pub id: ItemId,
+    /// Told apart from every other page ever opened, the closed ones included.
+    generation: u64,
     pub detail: Loadable<SeriesDetail>,
     pub seasons: Vec<Season>,
     /// The season whose episodes show.
@@ -46,6 +48,20 @@ pub struct SeriesPage {
     pub error: Option<&'static str>,
     pub busy: bool,
     refreshes: Refreshes,
+}
+
+impl ListPage for SeriesPage {
+    fn item(&self) -> &ItemId {
+        &self.id
+    }
+
+    fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    fn button(&mut self) -> (&mut Toggle, &mut Option<&'static str>) {
+        (&mut self.favourite, &mut self.error)
+    }
 }
 
 impl SeriesPage {
@@ -71,8 +87,10 @@ impl Shell {
     pub fn open_series(&mut self, id: ItemId, cx: &mut Context<Self>) {
         // The card belongs to the page under: it does not play over this one.
         self.cancel_up_next(cx);
+        let generation = self.next_generation();
         self.series_pages.push(SeriesPage {
             id,
+            generation,
             detail: Loadable::Loading,
             seasons: Vec::new(),
             season: 0,
@@ -116,6 +134,7 @@ impl Shell {
         let refresh = page.refreshes.ask(&mut self.refreshes_asked);
         let id = page.id.clone();
         let asked = id.clone();
+        let read_at = page.favourite.changes();
         self.ask(
             cx,
             move |server| {
@@ -164,7 +183,7 @@ impl Shell {
                 page.season = page.season.min(fresh.seasons.len().saturating_sub(1));
                 page.next = fresh.next;
                 page.seasons = fresh.seasons;
-                page.favourite.sync(fresh.detail.favourite);
+                page.favourite.sync(fresh.detail.favourite, read_at);
                 page.detail = Loadable::Ready(fresh.detail);
                 // What was watched may have changed in every season: the one shown is asked
                 // again, and stays drawn as it was until it comes; the others are forgotten.

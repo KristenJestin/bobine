@@ -6,8 +6,9 @@ use gpui_kit::{Context, ScrollHandle, UniformListScrollHandle};
 
 use super::Shell;
 use super::pages::Loadable;
-use crate::favourite;
+use crate::favourite::{self, ListPage};
 use crate::navigation::Screen;
+use crate::series_page::Refreshes;
 
 /// The collections of the server.
 #[derive(Default)]
@@ -28,6 +29,25 @@ pub struct CollectionPage {
 pub struct MyListPage {
     pub items: Option<Loadable<Vec<Favourite>>>,
     pub scroll: UniformListScrollHandle,
+    /// Each time the list is asked it is numbered: a read sent before a change was answered may
+    /// land after the read that follows it, and must not overwrite it.
+    asked: Refreshes,
+}
+
+impl MyListPage {
+    /// The list is asked: its number, taken from `counter` like the series pages' refreshes.
+    fn ask(&mut self, counter: &mut u64) -> u64 {
+        self.asked.ask(counter)
+    }
+
+    /// The answer to the ask `number` came: it shows, unless a newer ask was made since.
+    fn landed(&mut self, number: u64, items: Loadable<Vec<Favourite>>) -> bool {
+        let newest = self.asked.is_newest(number);
+        if newest {
+            self.items = Some(items);
+        }
+        newest
+    }
 }
 
 impl<T> Loadable<T> {
@@ -44,34 +64,23 @@ impl Shell {
     /// The "Ma liste" button of the film or series page shown: the button changes at once, the
     /// server is asked, and a failure puts the button back and says so on the page.
     pub fn toggle_favourite(&mut self, cx: &mut Context<Self>) {
-        let screen = self.navigator.current();
-        let (depth, id, wanted) = match screen {
-            Screen::FilmDetail => {
-                let depth = self.details.len().wrapping_sub(1);
-                let Some(page) = self.details.last_mut() else {
-                    return;
-                };
-                let Some(wanted) = page.favourite.press() else {
-                    return;
-                };
-                page.error = None;
-                (depth, page.id.clone(), wanted)
-            }
-            Screen::SeriesDetail => {
-                let depth = self.series_pages.len().wrapping_sub(1);
-                let Some(page) = self.series_pages.last_mut() else {
-                    return;
-                };
-                let Some(wanted) = page.favourite.press() else {
-                    return;
-                };
-                page.error = None;
-                (depth, page.id.clone(), wanted)
-            }
+        let page: &mut dyn ListPage = match self.navigator.current() {
+            Screen::FilmDetail => match self.details.last_mut() {
+                Some(page) => page,
+                None => return,
+            },
+            Screen::SeriesDetail => match self.series_pages.last_mut() {
+                Some(page) => page,
+                None => return,
+            },
             _ => return,
         };
+        let Some(pressed) = favourite::press(page) else {
+            return;
+        };
         cx.notify();
-        let asked = id.clone();
+        let asked = pressed.item.clone();
+        let wanted = pressed.wanted;
         self.ask(
             cx,
             move |server| favourite::ask(server, &asked, wanted),
@@ -80,32 +89,23 @@ impl Shell {
                     // An expired session brings the login back; the page says what failed.
                     shell.failed(error.clone(), cx);
                 }
-                shell.favourite_answered(screen, depth, &id, wanted, &answer);
+                let pages = shell
+                    .details
+                    .iter_mut()
+                    .map(|page| page as &mut dyn ListPage)
+                    .chain(
+                        shell
+                            .series_pages
+                            .iter_mut()
+                            .map(|page| page as &mut dyn ListPage),
+                    );
+                let current = shell.navigator.current();
+                if favourite::answered(pages, current, &pressed, &answer) {
+                    shell.load_my_list(cx);
+                }
+                cx.notify();
             },
         );
-    }
-
-    fn favourite_answered(
-        &mut self,
-        screen: Screen,
-        depth: usize,
-        id: &ItemId,
-        wanted: bool,
-        answer: &Result<(), bobine::provider::ProviderError>,
-    ) {
-        let (toggle, error) = match screen {
-            Screen::FilmDetail => match self.detail_page(depth, id) {
-                Some(page) => (&mut page.favourite, &mut page.error),
-                None => return,
-            },
-            _ => match self.series_page(depth, id) {
-                Some(page) => (&mut page.favourite, &mut page.error),
-                None => return,
-            },
-        };
-        if let Some(said) = toggle.answered(wanted, answer) {
-            *error = Some(said);
-        }
     }
 
     /// The collections, once; asked again when the first try failed.
@@ -132,14 +132,16 @@ impl Shell {
     /// The user's list, each time it shows: a title put in it from a page shows at once.
     pub fn load_my_list(&mut self, cx: &mut Context<Self>) {
         Loadable::asking(&mut self.my_list.items);
+        let number = self.my_list.ask(&mut self.refreshes_asked);
         self.ask(
             cx,
             |server| server.favourites(),
-            |shell, items, cx| {
-                shell.my_list.items = Some(match items {
+            move |shell, items, cx| {
+                let items = match items {
                     Ok(items) => Loadable::Ready(items),
                     Err(error) => Loadable::Failed(shell.failed(error, cx)),
-                });
+                };
+                shell.my_list.landed(number, items);
             },
         );
     }
@@ -189,5 +191,43 @@ impl Shell {
                 }
             },
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn shown(page: &MyListPage) -> Option<usize> {
+        match &page.items {
+            Some(Loadable::Ready(items)) => Some(items.len()),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn ma_liste_shows_the_change_made_just_before() {
+        let mut counter = 0;
+        let mut page = MyListPage::default();
+        // Ma liste → film → remove → Escape: the list is asked while the server takes the
+        // change, and asked again when the change is answered.
+        let during = page.ask(&mut counter);
+        let after = page.ask(&mut counter);
+        // The read after the change comes first, the one sent during it lands late.
+        assert!(page.landed(after, Loadable::Ready(Vec::new())));
+        assert!(!page.landed(during, Loadable::Failed("old")));
+        assert_eq!(shown(&page), Some(0), "the late old read is dropped");
+    }
+
+    #[test]
+    fn the_lists_asked_in_order_show_the_last() {
+        let mut counter = 0;
+        let mut page = MyListPage::default();
+        let first = page.ask(&mut counter);
+        assert!(page.landed(first, Loadable::Ready(Vec::new())));
+        assert_eq!(shown(&page), Some(0));
+        let second = page.ask(&mut counter);
+        assert!(page.landed(second, Loadable::Failed("later")));
+        assert!(matches!(page.items, Some(Loadable::Failed("later"))));
     }
 }

@@ -18,7 +18,7 @@ use gpui_kit::{
 };
 
 use super::{Film as Playing, Shell};
-use crate::favourite::Toggle;
+use crate::favourite::{ListPage, Toggle};
 use crate::film_page::{self, Choices, From, Plan};
 use crate::grid::{self, Grid, Listed};
 use crate::images::{self, Key};
@@ -160,6 +160,8 @@ impl Chip {
 
 pub struct DetailPage {
     pub id: ItemId,
+    /// Told apart from every other page ever opened, the closed ones included.
+    generation: u64,
     pub detail: Loadable<FilmDetail>,
     pub choices: Option<Choices>,
     /// Hidden while unknown, when the film is in none, or when the lookup failed.
@@ -178,6 +180,20 @@ pub struct DetailPage {
     /// What went wrong with the last button.
     pub error: Option<&'static str>,
     pub busy: bool,
+}
+
+impl ListPage for DetailPage {
+    fn item(&self) -> &ItemId {
+        &self.id
+    }
+
+    fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    fn button(&mut self) -> (&mut Toggle, &mut Option<&'static str>) {
+        (&mut self.favourite, &mut self.error)
+    }
 }
 
 impl DetailPage {
@@ -547,8 +563,10 @@ impl Shell {
     }
 
     pub fn open_film(&mut self, id: ItemId, cx: &mut Context<Self>) {
+        let generation = self.next_generation();
         self.details.push(DetailPage {
             id,
+            generation,
             detail: Loadable::Loading,
             choices: None,
             collection: None,
@@ -576,6 +594,7 @@ impl Shell {
     fn load_detail(&mut self, depth: usize, with_collection: bool, cx: &mut Context<Self>) {
         let id = self.details[depth].id.clone();
         let asked = id.clone();
+        let read_at = self.details[depth].favourite.changes();
         self.ask(
             cx,
             move |server| server.film(&asked),
@@ -602,7 +621,7 @@ impl Shell {
                 {
                     page.choices = Some(Choices::new(&detail.versions));
                 }
-                page.favourite.sync(detail.favourite);
+                page.favourite.sync(detail.favourite, read_at);
                 page.detail = Loadable::Ready(detail);
                 if with_collection {
                     shell.load_collection(depth, id, cx);
@@ -893,6 +912,7 @@ impl Shell {
         };
         let id = self.details[depth].id.clone();
         let asked = id.clone();
+        let read_at = self.details[depth].favourite.changes();
         self.ask(
             cx,
             move |server| {
@@ -909,7 +929,7 @@ impl Shell {
                 if let Some(page) = shell.detail_page(depth, &id)
                     && let Loadable::Ready(shown) = &mut page.detail
                 {
-                    page.favourite.sync(detail.favourite);
+                    page.favourite.sync(detail.favourite, read_at);
                     *shown = detail;
                 }
             },

@@ -128,6 +128,9 @@ pub struct Shell {
     /// The numbers of the series pages' refreshes, counted over every page: an answer on its way
     /// for a page that closed never matches the page that opens in its place.
     refreshes_asked: u64,
+    /// The film and series pages opened so far: each takes the next number, so that an answer on
+    /// its way for a page that closed never reaches the page that opens in its place.
+    pages_opened: u64,
     /// The card fades in and out; the episode it showed stays drawn while it fades out.
     pub up_next_fade: Presence<Episode>,
     /// The episode ended in fullscreen: the window stays so while the card counts down, and
@@ -201,6 +204,7 @@ impl Shell {
             up_next: UpNext::default(),
             up_next_ticker: None,
             refreshes_asked: 0,
+            pages_opened: 0,
             up_next_fade: Presence::new(motion::quick()),
             fullscreen_kept: false,
             people: Vec::new(),
@@ -224,6 +228,12 @@ impl Shell {
 
     /// Opens the player on `media`. Its addresses go straight to mpv: nothing here keeps or
     /// prints them.
+    /// The number of the film or series page about to open.
+    fn next_generation(&mut self) -> u64 {
+        self.pages_opened += 1;
+        self.pages_opened
+    }
+
     pub fn play(
         &mut self,
         mpv: Arc<Libmpv>,
