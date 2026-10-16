@@ -29,6 +29,8 @@ pub fn empty(_cx: &mut Context<Shell>) -> impl IntoElement {
 pub struct Shown {
     pub controls: f32,
     pub panel: f32,
+    /// "Conversion par le serveur".
+    pub notice: f32,
 }
 
 pub fn render(
@@ -50,6 +52,7 @@ pub fn render(
     // Only an open panel closes on a click outside; one fading out is just drawn.
     let outside = session.panel_open().then(|| outside_panel(cx));
     let panel = (shown.panel > 0.).then(|| panel(session, shown.panel, window, cx));
+    let notice = (shown.notice > 0.).then(|| conversion_notice(shown.notice));
     div()
         .id("player")
         .size_full()
@@ -58,6 +61,7 @@ pub fn render(
             shell.player_mouse_moved(cx);
         }))
         .children(controls)
+        .children(notice)
         .children(outside)
         .children(panel)
         .when_some(session.error(), |root, error| {
@@ -78,6 +82,28 @@ pub fn render(
                     ),
             )
         })
+}
+
+/// One line at the top, over the picture whether the controls show or not: the server
+/// converts the film, which the viewer may notice in its picture or its start.
+fn conversion_notice(shown: f32) -> Div {
+    div()
+        .absolute()
+        .top(px(30.))
+        .left_0()
+        .right_0()
+        .flex()
+        .justify_center()
+        .opacity(shown)
+        .child(
+            div()
+                .px(px(16.))
+                .py(px(8.))
+                .rounded(px(theme::RADIUS_LARGE))
+                .bg(theme::panel())
+                .text_size(px(13.))
+                .child("Conversion par le serveur"),
+        )
 }
 
 /// The darkening behind the controls, top or bottom, so they read over a bright picture.

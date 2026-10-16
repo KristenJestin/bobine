@@ -113,6 +113,8 @@ impl fmt::Display for PlayerError {
 pub enum PlayerEvent {
     /// The file is open and what `load` chose is applied: the film is playing.
     Loaded,
+    /// The first picture reached the video surface: the film decodes.
+    FirstFrame,
     /// Seconds from the start.
     Position(f64),
     Duration(f64),

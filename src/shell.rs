@@ -23,16 +23,21 @@ use gpui_kit::{
     Pixels, Render, SharedString, Size, Subscription, Task, Window, div, px,
 };
 
-use bobine::provider::{Connector, Episode, Film as FilmItem, MediaServer, Series};
+use bobine::provider::{
+    Connector, Episode, Film as FilmItem, MediaServer, PlayMethod, Playback as Opened,
+    PlaybackReport, ProviderError, Series,
+};
 
 use crate::chrome::{back_link, pill_bar};
+use crate::fallback::{self, Step};
+use crate::film_page::Plan;
 use crate::images::Images;
 use crate::motion::{self, Fade, Presence};
 use crate::navigation::{Navigator, Screen};
 use crate::player::libmpv::Libmpv;
 use crate::player::mpv::MpvPlayer;
 use crate::player::session::{Session, WindowRequest};
-use crate::player::{Media, Player};
+use crate::player::{Media, Player, PlayerError};
 use crate::reports::{self, Reporting};
 use crate::screens;
 use crate::search;
@@ -167,6 +172,8 @@ pub struct Shell {
     pub frames: std::cell::RefCell<Vec<Instant>>,
     /// Given to every mpv: the headless harness silences the sound.
     pub mpv_options: Vec<(&'static str, &'static str)>,
+    /// How many playbacks started: an answer of the server names the one it is for.
+    playbacks: u64,
 }
 
 /// The film being played and what keeps it in step with the window.
@@ -181,8 +188,22 @@ pub struct Playback {
     reporting: Option<Reporting>,
     /// The episode after the one playing: the card offers it at the end.
     next: Option<Episode>,
+    id: u64,
+    method: PlayMethod,
+    /// What the server converts when the file does not play; `None` for a local file.
+    conversion: Option<Conversion>,
+    /// The server is being asked for the conversion.
+    asking: bool,
+    notice_fade: Fade,
+    notice_shown: bool,
     _ticker: Task<()>,
     _bounds: Subscription,
+}
+
+/// A film of the server, what the server may convert if it does not play as it is.
+pub struct Conversion {
+    pub server: Arc<dyn MediaServer>,
+    pub plan: Plan,
 }
 
 /// What the player shows of the film above the seek bar.
@@ -234,6 +255,7 @@ impl Shell {
             #[cfg(feature = "harness")]
             frames: Default::default(),
             mpv_options: Vec::new(),
+            playbacks: 0,
         };
         shell.begin(open, cx);
         shell
@@ -300,6 +322,7 @@ impl Shell {
             shell.lay_out_video(window);
             cx.notify();
         });
+        self.playbacks += 1;
         self.playback = Some(Playback {
             session,
             controls_fade: Fade::new(motion::quick()),
@@ -308,6 +331,12 @@ impl Shell {
             had_error: false,
             reporting,
             next: None,
+            id: self.playbacks,
+            method: PlayMethod::DirectPlay,
+            conversion: None,
+            asking: false,
+            notice_fade: Fade::new(motion::quick()),
+            notice_shown: false,
             _ticker: ticker,
             _bounds: bounds,
         });
@@ -397,14 +426,122 @@ impl Shell {
             self.leave_player(true, window, cx);
             return;
         }
+        let step = match &playback.conversion {
+            Some(conversion) if !playback.asking => fallback::step(
+                playback.method,
+                &playback.session,
+                conversion.plan.start,
+                now,
+            ),
+            _ => Step::Nothing,
+        };
+        match step {
+            Step::Convert { from } => self.convert(from, cx),
+            Step::CannotPlay => playback.session.fail(PlayerError("aucune image".into())),
+            Step::Nothing => {}
+        }
+        let Some(playback) = &mut self.playback else {
+            return;
+        };
         let shown = playback.session.controls_visible(now);
         let has_error = playback.session.error().is_some();
+        let notice =
+            fallback::notice_shown(playback.method, playback.asking, &playback.session, now);
         // Hidden controls have nothing to redraw: the video is not GPUI's.
-        if shown || shown != playback.controls_shown || has_error != playback.had_error {
+        if shown
+            || shown != playback.controls_shown
+            || has_error != playback.had_error
+            || notice != playback.notice_shown
+        {
             playback.controls_shown = shown;
             playback.had_error = has_error;
+            playback.notice_shown = notice;
             cx.notify();
         }
+    }
+
+    /// The film of the server does not play as it is: the server is asked to convert it, from
+    /// `from`. The playback that did not play is told stopped first.
+    fn convert(&mut self, from: Duration, cx: &mut Context<Self>) {
+        let Some(playback) = &mut self.playback else {
+            return;
+        };
+        let Some(conversion) = &playback.conversion else {
+            return;
+        };
+        playback.asking = true;
+        // Its words go: the conversion says what it does instead.
+        playback.session.forget_error();
+        if let Some(reporting) = playback.reporting.take() {
+            drop(reporting.finish(&playback.session));
+        }
+        let (server, request) = (
+            conversion.server.clone(),
+            conversion.plan.transcode_request(from),
+        );
+        let id = playback.id;
+        let task = cx
+            .background_executor()
+            .spawn(async move { server.transcode(&request) });
+        cx.spawn(async move |this, cx| {
+            let opened = task.await;
+            this.update(cx, |shell, cx| shell.converted(id, from, opened, cx))
+                .ok();
+        })
+        .detach();
+        cx.notify();
+    }
+
+    /// The server's answer: the player plays its conversion where the file stopped, unless the
+    /// viewer left meanwhile.
+    fn converted(
+        &mut self,
+        id: u64,
+        from: Duration,
+        opened: Result<Opened, ProviderError>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(playback) = self.playback.as_mut().filter(|playback| playback.id == id) else {
+            return;
+        };
+        let Some(conversion) = &mut playback.conversion else {
+            return;
+        };
+        playback.asking = false;
+        cx.notify();
+        let opened = match opened {
+            Ok(opened) => opened,
+            Err(error) => {
+                eprintln!("bobine: the server does not convert the film: {error}");
+                playback
+                    .session
+                    .fail(PlayerError("le serveur ne peut pas le convertir".into()));
+                return;
+            }
+        };
+        conversion.plan = conversion.plan.converted(from);
+        playback.method = opened.method;
+        playback.session.subtitle = fallback::said(playback.session.subtitle.take(), opened.method);
+        if let Err(error) = fallback::restart(&mut playback.session, &conversion.plan, &opened) {
+            // mpv's error code in words: no address in it.
+            eprintln!("bobine: the conversion does not play: {error}");
+            playback.session.fail(error);
+            return;
+        }
+        let plan = &conversion.plan;
+        playback.reporting = Some(Reporting::start(
+            conversion.server.clone(),
+            PlaybackReport {
+                session: opened.session,
+                film: opened.film,
+                source: opened.source,
+                position: from,
+                paused: false,
+                audio_track: plan.audio_index,
+                subtitle_track: plan.subtitle_index,
+                method: opened.method,
+            },
+        ));
     }
 
     /// The mouse moved over the player: the controls and the cursor come back at once.
@@ -558,12 +695,20 @@ impl Render for Shell {
                         .controls_fade
                         .set(session.controls_visible(now), now);
                     playback.panel_fade.set(session.panel_open(), now);
-                    if playback.controls_fade.moving(now) || playback.panel_fade.moving(now) {
+                    playback.notice_fade.set(
+                        fallback::notice_shown(playback.method, playback.asking, session, now),
+                        now,
+                    );
+                    if playback.controls_fade.moving(now)
+                        || playback.panel_fade.moving(now)
+                        || playback.notice_fade.moving(now)
+                    {
                         window.request_animation_frame();
                     }
                     let shown = screens::player::Shown {
                         controls: playback.controls_fade.level(now),
                         panel: playback.panel_fade.level(now),
+                        notice: playback.notice_fade.level(now),
                     };
                     screens::player::render(session, shown, window, cx).into_any_element()
                 }

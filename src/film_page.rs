@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use bobine::provider::{
     AudioTrack, Film, FilmDetail, ItemId, MediaServer, MediaSource, MediaSourceId, Playback,
-    ProviderError, SubtitleTrack, VideoRange,
+    ProviderError, SubtitleTrack, TranscodeRequest, VideoRange,
 };
 
 use crate::player::{self, FirstSubtitle, Media, Stream, Track, TrackKind, tracks};
@@ -148,6 +148,35 @@ impl Plan {
                 }
             })
             .collect()
+    }
+
+    /// What the server is asked to convert when the version does not play as it is: the tracks
+    /// chosen, from `from`. An external subtitle stays a file the player adds.
+    pub fn transcode_request(&self, from: Duration) -> TranscodeRequest {
+        TranscodeRequest {
+            film: self.film.clone(),
+            source: self.source.clone(),
+            start: from,
+            audio_track: self.audio_index,
+            subtitle_track: self
+                .subtitle_index
+                .filter(|_| matches!(self.subtitle, FirstShown::Embedded(_))),
+        }
+    }
+
+    /// The plan of the converted stream, from `from`: it holds only the audio track asked and
+    /// the embedded subtitle drawn into the picture, so the player keeps their defaults.
+    pub fn converted(&self, from: Duration) -> Plan {
+        let subtitle = match self.subtitle {
+            FirstShown::Embedded(_) => FirstShown::Off,
+            other => other,
+        };
+        Plan {
+            start: from,
+            audio: None,
+            subtitle,
+            ..self.clone()
+        }
     }
 
     /// What the player loads. `externals` comes from [`Plan::externals`] on the same playback.
@@ -436,6 +465,38 @@ mod tests {
             panic!("not a load");
         };
         assert_eq!(subtitle, FirstSubtitle::External(0));
+    }
+
+    #[test]
+    fn the_conversion_keeps_the_tracks_chosen_for_the_server_and_the_external_file_for_the_player()
+    {
+        let detail = detail();
+        let mut choices = Choices::new(&detail.versions);
+        choices.audio = Some(2);
+        choices.subtitle = Some(4);
+        let embedded = plan(&detail.film, &detail.versions, &choices, From::Resume).unwrap();
+        let from = Duration::from_secs(4321);
+        let request = embedded.transcode_request(from);
+        assert_eq!(
+            request,
+            TranscodeRequest {
+                film: embedded.film.clone(),
+                source: embedded.source.clone(),
+                start: from,
+                audio_track: Some(2),
+                subtitle_track: Some(4),
+            }
+        );
+        let converted = embedded.converted(from);
+        assert_eq!(converted.start, from);
+        assert_eq!(converted.audio, None);
+        assert_eq!(converted.subtitle, FirstShown::Off);
+        assert_eq!(converted.audio_index, Some(2), "still reported");
+
+        choices.subtitle = Some(5);
+        let external = plan(&detail.film, &detail.versions, &choices, From::Resume).unwrap();
+        assert_eq!(external.transcode_request(from).subtitle_track, None);
+        assert_eq!(external.converted(from).subtitle, FirstShown::External(5));
     }
 
     #[test]
