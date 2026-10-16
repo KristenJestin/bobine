@@ -169,12 +169,13 @@ pub fn logo_fit(size: (f32, f32)) -> Option<(f32, f32)> {
     logo_fit_in(size, LOGO)
 }
 
-/// The size a logo of `size` is drawn at, to fit in `room` (its widest and its tallest).
+/// The size a logo of `size` is drawn at, to fit in `room` (its widest and its tallest), never
+/// larger than it is: a small picture blown up turns blurry.
 pub fn logo_fit_in((width, height): (f32, f32), room: (f32, f32)) -> Option<(f32, f32)> {
     if width <= 0. || height <= 0. {
         return None;
     }
-    let scale = (room.0 / width).min(room.1 / height);
+    let scale = (room.0 / width).min(room.1 / height).min(1.);
     Some((width * scale, height * scale))
 }
 
@@ -413,6 +414,15 @@ mod tests {
         // Wide: the width fills the room. Tall: the height does.
         assert_eq!(logo_fit((880., 130.)), Some((440., 65.)));
         assert_eq!(logo_fit((200., 260.)), Some((100., 130.)));
+    }
+
+    #[test]
+    fn a_logo_smaller_than_its_room_keeps_its_own_size() {
+        assert_eq!(logo_fit((300., 60.)), Some((300., 60.)));
+        assert_eq!(logo_fit_in((200., 50.), PAGE_LOGO), Some((200., 50.)));
+        // Too wide for the page but not for the header: smaller only where it must be.
+        assert_eq!(logo_fit((400., 100.)), Some((400., 100.)));
+        assert_eq!(logo_fit_in((400., 100.), PAGE_LOGO), Some((360., 90.)));
     }
 
     #[test]
