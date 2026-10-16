@@ -128,7 +128,7 @@ mod tests {
     use std::rc::Rc;
     use std::sync::Arc;
 
-    use bobine::provider::Connector;
+    use bobine::provider::{Connector, MediaServer};
     use gpui_kit::{
         Bounds, Modifiers, Pixels, TestAppContext, VisualTestContext, WindowHandle, point, px, size,
     };
@@ -137,7 +137,7 @@ mod tests {
     use crate::fake::FakeServer;
     use crate::home_page::{self, PlayTarget};
     use crate::navigation::NavEntry;
-    use crate::screens::{Play, Quick};
+    use crate::screens::{Open, Play, Quick};
     use crate::series_page;
 
     /// The Home of a server whose playbacks are refused once asked (no player starts), in a
@@ -149,9 +149,22 @@ mod tests {
         WindowHandle<Shell>,
         &'static mut VisualTestContext,
     ) {
+        home_with(cx, |_| {})
+    }
+
+    /// The Home of `home`, of a server first changed by `change`.
+    fn home_with(
+        cx: &mut TestAppContext,
+        change: impl FnOnce(&mut crate::fake::State),
+    ) -> (
+        FakeServer,
+        WindowHandle<Shell>,
+        &'static mut VisualTestContext,
+    ) {
         let server = FakeServer::new(6, true);
         server.state.lock().unwrap().play_error =
             Some(ProviderError::Unreachable("refused".into()));
+        change(&mut server.state.lock().unwrap());
         let connector: Arc<dyn Connector> = Arc::new(server.clone());
         let window =
             cx.add_window(|_, cx| Shell::new(None, Box::new(move || Ok(connector)), None, cx));
@@ -189,6 +202,41 @@ mod tests {
             found.sort_by_key(|(id, _)| id.to_string());
             found.into_iter().next().expect("a poster on the Home")
         })
+    }
+
+    /// A Home whose Recently added lists the first series by its third season, new, as a
+    /// server does when a series gains a season: the card, and the series it stands for.
+    fn home_with_a_new_season(
+        cx: &mut TestAppContext,
+    ) -> (
+        FakeServer,
+        WindowHandle<Shell>,
+        &'static mut VisualTestContext,
+        ElementId,
+        ItemId,
+    ) {
+        let series = crate::fake::series().remove(0);
+        let season = FakeServer::new(0, true).seasons(&series.id).unwrap()[2].clone();
+        let (server, window, cx) = home_with(cx, |state| {
+            state.series[0].season = Some(season);
+        });
+        let shell = window.root(cx).unwrap();
+        let id = cx.read(|cx| {
+            let shell = shell.read(cx);
+            shell
+                .cards
+                .ids()
+                .into_iter()
+                .filter(|id| id.to_string().contains("home-poster"))
+                .find(|id| {
+                    shell
+                        .cards
+                        .offer(id)
+                        .is_some_and(|offer| matches!(offer.open, Open::Series(_, Some(_))))
+                })
+                .expect("the card of the new season")
+        });
+        (server, window, cx, id, series.id)
     }
 
     fn film_with_resume(server: &FakeServer) -> impl Fn(&PlayTarget) -> bool {
@@ -496,5 +544,25 @@ mod tests {
             })
             .unwrap();
         assert_eq!(opened, Some(film));
+    }
+
+    #[gpui_kit::test]
+    fn a_click_on_a_card_of_a_new_season_opens_its_series_on_that_season(cx: &mut TestAppContext) {
+        let (_, window, cx, id, series) = home_with_a_new_season(cx);
+        let card = bounds(cx, "card-hover", &id);
+        let at = point(card.left() + px(12.), card.bottom() - px(12.));
+        cx.simulate_mouse_move(at, None, Modifiers::none());
+        cx.simulate_click(at, Modifiers::none());
+        cx.run_until_parked();
+        assert_eq!(screen(&window, cx), Screen::SeriesDetail);
+        let (opened, season) = window
+            .read_with(cx, |shell, _| {
+                let page = shell.series_pages.last().expect("the series page");
+                (page.id.clone(), page.season)
+            })
+            .unwrap();
+        assert_eq!(opened, series);
+        // Unasked, the page lands on the second season, where the series is begun.
+        assert_eq!(season, 2, "the page opens on the new season");
     }
 }
