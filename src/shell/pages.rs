@@ -3526,4 +3526,37 @@ mod tests {
             })
             .unwrap();
     }
+
+    #[gpui_kit::test]
+    fn the_meta_line_bars_stand_level_with_each_other_and_with_the_text(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        let (_server, window) = signed_in_window(cx);
+        window
+            .update(cx, |shell, _, cx| {
+                shell.open_film(ItemId(crate::fake::FILM.into()), cx)
+            })
+            .unwrap();
+        let mut visual = drawn(&window, cx);
+        let mut centre = |selector: String| {
+            let bounds = visual
+                .debug_bounds(Box::leak(selector.into_boxed_str()))
+                .expect("a part of the meta line");
+            (bounds.center().y, bounds.size.height)
+        };
+        let bars: Vec<_> = (1..4)
+            .map(|n| centre(format!("meta-separator {n}")))
+            .collect();
+        let texts: Vec<_> = (0..4).map(|n| centre(format!("meta-part {n}"))).collect();
+        for (bar, text) in bars.iter().zip(&texts[1..]) {
+            // Half a pixel below the middle at most: the bar is nudged to the digits' middle.
+            assert!((bar.0 - text.0).abs() <= px(1.), "{bar:?} against {text:?}");
+        }
+        assert!(bars.windows(2).all(|pair| pair[0] == pair[1]), "{bars:?}");
+        assert!(texts.iter().all(|text| text.0 == texts[0].0), "{texts:?}");
+        assert!(
+            bars.iter().all(|bar| bar.1 <= px(11.)),
+            "taller than the digits"
+        );
+    }
 }

@@ -462,22 +462,41 @@ fn genre_links(
         }))
 }
 
+/// The height of the bar between two facts: the height of the digits at the size of the line
+/// (a bar taller than them reads as sitting above the text), nudged half a pixel down to the
+/// middle of the digits, which have no descender.
+const SEPARATOR: f32 = 11.;
+
 fn meta_row(parts: impl IntoIterator<Item = AnyElement>) -> Div {
-    let mut meta = parts.into_iter();
+    let mut meta = parts.into_iter().enumerate();
+    let part = |index: usize, part: AnyElement| {
+        div()
+            .debug_selector(move || format!("meta-part {index}"))
+            .flex()
+            .items_center()
+            .child(part)
+    };
     div()
         .flex()
         .items_center()
         .gap(px(10.))
         .text_size(px(14.))
         .text_color(theme::muted())
-        .children(meta.next())
-        .children(meta.map(|part| {
+        .children(meta.next().map(|(index, first)| part(index, first)))
+        .children(meta.map(|(index, next)| {
             div()
                 .flex()
                 .items_center()
                 .gap(px(10.))
-                .child(div().w(px(1.)).h(px(12.)).bg(theme::line()))
-                .child(part)
+                .child(
+                    div()
+                        .debug_selector(move || format!("meta-separator {index}"))
+                        .w(px(1.))
+                        .h(px(SEPARATOR))
+                        .mt(px(1.))
+                        .bg(theme::line()),
+                )
+                .child(part(index, next))
         }))
 }
 
