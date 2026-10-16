@@ -795,9 +795,9 @@ impl MediaServer for FakeServer {
         let state = &mut *guard;
         state.record.watched.push((film.clone(), watched));
         let episodes = state.episodes.iter_mut();
-        // A season marks all its episodes.
+        // A season or a series marks all its episodes.
         let marked = episodes
-            .filter(|e| &e.item.id == film || &e.season == film)
+            .filter(|e| &e.item.id == film || &e.season == film || &e.series == film)
             .map(|e| &mut e.item);
         for found in state
             .films
@@ -1337,6 +1337,24 @@ mod tests {
 
     fn titles(page: &Page<Series>) -> Vec<&str> {
         page.items.iter().map(|s| s.title.as_str()).collect()
+    }
+
+    #[test]
+    fn a_series_marked_watched_has_all_its_episodes_watched() {
+        let server = FakeServer::new(3, true);
+        let series = ItemId("series-0".into());
+        let shown = |server: &FakeServer| {
+            let state = server.state();
+            FakeServer::counted(&state, &state.series[0])
+        };
+        server.set_watched(&series, true).unwrap();
+        assert_eq!(
+            (shown(&server).unwatched, shown(&server).watched),
+            (0, true)
+        );
+        server.set_watched(&series, false).unwrap();
+        assert!(!shown(&server).watched);
+        assert!(shown(&server).unwatched > 0);
     }
 
     #[test]

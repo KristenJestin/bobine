@@ -1699,6 +1699,17 @@ fn watched_and_unwatched() {
 }
 
 #[test]
+fn a_series_is_marked_watched_as_a_whole() {
+    let s = Setup::new();
+    let server = s.signed_in();
+    server.set_watched(&series(), true).unwrap();
+    let path = format!("/UserPlayedItems/{SERIES}");
+    assert_eq!(s.fake.last("POST", &path).param("userId"), Some(USER_ID));
+    server.set_watched(&series(), false).unwrap();
+    assert_eq!(s.fake.last("DELETE", &path).param("userId"), Some(USER_ID));
+}
+
+#[test]
 fn image_at_the_requested_size() {
     let s = Setup::new();
     let server = s.signed_in();

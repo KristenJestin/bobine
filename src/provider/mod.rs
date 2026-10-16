@@ -70,7 +70,7 @@ pub trait MediaServer: Send + Sync {
     fn report_started(&self, report: &PlaybackReport) -> Result<(), ProviderError>;
     fn report_progress(&self, report: &PlaybackReport) -> Result<(), ProviderError>;
     fn report_stopped(&self, report: &PlaybackReport) -> Result<(), ProviderError>;
-    /// Marks a film or an episode watched, or no longer; a season, all its episodes.
+    /// Marks a film or an episode watched, or no longer; a season or a series, all its episodes.
     fn set_watched(&self, film: &ItemId, watched: bool) -> Result<(), ProviderError>;
 
     /// An image at the width asked for (the server scales it down, keeping its proportions).
