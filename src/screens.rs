@@ -242,14 +242,16 @@ fn series_poster(
     cx: &mut Context<Shell>,
 ) -> Stateful<Div> {
     let image = shell.image(series.poster.as_ref(), images::POSTER, cx);
-    series_poster_with(series, image, width, id, cx)
+    series_poster_with(series, image, width, false, id, cx)
 }
 
-/// A series poster whose picture is already asked: see `film_card_with`.
+/// A series poster whose picture is already asked: see `film_card_with`. `fresh` is for the
+/// Recently added row, where a season handed for its series says which one is new.
 fn series_poster_with(
     series: &Series,
     image: Option<Arc<RenderImage>>,
     width: f32,
+    fresh: bool,
     id: impl Into<ElementId>,
     cx: &mut Context<Shell>,
 ) -> Stateful<Div> {
@@ -275,7 +277,7 @@ fn series_poster_with(
         .child(poster_image(image, rating, corner, width, false))
         .child(poster_caption(
             series.title.clone(),
-            series_page::card_detail(series).unwrap_or_default(),
+            series_page::card_detail(series, fresh).unwrap_or_default(),
         ))
 }
 

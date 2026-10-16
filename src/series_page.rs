@@ -55,12 +55,12 @@ pub fn years(series: &Series) -> Option<String> {
     })
 }
 
-/// The line under a series' name on a card: the years, or for a season the server handed in
-/// its place, which season.
-pub fn card_detail(series: &Series) -> Option<String> {
+/// The line under a series' name on a card: the years, or in Recently added (`fresh`), for a
+/// season the server handed in its place, which season is new.
+pub fn card_detail(series: &Series, fresh: bool) -> Option<String> {
     match &series.season {
-        Some(season) => Some(format!("{} · new", season_label(season))),
-        None => years(series),
+        Some(season) if fresh => Some(format!("{} · new", season_label(season))),
+        _ => years(series),
     }
 }
 
@@ -476,10 +476,14 @@ mod tests {
     }
 
     #[test]
-    fn a_season_card_says_which_season_is_new() {
+    fn a_season_card_says_which_season_is_new_in_recently_added_only() {
         let mut series = crate::fake::series().remove(0);
         series.season = Some(seasons().remove(2));
-        assert_eq!(card_detail(&series).as_deref(), Some("Season 3 · new"));
+        assert_eq!(
+            card_detail(&series, true).as_deref(),
+            Some("Season 3 · new")
+        );
+        assert_eq!(card_detail(&series, false), years(&series));
     }
 
     fn next(server: &FakeServer) -> ItemId {
