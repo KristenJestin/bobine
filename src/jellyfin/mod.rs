@@ -420,7 +420,7 @@ impl MediaServer for Jellyfin {
     }
 
     fn films(&self, library: &ItemId, query: &FilmQuery) -> Result<Page<Film>, ProviderError> {
-        let found = self.page("films", "Movie", library, query)?;
+        let found = self.page("movies", "Movie", library, query)?;
         let films: Vec<Film> = found.items.iter().map(Item::film).collect();
         let total = found.total_record_count.unwrap_or(films.len() as u32);
         Ok(Page {
@@ -480,7 +480,7 @@ impl MediaServer for Jellyfin {
 
     fn film(&self, film: &ItemId) -> Result<FilmDetail, ProviderError> {
         let item: Item = self.http.get(
-            "film",
+            "movie",
             &format!("/Items/{}", encode(&film.0)),
             &[self.user()],
         )?;

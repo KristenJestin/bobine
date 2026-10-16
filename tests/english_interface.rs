@@ -233,6 +233,71 @@ fn raw(chars: &[char], from: usize, hashes: usize) -> (String, usize) {
 /// literals and the body of every `#[cfg(test)] mod name { … }`. A `#[cfg(test)] mod name;`
 /// has no body here: the file it names is read like any other.
 fn literals(code: &str) -> Vec<(usize, String)> {
+    strings(code)
+        .into_iter()
+        .map(|(line, text, _)| (line, text))
+        .collect()
+}
+
+/// The literals that may reach the interface: those of `literals`, less a message of
+/// `expect(…)`, `panic!(…)` or `eprintln!(…)` (a panic or the terminal), a lint's `reason` and
+/// the name that opens an element id, `("film", index)`.
+fn interface_literals(code: &str) -> Vec<(usize, String)> {
+    strings(code)
+        .into_iter()
+        .filter(|(_, _, quiet)| !quiet)
+        .map(|(line, text, _)| (line, text))
+        .collect()
+}
+
+/// Whether the literal at `at` is a lint's `reason = …`, opens a tuple (an element id), or is
+/// inside an `expect(…)`, a `panic!(…)` or an `eprintln!(…)` of the same statement.
+fn quiet(tokens: &[(usize, Token)], at: usize) -> bool {
+    let word = |at: usize| match tokens.get(at) {
+        Some((_, Token::Word(word))) => word.as_str(),
+        _ => "",
+    };
+    let sym = |at: usize| match tokens.get(at) {
+        Some((_, Token::Sym(sym))) => Some(*sym),
+        _ => None,
+    };
+    let last = at;
+    if last >= 2 && sym(last - 1) == Some('=') && word(last - 2) == "reason" {
+        return true;
+    }
+    let tuple = last >= 1
+        && sym(last - 1) == Some('(')
+        && sym(at + 1) == Some(',')
+        && (last < 2 || (word(last - 2).is_empty() && sym(last - 2) != Some('!')));
+    if tuple {
+        return true;
+    }
+    let mut depth = 0;
+    for at in (0..last).rev() {
+        match sym(at) {
+            Some(')') => depth += 1,
+            Some('(') if depth > 0 => depth -= 1,
+            Some('(') => {
+                let call = if at >= 2 && sym(at - 1) == Some('!') {
+                    word(at - 2)
+                } else if at >= 1 {
+                    word(at - 1)
+                } else {
+                    ""
+                };
+                if matches!(call, "expect" | "panic" | "eprintln") {
+                    return true;
+                }
+            }
+            Some(';' | '{' | '}') if depth == 0 => return false,
+            _ => {}
+        }
+    }
+    false
+}
+
+/// The literals of `literals`, each with whether it is `quiet`.
+fn strings(code: &str) -> Vec<(usize, String, bool)> {
     const TEST_MOD: [&str; 7] = ["#", "[", "cfg", "(", "test", ")", "]"];
     let tokens = tokens(code);
     let text = |token: &Token| match token {
@@ -280,7 +345,7 @@ fn literals(code: &str) -> Vec<(usize, String)> {
             }
         }
         if let (line, Token::Str(string)) = &tokens[i] {
-            found.push((*line, string.clone()));
+            found.push((*line, string.clone(), quiet(&tokens, i)));
         }
         i += 1;
     }
@@ -378,18 +443,11 @@ fn no_string_of_the_program_is_in_french() {
 }
 
 /// The word of the interface for what Jellyfin calls a movie: "film" is the French word, and the
-/// interface says "movie", "Movies", "2 movies". Whole words only, so that `film-play` or
-/// `--films` is left alone; and a single lowercase word (`"film"`, `"films"`) is an id or a
-/// label of the code, not a text.
+/// interface says "movie", "Movies", "2 movies". Whole words only, so that `film-play`,
+/// `--films` or `film_detail` is left alone; `film's` is the word `film`.
 fn film_in(literal: &str) -> Option<String> {
-    let words: Vec<&str> = literal
-        .split_whitespace()
-        .map(|word| word.trim_matches(|c: char| !c.is_alphanumeric() && c != '-'))
-        .collect();
-    let alone = words.len() == 1 && words[0] == words[0].to_lowercase();
-    words
-        .into_iter()
-        .filter(|_| !alone)
+    literal
+        .split(|c: char| !(c.is_alphanumeric() || c == '-' || c == '_'))
         .find(|word| matches!(word.to_lowercase().as_str(), "film" | "films"))
         .map(|word| format!("the word {word}"))
 }
@@ -410,17 +468,7 @@ fn no_text_of_the_interface_says_film_where_it_means_movie() {
             continue;
         }
         let source = fs::read_to_string(&file).unwrap();
-        let lines: Vec<&str> = source.lines().collect();
-        for (line, literal) in literals(&source) {
-            // What goes to the terminal, a panic message and the reason of a lint are not the
-            // interface.
-            let written = lines.get(line - 1).copied().unwrap_or_default();
-            if ["eprintln!", "reason =", ".expect(", "panic!("]
-                .iter()
-                .any(|quiet| written.contains(quiet))
-            {
-                continue;
-            }
+        for (line, literal) in interface_literals(&source) {
             if let Some(why) = film_in(&literal) {
                 found.push(format!("{name}:{line}: {why} in {literal:?}"));
             }
@@ -441,6 +489,10 @@ fn film_is_told_from_the_ids_that_hold_the_word() {
         "this film",
         "2 films",
         "Film",
+        "film",
+        "films",
+        "the film's page",
+        "the film’s page",
     ] {
         assert!(film_in(said).is_some(), "{said}");
     }
@@ -454,6 +506,20 @@ fn film_is_told_from_the_ids_that_hold_the_word() {
     ] {
         assert_eq!(film_in(fine), None, "{fine}");
     }
+}
+
+#[test]
+fn only_the_literal_of_an_expect_a_panic_a_lint_reason_or_an_id_is_left_out() {
+    let code = "let p = plural(n, \"film\", \"films\").expect(\"no film\");\n\
+                panic!(\"film {}\", \"2 films\");\n\
+                #[expect(dead_code, reason = \"the film\")] let t = \"this film\";\n\
+                eprintln!(\"a film\"); let e = x.expect(&format!(\"film {}\", 1));\n\
+                poster(shell, film, (\"film\", index)); get(\"films\", path);";
+    let seen: Vec<String> = interface_literals(code)
+        .into_iter()
+        .map(|(_, s)| s)
+        .collect();
+    assert_eq!(seen, ["film", "films", "this film", "films"]);
 }
 
 #[test]
