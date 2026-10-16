@@ -188,8 +188,15 @@ impl Fallback {
         if id != self.id {
             return None;
         }
-        let from = self.asking.take()?;
+        let asked_from = self.asking.take()?;
         let chosen = self.chosen.take();
+        // A quality the viewer chose starts where they are now: they may have sought meanwhile.
+        let from = match chosen {
+            Some(_) if session.position_known() => {
+                Duration::from_secs_f64(session.position.max(0.))
+            }
+            _ => asked_from,
+        };
         let opened = match (opened, chosen) {
             (Ok(opened), _) => opened,
             // The film the viewer was watching plays on as it did.
@@ -893,6 +900,25 @@ mod tests {
             None,
             "never converted twice"
         );
+    }
+
+    #[test]
+    fn a_quality_chosen_starts_where_the_viewer_is_when_the_server_answers() {
+        let server = Arc::new(FakeServer::new(3, false));
+        let (mut fallback, mut session, player, mut now) = playing_at(&server, 4500.);
+        let reopen = fallback
+            .choose(Quality::Cap(4_000_000), &mut session)
+            .unwrap();
+        // The viewer seeks while the server is asked.
+        let events = vec![PlayerEvent::Position(4620.)];
+        tick(&mut fallback, &mut session, &player, &mut now, 1, events);
+        let id = fallback.id();
+        let report = fallback
+            .answered(id, &mut session, reopen.open(&*server), now)
+            .expect("plays");
+        let converted = server.state.lock().unwrap().converted.clone();
+        assert_eq!(loads(&player), [(converted, 4620.)]);
+        assert_eq!(report.position, Duration::from_secs(4620));
     }
 
     #[test]
