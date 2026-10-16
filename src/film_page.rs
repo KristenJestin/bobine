@@ -231,6 +231,7 @@ impl Plan {
             subtitle_track: self
                 .subtitle_index
                 .filter(|_| matches!(self.subtitle, FirstShown::Embedded(_))),
+            max_bitrate: None,
         }
     }
 
@@ -606,6 +607,7 @@ mod tests {
                 start: from,
                 audio_track: Some(2),
                 subtitle_track: Some(4),
+                max_bitrate: None,
             }
         );
         let opened = server.transcode(&request).unwrap();
