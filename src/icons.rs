@@ -136,8 +136,11 @@ pub fn with_stars(text: &str, size: f32) -> Div {
         .flex()
         .items_center()
         .gap(px(4.))
+        .min_w_0()
+        .overflow_hidden()
         .children(runs(text).into_iter().map(|run| match run {
-            Run::Text(piece) => div().child(piece.to_string()),
+            // The text gives way, with its ellipsis, when the room is short: the star does not.
+            Run::Text(piece) => div().min_w_0().truncate().child(piece.to_string()),
             Run::Star => icon(IconName::Star, size),
         }))
 }

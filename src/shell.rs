@@ -164,7 +164,7 @@ pub struct Shell {
     viewport: Size<Pixels>,
     /// When each draw started: the harness reads the frame times of a move from it.
     #[cfg(feature = "harness")]
-    pub frames: Vec<Instant>,
+    pub frames: std::cell::RefCell<Vec<Instant>>,
     /// Given to every mpv: the headless harness silences the sound.
     pub mpv_options: Vec<(&'static str, &'static str)>,
 }
@@ -232,7 +232,7 @@ impl Shell {
             turned_forward: true,
             viewport: Size::default(),
             #[cfg(feature = "harness")]
-            frames: Vec::new(),
+            frames: Default::default(),
             mpv_options: Vec::new(),
         };
         shell.begin(open, cx);
@@ -241,25 +241,25 @@ impl Shell {
 
     /// A frame was drawn: the page and its header are two views of one frame, which count once.
     #[cfg(feature = "harness")]
-    pub fn note_frame(&mut self) {
+    pub fn note_frame(&self) {
         let now = Instant::now();
-        if self
-            .frames
+        let mut frames = self.frames.borrow_mut();
+        if frames
             .last()
             .is_none_or(|last| now.duration_since(*last) > Duration::from_millis(3))
         {
-            self.frames.push(now);
+            frames.push(now);
         }
     }
 
-    /// Opens the player on `media`. Its addresses go straight to mpv: nothing here keeps or
-    /// prints them.
     /// The number of the film or series page about to open.
     fn next_generation(&mut self) -> u64 {
         self.pages_opened += 1;
         self.pages_opened
     }
 
+    /// Opens the player on `media`. Its addresses go straight to mpv: nothing here keeps or
+    /// prints them.
     pub fn play(
         &mut self,
         mpv: Arc<Libmpv>,

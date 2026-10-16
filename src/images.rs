@@ -58,6 +58,11 @@ impl<K: Hash + Eq + Clone, V> Lru<K, V> {
         Some(&entry.0)
     }
 
+    /// The value, without counting as a use: for a reader that must not write.
+    pub fn peek(&self, key: &K) -> Option<&V> {
+        self.entries.get(key).map(|(value, ..)| value)
+    }
+
     /// Every value, the cache left empty.
     pub fn drain(&mut self) -> Vec<V> {
         self.used = 0;

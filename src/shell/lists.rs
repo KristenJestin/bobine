@@ -103,9 +103,31 @@ impl Shell {
                 if favourite::answered(pages, current, &pressed, &answer) {
                     shell.load_my_list(cx);
                 }
+                // The page that pressed went back to what it showed, which another page's
+                // change may have made out of date: it reads the server again.
+                if let Some(page) = favourite::reread(&pressed, &answer) {
+                    shell.read_again(page, cx);
+                }
                 cx.notify();
             },
         );
+    }
+
+    /// Reads the film or series page numbered `generation` again, if it is still open.
+    fn read_again(&mut self, generation: u64, cx: &mut Context<Self>) {
+        if let Some(depth) = self
+            .details
+            .iter()
+            .position(|p| p.generation() == generation)
+        {
+            self.load_detail(depth, false, cx);
+        } else if let Some(depth) = self
+            .series_pages
+            .iter()
+            .position(|p| p.generation() == generation)
+        {
+            self.load_series(depth, false, None, cx);
+        }
     }
 
     /// The collections, once; asked again when the first try failed.

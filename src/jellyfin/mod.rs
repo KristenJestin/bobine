@@ -706,6 +706,8 @@ impl MediaServer for Jellyfin {
                 ("limit", limit.to_string()),
                 ("imageTypeLimit", "1".into()),
                 ("enableImageTypes", "Primary,Backdrop".into()),
+                // An episode that comes alone is listed as its series, with the series poster.
+                ("fields", "SeriesPrimaryImage".into()),
             ],
         )?;
         // Two episodes of one series, or one episode beside its series, are one entry.

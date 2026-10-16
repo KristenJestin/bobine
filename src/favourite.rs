@@ -133,6 +133,20 @@ pub fn answered<'a>(
     answer.is_ok() && current == Screen::MyList
 }
 
+/// The page numbered `generation`, at `depth` of its stack, if it is still open there: the read
+/// of a page answers to it and to no other that shows the same title.
+pub fn numbered<P: ListPage>(stack: &mut [P], depth: usize, generation: u64) -> Option<&mut P> {
+    stack
+        .get_mut(depth)
+        .filter(|page| page.generation() == generation)
+}
+
+/// The page to read again after the server's answer: when a press failed, the page that made
+/// it shows the state it had before, which another page's change may have made out of date.
+pub fn reread(pressed: &Pressed, answer: &Result<(), ProviderError>) -> Option<u64> {
+    answer.is_err().then_some(pressed.page)
+}
+
 /// Puts `item` in the list or takes it out, on the server.
 pub fn ask(server: &dyn MediaServer, item: &ItemId, wanted: bool) -> Result<(), ProviderError> {
     server.set_favourite(item, wanted)
@@ -434,6 +448,48 @@ mod tests {
         );
         answer_to(&mut reopened, Screen::FilmDetail, &again, Ok(()));
         assert_eq!(press(&mut reopened[0]).map(|p| p.wanted), Some(true));
+    }
+
+    #[test]
+    fn the_read_of_a_page_never_reaches_a_page_opened_after_it_at_its_depth() {
+        let mut stack = [Page::new("film-a", 1, true)];
+        assert!(numbered(&mut stack, 0, 1).is_some());
+        // Escape, the same title is opened again at the same depth: another page.
+        let mut stack = [Page::new("film-a", 2, true)];
+        assert!(numbered(&mut stack, 0, 1).is_none());
+        assert!(numbered(&mut stack, 0, 2).is_some());
+        // And not at another depth.
+        assert!(numbered(&mut stack, 1, 2).is_none());
+    }
+
+    #[test]
+    fn a_press_that_fails_after_another_page_changed_the_same_title_is_read_again() {
+        // Two pages of one title, both showing it out of the list.
+        let mut stack = [Page::new("film-a", 1, false), Page::new("film-a", 2, false)];
+        let first = press(&mut stack[0]).unwrap();
+        let second = press(&mut stack[1]).unwrap();
+        assert_eq!((first.wanted, second.wanted), (true, true));
+        // The first is answered: the server has the title, the second page has a press of its
+        // own on its way and so does not follow.
+        answer_to(&mut stack, Screen::FilmDetail, &first, Ok(()));
+        assert!(stack[1].toggle.on(), "its own press still shows");
+        // The second fails: it puts itself back to out of the list, which the server does not say.
+        let failed = Err(ProviderError::Server(500));
+        let again = reread(&second, &failed);
+        answer_to(&mut stack, Screen::FilmDetail, &second, failed);
+        assert!(!stack[1].toggle.on(), "stale until read again");
+        assert_eq!(again, Some(2));
+        // The read sent then, answered: the page shows what the server holds.
+        let read_at = stack[1].toggle.changes();
+        stack[1].toggle.sync(true, read_at);
+        assert!(stack[1].toggle.on());
+    }
+
+    #[test]
+    fn a_press_that_succeeds_is_not_read_again() {
+        let mut stack = [Page::new("film-a", 1, false)];
+        let pressed = press(&mut stack[0]).unwrap();
+        assert_eq!(reread(&pressed, &Ok(())), None);
     }
 
     #[test]

@@ -126,6 +126,8 @@ fn grid_screen<T: Listed + 'static>(
         _ if rows == 0 => Some(empty),
         _ => None,
     };
+    // The retries are used up and no list is there: the failure has a way to try again.
+    let gave_up = shown.gave_up();
     let scroll = shown.scroll.clone();
     let tools = shown.tools.clone();
     let choices = match &shown.choices {
@@ -236,7 +238,24 @@ fn grid_screen<T: Listed + 'static>(
                     cx,
                 )),
         )
-        .children(status.map(|why| div().px(px(MARGIN)).child(note(why))))
+        .children(status.map(|why| {
+            div()
+                .px(px(MARGIN))
+                .flex()
+                .items_center()
+                .gap(px(14.))
+                .child(note(why))
+                .children(gave_up.then(|| {
+                    theme::ghost_button(
+                        "library-retry",
+                        Some(IconName::RotateCcw),
+                        "Réessayer",
+                        window,
+                        cx,
+                    )
+                    .on_click(cx.listener(|shell, _, _, cx| shell.retry_list(cx)))
+                }))
+        }))
         .child(
             div()
                 .flex()

@@ -4,18 +4,20 @@
 //! up and down, and the wheel goes to the row under the pointer when it is over one.
 
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::Instant;
 
-use bobine::provider::{Feature, ImageRef, Title};
+use bobine::provider::{Feature, ImageRef, ItemId, Title};
 use gpui_kit::prelude::*;
 use gpui_kit::{
     Animation, AnimationExt, AnyElement, App, Context, Div, ElementId, Entity, FontWeight,
-    IntoElement, ObjectFit, Render, ScrollHandle, SharedString, Stateful, WeakEntity, Window, div,
-    img, linear_color_stop, linear_gradient, px, relative, rgb, rgba,
+    IntoElement, ObjectFit, Render, RenderImage, ScrollHandle, SharedString, Stateful, WeakEntity,
+    Window, div, img, linear_color_stop, linear_gradient, px, relative, rgb, rgba,
 };
 
 use super::film_detail::{EDGE, ROW_POSTER, hero_frame, meta_line};
 use super::{note, picture, poster, progress_bar, row_heading, series_poster};
+use crate::grid::Grid;
 use crate::hero::{self, Headline};
 use crate::home_page::{self, ListKind, PlayTarget};
 use crate::icons::{IconName, icon};
@@ -125,6 +127,7 @@ fn hero_height(window_height: f32) -> f32 {
 pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -> impl IntoElement {
     // The header's time runs while this is drawn.
     shell.start_hero_ticker(window, cx);
+    shell.ask_hero_images(cx);
     let viewport = window.viewport_size();
     let (width, window_height) = (f32::from(viewport.width), f32::from(viewport.height));
     let hero_height = hero_height(window_height);
@@ -226,14 +229,20 @@ pub(super) fn error_pill(why: &'static str) -> impl IntoElement {
 
 /// The header as a view of its own: its time makes it redraw 30 times a second, and nothing
 /// else on the page has to be built again for that. The shell tells it when what it shows
-/// changes (`Shell::notify_hero`).
+/// changes (`Shell::notify_hero`). It only reads the shell: a write to the shell during a draw
+/// (an image asked, a listener) has the whole page built again with it. Its pictures are asked
+/// by `Shell::ask_hero_images`, its clicks reach the shell through a weak handle.
 pub struct HeroView {
     shell: WeakEntity<Shell>,
+    logos: hero::Logos,
 }
 
 impl HeroView {
     pub fn new(shell: WeakEntity<Shell>) -> Self {
-        Self { shell }
+        Self {
+            shell,
+            logos: hero::Logos::default(),
+        }
     }
 }
 
@@ -243,140 +252,285 @@ impl Render for HeroView {
             return div().into_any_element();
         };
         let height = hero_height(f32::from(window.viewport_size().height));
-        shell.update(cx, |shell, shell_cx| {
+        let now = Instant::now();
+        let (features, frame) = {
+            let shell = shell.read(cx);
             #[cfg(feature = "harness")]
             shell.note_frame();
-            if shell.home.featured().is_empty() {
+            let Some(features) = shell.home.shared_features().filter(|f| !f.is_empty()) else {
                 return div().into_any_element();
-            }
-            hero(shell, height, window, shell_cx).into_any_element()
-        })
+            };
+            let carousel = &shell.home.carousel;
+            let frame = Frame {
+                current: carousel.current().min(features.len() - 1),
+                blend: carousel.blend(now),
+                crossfading: carousel.crossfading(now),
+                progress: carousel.progress(now),
+                busy: shell.home.busy,
+                backdrops: features
+                    .iter()
+                    .map(|f| shell.peek_image(f.backdrop.as_ref(), images::BACKDROP))
+                    .collect(),
+                logos: features
+                    .iter()
+                    .map(|f| shell.peek_image(f.logo.as_ref(), images::LOGO))
+                    .collect(),
+            };
+            (features, frame)
+        };
+        self.logos.keep_only(&features);
+        let target = self.shell.clone();
+        let mut view = Draw {
+            frame,
+            target: &target,
+            logos: &mut self.logos,
+        };
+        view.hero(&features, height, window, cx).into_any_element()
     }
 }
 
-fn hero(
-    shell: &mut Shell,
-    height: f32,
-    window: &mut Window,
-    cx: &mut Context<Shell>,
-) -> impl IntoElement {
-    let now = Instant::now();
-    let features: Rc<[Feature]> = shell.home.shared_features().unwrap_or_else(|| Rc::from([]));
-    let current = shell.home.carousel.current().min(features.len() - 1);
-    let blend = shell.home.carousel.blend(now);
-    if shell.home.carousel.crossfading(now) {
-        window.request_animation_frame();
-    }
-    let (text_out, text_in) = hero::text_levels(blend.level);
-    // The next picture is asked while this one shows, so that the change does not wait for it.
-    if features.len() > 1 {
-        let next = &features[(current + 1) % features.len()];
-        let _ = shell.image(next.backdrop.as_ref(), images::BACKDROP, cx);
+/// What the shell holds that one draw of the header needs, read once.
+struct Frame {
+    /// The title shown, and the one fading out under it if a change is under way.
+    current: usize,
+    blend: hero::Blend,
+    crossfading: bool,
+    progress: f32,
+    busy: bool,
+    /// The pictures of each title, when they are here.
+    backdrops: Vec<Option<Arc<RenderImage>>>,
+    logos: Vec<Option<Arc<RenderImage>>>,
+}
+
+/// One draw of the header: it holds what it read of the shell, and writes nothing to it.
+struct Draw<'a> {
+    frame: Frame,
+    /// Where the clicks go.
+    target: &'a WeakEntity<Shell>,
+    logos: &'a mut hero::Logos,
+}
+
+impl Draw<'_> {
+    fn hero(
+        &mut self,
+        features: &Rc<[Feature]>,
+        height: f32,
+        window: &mut Window,
+        cx: &mut Context<HeroView>,
+    ) -> impl IntoElement {
+        let (current, blend) = (self.frame.current, self.frame.blend);
+        if self.frame.crossfading {
+            window.request_animation_frame();
+        }
+        let (text_out, text_in) = hero::text_levels(blend.level);
+
+        let leaving = blend.leaving.filter(|at| *at < features.len());
+        let backdrop = |at: usize, level: f32| {
+            div()
+                .absolute()
+                .inset_0()
+                .opacity(level)
+                .child(hero_frame(self.frame.backdrops[at].clone(), height))
+        };
+        let mut layers: Vec<AnyElement> = Vec::new();
+        if let Some(leaving) = leaving {
+            layers.push(backdrop(leaving, 1.).into_any_element());
+        }
+        layers.push(backdrop(current, blend.level).into_any_element());
+        if let Some(leaving) = leaving {
+            layers.push(
+                self.slide_text(features, leaving, text_out, false, window, cx)
+                    .into_any_element(),
+            );
+        }
+        layers.push(
+            self.slide_text(features, current, text_in, true, window, cx)
+                .into_any_element(),
+        );
+
+        let target = self.target.clone();
+        let marks = (features.len() > 1).then(|| self.marks(features.len(), window, cx));
+        div()
+            .id("hero")
+            .relative()
+            .w_full()
+            .h(px(height))
+            .overflow_hidden()
+            .on_hover(move |hovered: &bool, window, cx: &mut App| {
+                let hovered = *hovered;
+                target
+                    .update(cx, |shell, cx| shell.hover_hero(hovered, window, cx))
+                    .ok();
+            })
+            .children(layers)
+            .children(marks)
+            // The header comes in with a fade the first time it is drawn.
+            .with_animation(
+                "hero-in",
+                Animation::new(motion::page()).with_easing(motion::ease_out),
+                |header, t| header.opacity(t),
+            )
     }
 
-    let leaving = blend.leaving.filter(|at| *at < features.len());
-    let backdrop = |shell: &mut Shell, feature: &Feature, level: f32, cx: &mut Context<Shell>| {
-        let image = shell.image(feature.backdrop.as_ref(), images::BACKDROP, cx);
+    /// The text of the `at`th title, `level` of the way in. Only the title on show answers a
+    /// click, and a click names its title: the header may have changed by the time it comes.
+    fn slide_text(
+        &mut self,
+        features: &[Feature],
+        at: usize,
+        level: f32,
+        live: bool,
+        window: &mut Window,
+        cx: &mut Context<HeroView>,
+    ) -> Div {
+        let feature = &features[at];
+        let headline = match hero::headline(feature) {
+            Headline::Logo(logo) => self.logo_or_title(&logo, at, &feature.title, window),
+            Headline::Text(title) => title_text(title).into_any_element(),
+        };
+        // One id for each button of each title and of each of its two states.
+        let id = |name: &'static str| (name, at * 2 + usize::from(live));
+        let play = theme::primary_button(
+            id("play"),
+            Some(IconName::Play),
+            hero::play_label(feature),
+            window,
+            cx,
+        )
+        .when(live, |button| {
+            let target = self.target.clone();
+            let what = home_page::play_target(feature);
+            button.on_click(move |_, window, cx| {
+                let what = what.clone();
+                target
+                    .update(cx, |shell, cx| shell.play_from_home(what, window, cx))
+                    .ok();
+            })
+        });
+        let more =
+            theme::ghost_button(id("more"), Some(IconName::Plus), "Plus d'infos", window, cx).when(
+                live,
+                |button| {
+                    let target = self.target.clone();
+                    let (kind, item) = (feature.kind, feature.id.clone());
+                    button.on_click(move |_, _, cx| {
+                        let item = item.clone();
+                        target
+                            .update(cx, |shell, cx| shell.open_feature(kind, item, cx))
+                            .ok();
+                    })
+                },
+            );
+        let busy = self.frame.busy;
         div()
             .absolute()
-            .inset_0()
+            .left(px(HERO_INSET))
+            .bottom(px(72.))
+            .w(px(HERO_TEXT_WIDTH))
             .opacity(level)
-            .child(hero_frame(image, height))
-    };
-    let mut layers: Vec<AnyElement> = Vec::new();
-    if let Some(leaving) = leaving {
-        layers.push(backdrop(shell, &features[leaving], 1., cx).into_any_element());
+            .flex()
+            .flex_col()
+            .gap(px(14.))
+            .child(kind_chip(hero::kind_label(feature)))
+            .child(div().py(px(6.)).child(headline))
+            .child(meta_line(hero::meta(feature)))
+            .children(feature.overview.clone().map(|overview| {
+                div()
+                    .max_w(px(500.))
+                    .text_size(px(15.))
+                    .line_height(px(23.))
+                    .text_color(rgba(0xf4f4f5d9))
+                    .line_clamp(3)
+                    .child(overview)
+            }))
+            .child(
+                div()
+                    .pt(px(8.))
+                    .flex()
+                    .gap(px(10.))
+                    .when(busy, |row| row.opacity(0.6))
+                    .child(play)
+                    .child(more),
+            )
     }
-    layers.push(backdrop(shell, &features[current], blend.level, cx).into_any_element());
-    if let Some(leaving) = leaving {
-        layers.push(
-            slide_text(shell, &features, leaving, text_out, false, window, cx).into_any_element(),
-        );
-    }
-    layers
-        .push(slide_text(shell, &features, current, text_in, true, window, cx).into_any_element());
 
-    div()
-        .id("hero")
-        .relative()
-        .w_full()
-        .h(px(height))
-        .overflow_hidden()
-        .on_hover(
-            cx.listener(|shell, hovered: &bool, window, cx| shell.hover_hero(*hovered, window, cx)),
-        )
-        .children(layers)
-        .children((features.len() > 1).then(|| marks(shell, features.len(), now, window, cx)))
-        // The header comes in with a fade the first time it is drawn.
-        .with_animation(
-            "hero-in",
-            Animation::new(motion::page()).with_easing(motion::ease_out),
-            |header, t| header.opacity(t),
-        )
-}
-
-/// The text of the `at`th title, `level` of the way in. Only the title on show answers a click.
-fn slide_text(
-    shell: &mut Shell,
-    features: &[Feature],
-    at: usize,
-    level: f32,
-    live: bool,
-    window: &mut Window,
-    cx: &mut Context<Shell>,
-) -> Div {
-    let feature = &features[at];
-    let headline = match hero::headline(feature) {
-        Headline::Logo(logo) => logo_or_title(shell, &logo, &feature.title, window, cx),
-        Headline::Text(title) => title_text(title).into_any_element(),
-    };
-    // One id for each button of each title and of each of its two states.
-    let id = |name: &'static str| (name, at * 2 + usize::from(live));
-    let play = theme::primary_button(
-        id("play"),
-        Some(IconName::Play),
-        hero::play_label(feature),
-        window,
-        cx,
-    )
-    .when(live, |button| {
-        button.on_click(cx.listener(move |shell, _, window, cx| shell.play_feature(at, window, cx)))
-    });
-    let more = theme::ghost_button(id("more"), Some(IconName::Plus), "Plus d'infos", window, cx)
-        .when(live, |button| {
-            button.on_click(cx.listener(move |shell, _, _, cx| shell.open_feature(at, cx)))
+    /// The logo, at the size it fits in the room given, once it is here; the title in text until
+    /// then, so that the header is never empty while the logo comes.
+    fn logo_or_title(
+        &mut self,
+        logo: &ImageRef,
+        at: usize,
+        title: &str,
+        window: &mut Window,
+    ) -> AnyElement {
+        let drawn = self.frame.logos[at].clone().and_then(|image| {
+            let size = image.size(0);
+            let fit = hero::logo_fit((size.width.0 as f32, size.height.0 as f32))?;
+            Some((image, fit))
         });
-    let busy = shell.home.busy;
-    div()
-        .absolute()
-        .left(px(HERO_INSET))
-        .bottom(px(72.))
-        .w(px(HERO_TEXT_WIDTH))
-        .opacity(level)
-        .flex()
-        .flex_col()
-        .gap(px(14.))
-        .child(kind_chip(hero::kind_label(feature)))
-        .child(div().py(px(6.)).child(headline))
-        .child(meta_line(hero::meta(feature)))
-        .children(feature.overview.clone().map(|overview| {
-            div()
-                .max_w(px(500.))
-                .text_size(px(15.))
-                .line_height(px(23.))
-                .text_color(rgba(0xf4f4f5d9))
-                .line_clamp(3)
-                .child(overview)
-        }))
-        .child(
-            div()
-                .pt(px(8.))
-                .flex()
-                .gap(px(10.))
-                .when(busy, |row| row.opacity(0.6))
-                .child(play)
-                .child(more),
-        )
+        match drawn {
+            // It fades in when it comes, once: not again each time its title comes back.
+            Some((image, (w, h))) => {
+                let level = self.logos.level(&logo.item, Instant::now());
+                if level < 1. {
+                    window.request_animation_frame();
+                }
+                div()
+                    .opacity(level)
+                    .child(img(image).w(px(w)).h(px(h)).object_fit(ObjectFit::Contain))
+                    .into_any_element()
+            }
+            None => title_text(title.to_string()).into_any_element(),
+        }
+    }
+
+    /// A bar for each title under the header: the one shown fills as its time runs, a click on
+    /// one shows its title.
+    fn marks(&self, count: usize, window: &mut Window, cx: &mut Context<HeroView>) -> Div {
+        let (current, progress) = (self.frame.current, self.frame.progress);
+        let shades = theme::Shades {
+            rest: rgba(0xffffff33),
+            hover: rgba(0xffffff66),
+            press: rgba(0xffffff80),
+        };
+        div()
+            .absolute()
+            .left(px(EDGE))
+            .right(px(EDGE))
+            .bottom(px(18.))
+            .flex()
+            .gap(px(8.))
+            .children((0..count).map(|index| {
+                let track = theme::eased(("hero-track", index), shades, window, cx)
+                    .w_full()
+                    .h(px(4.))
+                    .rounded_full()
+                    .overflow_hidden()
+                    .children((index == current).then(|| {
+                        div()
+                            .h_full()
+                            .w(relative(progress))
+                            .rounded_full()
+                            .bg(theme::text())
+                    }));
+                let target = self.target.clone();
+                // The bar is thin, its click is not.
+                div()
+                    .id(("hero-mark", index))
+                    .flex_1()
+                    .h(px(22.))
+                    .flex()
+                    .items_end()
+                    .pb(px(0.))
+                    .cursor_pointer()
+                    .on_click(move |_, _, cx| {
+                        target
+                            .update(cx, |shell, cx| shell.jump_hero(index, cx))
+                            .ok();
+                    })
+                    .child(track)
+            }))
+    }
 }
 
 fn title_text(title: String) -> Div {
@@ -385,36 +539,6 @@ fn title_text(title: String) -> Div {
         .line_height(px(64.))
         .font_weight(FontWeight::BOLD)
         .child(title)
-}
-
-/// The logo, at the size it fits in the room given, once it is here; the title in text until
-/// then, so that the header is never empty while the logo comes.
-fn logo_or_title(
-    shell: &mut Shell,
-    logo: &ImageRef,
-    title: &str,
-    window: &mut Window,
-    cx: &mut Context<Shell>,
-) -> AnyElement {
-    let drawn = shell.image(Some(logo), images::LOGO, cx).and_then(|image| {
-        let size = image.size(0);
-        let fit = hero::logo_fit((size.width.0 as f32, size.height.0 as f32))?;
-        Some((image, fit))
-    });
-    match drawn {
-        // It fades in when it comes, once: not again each time its title comes back.
-        Some((image, (w, h))) => {
-            let level = shell.home.logo_level(&logo.item, Instant::now());
-            if level < 1. {
-                window.request_animation_frame();
-            }
-            div()
-                .opacity(level)
-                .child(img(image).w(px(w)).h(px(h)).object_fit(ObjectFit::Contain))
-                .into_any_element()
-        }
-        None => title_text(title.to_string()).into_any_element(),
-    }
 }
 
 /// `● FILM` over the title.
@@ -435,56 +559,6 @@ fn kind_chip(label: &'static str) -> Div {
             .child(div().size(px(7.)).rounded_full().bg(theme::accent()))
             .child(label),
     )
-}
-
-/// A bar for each title under the header: the one shown fills as its time runs, a click on one
-/// shows its title.
-fn marks(
-    shell: &Shell,
-    count: usize,
-    now: Instant,
-    window: &mut Window,
-    cx: &mut Context<Shell>,
-) -> Div {
-    let current = shell.home.carousel.current();
-    let progress = shell.home.carousel.progress(now);
-    let shades = theme::Shades {
-        rest: rgba(0xffffff33),
-        hover: rgba(0xffffff66),
-        press: rgba(0xffffff80),
-    };
-    div()
-        .absolute()
-        .left(px(EDGE))
-        .right(px(EDGE))
-        .bottom(px(18.))
-        .flex()
-        .gap(px(8.))
-        .children((0..count).map(|index| {
-            let track = theme::eased(("hero-track", index), shades, window, cx)
-                .w_full()
-                .h(px(4.))
-                .rounded_full()
-                .overflow_hidden()
-                .children((index == current).then(|| {
-                    div()
-                        .h_full()
-                        .w(relative(progress))
-                        .rounded_full()
-                        .bg(theme::text())
-                }));
-            // The bar is thin, its click is not.
-            div()
-                .id(("hero-mark", index))
-                .flex_1()
-                .h(px(22.))
-                .flex()
-                .items_end()
-                .pb(px(0.))
-                .cursor_pointer()
-                .on_click(cx.listener(move |shell, _, _, cx| shell.jump_hero(index, cx)))
-                .child(track)
-        }))
 }
 
 // The rows.
@@ -550,7 +624,19 @@ fn titles_row(
             let cards: Vec<_> = (0..titles.len())
                 .map(|at| {
                     let id = (name.clone(), at);
-                    wide_card(shell, titles, at, WIDE, id, range.contains(&at), window, cx)
+                    let image = range
+                        .contains(&at)
+                        .then(|| shell.image(card_picture(&titles[at]), images::CARD, cx))
+                        .flatten();
+                    wide_card(
+                        &titles[at],
+                        image,
+                        Pick::Row(Rc::clone(titles), at),
+                        WIDE,
+                        id,
+                        window,
+                        cx,
+                    )
                 })
                 .collect();
             cards_row(index, scroll, WIDE * 9. / 16. + WIDE_CAPTION, cards).into_any_element()
@@ -638,45 +724,55 @@ fn poster_card(
 /// How much the pointer is over an element, eased.
 struct Over(Fade);
 
+/// Where a card's title is read from when it is clicked: the card holds no copy of it, which
+/// would be made again at every frame.
+#[derive(Clone)]
+pub(super) enum Pick {
+    /// The `at`th title of a row of the Home.
+    Row(Rc<[Title]>, usize),
+    /// The `at`th title of the full list, which must still be `id`: the list may have been
+    /// refreshed since the card was drawn.
+    Listed(usize, ItemId),
+}
+
+impl Pick {
+    pub(super) fn title(&self, list: Option<&Grid<Title>>) -> Option<Title> {
+        match self {
+            Self::Row(titles, at) => titles.get(*at).cloned(),
+            Self::Listed(at, id) => list?.film(*at).filter(|title| title.id() == id).cloned(),
+        }
+    }
+}
+
+/// The picture of a wide card: the backdrop, else the poster.
+pub(super) fn card_picture(title: &Title) -> Option<&ImageRef> {
+    match title {
+        Title::Film(film) => film.backdrop.as_ref().or(film.poster.as_ref()),
+        Title::Episode(episode) => episode
+            .item
+            .backdrop
+            .as_ref()
+            .or(episode.item.poster.as_ref()),
+        Title::Series(series) => series.backdrop.as_ref().or(series.poster.as_ref()),
+    }
+}
+
 /// A wide card: the picture, how far the viewer went, the title and a line; the pointer over it
 /// brings a veil and a play button. A click opens the page of the title, the button plays it.
-#[allow(
-    clippy::too_many_arguments,
-    reason = "one card's state, read once per frame"
-)]
 pub(super) fn wide_card(
-    shell: &mut Shell,
-    titles: &Rc<[Title]>,
-    at: usize,
+    title: &Title,
+    image: Option<Arc<RenderImage>>,
+    pick: Pick,
     width: f32,
     id: (SharedString, usize),
-    near: bool,
     window: &mut Window,
     cx: &mut Context<Shell>,
 ) -> Stateful<Div> {
     let height = width * 9. / 16.;
-    let title = &titles[at];
-    let item = match title {
-        Title::Film(film) => (film.backdrop.as_ref().or(film.poster.as_ref()), Some(film)),
-        Title::Episode(episode) => (
-            episode
-                .item
-                .backdrop
-                .as_ref()
-                .or(episode.item.poster.as_ref()),
-            Some(&episode.item),
-        ),
-        Title::Series(series) => (series.backdrop.as_ref().or(series.poster.as_ref()), None),
-    };
-    let image = near
-        .then(|| shell.image(item.0, images::CARD, cx))
-        .flatten();
     let (heading, detail) = home_page::card_lines(title);
     let left = home_page::time_left(title);
     let progress = home_page::progress(title);
-    // The click reads the title from the row when it comes: no copy of it is made per frame.
-    let opened = Rc::clone(titles);
-    let played = Rc::clone(titles);
+    let (opened, played) = (pick.clone(), pick);
 
     let over_id: ElementId = (id.0.clone(), id.1 + 100_000).into();
     let over = window.use_keyed_state(over_id, cx, |_, _| Over(Fade::new(motion::quick())));
@@ -715,7 +811,7 @@ pub(super) fn wide_card(
                 .bottom(px(14.))
                 .child(progress_bar(fraction, width - 28.))
         }))
-        .child(hover_layer(&id, &over, level, played, at, window, cx));
+        .child(hover_layer(&id, &over, level, played, window, cx));
 
     div()
         .id(id)
@@ -725,7 +821,11 @@ pub(super) fn wide_card(
         .flex_col()
         .gap(px(10.))
         .cursor_pointer()
-        .on_click(cx.listener(move |shell, _, _, cx| shell.open_title(&opened[at], cx)))
+        .on_click(cx.listener(move |shell, _, _, cx| {
+            if let Some(title) = opened.title(shell.list.as_ref().map(|list| &list.grid)) {
+                shell.open_title(&title, cx);
+            }
+        }))
         .child(picture_box)
         .child(
             div()
@@ -768,8 +868,7 @@ fn hover_layer(
     id: &(SharedString, usize),
     over: &Entity<Over>,
     level: f32,
-    titles: Rc<[Title]>,
-    at: usize,
+    pick: Pick,
     window: &mut Window,
     cx: &mut Context<Shell>,
 ) -> Stateful<Div> {
@@ -794,7 +893,9 @@ fn hover_layer(
     // A click on the button plays; it never opens the page behind it.
     .on_click(cx.listener(move |shell, _, window, cx| {
         cx.stop_propagation();
-        shell.play_from_home(PlayTarget::of(&titles[at]), window, cx)
+        if let Some(title) = pick.title(shell.list.as_ref().map(|list| &list.grid)) {
+            shell.play_from_home(PlayTarget::of(&title), window, cx);
+        }
     }))
     .child(icon(IconName::Play, 22.));
     div()
@@ -813,4 +914,62 @@ fn hover_layer(
             });
         })
         .child(play.opacity(level))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::fake::films;
+    use bobine::provider::Page;
+
+    fn titles(count: usize) -> Vec<Title> {
+        films(count).into_iter().map(Title::Film).collect()
+    }
+
+    #[test]
+    fn a_click_on_a_card_of_a_row_reads_its_title_from_the_row() {
+        let row: Rc<[Title]> = Rc::from(titles(3));
+        assert_eq!(
+            Pick::Row(Rc::clone(&row), 1).title(None),
+            Some(row[1].clone())
+        );
+        assert_eq!(Pick::Row(row, 3).title(None), None);
+    }
+
+    #[test]
+    fn a_click_on_a_card_of_the_full_list_reads_its_title_from_the_list() {
+        let mut grid: Grid<Title> = Grid::default();
+        let all = titles(3);
+        grid.loaded(
+            grid.epoch(),
+            0,
+            Page {
+                items: all.clone(),
+                total: 3,
+            },
+        );
+        let pick = |at: usize| Pick::Listed(at, all[at].id().clone());
+        assert_eq!(pick(2).title(Some(&grid)), Some(all[2].clone()));
+        assert_eq!(
+            Pick::Listed(3, all[2].id().clone()).title(Some(&grid)),
+            None
+        );
+        assert_eq!(pick(0).title(None), None);
+    }
+
+    #[test]
+    fn a_click_on_a_card_whose_place_now_holds_another_title_opens_nothing() {
+        let mut grid: Grid<Title> = Grid::default();
+        let all = titles(3);
+        grid.loaded(
+            grid.epoch(),
+            0,
+            Page {
+                items: all.clone(),
+                total: 3,
+            },
+        );
+        let drawn = Pick::Listed(1, all[2].id().clone());
+        assert_eq!(drawn.title(Some(&grid)), None);
+    }
 }

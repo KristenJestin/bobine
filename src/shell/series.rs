@@ -12,7 +12,7 @@ use gpui_kit::{Bounds, Context, Pixels, ScrollHandle, ScrollWheelEvent, Task, Wi
 
 use super::pages::{Chip, Loadable, Origin, route_wheel};
 use super::{Film as Playing, Shell};
-use crate::favourite::{ListPage, Toggle};
+use crate::favourite::{self, ListPage, Toggle};
 use crate::film_page::{self, Choices, From};
 use crate::menu::Menus;
 use crate::motion::{self, Presence};
@@ -120,6 +120,16 @@ impl Shell {
             .filter(|page| &page.id == id)
     }
 
+    /// The series page of that number at `depth`, if it is still open there: a read answers to
+    /// the page that asked it, not to another that shows the same title.
+    pub(super) fn series_numbered(
+        &mut self,
+        depth: usize,
+        generation: u64,
+    ) -> Option<&mut SeriesPage> {
+        favourite::numbered(&mut self.series_pages, depth, generation)
+    }
+
     /// Asks the series, its seasons and the episode to play next, then the episodes of the
     /// season shown. `first`: the page opens on the season of the next episode. `after`: the
     /// reports of a playback, sent before anything is asked.
@@ -134,6 +144,7 @@ impl Shell {
         let refresh = page.refreshes.ask(&mut self.refreshes_asked);
         let id = page.id.clone();
         let asked = id.clone();
+        let generation = page.generation;
         let read_at = page.favourite.changes();
         self.ask(
             cx,
@@ -152,7 +163,7 @@ impl Shell {
                     Ok(fresh) => fresh,
                     Err(error) => {
                         let said = shell.failed(error, cx);
-                        if let Some(page) = shell.series_page(depth, &id)
+                        if let Some(page) = shell.series_numbered(depth, generation)
                             && page.refreshes.landed(refresh)
                             && !matches!(page.detail, Loadable::Ready(_))
                         {
@@ -163,7 +174,7 @@ impl Shell {
                 };
                 shell.series.grid.update(&fresh.detail.series);
                 let Some(page) = shell
-                    .series_page(depth, &id)
+                    .series_numbered(depth, generation)
                     .filter(|page| page.refreshes.is_newest(refresh))
                 else {
                     return;

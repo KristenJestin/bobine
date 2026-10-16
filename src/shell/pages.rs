@@ -19,7 +19,7 @@ use gpui_kit::{
 };
 
 use super::{Film as Playing, HomePage, Shell};
-use crate::favourite::{ListPage, Toggle};
+use crate::favourite::{self, ListPage, Toggle};
 use crate::film_page::{self, Choices, From, Plan};
 use crate::grid::{Grid, Listed, RETRY_AFTER};
 use crate::images::{self, Key};
@@ -197,6 +197,18 @@ impl<T: Listed> LibraryPage<T> {
     /// it would still take clicks, opacity does not stop them.
     pub fn cells_visible(&self, now: Instant) -> bool {
         !self.grid.has_stale() || self.appear.value(now) > GONE
+    }
+
+    /// The first page of the list was asked again until it was given up, and no list is there:
+    /// the failure is shown, with a way to try again.
+    pub fn gave_up(&self) -> bool {
+        self.grid.total.is_none() && self.grid.gave_up(0)
+    }
+
+    /// "Réessayer": the first page is asked anew, as many times as the first time.
+    pub fn retry(&mut self) {
+        self.grid.forget_failures();
+        self.error = None;
     }
 
     /// The count in the header: none while the new list is awaited, the old total is not its.
@@ -377,6 +389,33 @@ impl ListPage for DetailPage {
 }
 
 impl DetailPage {
+    pub(super) fn new(id: ItemId, generation: u64) -> Self {
+        DetailPage {
+            id,
+            generation,
+            detail: Loadable::Loading,
+            choices: None,
+            collection: None,
+            menus: Menus::default(),
+            menu_fade: Presence::new(motion::quick()),
+            chips: Default::default(),
+            favourite: Toggle::default(),
+            scroll: ScrollHandle::new(),
+            rows: Default::default(),
+            gesture: Default::default(),
+            error: None,
+            busy: false,
+        }
+    }
+
+    /// A read that failed: only a first load shows the failure. A page already shown stays,
+    /// whatever the network does to a read made behind it.
+    fn load_failed(&mut self, said: &'static str) {
+        if !matches!(self.detail, Loadable::Ready(_)) {
+            self.detail = Loadable::Failed(said);
+        }
+    }
+
     pub fn ready(&self) -> Option<(&FilmDetail, &Choices)> {
         match (&self.detail, &self.choices) {
             (Loadable::Ready(detail), Some(choices)) => Some((detail, choices)),
@@ -779,6 +818,22 @@ impl Shell {
         cx.notify();
     }
 
+    /// "Réessayer", when the first page of the list was given up: it is asked again.
+    pub fn retry_list(&mut self, cx: &mut Context<Self>) {
+        match self.navigator.current() {
+            Screen::Library => {
+                self.library.retry();
+                self.ask_films(0..1, cx);
+            }
+            Screen::Series => {
+                self.series.retry();
+                self.ask_series(0..1, cx);
+            }
+            _ => return,
+        }
+        cx.notify();
+    }
+
     /// The "Non vus" chip.
     pub fn toggle_unwatched(&mut self, cx: &mut Context<Self>) {
         self.change_tools(
@@ -904,22 +959,7 @@ impl Shell {
 
     pub fn open_film(&mut self, id: ItemId, cx: &mut Context<Self>) {
         let generation = self.next_generation();
-        self.details.push(DetailPage {
-            id,
-            generation,
-            detail: Loadable::Loading,
-            choices: None,
-            collection: None,
-            menus: Menus::default(),
-            menu_fade: Presence::new(motion::quick()),
-            chips: Default::default(),
-            favourite: Toggle::default(),
-            scroll: ScrollHandle::new(),
-            rows: Default::default(),
-            gesture: Default::default(),
-            error: None,
-            busy: false,
-        });
+        self.details.push(DetailPage::new(id, generation));
         self.navigator.open(Screen::FilmDetail);
         self.load_detail(self.details.len() - 1, true, cx);
         cx.notify();
@@ -930,10 +970,26 @@ impl Shell {
         self.details.get_mut(depth).filter(|page| &page.id == id)
     }
 
+    /// The film page of that number at `depth`, if it is still open there: a read answers to
+    /// the page that asked it, not to another that shows the same title.
+    pub(super) fn detail_numbered(
+        &mut self,
+        depth: usize,
+        generation: u64,
+    ) -> Option<&mut DetailPage> {
+        favourite::numbered(&mut self.details, depth, generation)
+    }
+
     /// Asks the film, then (once the page shows) its collection: that lookup is slow.
-    fn load_detail(&mut self, depth: usize, with_collection: bool, cx: &mut Context<Self>) {
+    pub(super) fn load_detail(
+        &mut self,
+        depth: usize,
+        with_collection: bool,
+        cx: &mut Context<Self>,
+    ) {
         let id = self.details[depth].id.clone();
         let asked = id.clone();
+        let generation = self.details[depth].generation;
         let read_at = self.details[depth].favourite.changes();
         self.ask(
             cx,
@@ -943,14 +999,14 @@ impl Shell {
                     Ok(detail) => detail,
                     Err(error) => {
                         let said = shell.failed(error, cx);
-                        if let Some(page) = shell.detail_page(depth, &id) {
-                            page.detail = Loadable::Failed(said);
+                        if let Some(page) = shell.detail_numbered(depth, generation) {
+                            page.load_failed(said);
                         }
                         return;
                     }
                 };
                 shell.library.grid.update(&detail.film);
-                let Some(page) = shell.detail_page(depth, &id) else {
+                let Some(page) = shell.detail_numbered(depth, generation) else {
                     return;
                 };
                 // Coming back from the player keeps what the chips chose.
@@ -1273,6 +1329,7 @@ impl Shell {
         };
         let id = self.details[depth].id.clone();
         let asked = id.clone();
+        let generation = self.details[depth].generation;
         let read_at = self.details[depth].favourite.changes();
         self.ask(
             cx,
@@ -1287,7 +1344,7 @@ impl Shell {
                 };
                 shell.library.grid.update(&detail.film);
                 // Continue Watching is asked again when Home shows.
-                if let Some(page) = shell.detail_page(depth, &id)
+                if let Some(page) = shell.detail_numbered(depth, generation)
                     && let Loadable::Ready(shown) = &mut page.detail
                 {
                     page.favourite.sync(detail.favourite, read_at);
@@ -1314,6 +1371,19 @@ impl Shell {
         // A failed image waiting for its retry is drawn here, with nothing else to end a fetch.
         self.wake_for_image_retries(cx);
         None
+    }
+
+    /// The image at `width` if it is here, read without writing anything: for a draw that must
+    /// not touch the shell. Its asking is `ask_hero_images`'s, outside the draw.
+    pub fn peek_image(
+        &self,
+        image: Option<&bobine::provider::ImageRef>,
+        width: u32,
+    ) -> Option<Arc<RenderImage>> {
+        self.images
+            .cache
+            .peek(&Key::new(image?, width))
+            .map(Arc::clone)
     }
 
     /// A failed image still on screen is asked again once its wait is over: the window is woken
@@ -1407,6 +1477,28 @@ mod tests {
 
     use crate::fake::{FILMS_LIBRARY, FakeServer};
     use bobine::provider::MediaServer;
+
+    fn shown_film() -> DetailPage {
+        let server = FakeServer::new(3, false);
+        let id = ItemId(crate::fake::FILM.into());
+        let mut page = DetailPage::new(id.clone(), 1);
+        page.detail = Loadable::Ready(server.film(&id).unwrap());
+        page
+    }
+
+    #[test]
+    fn a_read_that_fails_on_a_film_page_that_is_showing_keeps_the_page() {
+        let mut page = shown_film();
+        page.load_failed("Hors ligne");
+        assert!(matches!(page.detail, Loadable::Ready(_)));
+    }
+
+    #[test]
+    fn a_first_load_that_fails_shows_the_failure() {
+        let mut page = DetailPage::new(ItemId(crate::fake::FILM.into()), 1);
+        page.load_failed("Hors ligne");
+        assert!(matches!(page.detail, Loadable::Failed("Hors ligne")));
+    }
 
     /// A films page whose first page of a 1284-film library has arrived.
     fn films_page() -> LibraryPage<Film> {
@@ -1719,6 +1811,46 @@ mod tests {
         page.follow_list(retry);
         assert!(!page.grid.has_stale());
         assert_eq!(page.grid.total, Some(1027));
+    }
+
+    /// The first page fails every time it is asked, up to the last try, from `t`.
+    fn give_up(page: &mut LibraryPage<Film>, t: Instant) -> Instant {
+        let epoch = page.grid.epoch();
+        let mut now = t;
+        for _ in 0..=crate::grid::MAX_RETRIES {
+            assert_eq!(page.pages_wanted(0..40, now), [0]);
+            page.grid.failed(epoch, 0, now);
+            now += crate::grid::RETRY_AFTER;
+        }
+        now
+    }
+
+    #[test]
+    fn a_first_page_given_up_during_the_fade_shows_the_failure_and_can_be_tried_again() {
+        let (mut page, t) = fading(Instant::now());
+        assert!(!page.gave_up());
+        let now = give_up(&mut page, t);
+        page.follow_list(now);
+        assert!(page.gave_up());
+        assert_eq!(page.pages_wanted(0..40, now), Vec::<u32>::new());
+        page.retry();
+        assert!(!page.gave_up());
+        assert_eq!(page.pages_wanted(0..40, now), [0]);
+        // The server is back: the list lands in the old one's place.
+        page.loaded(page.grid.epoch(), 0, answer(&page, 0));
+        page.follow_list(now);
+        assert!(!page.grid.has_stale());
+        assert_eq!(page.grid.total, Some(1027));
+    }
+
+    #[test]
+    fn a_first_page_that_still_has_tries_left_is_not_given_up() {
+        let (mut page, t) = fading(Instant::now());
+        let epoch = page.grid.epoch();
+        for _ in 0..crate::grid::MAX_RETRIES {
+            page.grid.failed(epoch, 0, t);
+        }
+        assert!(!page.gave_up());
     }
 
     #[test]

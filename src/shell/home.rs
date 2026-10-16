@@ -2,7 +2,6 @@
 //! start, and the full list behind "Tout voir". Like every page, each call to the server runs
 //! off the window's thread, and an answer that comes after a newer ask is dropped.
 
-use std::collections::HashMap;
 use std::ops::Range;
 use std::rc::Rc;
 use std::thread::JoinHandle;
@@ -18,7 +17,6 @@ use super::{Film as Playing, Shell};
 use crate::grid::{Grid, Listed};
 use crate::hero::{self, Carousel};
 use crate::home_page::{self, Asks, ListKind, PlayTarget, StartError};
-use crate::motion;
 use crate::navigation::Screen;
 use crate::scroll;
 
@@ -61,8 +59,6 @@ pub struct HomePage {
     pub next_row: Rc<[Title]>,
     /// One row for each library of films or of series, in the server's order.
     pub latest: Option<Loadable<Vec<LatestRow>>>,
-    /// When each logo was first drawn: it fades in then, once.
-    logos: HashMap<ItemId, Instant>,
     pub scroll: ScrollHandle,
     /// The rows that scroll sideways, in the order they are drawn.
     pub rows: Vec<ScrollHandle>,
@@ -84,7 +80,6 @@ impl Default for HomePage {
             next_up: None,
             next_row: Rc::from([]),
             latest: None,
-            logos: HashMap::new(),
             scroll: ScrollHandle::new(),
             rows: Vec::new(),
             gesture: scroll::Gesture::default(),
@@ -104,20 +99,123 @@ impl HomePage {
         }
     }
 
-    /// How much of the way in the logo of `title` is, from 0 to 1.
-    pub fn logo_level(&mut self, title: &ItemId, now: Instant) -> f32 {
-        let since = *self.logos.entry(title.clone()).or_insert(now);
-        motion::ease_out(
-            now.saturating_duration_since(since).as_secs_f32() / motion::page().as_secs_f32(),
-        )
-    }
-
     /// The same titles, shared: the header draws them while it also asks the shell for pictures.
     pub fn shared_features(&self) -> Option<Rc<[Feature]>> {
         match &self.features {
             Some(Loadable::Ready(features)) => Some(Rc::clone(features)),
             _ => None,
         }
+    }
+
+    /// A new load of the page starts: the number its answers must carry, and what is not there
+    /// yet shows as awaited. What is drawn stays drawn until the new answer comes.
+    pub fn begin_load(&mut self) -> u64 {
+        // The pointer may have been over the header when the Home was left, and its leaving
+        // never heard: the header says again whether it is over it.
+        self.hovered = false;
+        let asked = self.asked.next();
+        self.features.get_or_insert(Loadable::Loading);
+        self.resume.get_or_insert(Loadable::Loading);
+        self.next_up.get_or_insert(Loadable::Loading);
+        self.latest.get_or_insert(Loadable::Loading);
+        asked
+    }
+
+    /// Whether the answers to the load `asked` are the newest: an older one comes late and is
+    /// dropped.
+    pub fn is_latest(&self, asked: u64) -> bool {
+        self.asked.is_latest(asked)
+    }
+
+    /// The header's titles came: the one shown stays shown when it is still among them.
+    pub fn features_landed(&mut self, asked: u64, features: Loadable<Rc<[Feature]>>) -> bool {
+        if !self.is_latest(asked) {
+            return false;
+        }
+        let now = Instant::now();
+        let shown = self
+            .featured()
+            .get(self.carousel.current())
+            .map(|feature| feature.id.clone());
+        let list: &[Feature] = match &features {
+            Loadable::Ready(features) => features,
+            _ => &[],
+        };
+        let kept = hero::kept(shown.as_ref(), list);
+        self.carousel.retarget(list.len(), kept, now);
+        self.features = Some(features);
+        true
+    }
+
+    pub fn resume_landed(&mut self, asked: u64, started: Loadable<Rc<[Title]>>) -> bool {
+        if !self.is_latest(asked) {
+            return false;
+        }
+        self.resume = Some(started);
+        self.work_out_next_row();
+        true
+    }
+
+    pub fn next_up_landed(&mut self, asked: u64, next: Loadable<Vec<Episode>>) -> bool {
+        if !self.is_latest(asked) {
+            return false;
+        }
+        self.next_up = Some(next);
+        self.work_out_next_row();
+        true
+    }
+
+    /// The libraries came: one row for each of films or of series, the rows already drawn
+    /// keeping their titles until the new ones come. Returns the libraries to ask the latest of.
+    pub fn libraries_landed(&mut self, asked: u64, libraries: Vec<Library>) -> Vec<ItemId> {
+        if !self.is_latest(asked) {
+            return Vec::new();
+        }
+        let libraries: Vec<Library> = libraries
+            .into_iter()
+            .filter(|library| library.kind != LibraryKind::Other)
+            .collect();
+        let mut rows: Vec<LatestRow> = Vec::new();
+        for library in &libraries {
+            let before = match &mut self.latest {
+                Some(Loadable::Ready(rows)) => rows
+                    .iter_mut()
+                    .find(|row| row.library.id == library.id)
+                    .map(|row| std::mem::replace(&mut row.titles, Loadable::Loading)),
+                _ => None,
+            };
+            rows.push(LatestRow {
+                library: library.clone(),
+                titles: before.unwrap_or(Loadable::Loading),
+            });
+        }
+        self.latest = Some(Loadable::Ready(rows));
+        libraries.into_iter().map(|library| library.id).collect()
+    }
+
+    pub fn libraries_failed(&mut self, asked: u64, why: &'static str) {
+        if !self.is_latest(asked) {
+            return;
+        }
+        self.latest = Some(Loadable::Failed(why));
+    }
+
+    /// The latest titles of one library came.
+    pub fn latest_landed(
+        &mut self,
+        asked: u64,
+        library: &ItemId,
+        titles: Loadable<Rc<[Title]>>,
+    ) -> bool {
+        if !self.is_latest(asked) {
+            return false;
+        }
+        if let Some(Loadable::Ready(rows)) = &mut self.latest
+            && let Some(row) = rows.iter_mut().find(|row| &row.library.id == library)
+        {
+            row.titles = titles;
+        }
+        true
     }
 
     /// The row under "Reprendre" worked out again: what is started is not asked as next.
@@ -157,88 +255,66 @@ pub struct ListPage {
 impl Shell {
     /// Asks everything the Home shows. What is drawn stays drawn until the new answer comes.
     pub fn load_home(&mut self, cx: &mut Context<Self>) {
-        // The pointer may have been over the header when the Home was left, and its leaving
-        // never heard: the header says again whether it is over it.
-        self.home.hovered = false;
-        let asked = self.home.asked.next();
-        let home = &mut self.home;
-        home.features.get_or_insert(Loadable::Loading);
-        home.resume.get_or_insert(Loadable::Loading);
-        home.next_up.get_or_insert(Loadable::Loading);
-        home.latest.get_or_insert(Loadable::Loading);
+        let asked = self.home.begin_load();
 
         self.ask(
             cx,
             |server| server.featured(FEATURED),
             move |shell, features, cx| {
-                if !shell.home.asked.is_latest(asked) {
+                if !shell.home.is_latest(asked) {
                     return;
                 }
                 let features = match features {
                     Ok(features) => Loadable::Ready(Rc::from(features)),
                     Err(error) => Loadable::Failed(shell.failed(error, cx)),
                 };
-                shell.show_features(features);
+                shell.home.features_landed(asked, features);
             },
         );
         self.ask(
             cx,
             |server| server.continue_watching(),
             move |shell, started, cx| {
-                if shell.home.asked.is_latest(asked) {
-                    shell.home.resume = Some(match started {
-                        Ok(started) => Loadable::Ready(Rc::from(started)),
-                        Err(error) => Loadable::Failed(shell.failed(error, cx)),
-                    });
-                    shell.home.work_out_next_row();
+                if !shell.home.is_latest(asked) {
+                    return;
                 }
+                let started = match started {
+                    Ok(started) => Loadable::Ready(Rc::from(started)),
+                    Err(error) => Loadable::Failed(shell.failed(error, cx)),
+                };
+                shell.home.resume_landed(asked, started);
             },
         );
         self.ask(
             cx,
             |server| server.next_episodes(home_page::ROW),
             move |shell, next, cx| {
-                if shell.home.asked.is_latest(asked) {
-                    shell.home.next_up = Some(match next {
-                        Ok(next) => Loadable::Ready(next),
-                        Err(error) => Loadable::Failed(shell.failed(error, cx)),
-                    });
-                    shell.home.work_out_next_row();
+                if !shell.home.is_latest(asked) {
+                    return;
                 }
+                let next = match next {
+                    Ok(next) => Loadable::Ready(next),
+                    Err(error) => Loadable::Failed(shell.failed(error, cx)),
+                };
+                shell.home.next_up_landed(asked, next);
             },
         );
         self.ask(
             cx,
             |server| server.libraries(),
             move |shell, libraries, cx| {
-                if !shell.home.asked.is_latest(asked) {
+                if !shell.home.is_latest(asked) {
                     return;
                 }
                 match libraries {
                     Ok(libraries) => shell.load_latest(libraries, asked, cx),
                     Err(error) => {
-                        shell.home.latest = Some(Loadable::Failed(shell.failed(error, cx)));
+                        let why = shell.failed(error, cx);
+                        shell.home.libraries_failed(asked, why);
                     }
                 }
             },
         );
-    }
-
-    /// The header's titles came: the one shown stays shown when it is still among them.
-    fn show_features(&mut self, features: Loadable<Rc<[Feature]>>) {
-        let now = Instant::now();
-        let shown = self
-            .home
-            .featured()
-            .get(self.home.carousel.current())
-            .map(|feature| feature.id.clone());
-        let list: &[Feature] = match &features {
-            Loadable::Ready(features) => features,
-            _ => &[],
-        };
-        let kept = hero::kept(shown.as_ref(), list);
-        self.home.carousel.retarget(list.len(), kept, now);
-        self.home.features = Some(features);
     }
 
     /// What the header shows changed: it is drawn again, alone.
@@ -248,28 +324,7 @@ impl Shell {
 
     /// One row for each library of films or of series.
     fn load_latest(&mut self, libraries: Vec<Library>, asked: u64, cx: &mut Context<Self>) {
-        let libraries: Vec<Library> = libraries
-            .into_iter()
-            .filter(|library| library.kind != LibraryKind::Other)
-            .collect();
-        // Rows already drawn keep their titles until the new ones come.
-        let mut rows: Vec<LatestRow> = Vec::new();
-        for library in &libraries {
-            let before = match &mut self.home.latest {
-                Some(Loadable::Ready(rows)) => rows
-                    .iter_mut()
-                    .find(|row| row.library.id == library.id)
-                    .map(|row| std::mem::replace(&mut row.titles, Loadable::Loading)),
-                _ => None,
-            };
-            rows.push(LatestRow {
-                library: library.clone(),
-                titles: before.unwrap_or(Loadable::Loading),
-            });
-        }
-        self.home.latest = Some(Loadable::Ready(rows));
-        for library in libraries {
-            let id = library.id.clone();
+        for id in self.home.libraries_landed(asked, libraries) {
             self.ask(
                 cx,
                 {
@@ -277,18 +332,14 @@ impl Shell {
                     move |server| server.latest(&id, home_page::ROW)
                 },
                 move |shell, titles, cx| {
-                    if !shell.home.asked.is_latest(asked) {
+                    if !shell.home.is_latest(asked) {
                         return;
                     }
                     let titles = match titles {
                         Ok(titles) => Loadable::Ready(Rc::from(titles)),
                         Err(error) => Loadable::Failed(shell.failed(error, cx)),
                     };
-                    if let Some(Loadable::Ready(rows)) = &mut shell.home.latest
-                        && let Some(row) = rows.iter_mut().find(|row| row.library.id == id)
-                    {
-                        row.titles = titles;
-                    }
+                    shell.home.latest_landed(asked, &id, titles);
                 },
             );
         }
@@ -329,6 +380,7 @@ impl Shell {
         // The window redraws while the bar grows; nothing while the pointer holds it.
         let moved = self.home.carousel.tick(now);
         if moved || !self.home.carousel.paused() {
+            self.ask_hero_images(cx);
             self.notify_hero(cx);
         }
         true
@@ -367,7 +419,25 @@ impl Shell {
     /// A click on one of the marks under the header.
     pub fn jump_hero(&mut self, to: usize, cx: &mut Context<Self>) {
         self.home.carousel.jump(to, Instant::now());
+        self.ask_hero_images(cx);
         self.notify_hero(cx);
+    }
+
+    /// Asks the pictures the header draws that are not here yet. The header only reads them
+    /// when it draws: a write to the shell during a draw would have the whole page built again.
+    pub fn ask_hero_images(&mut self, cx: &mut Context<Self>) {
+        let Some(features) = self.home.shared_features() else {
+            return;
+        };
+        let current = self
+            .home
+            .carousel
+            .current()
+            .min(features.len().saturating_sub(1));
+        let leaving = self.home.carousel.blend(Instant::now()).leaving;
+        for (image, width) in hero::pictures(&features, current, leaving) {
+            let _ = self.image(Some(&image), width, cx);
+        }
     }
 
     /// The wheel or the touchpad over the Home: the page goes up and down, the row under the
@@ -394,25 +464,13 @@ impl Shell {
         }
     }
 
-    /// "Plus d'infos" under the header's `at`th title.
-    pub fn open_feature(&mut self, at: usize, cx: &mut Context<Self>) {
-        let Some(feature) = self.home.featured().get(at) else {
-            return;
-        };
-        let id = feature.id.clone();
-        match feature.kind {
+    /// "Plus d'infos" under a title of the header: the title is named by the button, not by its
+    /// place, since the titles may change between the draw and the click.
+    pub fn open_feature(&mut self, kind: FeatureKind, id: ItemId, cx: &mut Context<Self>) {
+        match kind {
             FeatureKind::Film => self.open_film(id, cx),
             FeatureKind::Series => self.open_series(id, cx),
         }
-    }
-
-    /// "Lecture" under the header's `at`th title.
-    pub fn play_feature(&mut self, at: usize, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(feature) = self.home.featured().get(at) else {
-            return;
-        };
-        let target = home_page::play_target(feature);
-        self.play_from_home(target, window, cx);
     }
 
     /// "Lecture": the server opens a playback, then the player starts, like the page of the
@@ -589,28 +647,105 @@ impl Shell {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::fake::FakeServer;
+    use bobine::provider::MediaServer;
 
-    #[test]
-    fn a_logo_fades_in_the_first_time_it_is_drawn_and_not_again() {
-        let mut home = HomePage::default();
-        let id = ItemId("title-1".into());
-        let t0 = Instant::now();
-        assert_eq!(home.logo_level(&id, t0), 0.);
-        let midway = home.logo_level(&id, t0 + motion::page() / 2);
-        assert!(midway > 0. && midway < 1., "{midway}");
-        assert_eq!(home.logo_level(&id, t0 + motion::page()), 1.);
-        // Shown again later, as its title comes back: it is there at once.
-        assert_eq!(home.logo_level(&id, t0 + motion::page() * 40), 1.);
+    /// What the server answered to one load of the Home.
+    struct Answers {
+        features: Vec<Feature>,
+        started: Vec<Title>,
+        next: Vec<Episode>,
+        libraries: Vec<Library>,
+        latest: Vec<(ItemId, Vec<Title>)>,
+    }
+
+    fn read(server: &FakeServer) -> Answers {
+        let libraries = server.libraries().unwrap();
+        Answers {
+            features: server.featured(FEATURED).unwrap(),
+            started: server.continue_watching().unwrap(),
+            next: server.next_episodes(home_page::ROW).unwrap(),
+            latest: libraries
+                .iter()
+                .map(|library| {
+                    (
+                        library.id.clone(),
+                        server.latest(&library.id, home_page::ROW).unwrap(),
+                    )
+                })
+                .collect(),
+            libraries,
+        }
+    }
+
+    /// The answers reach the page as the shell hands them over, for the load `asked`.
+    fn deliver(home: &mut HomePage, asked: u64, answers: &Answers) {
+        home.features_landed(asked, Loadable::Ready(Rc::from(answers.features.clone())));
+        home.resume_landed(asked, Loadable::Ready(Rc::from(answers.started.clone())));
+        home.next_up_landed(asked, Loadable::Ready(answers.next.clone()));
+        let rows = home.libraries_landed(asked, answers.libraries.clone());
+        for (library, titles) in &answers.latest {
+            if rows.contains(library) {
+                home.latest_landed(asked, library, Loadable::Ready(Rc::from(titles.clone())));
+            }
+        }
+    }
+
+    /// The ids of everything the page shows.
+    fn shown(home: &HomePage) -> Vec<Vec<String>> {
+        let ids = |titles: &[Title]| titles.iter().map(|t| t.id().0.clone()).collect();
+        let latest = match &home.latest {
+            Some(Loadable::Ready(rows)) => rows
+                .iter()
+                .flat_map(|row| match &row.titles {
+                    Loadable::Ready(titles) => ids(titles),
+                    _ => Vec::new(),
+                })
+                .collect(),
+            _ => Vec::new(),
+        };
+        vec![
+            home.featured().iter().map(|f| f.id.0.clone()).collect(),
+            match &home.resume {
+                Some(Loadable::Ready(titles)) => ids(titles),
+                _ => Vec::new(),
+            },
+            ids(&home.next_row),
+            latest,
+        ]
     }
 
     #[test]
-    fn each_logo_has_its_own_fade() {
+    fn two_loads_of_the_home_answered_out_of_order_show_the_newest() {
+        let server = FakeServer::new(6, false);
         let mut home = HomePage::default();
-        let t0 = Instant::now();
-        home.logo_level(&ItemId("title-1".into()), t0);
-        assert_eq!(
-            home.logo_level(&ItemId("title-2".into()), t0 + motion::page()),
-            0.
+        let old = home.begin_load();
+        // The first load read the server before the viewer started a film and an episode.
+        let old_answers = read(&server);
+        {
+            let mut state = server.state.lock().unwrap();
+            state.films.remove(0);
+            state.films[0].resume = Some(Duration::from_secs(600));
+            state.episodes[0].item.resume = Some(Duration::from_secs(300));
+        }
+        let new = home.begin_load();
+        let new_answers = read(&server);
+        let alone = |answers: &Answers| {
+            let mut home = HomePage::default();
+            let asked = home.begin_load();
+            deliver(&mut home, asked, answers);
+            shown(&home)
+        };
+        assert_ne!(
+            alone(&old_answers),
+            alone(&new_answers),
+            "the two loads must differ for this test to mean anything"
         );
+
+        // The second load answers first, the first one comes late.
+        deliver(&mut home, new, &new_answers);
+        let newest = shown(&home);
+        deliver(&mut home, old, &old_answers);
+        assert_eq!(shown(&home), newest);
     }
 }

@@ -434,7 +434,9 @@ fn show_screen(
                     return false;
                 }
                 if let Some(acts) = &acts {
-                    shell.update(cx, |shell, _| acts.report(&shell.frames)).ok();
+                    shell
+                        .update(cx, |shell, _| acts.report(&shell.frames.borrow()))
+                        .ok();
                 }
                 shell.update(cx, |shell, _| shell.close_video()).ok();
                 let images = fake.state.lock().unwrap().record.images.clone();

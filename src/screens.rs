@@ -16,11 +16,13 @@ mod series_detail;
 pub use home::HeroView;
 pub use series_detail::up_next_card;
 
+use std::sync::Arc;
+
 use bobine::provider::{Film, Series};
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    AnyElement, Context, Div, ElementId, FontWeight, IntoElement, ObjectFit, Stateful, Window, div,
-    img, px, rgba,
+    AnyElement, Context, Div, ElementId, FontWeight, IntoElement, ObjectFit, RenderImage, Stateful,
+    Window, div, img, px, rgba,
 };
 
 use crate::film_page;
@@ -96,10 +98,7 @@ fn row_heading(title: impl Into<gpui_kit::SharedString>) -> Div {
 
 /// An image filling its box, once it is here; the box's own colour until then. The box does
 /// not clip its children to its rounded corners: the image is rounded by `radius` itself.
-fn picture(
-    image: Option<std::sync::Arc<gpui_kit::RenderImage>>,
-    radius: f32,
-) -> Option<AnyElement> {
+fn picture(image: Option<Arc<RenderImage>>, radius: f32) -> Option<AnyElement> {
     image.map(|image| {
         img(image)
             .rounded(px(radius))
@@ -146,6 +145,17 @@ fn poster(
     film_card(shell, film, width, id, outlined, false, cx)
 }
 
+/// `poster`, its picture already asked: see `film_card_with`.
+fn poster_with(
+    film: &Film,
+    image: Option<Arc<RenderImage>>,
+    width: f32,
+    id: impl Into<ElementId>,
+    cx: &mut Context<Shell>,
+) -> Stateful<Div> {
+    film_card_with(film, image, width, id, false, false, cx)
+}
+
 /// A film with, over the foot of its poster, how far the viewer went when it is started.
 fn started_poster(
     shell: &mut Shell,
@@ -167,6 +177,20 @@ fn film_card(
     cx: &mut Context<Shell>,
 ) -> Stateful<Div> {
     let image = shell.image(film.poster.as_ref(), images::POSTER, cx);
+    film_card_with(film, image, width, id, outlined, with_progress, cx)
+}
+
+/// A film poster whose picture is already asked: drawing it needs no shell, so a caller that
+/// holds the film borrowed from the shell does not copy it at every frame.
+fn film_card_with(
+    film: &Film,
+    image: Option<Arc<RenderImage>>,
+    width: f32,
+    id: impl Into<ElementId>,
+    outlined: bool,
+    with_progress: bool,
+    cx: &mut Context<Shell>,
+) -> Stateful<Div> {
     let opened = film.id.clone();
     let mut caption: Vec<String> = film.year.iter().map(i32::to_string).collect();
     if outlined {
@@ -217,6 +241,17 @@ fn series_poster(
     cx: &mut Context<Shell>,
 ) -> Stateful<Div> {
     let image = shell.image(series.poster.as_ref(), images::POSTER, cx);
+    series_poster_with(series, image, width, id, cx)
+}
+
+/// A series poster whose picture is already asked: see `film_card_with`.
+fn series_poster_with(
+    series: &Series,
+    image: Option<Arc<RenderImage>>,
+    width: f32,
+    id: impl Into<ElementId>,
+    cx: &mut Context<Shell>,
+) -> Stateful<Div> {
     let opened = series.id.clone();
     let corner = series_page::badge(series).map_or(Corner::Nothing, Corner::Count);
     let rating = series
@@ -241,7 +276,7 @@ fn series_poster(
 }
 
 fn poster_image(
-    image: Option<std::sync::Arc<gpui_kit::RenderImage>>,
+    image: Option<Arc<RenderImage>>,
     rating: Option<String>,
     corner: Corner,
     width: f32,

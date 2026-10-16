@@ -203,6 +203,18 @@ impl<T: Listed> Grid<T> {
         self.pages.insert(page, films.items);
     }
 
+    /// Whether the page failed so often that it is not asked any more.
+    pub fn gave_up(&self, page: u32) -> bool {
+        self.failures
+            .get(&page)
+            .is_some_and(|&(failures, _)| failures > MAX_RETRIES)
+    }
+
+    /// The failures are forgotten: the pages that gave up are asked again at once.
+    pub fn forget_failures(&mut self) {
+        self.failures.clear();
+    }
+
     /// The page may be asked again, a few times, once `RETRY_AFTER` has passed.
     pub fn failed(&mut self, epoch: u64, page: u32, now: Instant) {
         if !self.is_current(epoch) {
