@@ -2,15 +2,20 @@
 //! draws this and forwards the keys, the mouse and the layout to it; the tests drive it with a
 //! fake player, a fake display and their own clock.
 
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use bobine::provider::Segment;
 
 use super::controls::{Controls, KeyAction, key_action, on_picture, subtitle_position};
 use super::segments::{Button, Label, Press, Prompt, button_at};
 use super::settings::{self, Page, Quality};
-use super::{Aspect, Media, Player, PlayerError, PlayerEvent, Seek, Track, TrackKind, tracks};
+use super::{
+    Aspect, Media, PlaybackInfo, Player, PlayerError, PlayerEvent, Seek, Track, TrackKind, tracks,
+};
 use crate::video::{Rect, VideoDisplay, placement};
+
+/// How often "Playback info" is read from the player.
+const INFO_EVERY: Duration = Duration::from_secs(1);
 
 /// What the session asks of the window.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -61,6 +66,10 @@ pub struct Session {
     pub duration: f64,
     pub paused: bool,
     tracks: Vec<Track>,
+    /// What "Playback info" shows, and when it was read: mpv is asked once a second, not at
+    /// every frame drawn.
+    info: PlaybackInfo,
+    info_read_at: Option<Instant>,
     error: Option<PlayerError>,
     window_height: f32,
     /// Whether the controls showed at the last update, and mpv's `sub-pos` for it.
@@ -117,6 +126,8 @@ impl Session {
             duration: 0.,
             paused: false,
             tracks: Vec::new(),
+            info: PlaybackInfo::default(),
+            info_read_at: None,
             error: None,
             window_height: 0.,
             controls_shown: false,
@@ -386,7 +397,7 @@ impl Session {
 
     /// The lines of "Playback info".
     pub fn playback_info(&self) -> Vec<(&'static str, String)> {
-        settings::info_lines(self.converted, &self.player.info())
+        settings::info_lines(self.converted, &self.info)
     }
 
     /// A double click `y` pixels from the top of the window: on the picture, it toggles
@@ -490,6 +501,13 @@ impl Session {
                 // The film plays; a refused subtitle is simply not in the panel.
                 PlayerEvent::SubtitleFailed(_) => {}
             }
+        }
+        if self
+            .info_read_at
+            .is_none_or(|read| now.saturating_duration_since(read) >= INFO_EVERY)
+        {
+            self.info = self.player.info();
+            self.info_read_at = Some(now);
         }
         self.follow_segments(now);
         let shown = self.controls_visible(now);
@@ -915,6 +933,7 @@ mod tests {
             hardware_decoder: Some("vaapi".into()),
         };
         let mut session = f.session;
+        session.update(Instant::now());
         assert_eq!(
             session.playback_info(),
             [
@@ -933,6 +952,25 @@ mod tests {
             session.playback_info()[0],
             ("Playback", "Converted by the server".to_string())
         );
+    }
+
+    #[test]
+    fn playback_info_is_read_once_a_second_and_kept() {
+        let mut f = fixture();
+        let container = |name: &str| crate::player::PlaybackInfo {
+            container: Some(name.into()),
+            ..Default::default()
+        };
+        let shown = |session: &Session| session.playback_info()[1].1.clone();
+        *f.player.info.borrow_mut() = container("matroska,webm");
+        let now = Instant::now();
+        f.session.update(now);
+        *f.player.info.borrow_mut() = container("mp4");
+        assert_eq!(shown(&f.session), "MKV", "kept between ticks");
+        f.session.update(now + Duration::from_millis(500));
+        assert_eq!(shown(&f.session), "MKV", "read once a second");
+        f.session.update(now + Duration::from_secs(1));
+        assert_eq!(shown(&f.session), "MP4");
     }
 
     #[test]
