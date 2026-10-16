@@ -147,6 +147,24 @@ impl<T: Listed> LibraryPage<T> {
     }
 }
 
+/// What a root screen asks for when it shows.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Arrival {
+    Home,
+    Library(LibraryKind),
+    /// A library already known is not asked again: its tools and its list stay as they were.
+    Nothing,
+}
+
+pub fn arrival(screen: Screen, films_known: bool, series_known: bool) -> Arrival {
+    match screen {
+        Screen::Home => Arrival::Home,
+        Screen::Library if !films_known => Arrival::Library(LibraryKind::Films),
+        Screen::Series if !series_known => Arrival::Library(LibraryKind::Series),
+        _ => Arrival::Nothing,
+    }
+}
+
 /// The page shown again once the player is left, asked anew.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Reload {
@@ -485,15 +503,15 @@ impl Shell {
 
     /// A root screen shows: what it lists may have changed since (a film watched, resumed).
     fn arrived(&mut self, cx: &mut Context<Self>) {
-        match self.navigator.current() {
-            Screen::Home => self.load_home(cx),
-            Screen::Library if self.library.library.is_none() => {
-                self.load_library(LibraryKind::Films, cx)
-            }
-            Screen::Series if self.series.library.is_none() => {
-                self.load_library(LibraryKind::Series, cx)
-            }
-            _ => {}
+        let arrival = arrival(
+            self.navigator.current(),
+            self.library.library.is_some(),
+            self.series.library.is_some(),
+        );
+        match arrival {
+            Arrival::Home => self.load_home(cx),
+            Arrival::Library(kind) => self.load_library(kind, cx),
+            Arrival::Nothing => {}
         }
     }
 
@@ -1293,12 +1311,67 @@ mod tests {
     }
 
     #[test]
-    fn the_tools_of_the_films_and_of_the_series_are_apart() {
+    fn the_tools_and_the_list_stay_when_leaving_the_screen_and_coming_back() {
         let mut films = films_page();
-        let series = LibraryPage::<bobine::provider::Series>::default();
-        films.change(|tools| tools.filters.unwatched = true);
+        films.library = Some(Loadable::Ready(ItemId(FILMS_LIBRARY.into())));
+        let mut series = LibraryPage::<bobine::provider::Series>::default();
+        let mut nav = crate::navigation::Navigator::new();
+        let known = |films: &LibraryPage<Film>, series: &LibraryPage<_>| {
+            (films.library.is_some(), series.library.is_some())
+        };
+
+        // The tools are changed, the new list arrives and is scrolled.
+        films.change(|tools| {
+            tools.filters.genre = Some("Drame".into());
+            tools.sort = Sort::Title;
+        });
+        let server = FakeServer::new(1284, true);
+        let first = server
+            .films(&ItemId(FILMS_LIBRARY.into()), &films.tools.query(0))
+            .unwrap();
+        films.grid.pages_to_ask(0..8, Instant::now());
+        films.grid.loaded(films.grid.epoch(), 0, first);
+        let (total, title) = (
+            films.grid.total,
+            films.grid.film(0).map(|f| f.title.clone()),
+        );
+        films
+            .scroll
+            .0
+            .borrow()
+            .base_handle
+            .set_offset(point(px(0.), px(-900.)));
+        let tools = films.tools.clone();
+
+        // Away to the series, which load for the first time, then back to the films.
+        nav.select(NavEntry::Series);
+        let (f, s) = known(&films, &series);
+        assert_eq!(
+            arrival(nav.current(), f, s),
+            Arrival::Library(LibraryKind::Series)
+        );
+        series.library = Some(Loadable::Loading);
+        nav.select(NavEntry::Films);
+        let (f, s) = known(&films, &series);
+        assert_eq!(arrival(nav.current(), f, s), Arrival::Nothing);
+
+        assert_eq!(films.tools, tools);
         assert!(films.tools.narrowed());
+        assert_eq!(films.grid.total, total);
+        assert_eq!(films.grid.film(0).map(|f| f.title.clone()), title);
+        assert_eq!(films.scroll.0.borrow().base_handle.offset().y, px(-900.));
+        // The other library's tools are its own.
         assert!(!series.tools.narrowed());
+    }
+
+    #[test]
+    fn a_library_not_asked_yet_is_asked_when_its_screen_shows() {
+        assert_eq!(
+            arrival(Screen::Library, false, true),
+            Arrival::Library(LibraryKind::Films)
+        );
+        assert_eq!(arrival(Screen::Library, true, false), Arrival::Nothing);
+        assert_eq!(arrival(Screen::Home, true, true), Arrival::Home);
     }
 
     #[test]
