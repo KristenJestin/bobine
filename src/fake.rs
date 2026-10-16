@@ -297,6 +297,8 @@ pub fn versions() -> Vec<MediaSource> {
                 subtitle(4, "fre", "ass", false, false),
                 subtitle(5, "eng", "subrip", false, true),
             ],
+            default_audio: None,
+            default_subtitle: None,
         },
         MediaSource {
             id: MediaSourceId("source-1080".into()),
@@ -310,6 +312,8 @@ pub fn versions() -> Vec<MediaSource> {
             }),
             audio: vec![audio(1, "fre", "aac", 2, true)],
             subtitles: vec![subtitle(2, "fre", "subrip", false, false)],
+            default_audio: None,
+            default_subtitle: None,
         },
     ]
 }
