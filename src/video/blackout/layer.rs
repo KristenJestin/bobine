@@ -34,7 +34,7 @@ use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1::{
     self, Anchor, KeyboardInteractivity, ZwlrLayerSurfaceV1,
 };
 
-use super::{Blackout, Covers, monitor_with_id};
+use super::{Blackout, Covers, Heartbeat, Wish, monitor_with_id};
 use crate::motion::{self, Fade};
 
 /// The steps of a fade: one pixel for each, from transparent to black.
@@ -47,6 +47,8 @@ const NAMESPACE: &str = "bobine-blackout";
 enum Command {
     /// The other monitors are wanted black or not, and GPUI's id of the window's monitor.
     Want(bool, Option<Uuid>),
+    /// The UI thread is alive: said on every player tick while covering.
+    Beat,
     Stop,
 }
 
@@ -128,11 +130,25 @@ impl Screens {
         self.send(Command::Want(wanted, window_on));
     }
 
+    /// Says the UI thread is alive. Without it for `SILENCE` the thread uncovers everything,
+    /// so a frozen UI never leaves the monitors black. Only sent while covering.
+    pub fn beat(&mut self) {
+        if matches!(self.sent, Some((true, _))) {
+            self.send(Command::Beat);
+        }
+    }
+
     fn send(&mut self, command: Command) {
         // A thread that ended (its connection lost) has nothing left on the screens.
         if self.commands.send(command).is_ok() {
             let _ = self.wake.write(&[1]);
         }
+    }
+}
+
+impl Wish for Screens {
+    fn want(&mut self, wanted: bool, window_on: Option<Uuid>) {
+        Screens::want(self, wanted, window_on);
     }
 }
 
@@ -180,15 +196,20 @@ fn run(
 ) {
     let mut blackout = Blackout::default();
     let mut wish: (bool, Option<Uuid>) = (false, None);
+    let mut heartbeat = Heartbeat::new(Instant::now());
+    // The UI went silent while covering: the wish is kept, but nothing is covered.
+    let mut silent = false;
     loop {
         let _ = woken.read(&mut [0; 64]);
         let mut wish_changed = false;
         loop {
             match commands.try_recv() {
                 Ok(Command::Want(wanted, window_on)) => {
+                    heartbeat.beat(Instant::now());
                     wish = (wanted, window_on);
                     wish_changed = true;
                 }
+                Ok(Command::Beat) => heartbeat.beat(Instant::now()),
                 Ok(Command::Stop) | Err(TryRecvError::Disconnected) => return,
                 Err(TryRecvError::Empty) => break,
             }
@@ -196,13 +217,21 @@ fn run(
         if queue.dispatch_pending(&mut state).is_err() {
             return;
         }
-        if wish_changed || state.outputs_changed {
+        let now = Instant::now();
+        let was_silent = silent;
+        silent = wish.0 && heartbeat.lapsed(now);
+        if wish_changed || silent != was_silent || state.outputs_changed {
             state.outputs_changed = false;
             let outputs = state.output_names();
             let window_on = wish.1.and_then(|id| monitor_with_id(&outputs, id));
-            blackout.follow(&outputs, wish.0, window_on.as_deref(), &mut state);
+            blackout.follow(
+                &outputs,
+                wish.0 && !silent,
+                window_on.as_deref(),
+                &mut state,
+            );
         }
-        let fading = state.step(Instant::now());
+        let fading = state.step(now);
         if connection.flush().is_err() {
             return;
         }
@@ -221,7 +250,17 @@ fn run(
                 revents: 0,
             },
         ];
-        let timeout = if fading { FRAME_MS } else { -1 };
+        // While covering, wake up when the UI's silence would lapse.
+        let watch = (wish.0 && !silent).then(|| {
+            let wait = heartbeat.until_lapse(Instant::now());
+            wait.as_millis() as i32 + 1
+        });
+        let timeout = match (fading, watch) {
+            (true, Some(watch)) => FRAME_MS.min(watch),
+            (true, None) => FRAME_MS,
+            (false, Some(watch)) => watch,
+            (false, None) => -1,
+        };
         // SAFETY: two valid pollfds, alive for the call.
         let ready = unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as libc::nfds_t, timeout) };
         if ready > 0 && fds[0].revents != 0 {

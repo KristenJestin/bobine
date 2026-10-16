@@ -378,12 +378,15 @@ impl Shell {
     /// Closes the player: the video surface and mpv go before anything else does. The server is
     /// told the playback stopped; the handle ends once it has been.
     pub fn stop_playback(&mut self) -> Option<std::thread::JoinHandle<()>> {
-        let Playback {
-            session, reporting, ..
-        } = self.playback.take()?;
-        let reports = reporting.map(|reporting| reporting.finish(&session));
-        drop(session);
-        reports
+        // The covers first: mpv shutting down can take a moment.
+        blackout::stop_with(self.screens.as_mut(), || {
+            let Playback {
+                session, reporting, ..
+            } = self.playback.take()?;
+            let reports = reporting.map(|reporting| reporting.finish(&session));
+            drop(session);
+            reports
+        })
     }
 
     /// The window is closing: the film goes, the server is told where it stopped (a moment
@@ -427,6 +430,7 @@ impl Shell {
         );
         let window_on = window.display(cx).and_then(|display| display.uuid().ok());
         screens.want(wanted, window_on);
+        screens.beat();
     }
 
     /// Back to the page the film was started from. `ended`: the file ended by itself, and the

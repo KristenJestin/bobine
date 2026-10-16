@@ -6,6 +6,7 @@
 pub mod layer;
 
 use std::collections::BTreeSet;
+use std::time::{Duration, Instant};
 
 use uuid::Uuid;
 
@@ -42,6 +43,51 @@ pub fn monitor_with_id(outputs: &[String], id: Uuid) -> Option<String> {
         .cloned()
 }
 
+/// Where the wish to cover goes: the adapter's thread, or a fake.
+pub trait Wish {
+    fn want(&mut self, wanted: bool, window_on: Option<Uuid>);
+}
+
+/// Stops the film, the covers having been withdrawn first: mpv shutting down can take a
+/// moment, and the other monitors must not stay black for it.
+pub fn stop_with<W: Wish, R>(wish: Option<&mut W>, stop: impl FnOnce() -> R) -> R {
+    if let Some(wish) = wish {
+        wish.want(false, None);
+    }
+    stop()
+}
+
+/// How long the UI may stay silent while covering before the covers go: a UI thread that froze
+/// must not leave the monitors black.
+pub const SILENCE: Duration = Duration::from_secs(2);
+
+/// The blackout thread's watch on the UI thread, which says it is alive on every player tick.
+/// The time is passed in, so it is tested without waiting.
+pub struct Heartbeat {
+    last: Instant,
+}
+
+impl Heartbeat {
+    pub fn new(now: Instant) -> Heartbeat {
+        Heartbeat { last: now }
+    }
+
+    /// A message came from the UI thread.
+    pub fn beat(&mut self, now: Instant) {
+        self.last = now;
+    }
+
+    /// Nothing came for too long.
+    pub fn lapsed(&self, now: Instant) -> bool {
+        self.until_lapse(now).is_zero()
+    }
+
+    /// How long until it lapses, to wake up for it.
+    pub fn until_lapse(&self, now: Instant) -> Duration {
+        SILENCE.saturating_sub(now.saturating_duration_since(self.last))
+    }
+}
+
 /// Follows the monitors and the wish, and covers or uncovers only what changed.
 #[derive(Default)]
 pub struct Blackout {
@@ -71,6 +117,8 @@ impl Blackout {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::RefCell;
+
     use super::*;
 
     fn names(names: &[&str]) -> Vec<String> {
@@ -201,5 +249,56 @@ mod tests {
         covers.calls.clear();
         blackout.follow(&outputs, true, Some("DP-1"), &mut covers);
         assert_eq!(covers.calls, ["uncover DP-1", "cover DP-2"]);
+    }
+
+    /// Writes into a log shared with the stop, to tell which came first.
+    struct FakeWish<'a> {
+        log: &'a RefCell<Vec<String>>,
+    }
+
+    impl Wish for FakeWish<'_> {
+        fn want(&mut self, wanted: bool, window_on: Option<Uuid>) {
+            self.log
+                .borrow_mut()
+                .push(format!("want {wanted} {window_on:?}"));
+        }
+    }
+
+    #[test]
+    fn the_covers_are_withdrawn_before_the_film_stops() {
+        let log = RefCell::new(Vec::new());
+        let mut wish = FakeWish { log: &log };
+        stop_with(Some(&mut wish), || log.borrow_mut().push("stop".into()));
+        assert_eq!(*log.borrow(), ["want false None", "stop"]);
+    }
+
+    #[test]
+    fn a_film_without_screens_just_stops() {
+        let stopped = stop_with(None::<&mut FakeWish>, || 7);
+        assert_eq!(stopped, 7);
+    }
+
+    #[test]
+    fn the_ui_silent_for_two_seconds_lapses_the_heartbeat() {
+        let start = Instant::now();
+        let mut heartbeat = Heartbeat::new(start);
+        assert!(!heartbeat.lapsed(start + Duration::from_millis(1999)));
+        assert!(heartbeat.lapsed(start + SILENCE));
+        heartbeat.beat(start + Duration::from_secs(1));
+        assert!(!heartbeat.lapsed(start + Duration::from_millis(2999)));
+        assert!(heartbeat.lapsed(start + Duration::from_secs(3)));
+    }
+
+    #[test]
+    fn the_heartbeat_says_how_long_until_it_lapses() {
+        let start = Instant::now();
+        let heartbeat = Heartbeat::new(start);
+        assert_eq!(heartbeat.until_lapse(start), SILENCE);
+        let later = start + Duration::from_millis(500);
+        assert_eq!(heartbeat.until_lapse(later), Duration::from_millis(1500));
+        assert_eq!(
+            heartbeat.until_lapse(start + Duration::from_secs(5)),
+            Duration::ZERO
+        );
     }
 }
