@@ -43,17 +43,17 @@ impl Screen {
     /// The word the back link of a detail page uses for the screen it goes back to.
     fn name(self) -> &'static str {
         match self {
-            Screen::Login => "Connexion",
-            Screen::Home => "Accueil",
+            Screen::Login => "Sign in",
+            Screen::Home => "Home",
             Screen::Library => "Films",
-            Screen::FilmDetail | Screen::SeriesDetail => "Fiche",
-            Screen::Person => "Personne",
-            Screen::Player => "Lecteur",
-            Screen::Series => "Séries",
-            Screen::HomeList => "Liste",
+            Screen::FilmDetail | Screen::SeriesDetail => "Details",
+            Screen::Person => "Person",
+            Screen::Player => "Player",
+            Screen::Series => "Series",
+            Screen::HomeList => "List",
             Screen::Collections => "Collections",
             Screen::CollectionDetail => "Collection",
-            Screen::MyList => "Ma liste",
+            Screen::MyList => "My list",
         }
     }
 }
@@ -79,11 +79,11 @@ impl NavEntry {
 
     pub fn label(self) -> &'static str {
         match self {
-            NavEntry::Home => "Accueil",
+            NavEntry::Home => "Home",
             NavEntry::Films => "Films",
-            NavEntry::Series => "Séries",
+            NavEntry::Series => "Series",
             NavEntry::Collections => "Collections",
-            NavEntry::MyList => "Ma liste",
+            NavEntry::MyList => "My list",
         }
     }
 
@@ -209,7 +209,7 @@ mod tests {
         let mut nav = Navigator::new();
         nav.switch_root(Screen::Home);
         nav.open(Screen::FilmDetail);
-        assert_eq!(nav.back_label(), Some("Accueil"));
+        assert_eq!(nav.back_label(), Some("Home"));
     }
 
     #[test]
@@ -218,10 +218,10 @@ mod tests {
         nav.switch_root(Screen::Home);
         nav.open(Screen::Person);
         assert!(Screen::Person.shows_back_link() && !Screen::Person.shows_pill_bar());
-        assert_eq!(nav.back_label(), Some("Accueil"));
+        assert_eq!(nav.back_label(), Some("Home"));
         // A film opened from the person goes back to the person.
         nav.open(Screen::FilmDetail);
-        assert_eq!(nav.back_label(), Some("Personne"));
+        assert_eq!(nav.back_label(), Some("Person"));
         assert!(nav.back() && nav.back());
         assert_eq!(nav.current(), Screen::Home);
     }
@@ -237,7 +237,7 @@ mod tests {
         // From a person's page.
         nav.open(Screen::Person);
         nav.open(Screen::SeriesDetail);
-        assert_eq!(nav.back_label(), Some("Personne"));
+        assert_eq!(nav.back_label(), Some("Person"));
         assert!(nav.back());
         assert_eq!(nav.current(), Screen::Person);
     }
@@ -305,7 +305,7 @@ mod tests {
     }
 
     #[test]
-    fn the_collections_and_ma_liste_entries_open_their_screens_under_the_pill_bar() {
+    fn the_collections_and_my_list_entries_open_their_screens_under_the_pill_bar() {
         let mut nav = on_library();
         assert!(nav.select(NavEntry::Collections));
         assert_eq!(nav.current(), Screen::Collections);
@@ -342,20 +342,20 @@ mod tests {
         let mut nav = on_library();
         nav.open(Screen::FilmDetail);
         nav.open(Screen::CollectionDetail);
-        assert_eq!(nav.back_label(), Some("Fiche"));
+        assert_eq!(nav.back_label(), Some("Details"));
         assert!(nav.back());
         assert_eq!(nav.current(), Screen::FilmDetail);
     }
 
     #[test]
-    fn a_film_or_a_series_opened_from_ma_liste_goes_back_to_it() {
+    fn a_film_or_a_series_opened_from_my_list_goes_back_to_it() {
         let mut nav = on_library();
         assert!(nav.select(NavEntry::MyList));
         nav.open(Screen::FilmDetail);
-        assert_eq!(nav.back_label(), Some("Ma liste"));
+        assert_eq!(nav.back_label(), Some("My list"));
         assert!(nav.back());
         nav.open(Screen::SeriesDetail);
-        assert_eq!(nav.back_label(), Some("Ma liste"));
+        assert_eq!(nav.back_label(), Some("My list"));
     }
 
     #[test]
@@ -374,7 +374,7 @@ mod tests {
         assert!(nav.select(NavEntry::Series));
         nav.open(Screen::SeriesDetail);
         assert!(!Screen::SeriesDetail.shows_pill_bar());
-        assert_eq!(nav.back_label(), Some("Séries"));
+        assert_eq!(nav.back_label(), Some("Series"));
         nav.open(Screen::Player);
         assert!(nav.back());
         assert_eq!(nav.current(), Screen::SeriesDetail);
@@ -389,7 +389,7 @@ mod tests {
         nav.open(Screen::HomeList);
         assert!(!Screen::HomeList.shows_pill_bar());
         assert!(Screen::HomeList.shows_back_link());
-        assert_eq!(nav.back_label(), Some("Accueil"));
+        assert_eq!(nav.back_label(), Some("Home"));
         assert!(nav.back());
         assert_eq!(nav.current(), Screen::Home);
     }
@@ -400,7 +400,7 @@ mod tests {
         nav.switch_root(Screen::Home);
         nav.open(Screen::HomeList);
         nav.open(Screen::SeriesDetail);
-        assert_eq!(nav.back_label(), Some("Liste"));
+        assert_eq!(nav.back_label(), Some("List"));
         nav.open(Screen::Player);
         assert!(nav.back() && nav.back());
         assert_eq!(nav.current(), Screen::HomeList);
@@ -416,11 +416,11 @@ mod tests {
     }
 
     #[test]
-    fn the_labels_are_in_french() {
+    fn the_labels_are_in_english() {
         let labels: Vec<&str> = NavEntry::ALL.into_iter().map(NavEntry::label).collect();
         assert_eq!(
             labels,
-            ["Accueil", "Films", "Séries", "Collections", "Ma liste"]
+            ["Home", "Films", "Series", "Collections", "My list"]
         );
     }
 }

@@ -1,6 +1,6 @@
 //! Home, after nabby.pro: a large header whose title changes by itself (cross-fading, with a bar
 //! under it for each title), and under it the rows: what was started, the next episodes, and
-//! what each library gained. Each row scrolls sideways and has its "Tout voir". The page scrolls
+//! what each library gained. Each row scrolls sideways and has its "See all". The page scrolls
 //! up and down, and the wheel goes to the row under the pointer when it is over one.
 
 use std::rc::Rc;
@@ -164,8 +164,8 @@ pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -
         .contains(&true);
     let empty = shown.is_empty() && !hero_wanted;
     let status = match (empty, loading) {
-        (true, true) => Some("Chargement…"),
-        (true, false) => Some("Rien à afficher pour l'instant."),
+        (true, true) => Some("Loading…"),
+        (true, false) => Some("Nothing to show yet."),
         _ => None,
     };
 
@@ -409,20 +409,17 @@ impl Draw<'_> {
                     .ok();
             })
         });
-        let more =
-            theme::ghost_button(id("more"), Some(IconName::Plus), "Plus d'infos", window, cx).when(
-                live,
-                |button| {
-                    let target = self.target.clone();
-                    let (kind, item) = (feature.kind, feature.id.clone());
-                    button.on_click(move |_, _, cx| {
-                        let item = item.clone();
-                        target
-                            .update(cx, |shell, cx| shell.open_feature(kind, item, cx))
-                            .ok();
-                    })
-                },
-            );
+        let more = theme::ghost_button(id("more"), Some(IconName::Plus), "More info", window, cx)
+            .when(live, |button| {
+                let target = self.target.clone();
+                let (kind, item) = (feature.kind, feature.id.clone());
+                button.on_click(move |_, _, cx| {
+                    let item = item.clone();
+                    target
+                        .update(cx, |shell, cx| shell.open_feature(kind, item, cx))
+                        .ok();
+                })
+            });
         let busy = self.frame.busy;
         div()
             .absolute()
@@ -594,7 +591,7 @@ fn titles_row(
         .on_click(
             cx.listener(move |shell, _, _, cx| shell.open_list(list.clone(), library.clone(), cx)),
         )
-        .child("Tout voir")
+        .child("See all")
         .child(icon(IconName::ArrowRight, 14.));
     let heading = div()
         .h(px(HEADING))

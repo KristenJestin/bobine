@@ -179,7 +179,7 @@ mod tests {
 
     #[test]
     fn typing_replaces_the_selection() {
-        let mut e = field("https://media.exemple.org");
+        let mut e = field("https://media.example.org");
         e.select_all();
         e.insert("h");
         assert_eq!(e.text(), "h");

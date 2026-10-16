@@ -1,4 +1,4 @@
-//! The full list behind a row's "Tout voir": a grid of its cards, the way the libraries show
+//! The full list behind a row's "See all": a grid of its cards, the way the libraries show
 //! theirs. Only the rows in view are built, and only their pages are asked of the server.
 
 use std::ops::Range;
@@ -45,8 +45,8 @@ pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -
     let rows = list.grid.rows(columns);
     let status = match (list.error, total) {
         (Some(why), None) => Some(why),
-        (_, None) => Some("Chargement…"),
-        (_, Some(0)) => Some("Rien dans cette liste."),
+        (_, None) => Some("Loading…"),
+        (_, Some(0)) => Some("Nothing in this list."),
         _ => None,
     };
     let scroll = list.scroll.clone();

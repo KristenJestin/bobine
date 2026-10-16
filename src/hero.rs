@@ -258,15 +258,15 @@ impl Logos {
     }
 }
 
-/// `FILM` or `SÉRIE`, over the title.
+/// `FILM` or `SERIES`, over the title.
 pub fn kind_label(feature: &Feature) -> &'static str {
     match feature.kind {
         FeatureKind::Film => "FILM",
-        FeatureKind::Series => "SÉRIE",
+        FeatureKind::Series => "SERIES",
     }
 }
 
-/// `1998 | ★ 7.4 | 1 h 50 | PG-13`: year, rating, runtime (films), age rating.
+/// `1998 | ★ 7.4 | 1h 50m | PG-13`: year, rating, runtime (films), age rating.
 pub fn meta(feature: &Feature) -> Vec<String> {
     let mut parts: Vec<String> = Vec::new();
     parts.extend(feature.year.map(|year| year.to_string()));
@@ -280,11 +280,11 @@ pub fn meta(feature: &Feature) -> Vec<String> {
     parts
 }
 
-/// `Reprendre à 20 min` for a film started, else `Lecture`.
+/// `Resume from 20m` for a film started, else `Play`.
 pub fn play_label(feature: &Feature) -> String {
     match feature.resume {
-        Some(resume) => format!("Reprendre à {}", film_page::short_duration(resume)),
-        None => "Lecture".to_string(),
+        Some(resume) => format!("Resume from {}", film_page::short_duration(resume)),
+        None => "Play".to_string(),
     }
 }
 
@@ -667,14 +667,14 @@ mod tests {
     #[test]
     fn the_header_says_whether_it_is_a_film_or_a_series() {
         assert_eq!(kind_label(&feature(FeatureKind::Film)), "FILM");
-        assert_eq!(kind_label(&feature(FeatureKind::Series)), "SÉRIE");
+        assert_eq!(kind_label(&feature(FeatureKind::Series)), "SERIES");
     }
 
     #[test]
     fn a_film_says_year_rating_runtime_and_age_rating() {
         assert_eq!(
             meta(&feature(FeatureKind::Film)),
-            ["2025", "★ 7.8", "2 h 04", "12+"]
+            ["2025", "★ 7.8", "2h 4m", "12+"]
         );
     }
 
@@ -695,9 +695,9 @@ mod tests {
     #[test]
     fn the_button_resumes_a_film_started_and_plays_the_rest() {
         let mut shown = feature(FeatureKind::Film);
-        assert_eq!(play_label(&shown), "Lecture");
+        assert_eq!(play_label(&shown), "Play");
         shown.resume = Some(secs(72 * 60));
-        assert_eq!(play_label(&shown), "Reprendre à 1 h 12");
-        assert_eq!(play_label(&feature(FeatureKind::Series)), "Lecture");
+        assert_eq!(play_label(&shown), "Resume from 1h 12m");
+        assert_eq!(play_label(&feature(FeatureKind::Series)), "Play");
     }
 }

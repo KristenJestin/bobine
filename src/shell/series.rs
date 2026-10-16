@@ -20,7 +20,7 @@ use crate::navigation::Screen;
 use crate::scroll;
 use crate::series_page::{self, Refreshes};
 
-/// How often the "Épisode suivant" card checks its countdown.
+/// How often the "Next episode" card checks its countdown.
 const UP_NEXT_TICK: Duration = Duration::from_millis(250);
 
 pub struct SeriesPage {
@@ -39,7 +39,7 @@ pub struct SeriesPage {
     pub menus: Menus<Chip>,
     pub menu_fade: Presence<Chip>,
     pub chips: [Rc<Cell<Option<Bounds<Pixels>>>>; 3],
-    /// "Ma liste".
+    /// "My list".
     pub favourite: Toggle,
     pub scroll: ScrollHandle,
     /// The rows that scroll sideways: the cast, similar series.
@@ -368,7 +368,7 @@ impl Shell {
         let choices = series_page::choices_for(page.next.as_ref(), page.choices.as_ref(), &episode);
         let Some(plan) = film_page::plan(&episode.item, &episode.versions, &choices, From::Resume)
         else {
-            page.error = Some("Cet épisode n'a aucune version à lire.");
+            page.error = Some("This episode has no version to play.");
             cx.notify();
             return;
         };
@@ -436,7 +436,7 @@ impl Shell {
         cx.notify();
     }
 
-    /// "Lire" on the card: the next episode at once.
+    /// "Play" on the card: the next episode at once.
     pub fn play_up_next_now(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(episode) = self.take_up_next(true) {
             self.up_next_ticker = None;
@@ -459,7 +459,7 @@ impl Shell {
         )
     }
 
-    /// "Annuler" on the card, or Escape. Whether there was a card to cancel.
+    /// "Cancel" on the card, or Escape. Whether there was a card to cancel.
     pub fn cancel_up_next(&mut self, cx: &mut Context<Self>) -> bool {
         if self.up_next.episode().is_none() {
             return false;

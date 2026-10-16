@@ -158,14 +158,14 @@ mod tests {
     #[test]
     fn a_line_with_a_rating_in_it_is_cut_around_the_star() {
         assert_eq!(
-            runs("2025 · ★ 6.0 · commencé"),
-            [Run::Text("2025 ·"), Run::Star, Run::Text("6.0 · commencé"),]
+            runs("2025 · ★ 6.0 · started"),
+            [Run::Text("2025 ·"), Run::Star, Run::Text("6.0 · started"),]
         );
     }
 
     #[test]
     fn a_line_without_a_star_stays_one_piece() {
-        assert_eq!(runs("2025 · commencé"), [Run::Text("2025 · commencé")]);
+        assert_eq!(runs("2025 · started"), [Run::Text("2025 · started")]);
         assert_eq!(runs(""), []);
     }
 

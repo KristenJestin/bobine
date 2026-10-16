@@ -376,7 +376,7 @@ fn show_screen(
     let to_collections = wants(&["collections", "collection-page"]);
     let to_collection = wants(&["collection-page"]);
     let to_list = wants(&["my-list", "my-list-empty"]);
-    // The "Ma liste" button pressed on the page that shows.
+    // The "My list" button pressed on the page that shows.
     let press_list = wants(&["film-list", "series-list"]);
     let (series_rows, up_next) = (wants(&["series-rows"]), wants(&["up-next"]));
     let home_rows = wants(&["home-rows"]);
@@ -427,7 +427,7 @@ fn show_screen(
                                         form.password.clone(),
                                     );
                                     address.update(cx, |f, cx| {
-                                        f.set_text("https://media.exemple.org", cx)
+                                        f.set_text("https://media.example.org", cx)
                                     });
                                     user.update(cx, |f, cx| f.set_text("camille", cx));
                                     password.update(cx, |f, cx| f.set_text("invented", cx));
@@ -602,11 +602,11 @@ enum Target {
     Hero,
     /// The mark under the Home's header for this title.
     HeroMark(usize),
-    /// The Home header's "Lecture" button.
+    /// The Home header's "Play" button.
     HeroPlay,
     /// The Home's row of this index, in its middle.
     HomeRow(usize),
-    /// "Tout voir" on the row of this index.
+    /// "See all" on the row of this index.
     SeeAll(usize),
     /// The card of this index in the row of that index, of this width: its middle.
     Card(usize, usize, f32),
@@ -866,14 +866,14 @@ impl Acts {
                     swipe(HomeRow(0), &[(2., -12.), (9., -3.), (9., 0.), (1., -10.)]),
                 ),
             ],
-            // "Tout voir" opens the full grid; Escape goes back to the Home.
+            // "See all" opens the full grid; Escape goes back to the Home.
             "home-lists" => vec![
                 // Before any move the window takes the pointer for being at its corner, over
                 // the header: it goes where it is out of the way.
                 (0.0, "", Hover(Bottom)),
-                (1.0, "click Tout voir on the first row", Click(SeeAll(0))),
+                (1.0, "click See all on the first row", Click(SeeAll(0))),
                 (3.0, "escape back to the Home", Key("escape")),
-                (4.0, "click Tout voir on the second row", Click(SeeAll(1))),
+                (4.0, "click See all on the second row", Click(SeeAll(1))),
                 (6.0, "escape back to the Home", Key("escape")),
                 (
                     7.0,
@@ -899,16 +899,16 @@ impl Acts {
                 ),
                 (12.0, "the pointer leaves the bar", Hover(Bottom)),
             ],
-            // The header's "Lecture" plays the first title, Escape leaves, the Home is asked anew.
+            // The header's "Play" plays the first title, Escape leaves, the Home is asked anew.
             "home-play" => vec![
                 // Before any move the window takes the pointer for being at its corner, over
                 // the header: it goes where it is out of the way.
                 (0.0, "", Hover(Bottom)),
-                (1.0, "click Lecture on the header", Click(HeroPlay)),
+                (1.0, "click Play on the header", Click(HeroPlay)),
                 (5.0, "escape leaves the player", Key("escape")),
                 (8.0, "the Home is back", Mark),
             ],
-            // The tools of the Films or Séries grid: a genre, unwatched only, an order, a letter,
+            // The tools of the Films or Series grid: a genre, unwatched only, an order, a letter,
             // a decade; the menus close by Escape and by a click outside.
             "tools" => vec![
                 (0.5, "open genre", Click(Tool(crate::shell::Tool::Genre))),
@@ -1468,12 +1468,12 @@ fn play_file(
         title: args
             .title
             .clone()
-            .unwrap_or_else(|| "Film de test".to_string()),
-        subtitle: Some("fichier local · lecture directe".to_string()),
+            .unwrap_or_else(|| "Test film".to_string()),
+        subtitle: Some("local file · direct play".to_string()),
     };
     let external = args.sub.as_deref().map(|url| ExternalSubtitle {
         url,
-        title: "Sous-titres externes",
+        title: "External subtitles",
         language: None,
     });
     let media = Media {

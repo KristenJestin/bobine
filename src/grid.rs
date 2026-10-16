@@ -26,17 +26,17 @@ pub fn columns(width: f32) -> usize {
     ((room / (MIN_POSTER + GAP)).floor() as usize).clamp(2, MAX_COLUMNS)
 }
 
-/// `1 284 titres`, with the narrow space French puts between thousands.
+/// `1,284 titles`, with a comma between thousands.
 pub fn count(total: u32) -> String {
     let digits = total.to_string();
     let mut grouped = String::new();
     for (index, digit) in digits.chars().enumerate() {
         if index > 0 && (digits.len() - index).is_multiple_of(3) {
-            grouped.push('\u{202f}');
+            grouped.push(',');
         }
         grouped.push(digit);
     }
-    let noun = if total > 1 { "titres" } else { "titre" };
+    let noun = if total == 1 { "title" } else { "titles" };
     format!("{grouped} {noun}")
 }
 
@@ -353,10 +353,12 @@ mod tests {
     }
 
     #[test]
-    fn the_count_reads_in_french() {
-        assert_eq!(count(1284), "1\u{202f}284 titres");
-        assert_eq!(count(1), "1 titre");
-        assert_eq!(count(1234567), "1\u{202f}234\u{202f}567 titres");
+    fn the_count_reads_in_english() {
+        assert_eq!(count(1284), "1,284 titles");
+        assert_eq!(count(0), "0 titles");
+        assert_eq!(count(1), "1 title");
+        assert_eq!(count(2), "2 titles");
+        assert_eq!(count(1234567), "1,234,567 titles");
     }
 
     #[test]

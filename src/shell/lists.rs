@@ -1,4 +1,4 @@
-//! The user's list ("Ma liste") and the collections: what the pages show of them, and how it
+//! The user's list ("My list") and the collections: what the pages show of them, and how it
 //! comes from the server. Every call runs off the window's thread, like the others.
 
 use bobine::provider::{
@@ -66,7 +66,7 @@ impl<T> Loadable<T> {
 }
 
 impl Shell {
-    /// The "Ma liste" button of the film or series page shown: the button changes at once, the
+    /// The "My list" button of the film or series page shown: the button changes at once, the
     /// server is asked, and a failure puts the button back and says so on the page.
     pub fn toggle_favourite(&mut self, cx: &mut Context<Self>) {
         let page: &mut dyn ListPage = match self.navigator.current() {
@@ -272,10 +272,10 @@ mod tests {
     }
 
     #[test]
-    fn ma_liste_shows_the_change_made_just_before() {
+    fn my_list_shows_the_change_made_just_before() {
         let mut counter = 0;
         let mut page = MyListPage::default();
-        // Ma liste → film → remove → Escape: the list is asked while the server takes the
+        // My list → film → remove → Escape: the list is asked while the server takes the
         // change, and asked again when the change is answered.
         let during = page.ask(&mut counter);
         let after = page.ask(&mut counter);

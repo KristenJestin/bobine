@@ -152,7 +152,7 @@ pub struct Shell {
     pub details: Vec<DetailPage>,
     /// The series pages open, the last one on top: one per `Screen::SeriesDetail`.
     pub series_pages: Vec<SeriesPage>,
-    /// The "Épisode suivant" card over the series page, after an episode ended.
+    /// The "Next episode" card over the series page, after an episode ended.
     pub up_next: UpNext,
     up_next_ticker: Option<Task<()>>,
     /// The numbers of the series pages' refreshes, counted over every page: an answer on its way

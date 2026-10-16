@@ -1,4 +1,4 @@
-//! The Collections and Ma liste screens: a grid of posters like the libraries', over a list the
+//! The Collections and My list screens: a grid of posters like the libraries', over a list the
 //! program already holds whole. Only the rows in view are built, so only their images are asked.
 
 use std::ops::Range;
@@ -40,7 +40,7 @@ pub fn render_collections(
         Some(Loadable::Ready(cards)) if cards.is_empty() => (0, Some(lists::NO_COLLECTION), None),
         Some(Loadable::Ready(cards)) => (cards.len(), None, Some(lists::collections(cards.len()))),
         Some(Loadable::Failed(why)) => (0, Some(*why), None),
-        _ => (0, Some("Chargement…"), None),
+        _ => (0, Some("Loading…"), None),
     };
     grid_screen(
         Cells {
@@ -73,11 +73,11 @@ pub fn render_my_list(
         }
         Some(Loadable::Ready(items)) => (items.len(), None, Some(grid::count(items.len() as u32))),
         Some(Loadable::Failed(why)) => (0, Some(*why), None),
-        _ => (0, Some("Chargement…"), None),
+        _ => (0, Some("Loading…"), None),
     };
     grid_screen(
         Cells {
-            title: "Ma liste",
+            title: "My list",
             count,
             status,
             len,
@@ -114,7 +114,7 @@ fn empty_list() -> impl IntoElement {
                 .text_size(px(22.))
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(theme::text())
-                .child("Ma liste"),
+                .child("My list"),
         )
         .child(
             div()

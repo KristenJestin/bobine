@@ -1,4 +1,4 @@
-//! The "Ma liste" button of a film or a series page. Pressing it changes what the button shows
+//! The "My list" button of a film or a series page. Pressing it changes what the button shows
 //! at once and asks the server; if the server fails, the button goes back and says so. While a
 //! request is on its way the button asks nothing more, so that two presses never leave the
 //! server and the page disagreeing about the order they came in.
@@ -8,7 +8,7 @@ use bobine::provider::{ItemId, MediaServer, ProviderError};
 use crate::navigation::Screen;
 
 /// What the page says when the server did not take the change.
-pub const FAILED: &str = "Ma liste n'a pas pu être modifiée.";
+pub const FAILED: &str = "My list could not be changed.";
 
 /// Whether the item is in the list, and whether the server is being asked to change it.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -79,7 +79,7 @@ impl Toggle {
     }
 }
 
-/// A page with a "Ma liste" button: a film page or a series page.
+/// A page with a "My list" button: a film page or a series page.
 pub trait ListPage {
     fn item(&self) -> &ItemId;
     /// Told apart from every other page ever opened, the ones closed included.
@@ -169,7 +169,7 @@ mod tests {
     }
 
     #[test]
-    fn pressing_ma_liste_shows_the_new_state_before_the_server_answers() {
+    fn pressing_my_list_shows_the_new_state_before_the_server_answers() {
         let mut toggle = Toggle::default();
         assert_eq!(toggle.press(), Some(true));
         assert_eq!(
@@ -377,7 +377,7 @@ mod tests {
 
     #[test]
     fn a_change_shows_on_every_page_of_the_same_title() {
-        // Ma liste, film A, its collection, film A again: removed on the top page.
+        // My list, film A, its collection, film A again: removed on the top page.
         let mut stack = [
             Page::new("film-a", 1, true),
             Page::new("film-b", 2, false),
@@ -493,16 +493,16 @@ mod tests {
     }
 
     #[test]
-    fn ma_liste_is_asked_again_when_the_change_is_answered_on_top_of_it() {
+    fn my_list_is_asked_again_when_the_change_is_answered_on_top_of_it() {
         let mut stack = [Page::new("film-a", 1, true)];
         let pressed = press(&mut stack[0]).unwrap();
-        // Ma liste → film → remove → Escape before the answer: Ma liste is the screen shown,
+        // My list → film → remove → Escape before the answer: My list is the screen shown,
         // and it was asked while the server was taking the change.
         assert!(answer_to(&mut stack, Screen::MyList, &pressed, Ok(())));
     }
 
     #[test]
-    fn ma_liste_is_left_alone_when_it_is_not_the_screen_shown_or_the_change_failed() {
+    fn my_list_is_left_alone_when_it_is_not_the_screen_shown_or_the_change_failed() {
         let mut stack = [Page::new("film-a", 1, true)];
         let pressed = press(&mut stack[0]).unwrap();
         assert!(!answer_to(&mut stack, Screen::FilmDetail, &pressed, Ok(())));

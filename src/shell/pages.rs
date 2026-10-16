@@ -208,7 +208,7 @@ impl<T: Listed> LibraryPage<T> {
         self.grid.total.is_none() && self.grid.gave_up(0)
     }
 
-    /// "Réessayer": the first page is asked anew, as many times as the first time.
+    /// "Retry": the first page is asked anew, as many times as the first time.
     pub fn retry(&mut self) {
         self.grid.forget_failures();
         self.error = None;
@@ -366,7 +366,7 @@ pub struct DetailPage {
     pub menu_fade: Presence<Chip>,
     /// Where each chip was last drawn, so its menu opens under it.
     pub chips: [Rc<Cell<Option<Bounds<Pixels>>>>; 3],
-    /// "Ma liste".
+    /// "My list".
     pub favourite: Toggle,
     pub scroll: ScrollHandle,
     /// The rows that scroll sideways: the cast, the collection, similar titles.
@@ -467,9 +467,9 @@ impl Shell {
     }
 
     pub fn show_login(&mut self, why: Option<&'static str>, cx: &mut Context<Self>) {
-        let address = cx.new(|cx| TextInput::new("https://media.exemple.org", false, cx));
-        let user = cx.new(|cx| TextInput::new("Nom d'utilisateur", false, cx));
-        let password = cx.new(|cx| TextInput::new("Mot de passe", true, cx));
+        let address = cx.new(|cx| TextInput::new("https://media.example.org", false, cx));
+        let user = cx.new(|cx| TextInput::new("Username", false, cx));
+        let password = cx.new(|cx| TextInput::new("Password", true, cx));
         let address_changed = cx.observe(&address, |shell, _, cx| shell.probe_soon(cx));
         self.login = Some(LoginForm {
             address,
@@ -538,7 +538,7 @@ impl Shell {
             return;
         }
         let Some(connector) = self.connector.clone() else {
-            form.error = Some("Le fichier du compte ne peut pas être écrit.");
+            form.error = Some("The account file cannot be written.");
             cx.notify();
             return;
         };
@@ -695,9 +695,9 @@ impl Shell {
                 let loaded = match found {
                     Ok(Some(library)) => Loadable::Ready(library),
                     Ok(None) if kind == LibraryKind::Series => {
-                        Loadable::Failed("Aucune bibliothèque de séries sur ce serveur.")
+                        Loadable::Failed("No series library on this server.")
                     }
-                    Ok(None) => Loadable::Failed("Aucune bibliothèque de films sur ce serveur."),
+                    Ok(None) => Loadable::Failed("No film library on this server."),
                     Err(error) => Loadable::Failed(shell.failed(error, cx)),
                 };
                 let library = match &loaded {
@@ -821,7 +821,7 @@ impl Shell {
         cx.notify();
     }
 
-    /// "Réessayer", when the first page of the list was given up: it is asked again.
+    /// "Retry", when the first page of the list was given up: it is asked again.
     pub fn retry_list(&mut self, cx: &mut Context<Self>) {
         match self.navigator.current() {
             Screen::Library => {
@@ -1167,7 +1167,7 @@ impl Shell {
         );
     }
 
-    /// "▶ Reprendre" or "↺ Depuis le début": the server opens a playback, then the player starts.
+    /// "▶ Resume" or "↺ From the start": the server opens a playback, then the player starts.
     pub fn play_film(&mut self, from: From, window: &mut Window, cx: &mut Context<Self>) {
         let depth = self.details.len().wrapping_sub(1);
         let Some(page) = self.details.last_mut() else {
@@ -1180,7 +1180,7 @@ impl Shell {
             return;
         }
         let Some(plan) = film_page::plan(&detail.film, &detail.versions, choices, from) else {
-            page.error = Some("Ce film n'a aucune version à lire.");
+            page.error = Some("This film has no version to play.");
             cx.notify();
             return;
         };
@@ -1193,7 +1193,7 @@ impl Shell {
                 .source(&detail.versions)
                 .map(film_page::version_label),
         );
-        parts.push("lecture directe".into());
+        parts.push("direct play".into());
         let playing = Playing {
             title: plan.title.clone(),
             subtitle: Some(parts.join(" · ")),
@@ -1269,7 +1269,7 @@ impl Shell {
             Ok(mpv) => Arc::new(mpv),
             Err(error) => {
                 eprintln!("bobine: the player cannot start: {error}");
-                self.tried(&origin, Some("Le lecteur ne peut pas démarrer."));
+                self.tried(&origin, Some("The player cannot start."));
                 return;
             }
         };
@@ -1300,7 +1300,7 @@ impl Shell {
             Err(error) => {
                 // The words of the video surface or of mpv's error code: no address in them.
                 eprintln!("bobine: the film does not play: {error}");
-                self.tried(&origin, Some("Lecture impossible."));
+                self.tried(&origin, Some("Cannot play."));
             }
         }
     }
@@ -1350,7 +1350,7 @@ impl Shell {
                     return;
                 };
                 shell.library.grid.update(&detail.film);
-                // Continue Watching is asked again when Home shows.
+                // Continue watching is asked again when Home shows.
                 if let Some(page) = shell.detail_numbered(depth, generation)
                     && let Loadable::Ready(shown) = &mut page.detail
                 {
@@ -1496,15 +1496,15 @@ mod tests {
     #[test]
     fn a_read_that_fails_on_a_film_page_that_is_showing_keeps_the_page() {
         let mut page = shown_film();
-        page.load_failed("Hors ligne");
+        page.load_failed("Offline");
         assert!(matches!(page.detail, Loadable::Ready(_)));
     }
 
     #[test]
     fn a_first_load_that_fails_shows_the_failure() {
         let mut page = DetailPage::new(ItemId(crate::fake::FILM.into()), 1);
-        page.load_failed("Hors ligne");
-        assert!(matches!(page.detail, Loadable::Failed("Hors ligne")));
+        page.load_failed("Offline");
+        assert!(matches!(page.detail, Loadable::Failed("Offline")));
     }
 
     /// A films page whose first page of a 1284-film library has arrived.
@@ -1625,13 +1625,13 @@ mod tests {
         for _ in 0..=crate::grid::MAX_RETRIES {
             page.grid.failed(page.grid.epoch(), 0, at(t, 400));
         }
-        page.error = Some("Hors ligne");
+        page.error = Some("Offline");
         assert!(page.gave_up());
         page.follow_list(at(t, 500));
         assert!(page.grid.has_stale());
         assert!(page.cells_visible(at(t, 600)));
         assert_eq!(opacity(&page, at(t, 1000)), 1.);
-        // "Réessayer": the list goes away again while the new one is awaited.
+        // "Retry": the list goes away again while the new one is awaited.
         page.retry();
         page.follow_list(at(t, 1100));
         assert_eq!(opacity(&page, at(t, 1500)), 0.);
@@ -1724,7 +1724,7 @@ mod tests {
     }
 
     #[test]
-    fn ma_liste_is_asked_again_each_time_it_shows() {
+    fn my_list_is_asked_again_each_time_it_shows() {
         assert_eq!(arrival(Screen::MyList, true, true), Arrival::MyList);
         assert_eq!(arrival(Screen::Home, true, true), Arrival::Home);
         assert_eq!(arrival(Screen::HomeList, true, true), Arrival::HomeList);

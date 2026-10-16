@@ -1,5 +1,5 @@
 //! What the Home shows and what its buttons start, apart from the window: the lists of its rows,
-//! what each card says, and the playback a "Lecture" opens for a film, a series or an episode.
+//! what each card says, and the playback a "Play" opens for a film, a series or an episode.
 //! The playback itself, its reports and its end are the film page's and the series page's.
 
 use bobine::provider::{
@@ -34,7 +34,7 @@ impl PlayTarget {
     }
 }
 
-/// What the "Lecture" under the header's title starts.
+/// What the "Play" under the header's title starts.
 pub fn play_target(feature: &Feature) -> PlayTarget {
     match feature.kind {
         FeatureKind::Film => PlayTarget::Film(feature.id.clone()),
@@ -84,7 +84,7 @@ pub fn start(server: &dyn MediaServer, target: &PlayTarget) -> Result<Started, S
                     .source(&detail.versions)
                     .map(film_page::version_label),
             );
-            parts.push("lecture directe".into());
+            parts.push("direct play".into());
             Ok(Started {
                 title: plan.title.clone(),
                 subtitle: parts.join(" · "),
@@ -111,7 +111,7 @@ pub fn start(server: &dyn MediaServer, target: &PlayTarget) -> Result<Started, S
                 subtitle.push_str(&format!(" · {}", film_page::version_label(source)));
             }
             // No card for the episode after: it counts down over a series page, and the Home has
-            // none. The Home shows it under "Prochain épisode" when it is back.
+            // none. The Home shows it under "Next up" when it is back.
             Ok(Started {
                 opened: server.play(&plan.film, &plan.source),
                 plan,
@@ -122,7 +122,7 @@ pub fn start(server: &dyn MediaServer, target: &PlayTarget) -> Result<Started, S
     }
 }
 
-/// The rows of the Home that list titles, and so have a full grid behind "Tout voir".
+/// The rows of the Home that list titles, and so have a full grid behind "See all".
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ListKind {
     /// Films and episodes started.
@@ -136,9 +136,9 @@ pub enum ListKind {
 impl ListKind {
     pub fn heading(&self) -> &'static str {
         match self {
-            Self::Resume => "Reprendre",
-            Self::NextUp => "Prochain épisode",
-            Self::Latest(..) => "Ajoutés récemment",
+            Self::Resume => "Continue watching",
+            Self::NextUp => "Next up",
+            Self::Latest(..) => "Recently added",
         }
     }
 }
@@ -159,13 +159,13 @@ impl Asks {
     }
 }
 
-/// How many titles a row of the Home holds; "Tout voir" shows them all.
+/// How many titles a row of the Home holds; "See all" shows them all.
 pub const ROW: u32 = 16;
 
-/// The most that "Reprendre" and "Prochain épisode" hold in their full list.
+/// The most that "Continue watching" and "Next up" hold in their full list.
 const WHOLE_LIST: u32 = grid::PAGE;
 
-/// One page of the full list behind "Tout voir". Resume and next up come whole in the first
+/// One page of the full list behind "See all". Resume and next up come whole in the first
 /// page (a person has a few dozen at most); the latest of a library are paged like its grid.
 pub fn fetch(
     server: &dyn MediaServer,
@@ -216,7 +216,7 @@ pub fn latest_query(kind: LibraryKind, page: u32) -> FilmQuery {
     }
 }
 
-/// What "Prochain épisode" lists: the next episodes, less those already under "Reprendre"
+/// What "Next up" lists: the next episodes, less those already under "Continue watching"
 /// (the server counts an episode started as the next of its series).
 pub fn next_up_row(next: Vec<Episode>, started: &[Title]) -> Vec<Episode> {
     next.into_iter()
@@ -251,7 +251,7 @@ fn item(title: &Title) -> Option<&bobine::provider::Film> {
     }
 }
 
-/// `reste 18 min` on a card of something started.
+/// `18m left` on a card of something started.
 pub fn time_left(title: &Title) -> Option<String> {
     film_page::time_left(item(title)?)
 }
@@ -423,7 +423,7 @@ mod tests {
     fn what_the_player_shows_of_a_film_is_its_year_and_its_version() {
         let server = server();
         let begun = start(&server, &PlayTarget::Film(ItemId(FILM.into()))).unwrap();
-        assert_eq!(begun.subtitle, "2025 · 4K HDR10 · lecture directe");
+        assert_eq!(begun.subtitle, "2025 · 4K HDR10 · direct play");
     }
 
     #[test]
@@ -434,7 +434,7 @@ mod tests {
         assert_eq!(begun.plan.start, Duration::from_secs(30 * 60));
         assert_eq!(begun.title, "Station Nord");
         assert!(
-            begun.subtitle.starts_with("S2 · É4 · Le Signal"),
+            begun.subtitle.starts_with("S2 · E4 · Le Signal"),
             "{}",
             begun.subtitle
         );
@@ -524,12 +524,12 @@ mod tests {
     }
 
     #[test]
-    fn the_rows_are_named_in_french() {
-        assert_eq!(ListKind::Resume.heading(), "Reprendre");
-        assert_eq!(ListKind::NextUp.heading(), "Prochain épisode");
+    fn the_rows_are_named_in_english() {
+        assert_eq!(ListKind::Resume.heading(), "Continue watching");
+        assert_eq!(ListKind::NextUp.heading(), "Next up");
         assert_eq!(
             ListKind::Latest(ItemId("films".into()), LibraryKind::Films).heading(),
-            "Ajoutés récemment"
+            "Recently added"
         );
     }
 
@@ -600,7 +600,7 @@ mod tests {
             card_lines(&title),
             (
                 "Station Nord".to_string(),
-                Some("S2 · É4 · Le Signal".to_string())
+                Some("S2 · E4 · Le Signal".to_string())
             )
         );
     }
@@ -622,12 +622,12 @@ mod tests {
         let server = server();
         // film-0: 1 h 12 of 2 h 11.
         let films = started(&server);
-        assert_eq!(time_left(&films[0]).as_deref(), Some("reste 59 min"));
+        assert_eq!(time_left(&films[0]).as_deref(), Some("59m left"));
         let shown = progress(&films[0]).unwrap();
         assert!((shown - 72. / 131.).abs() < 1e-4, "{shown}");
         // The episode: 30 of 48 min.
         let title = Title::Episode(episode(&server, "series-0-s2-e4"));
-        assert_eq!(time_left(&title).as_deref(), Some("reste 18 min"));
+        assert_eq!(time_left(&title).as_deref(), Some("18m left"));
         assert_eq!(progress(&title), Some(0.625));
     }
 

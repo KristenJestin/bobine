@@ -98,7 +98,7 @@ fn search_field(window: &mut Window, cx: &mut Context<Shell>) -> Stateful<Div> {
             app.open_search(window, cx);
         }))
         .child(icon(IconName::Search, 14.))
-        .child("Rechercher")
+        .child("Search")
         .child(
             div()
                 .px(px(6.))

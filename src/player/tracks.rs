@@ -33,7 +33,7 @@ pub fn from_mpv(get: impl Fn(&str) -> Option<String>) -> Vec<Track> {
         .collect()
 }
 
-/// How the panel names a track: `Français · E-AC-3 5.1`, `Anglais · SRT · fichier externe`.
+/// How the panel names a track: `French · E-AC-3 5.1`, `English · SRT · external file`.
 pub fn label(track: &Track) -> String {
     let mut parts: Vec<String> = Vec::new();
     if let Some(language) = track.language.as_deref().and_then(language_name) {
@@ -52,33 +52,33 @@ pub fn label(track: &Track) -> String {
         parts.push(title.clone());
     }
     if track.forced {
-        parts.push("forcés".into());
+        parts.push("forced".into());
     }
     if track.external {
-        parts.push("fichier externe".into());
+        parts.push("external file".into());
     }
     if parts.is_empty() {
-        return format!("Piste {}", track.id);
+        return format!("Track {}", track.id);
     }
     parts.join(" · ")
 }
 
-/// French names of the common languages, from their ISO 639 codes; others keep their code,
+/// English names of the common languages, from their ISO 639 codes; others keep their code,
 /// and "undetermined" has no name.
 fn language_name(code: &str) -> Option<String> {
     let name = match code.to_ascii_lowercase().as_str() {
         "und" | "" => return None,
-        "fr" | "fre" | "fra" => "Français",
-        "en" | "eng" => "Anglais",
-        "de" | "ger" | "deu" => "Allemand",
-        "es" | "spa" => "Espagnol",
-        "it" | "ita" => "Italien",
-        "pt" | "por" => "Portugais",
-        "nl" | "dut" | "nld" => "Néerlandais",
-        "ja" | "jpn" => "Japonais",
-        "ko" | "kor" => "Coréen",
-        "zh" | "chi" | "zho" => "Chinois",
-        "ru" | "rus" => "Russe",
+        "fr" | "fre" | "fra" => "French",
+        "en" | "eng" => "English",
+        "de" | "ger" | "deu" => "German",
+        "es" | "spa" => "Spanish",
+        "it" | "ita" => "Italian",
+        "pt" | "por" => "Portuguese",
+        "nl" | "dut" | "nld" => "Dutch",
+        "ja" | "jpn" => "Japanese",
+        "ko" | "kor" => "Korean",
+        "zh" | "chi" | "zho" => "Chinese",
+        "ru" | "rus" => "Russian",
         _ => return Some(code.to_string()),
     };
     Some(name.to_string())
@@ -159,7 +159,7 @@ mod tests {
                 ("id", "2"),
                 ("type", "audio"),
                 ("lang", "eng"),
-                ("title", "Commentaire"),
+                ("title", "Commentary"),
                 ("codec", "aac"),
                 ("demux-channel-count", "2"),
                 ("selected", "no"),
@@ -256,15 +256,15 @@ mod tests {
     #[test]
     fn an_audio_track_is_named_by_language_codec_and_channels() {
         let tracks = tracks();
-        assert_eq!(label(&tracks[1]), "Français · E-AC-3 5.1");
-        assert_eq!(label(&tracks[2]), "Anglais · AAC 2.0 · Commentaire");
+        assert_eq!(label(&tracks[1]), "French · E-AC-3 5.1");
+        assert_eq!(label(&tracks[2]), "English · AAC 2.0 · Commentary");
     }
 
     #[test]
     fn a_subtitle_track_says_forced_and_external() {
         let tracks = tracks();
-        assert_eq!(label(&tracks[3]), "Français · ASS · forcés");
-        assert_eq!(label(&tracks[4]), "Anglais · SRT · fichier externe");
+        assert_eq!(label(&tracks[3]), "French · ASS · forced");
+        assert_eq!(label(&tracks[4]), "English · SRT · external file");
     }
 
     #[test]
@@ -281,7 +281,7 @@ mod tests {
         assert!(!label.contains("Stream.srt"), "{label}");
         assert!(!label.contains("ApiKey"), "{label}");
         assert!(!label.contains("0123456789abcdef"), "{label}");
-        assert_eq!(label, "SRT · fichier externe");
+        assert_eq!(label, "SRT · external file");
     }
 
     #[test]
@@ -297,7 +297,7 @@ mod tests {
             external: false,
             selected: false,
         };
-        assert_eq!(label(&track), "Piste 3");
+        assert_eq!(label(&track), "Track 3");
         let with_codec = Track {
             codec: Some("hdmv_pgs_subtitle".into()),
             ..track.clone()
@@ -307,6 +307,6 @@ mod tests {
             language: Some("und".into()),
             ..track
         };
-        assert_eq!(label(&unknown), "Piste 3");
+        assert_eq!(label(&unknown), "Track 3");
     }
 }
