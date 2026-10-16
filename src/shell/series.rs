@@ -145,12 +145,11 @@ impl Shell {
                 else {
                     return;
                 };
-                // The chips keep their choice while the episode to play stays the same.
-                let same = page.next.as_ref().map(|e| &e.item.id)
-                    == fresh.next.as_ref().map(|e| &e.item.id);
-                if !same || page.choices.is_none() {
-                    page.choices = fresh.next.as_ref().map(|e| Choices::new(&e.versions));
-                }
+                page.choices = series_page::choices_after(
+                    page.next.as_ref(),
+                    page.choices.take(),
+                    fresh.next.as_ref(),
+                );
                 if first {
                     page.season = fresh
                         .next
@@ -293,11 +292,7 @@ impl Shell {
         let (Some(next), Some(choices)) = (&page.next, &mut page.choices) else {
             return;
         };
-        match chip {
-            Chip::Version => choices.set_version(&next.versions, value.unwrap_or(0) as usize),
-            Chip::Audio => choices.audio = value,
-            Chip::Subtitle => choices.subtitle = value,
-        }
+        chip.choose(choices, &next.versions, value);
     }
 
     pub fn scroll_series_page(
@@ -328,10 +323,7 @@ impl Shell {
         if page.waiting() {
             return;
         }
-        let choices = match (&page.next, &page.choices) {
-            (Some(next), Some(choices)) if next.item.id == episode.item.id => choices.clone(),
-            _ => Choices::new(&episode.versions),
-        };
+        let choices = series_page::choices_for(page.next.as_ref(), page.choices.as_ref(), &episode);
         let Some(plan) = film_page::plan(&episode.item, &episode.versions, &choices, From::Resume)
         else {
             page.error = Some("Cet épisode n'a aucune version à lire.");
@@ -352,13 +344,10 @@ impl Shell {
             title,
             subtitle: Some(subtitle),
         };
-        let (film, source) = (plan.film.clone(), plan.source.clone());
-        let task = cx.background_executor().spawn(async move {
-            let opened = server.play(&film, &source);
-            // Without it the end shows no card: the playback goes on all the same.
-            let after = series_page::following(&*server, &episode).ok().flatten();
-            (opened, after)
-        });
+        let source = plan.source.clone();
+        let task = cx
+            .background_executor()
+            .spawn(async move { series_page::open_episode(&*server, &episode, &source) });
         cx.spawn_in(window, async move |this, cx| {
             let (opened, after) = task.await;
             this.update_in(cx, |shell, window, cx| {

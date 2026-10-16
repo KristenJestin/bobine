@@ -4,9 +4,12 @@
 
 use std::time::{Duration, Instant};
 
-use bobine::provider::{Episode, ItemId, MediaServer, ProviderError, Season, Series, SeriesDetail};
+use bobine::provider::{
+    Episode, ItemId, MediaServer, MediaSourceId, Playback, ProviderError, Season, Series,
+    SeriesDetail,
+};
 
-use crate::film_page;
+use crate::film_page::{self, Choices};
 use crate::shell::Loadable;
 
 /// How long the "Épisode suivant" card counts down before the next episode plays.
@@ -149,6 +152,52 @@ pub fn following(
 /// tab chosen again tries again), or `again`.
 pub fn asks_episodes(shown: Option<&Loadable<Vec<Episode>>>, again: bool) -> bool {
     again || matches!(shown, None | Some(Loadable::Failed(_)))
+}
+
+/// The chips' choices once the episode the main button plays is known anew: kept while it stays
+/// the same, else that episode's defaults.
+pub fn choices_after(
+    shown: Option<&Episode>,
+    chosen: Option<Choices>,
+    fresh: Option<&Episode>,
+) -> Option<Choices> {
+    let fresh = fresh?;
+    match chosen {
+        Some(chosen) if shown.is_some_and(|shown| shown.item.id == fresh.item.id) => Some(chosen),
+        _ => Some(Choices::new(&fresh.versions)),
+    }
+}
+
+/// What `episode` plays with: the chips' choices when it is the episode they were made for, else
+/// its defaults.
+pub fn choices_for(next: Option<&Episode>, chosen: Option<&Choices>, episode: &Episode) -> Choices {
+    match (next, chosen) {
+        (Some(next), Some(chosen)) if next.item.id == episode.item.id => chosen.clone(),
+        _ => Choices::new(&episode.versions),
+    }
+}
+
+/// What playing an episode asks of the server, off the window's thread: the playback, and the
+/// episode after it, kept for the card at its end. Without that one the end shows no card; the
+/// playback goes on all the same.
+pub fn open_episode(
+    server: &dyn MediaServer,
+    episode: &Episode,
+    source: &MediaSourceId,
+) -> (Result<Playback, ProviderError>, Option<Episode>) {
+    let opened = server.play(&episode.item.id, source);
+    (opened, following(server, episode).ok().flatten())
+}
+
+/// The episode the card offers once the player is left: the one after, only when the file ended
+/// at its real end; none when the viewer left, or when the stream was cut.
+pub fn offered_on_leaving(
+    ended: bool,
+    next: Option<Episode>,
+    position: f64,
+    duration: f64,
+) -> Option<Episode> {
+    next.filter(|_| ended && reached_the_end(position, duration))
 }
 
 /// Whether the player stopped at the end of the episode, and not on a stream cut short.
@@ -747,6 +796,76 @@ mod tests {
         assert!(!asks_episodes(Some(&Loadable::Loading), false));
         assert!(!asks_episodes(Some(&Loadable::Ready(Vec::new())), false));
         assert!(asks_episodes(Some(&Loadable::Ready(Vec::new())), true));
+    }
+
+    #[test]
+    fn playing_an_episode_keeps_the_next_one_for_its_end() {
+        let server = FakeServer::new(1, true);
+        let playing = episode(&server, 2, 6);
+        let (opened, next) = open_episode(&server, &playing, &playing.versions[0].id);
+        assert_eq!(opened.unwrap().film, id(2, 6));
+        assert_eq!(next.unwrap().item.id, id(3, 1));
+        let (_, none) = open_episode(&server, &episode(&server, 3, 5), &playing.versions[0].id);
+        assert_eq!(none, None);
+    }
+
+    #[test]
+    fn the_card_starts_after_the_player_closes_at_the_end() {
+        let server = FakeServer::new(1, true);
+        let next = Some(episode(&server, 2, 5));
+        let offered = offered_on_leaving(true, next, 48. * 60. - 1., 48. * 60.);
+        assert_eq!(offered.unwrap().item.id, id(2, 5));
+        // A cut stream ends the file too, short of the end: no card.
+        let next = Some(episode(&server, 2, 5));
+        assert_eq!(offered_on_leaving(true, next, 40. * 60., 48. * 60.), None);
+    }
+
+    #[test]
+    fn no_card_when_the_player_is_left_before_the_end() {
+        let server = FakeServer::new(1, true);
+        let next = Some(episode(&server, 2, 5));
+        assert_eq!(
+            offered_on_leaving(false, next, 48. * 60. - 1., 48. * 60.),
+            None
+        );
+    }
+
+    #[test]
+    fn the_chips_apply_to_the_episode_about_to_play() {
+        let server = FakeServer::new(1, true);
+        let (next, other) = (episode(&server, 2, 4), episode(&server, 2, 5));
+        let mut chosen = Choices::new(&next.versions);
+        crate::shell::Chip::Audio.choose(&mut chosen, &next.versions, Some(7));
+        assert_ne!(chosen, Choices::new(&next.versions));
+        assert_eq!(choices_for(Some(&next), Some(&chosen), &next), chosen);
+        // Another episode of the list plays with its own defaults.
+        assert_eq!(
+            choices_for(Some(&next), Some(&chosen), &other),
+            Choices::new(&other.versions)
+        );
+    }
+
+    #[test]
+    fn the_chips_keep_their_choice_while_the_next_episode_stays_the_same() {
+        let server = FakeServer::new(1, true);
+        let (next, other) = (episode(&server, 2, 4), episode(&server, 2, 5));
+        let mut chosen = Choices::new(&next.versions);
+        crate::shell::Chip::Audio.choose(&mut chosen, &next.versions, Some(7));
+        let mut refreshed = next.clone();
+        refreshed.item.resume = Some(Duration::from_secs(31 * 60));
+        assert_eq!(
+            choices_after(Some(&next), Some(chosen.clone()), Some(&refreshed)),
+            Some(chosen.clone())
+        );
+        assert_eq!(
+            choices_after(Some(&next), Some(chosen), Some(&other)),
+            Some(Choices::new(&other.versions))
+        );
+        assert_eq!(
+            choices_after(None, None, Some(&next)),
+            Some(Choices::new(&next.versions))
+        );
+        assert_eq!(choices_after(Some(&next), None, None), None);
     }
 
     #[test]

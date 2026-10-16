@@ -69,6 +69,33 @@ fn focus_to(login_shown: bool, address_due: &mut bool, nothing_focused: bool) ->
     FocusTo::Keep
 }
 
+/// What becomes of a fullscreen kept for the next episode, at a draw.
+#[derive(Debug, PartialEq, Eq)]
+enum KeptFullscreen {
+    /// Still kept, or nothing was.
+    Keep,
+    /// The next episode plays: the fullscreen is the player's again.
+    Release,
+    /// The card was cancelled, or the next episode did not play: the window leaves it.
+    GiveBack,
+}
+
+/// `kept`: the fullscreen is kept for the next episode; `on_player`, it plays; `card`, the card
+/// counts down; `waiting`, the series page opens the next episode.
+fn kept_fullscreen(kept: bool, on_player: bool, card: bool, waiting: bool) -> KeptFullscreen {
+    match (kept, on_player) {
+        (false, _) => KeptFullscreen::Keep,
+        (true, true) => KeptFullscreen::Release,
+        (true, false) if card || waiting => KeptFullscreen::Keep,
+        (true, false) => KeptFullscreen::GiveBack,
+    }
+}
+
+/// Leaving the player in fullscreen keeps it only for the next episode the card offers.
+fn keeps_fullscreen(offered: bool, fullscreen: bool) -> bool {
+    offered && fullscreen
+}
+
 pub struct Shell {
     pub navigator: Navigator,
     focus: FocusHandle,
@@ -253,9 +280,19 @@ impl Shell {
         self.wayland = None;
     }
 
-    /// Back to the page the film was started from; `next`, the episode its card offers.
-    fn leave_player(&mut self, next: Option<Episode>, window: &mut Window, cx: &mut Context<Self>) {
-        self.fullscreen_kept = next.is_some() && window.is_fullscreen();
+    /// Back to the page the film was started from. `ended`: the file ended by itself, and the
+    /// card may offer the next episode.
+    fn leave_player(&mut self, ended: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let next = self.playback.as_mut().and_then(|playback| {
+            let session = &playback.session;
+            series_page::offered_on_leaving(
+                ended,
+                playback.next.take(),
+                session.position,
+                session.duration,
+            )
+        });
+        self.fullscreen_kept = keeps_fullscreen(next.is_some(), window.is_fullscreen());
         if window.is_fullscreen() && !self.fullscreen_kept {
             window.toggle_fullscreen();
         }
@@ -298,14 +335,8 @@ impl Shell {
             reporting.tick(now, &playback.session, ended);
         }
         if ended {
-            // The end of the film: back to where it was started from. The next episode is
-            // offered only at the real end, not when the stream was cut.
-            let session = &playback.session;
-            let next = playback
-                .next
-                .take()
-                .filter(|_| series_page::reached_the_end(session.position, session.duration));
-            self.leave_player(next, window, cx);
+            // The end of the film: back to where it was started from.
+            self.leave_player(true, window, cx);
             return;
         }
         let shown = playback.session.controls_visible(now);
@@ -349,14 +380,14 @@ impl Shell {
             Some(WindowRequest::ToggleFullscreen | WindowRequest::ExitFullscreen) => {
                 window.toggle_fullscreen();
             }
-            Some(WindowRequest::Leave) => self.leave_player(None, window, cx),
+            Some(WindowRequest::Leave) => self.leave_player(false, window, cx),
             None => {}
         }
         cx.notify();
     }
 
     pub fn player_back(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.leave_player(None, window, cx);
+        self.leave_player(false, window, cx);
     }
 }
 
@@ -394,15 +425,19 @@ impl Render for Shell {
         let back_label = self.navigator.back_label();
         let playing = screen == Screen::Player && self.playback.is_some();
         // The next episode playing keeps the fullscreen; anything else gives it back.
-        if screen == Screen::Player {
-            self.fullscreen_kept = false;
-        } else if self.fullscreen_kept
-            && self.up_next.episode().is_none()
-            && !self.series_pages.last().is_some_and(SeriesPage::waiting)
-        {
-            self.fullscreen_kept = false;
-            if window.is_fullscreen() {
-                window.toggle_fullscreen();
+        match kept_fullscreen(
+            self.fullscreen_kept,
+            screen == Screen::Player,
+            self.up_next.episode().is_some(),
+            self.series_pages.last().is_some_and(SeriesPage::waiting),
+        ) {
+            KeptFullscreen::Keep => {}
+            KeptFullscreen::Release => self.fullscreen_kept = false,
+            KeptFullscreen::GiveBack => {
+                self.fullscreen_kept = false;
+                if window.is_fullscreen() {
+                    window.toggle_fullscreen();
+                }
             }
         }
         let page = (screen, self.details.len() + self.series_pages.len());
@@ -482,6 +517,24 @@ impl Render for Shell {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fullscreen_is_kept_through_auto_next_and_given_back_on_cancel() {
+        use KeptFullscreen::*;
+        // The episode ends in fullscreen, a card is offered: the window stays so.
+        let kept = keeps_fullscreen(true, true);
+        assert!(kept);
+        assert_eq!(kept_fullscreen(kept, false, true, false), Keep);
+        // The countdown ends, the next episode opens, then plays.
+        assert_eq!(kept_fullscreen(kept, false, false, true), Keep);
+        assert_eq!(kept_fullscreen(kept, true, false, false), Release);
+        // Cancelled instead: given back.
+        assert_eq!(kept_fullscreen(kept, false, false, false), GiveBack);
+        // Left before the end, or not in fullscreen: nothing kept.
+        assert!(!keeps_fullscreen(false, true));
+        assert!(!keeps_fullscreen(true, false));
+        assert_eq!(kept_fullscreen(false, false, false, false), Keep);
+    }
 
     #[test]
     fn the_login_shown_takes_the_focus_the_root_had_taken_meanwhile() {

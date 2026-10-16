@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use bobine::provider::{
     Collection, Connector, Episode, Film, FilmDetail, FilmQuery, ItemId, LibraryKind, MediaServer,
-    Page, Playback as Opened, PlaybackReport, ProviderError,
+    MediaSource, Page, Playback as Opened, PlaybackReport, ProviderError,
 };
 use gpui_kit::prelude::*;
 use gpui_kit::{
@@ -74,6 +74,22 @@ impl<T> Default for LibraryPage<T> {
     }
 }
 
+/// The page shown again once the player is left, asked anew.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Reload {
+    Series(usize),
+    Film(usize),
+}
+
+/// What is asked again after a playback, on `screen`, the one back to: the series page on top,
+/// else the film page on top, if any.
+pub fn reload_after_playback(screen: Screen, films: usize, series: usize) -> Option<Reload> {
+    if screen == Screen::SeriesDetail {
+        return series.checked_sub(1).map(Reload::Series);
+    }
+    films.checked_sub(1).map(Reload::Film)
+}
+
 /// The page a play button was pressed on, at its depth, with what it shows.
 pub enum Origin {
     Film(usize, ItemId),
@@ -130,6 +146,15 @@ pub enum Chip {
 
 impl Chip {
     pub const ALL: [Chip; 3] = [Chip::Version, Chip::Audio, Chip::Subtitle];
+
+    /// The choice made in this chip's menu, for a film or an episode with `versions`.
+    pub fn choose(self, choices: &mut Choices, versions: &[MediaSource], value: Option<i32>) {
+        match self {
+            Chip::Version => choices.set_version(versions, value.unwrap_or(0) as usize),
+            Chip::Audio => choices.audio = value,
+            Chip::Subtitle => choices.subtitle = value,
+        }
+    }
 }
 
 pub struct DetailPage {
@@ -587,11 +612,7 @@ impl Shell {
         let (Loadable::Ready(detail), Some(choices)) = (&page.detail, &mut page.choices) else {
             return;
         };
-        match chip {
-            Chip::Version => choices.set_version(&detail.versions, value.unwrap_or(0) as usize),
-            Chip::Audio => choices.audio = value,
-            Chip::Subtitle => choices.subtitle = value,
-        }
+        chip.choose(choices, &detail.versions, value);
         cx.notify();
     }
 
@@ -832,14 +853,17 @@ impl Shell {
     /// Back from the player: once "stopped" reached the server, the film page shows where the
     /// viewer is now.
     pub(super) fn after_playback(&mut self, reports: JoinHandle<()>, cx: &mut Context<Self>) {
-        if self.navigator.current() == Screen::SeriesDetail {
-            if let Some(depth) = self.series_pages.len().checked_sub(1) {
+        let depth = match reload_after_playback(
+            self.navigator.current(),
+            self.details.len(),
+            self.series_pages.len(),
+        ) {
+            Some(Reload::Series(depth)) => {
                 self.load_series(depth, false, Some(reports), cx);
+                return;
             }
-            return;
-        }
-        let Some(depth) = self.details.len().checked_sub(1) else {
-            return;
+            Some(Reload::Film(depth)) => depth,
+            None => return,
         };
         let id = self.details[depth].id.clone();
         let asked = id.clone();
@@ -939,5 +963,23 @@ impl Shell {
                 },
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_series_page_reloads_after_a_playback() {
+        assert_eq!(
+            reload_after_playback(Screen::SeriesDetail, 1, 2),
+            Some(Reload::Series(1))
+        );
+        assert_eq!(
+            reload_after_playback(Screen::FilmDetail, 2, 1),
+            Some(Reload::Film(1))
+        );
+        assert_eq!(reload_after_playback(Screen::Home, 0, 0), None);
     }
 }
