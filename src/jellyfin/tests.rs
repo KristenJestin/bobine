@@ -988,6 +988,18 @@ fn a_new_season_card_counts_the_episodes_left_in_that_season() {
     assert_eq!(reach.unwatched, 8);
 }
 
+#[test]
+fn a_season_without_its_series_is_left_out_of_the_latest() {
+    let s = Setup::new();
+    let latest = s
+        .signed_in()
+        .latest(&ItemId(SERIES_LIBRARY.into()), 10)
+        .unwrap();
+    let orphan = ItemId("5c000000000000000000000000000001".into());
+    assert!(latest.iter().all(|title| title.id() != &orphan));
+    assert_eq!(latest.len(), 6);
+}
+
 fn season_item() -> super::dto::Item {
     serde_json::from_value(serde_json::json!({
         "Id": "5c000000000000000000000000000009", "Name": "Season 9", "Type": "Season",
@@ -1000,7 +1012,7 @@ fn season_item() -> super::dto::Item {
 
 #[test]
 fn a_season_handed_as_a_title_is_its_series() {
-    let Title::Series(series) = season_item().title() else {
+    let Some(Title::Series(series)) = season_item().title() else {
         panic!("a series")
     };
     assert_eq!(series.id, ItemId("5e000000000000000000000000000004".into()));

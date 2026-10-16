@@ -470,7 +470,7 @@ impl MediaServer for Jellyfin {
                 ("enableImageTypes", "Primary,Backdrop".into()),
             ],
         )?;
-        Ok(found.items.into_iter().map(Item::title).collect())
+        Ok(found.items.into_iter().filter_map(Item::title).collect())
     }
 
     fn film(&self, film: &ItemId) -> Result<FilmDetail, ProviderError> {
@@ -831,7 +831,7 @@ impl MediaServer for Jellyfin {
         )?;
         // Two episodes of one series, or one episode beside its series, are one entry.
         let mut titles: Vec<Title> = Vec::new();
-        for title in found.into_iter().map(Item::latest) {
+        for title in found.into_iter().filter_map(Item::latest) {
             if !titles.iter().any(|seen| seen.id() == title.id()) {
                 titles.push(title);
             }

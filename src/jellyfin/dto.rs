@@ -385,17 +385,19 @@ impl Item {
     }
 
     /// What a row of the Home lists: an episode, a series (or the season of one), else a film.
-    pub fn title(self) -> Title {
-        match self.kind.as_deref() {
+    /// A season that names no series has no page to open: it is not listed.
+    pub fn title(self) -> Option<Title> {
+        Some(match self.kind.as_deref() {
             Some("Episode") => Title::Episode(self.episode()),
+            Some("Season") if self.series_id.is_none() => return None,
             Some("Series" | "Season") => Title::Series(self.series()),
             _ => Title::Film(self.film()),
-        }
+        })
     }
 
     /// What a library's latest list holds: `/Items/Latest` groups the episodes of a series only
     /// when several came in, so a lone one comes as the episode, and is listed as its series.
-    pub fn latest(self) -> Title {
+    pub fn latest(self) -> Option<Title> {
         if self.kind.as_deref() != Some("Episode") {
             return self.title();
         }
@@ -407,7 +409,7 @@ impl Item {
             kind: ImageKind::Primary,
             tag: tag.clone(),
         });
-        Title::Series(Series {
+        Some(Title::Series(Series {
             id: ItemId(id),
             title: self.series_name.unwrap_or_default(),
             year: None,
@@ -417,7 +419,7 @@ impl Item {
             poster,
             backdrop: None,
             season: None,
-        })
+        }))
     }
 
     /// What the top of the Home says of a film or a series.
