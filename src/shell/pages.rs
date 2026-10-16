@@ -19,7 +19,7 @@ use gpui_kit::{
 };
 
 use super::{Film as Playing, HomePage, Shell};
-use crate::favourite::{ListPage, Toggle};
+use crate::favourite::{self, ListPage, Toggle};
 use crate::film_page::{self, Choices, From, Plan};
 use crate::grid::{Grid, Listed, RETRY_AFTER};
 use crate::images::{self, Key};
@@ -930,10 +930,26 @@ impl Shell {
         self.details.get_mut(depth).filter(|page| &page.id == id)
     }
 
+    /// The film page of that number at `depth`, if it is still open there: a read answers to
+    /// the page that asked it, not to another that shows the same title.
+    pub(super) fn detail_numbered(
+        &mut self,
+        depth: usize,
+        generation: u64,
+    ) -> Option<&mut DetailPage> {
+        favourite::numbered(&mut self.details, depth, generation)
+    }
+
     /// Asks the film, then (once the page shows) its collection: that lookup is slow.
-    fn load_detail(&mut self, depth: usize, with_collection: bool, cx: &mut Context<Self>) {
+    pub(super) fn load_detail(
+        &mut self,
+        depth: usize,
+        with_collection: bool,
+        cx: &mut Context<Self>,
+    ) {
         let id = self.details[depth].id.clone();
         let asked = id.clone();
+        let generation = self.details[depth].generation;
         let read_at = self.details[depth].favourite.changes();
         self.ask(
             cx,
@@ -943,14 +959,14 @@ impl Shell {
                     Ok(detail) => detail,
                     Err(error) => {
                         let said = shell.failed(error, cx);
-                        if let Some(page) = shell.detail_page(depth, &id) {
+                        if let Some(page) = shell.detail_numbered(depth, generation) {
                             page.detail = Loadable::Failed(said);
                         }
                         return;
                     }
                 };
                 shell.library.grid.update(&detail.film);
-                let Some(page) = shell.detail_page(depth, &id) else {
+                let Some(page) = shell.detail_numbered(depth, generation) else {
                     return;
                 };
                 // Coming back from the player keeps what the chips chose.
@@ -1273,6 +1289,7 @@ impl Shell {
         };
         let id = self.details[depth].id.clone();
         let asked = id.clone();
+        let generation = self.details[depth].generation;
         let read_at = self.details[depth].favourite.changes();
         self.ask(
             cx,
@@ -1287,7 +1304,7 @@ impl Shell {
                 };
                 shell.library.grid.update(&detail.film);
                 // Continue Watching is asked again when Home shows.
-                if let Some(page) = shell.detail_page(depth, &id)
+                if let Some(page) = shell.detail_numbered(depth, generation)
                     && let Loadable::Ready(shown) = &mut page.detail
                 {
                     page.favourite.sync(detail.favourite, read_at);

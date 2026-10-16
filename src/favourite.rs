@@ -133,6 +133,14 @@ pub fn answered<'a>(
     answer.is_ok() && current == Screen::MyList
 }
 
+/// The page numbered `generation`, at `depth` of its stack, if it is still open there: the read
+/// of a page answers to it and to no other that shows the same title.
+pub fn numbered<P: ListPage>(stack: &mut [P], depth: usize, generation: u64) -> Option<&mut P> {
+    stack
+        .get_mut(depth)
+        .filter(|page| page.generation() == generation)
+}
+
 /// Puts `item` in the list or takes it out, on the server.
 pub fn ask(server: &dyn MediaServer, item: &ItemId, wanted: bool) -> Result<(), ProviderError> {
     server.set_favourite(item, wanted)
@@ -434,6 +442,18 @@ mod tests {
         );
         answer_to(&mut reopened, Screen::FilmDetail, &again, Ok(()));
         assert_eq!(press(&mut reopened[0]).map(|p| p.wanted), Some(true));
+    }
+
+    #[test]
+    fn the_read_of_a_page_never_reaches_a_page_opened_after_it_at_its_depth() {
+        let mut stack = [Page::new("film-a", 1, true)];
+        assert!(numbered(&mut stack, 0, 1).is_some());
+        // Escape, the same title is opened again at the same depth: another page.
+        let mut stack = [Page::new("film-a", 2, true)];
+        assert!(numbered(&mut stack, 0, 1).is_none());
+        assert!(numbered(&mut stack, 0, 2).is_some());
+        // And not at another depth.
+        assert!(numbered(&mut stack, 1, 2).is_none());
     }
 
     #[test]
