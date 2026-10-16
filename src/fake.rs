@@ -31,7 +31,9 @@ pub const TRANSCODE_SESSION: &str = "session-converted";
 /// stopped in its fourth episode.
 pub const SERIES: &str = "series-0";
 
-/// The system keyring in memory: the tests and the harness never reach the real one.
+/// The system keyring in memory: the tests and the harness never reach the real one. Beside the
+/// library's `MemoryStore`, which is `cfg(test)` of the library and so out of reach of this
+/// binary and of its harness build.
 #[derive(Default)]
 pub struct MemoryKeyring {
     pub secrets: Mutex<HashMap<String, Token>>,
