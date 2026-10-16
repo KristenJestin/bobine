@@ -11,8 +11,8 @@ use std::time::Instant;
 use bobine::provider::{CastMember, Film, FilmDetail, ItemId, MediaSource};
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    AnyElement, Bounds, Context, Div, FontWeight, IntoElement, MouseDownEvent, Pixels, Point,
-    ScrollHandle, SharedString, Stateful, Window, anchored, canvas, deferred, div,
+    AnyElement, Bounds, Context, Div, FontWeight, IntoElement, MouseButton, MouseDownEvent, Pixels,
+    Point, ScrollHandle, SharedString, Stateful, Window, anchored, canvas, deferred, div,
     linear_color_stop, linear_gradient, point, px, rgb, rgba,
 };
 
@@ -596,6 +596,10 @@ fn menu<K: Copy + 'static>(
                     .when(open, move |menu| {
                         menu.occlude().on_mouse_down_out(cx.listener(
                             move |shell, event: &MouseDownEvent, _, cx| {
+                                // A side button is Back: it closes the menu itself, once.
+                                if matches!(event.button, MouseButton::Navigate(_)) {
+                                    return;
+                                }
                                 (actions.outside)(shell, event.position, cx);
                             },
                         ))

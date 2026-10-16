@@ -23,21 +23,22 @@ use std::time::{Duration, Instant};
 
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    Animation, AnimationExt, App, Context, Entity, FocusHandle, Focusable, IntoElement,
-    KeyDownEvent, Pixels, Render, SharedString, Size, Subscription, Task, Window, div, px,
+    Animation, AnimationExt, App, Context, DispatchPhase, Entity, FocusHandle, Focusable,
+    IntoElement, KeyDownEvent, MouseButton, MouseDownEvent, Pixels, Render, SharedString, Size,
+    Subscription, Task, Window, canvas, div, px,
 };
 
 use bobine::provider::{
     Connector, Episode, Film as FilmItem, MediaServer, Playback as Opened, ProviderError, Series,
 };
 
-use crate::chrome::{Account, AccountView, ButtonBounds, back_link, pill_bar};
+use crate::chrome::{Account, AccountView, ButtonBounds, back_link, bar_fade, pill_bar};
 use crate::config::Settings;
 use crate::fallback::{Fallback, Reopen};
 use crate::images::Images;
 use crate::menu::Menus;
 use crate::motion::{self, Fade, Presence};
-use crate::navigation::{Navigator, Screen};
+use crate::navigation::{NavEntry, Navigator, Screen};
 use crate::player::libmpv::Libmpv;
 use crate::player::mpv::MpvPlayer;
 use crate::player::segments::{Button, Label, offered};
@@ -181,6 +182,10 @@ pub struct Shell {
     pub my_list: MyListPage,
     /// The search palette, while it shows (it stays fading out after it closed).
     pub search: Option<SearchState>,
+    /// The pages gone back from, the last one on top: the mouse's forward button opens them again.
+    forward: Vec<pages::Reopen>,
+    /// The highlight of each entry of the pill bar eases from one section to the next.
+    nav_pills: [Fade; NavEntry::ALL.len()],
     pub images: Images,
     /// The cards drawn that answer the pointer, each a view of its own.
     pub cards: screens::Cards,
@@ -320,6 +325,8 @@ impl Shell {
             collection_pages: Vec::new(),
             my_list: Default::default(),
             search: None,
+            forward: Vec::new(),
+            nav_pills: [Fade::new(motion::quick()); NavEntry::ALL.len()],
             images: Images::default(),
             cards: Default::default(),
             marks: Marks::default(),
@@ -441,6 +448,7 @@ impl Shell {
             _bounds: bounds,
         });
         self.lay_out_video(window);
+        self.forward.clear();
         self.navigator.open(Screen::Player);
         cx.notify();
     }
@@ -814,6 +822,17 @@ impl Render for Shell {
         } else {
             None
         };
+        let section = self.navigator.section();
+        let now = Instant::now();
+        let highlight = std::array::from_fn(|at| {
+            let pill = &mut self.nav_pills[at];
+            pill.set(NavEntry::ALL[at].is_current(section), now);
+            if pill.moving(now) {
+                window.request_animation_frame();
+            }
+            pill.level(now)
+        });
+        let shell = cx.weak_entity();
         let playing = screen == Screen::Player && self.playback.is_some();
         // The next episode playing keeps the fullscreen; anything else gives it back.
         match kept_fullscreen(
@@ -947,8 +966,38 @@ impl Render for Shell {
             .when(screen == Screen::SeriesDetail, |root| {
                 root.children(screens::up_next_card(self, window, cx))
             })
+            // The side buttons of the mouse are heard over the whole window, the bar included,
+            // which lets no click through to what is under it.
+            .child(
+                canvas(
+                    |_, _, _| {},
+                    move |_, _, window, _| {
+                        window.on_mouse_event(move |event: &MouseDownEvent, phase, window, cx| {
+                            let MouseButton::Navigate(direction) = event.button else {
+                                return;
+                            };
+                            if phase == DispatchPhase::Bubble {
+                                let go = |shell: &mut Shell, cx: &mut Context<Shell>| {
+                                    shell.navigate(direction, window, cx)
+                                };
+                                shell.update(cx, go).ok();
+                            }
+                        });
+                    },
+                )
+                .absolute()
+                .size_full(),
+            )
+            // A light shade over the top of a backdrop, under the bar. It comes with the page.
+            .when(screen.has_backdrop(), |root| {
+                root.child(bar_fade().with_animation(
+                    ("shade-turn", turns as usize),
+                    Animation::new(motion::page()).with_easing(motion::ease_out),
+                    |shade, t| shade.opacity(t),
+                ))
+            })
             .when(screen.shows_pill_bar(), |root| {
-                root.child(pill_bar(screen, account, window, cx))
+                root.child(pill_bar(highlight, account, window, cx))
             })
             .when_some(
                 back_label.filter(|_| screen.shows_back_link()),

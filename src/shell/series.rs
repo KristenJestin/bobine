@@ -95,6 +95,7 @@ impl Shell {
 
     /// The page of a series, opened on `season` (a card of a new season) when it has it.
     pub fn open_series_on(&mut self, id: ItemId, season: Option<ItemId>, cx: &mut Context<Self>) {
+        self.forward.clear();
         // The card belongs to the page under: it does not play over this one.
         self.cancel_up_next(cx);
         let generation = self.next_generation();

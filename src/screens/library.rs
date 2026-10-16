@@ -202,42 +202,16 @@ fn grid_screen<T: Listed + 'static>(
         .relative()
         .flex()
         .flex_col()
-        .pt(px(96.))
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .justify_between()
-                .px(px(MARGIN))
-                .pb(px(24.))
-                .child(
-                    div()
-                        .flex()
-                        .items_baseline()
-                        .gap(px(14.))
-                        .child(
-                            div()
-                                .text_size(px(28.))
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .child(title),
-                        )
-                        .children(count.map(|total| {
-                            div()
-                                .text_size(px(14.))
-                                .text_color(theme::dim())
-                                .child(grid::count(total))
-                        })),
-                )
-                .child(tool_chips(
-                    &tools,
-                    unwatched,
-                    choices.as_ref(),
-                    menu,
-                    &chips,
-                    window,
-                    cx,
-                )),
-        )
+        .pt(px(GRID_TOP))
+        .child(heading(title, None, count).child(tool_chips(
+            &tools,
+            unwatched,
+            choices.as_ref(),
+            menu,
+            &chips,
+            window,
+            cx,
+        )))
         .children(status.map(|why| {
             div()
                 .px(px(MARGIN))
@@ -256,16 +230,57 @@ fn grid_screen<T: Listed + 'static>(
                     .on_click(cx.listener(|shell, _, _, cx| shell.retry_list(cx)))
                 }))
         }))
+        .child(rows_frame().opacity(opacity).child(list))
+        .children((letters > 0.).then(|| alphabet(highlight, letters, window, cx)))
+}
+
+/// Where a grid's heading starts, under the pill bar.
+pub(super) const GRID_TOP: f32 = 96.;
+
+/// The title of a grid, what it belongs to, and how many titles it holds; what goes on its right
+/// is added by the caller.
+pub(super) fn heading(title: &'static str, detail: Option<String>, count: Option<u32>) -> Div {
+    div()
+        .debug_selector(|| "grid-heading".into())
+        .flex()
+        .items_center()
+        .justify_between()
+        .px(px(MARGIN))
+        .pb(px(24.))
         .child(
             div()
                 .flex()
-                .flex_col()
-                .flex_1()
-                .min_h_0()
-                .opacity(opacity)
-                .child(list),
+                .items_baseline()
+                .gap(px(14.))
+                .child(
+                    div()
+                        .text_size(px(28.))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child(title),
+                )
+                .children(detail.map(|detail| {
+                    div()
+                        .text_size(px(14.))
+                        .text_color(theme::dim())
+                        .child(detail)
+                }))
+                .children(count.map(|total| {
+                    div()
+                        .text_size(px(14.))
+                        .text_color(theme::dim())
+                        .child(grid::count(total))
+                })),
         )
-        .children((letters > 0.).then(|| alphabet(highlight, letters, window, cx)))
+}
+
+/// What holds a grid's rows: the rest of the page.
+pub(super) fn rows_frame() -> Div {
+    div()
+        .debug_selector(|| "grid-rows".into())
+        .flex()
+        .flex_col()
+        .flex_1()
+        .min_h_0()
 }
 
 /// What the grid says when the filters leave nothing.

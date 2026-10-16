@@ -429,15 +429,7 @@ pub fn is_shortcut(key: &str, control: bool, others: bool) -> bool {
 
 /// Whether the palette opens over `screen`: not on the login (no server yet) nor in the player.
 pub fn opens_from(screen: Screen) -> bool {
-    matches!(
-        screen,
-        Screen::Home
-            | Screen::Library
-            | Screen::Series
-            | Screen::FilmDetail
-            | Screen::SeriesDetail
-            | Screen::Person
-    )
+    !matches!(screen, Screen::Login | Screen::Player)
 }
 
 #[cfg(test)]
@@ -887,7 +879,7 @@ mod tests {
     }
 
     #[test]
-    fn search_opens_from_the_series_grid_and_a_series_page() {
+    fn search_opens_from_every_screen_but_the_login_and_the_player() {
         for screen in [
             Screen::Home,
             Screen::Library,
@@ -895,6 +887,10 @@ mod tests {
             Screen::FilmDetail,
             Screen::SeriesDetail,
             Screen::Person,
+            Screen::HomeList,
+            Screen::Collections,
+            Screen::CollectionDetail,
+            Screen::MyList,
         ] {
             assert!(opens_from(screen), "{screen:?}");
         }

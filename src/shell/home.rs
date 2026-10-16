@@ -252,6 +252,8 @@ pub struct ListPage {
     pub grid: Grid<Title>,
     pub scroll: UniformListScrollHandle,
     pub error: Option<&'static str>,
+    /// The row offered instead when the list holds nothing.
+    pub suggestions: ScrollHandle,
 }
 
 impl Shell {
@@ -583,12 +585,14 @@ impl Shell {
 
     /// "See all" on a row.
     pub fn open_list(&mut self, kind: ListKind, library: Option<String>, cx: &mut Context<Self>) {
+        self.forward.clear();
         self.list = Some(ListPage {
             kind,
             library,
             grid: Grid::default(),
             scroll: UniformListScrollHandle::default(),
             error: None,
+            suggestions: ScrollHandle::new(),
         });
         self.navigator.open(Screen::HomeList);
         self.ask_list(0..1, cx);
