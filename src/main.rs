@@ -9,6 +9,7 @@ mod grid;
 #[cfg(feature = "harness")]
 mod harness;
 mod hero;
+mod home_page;
 mod icons;
 mod images;
 mod input;
