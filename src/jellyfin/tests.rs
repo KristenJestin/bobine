@@ -2094,3 +2094,111 @@ fn the_list_with_a_revoked_token_asks_to_sign_in_again() {
         Err(ProviderError::SessionExpired)
     );
 }
+
+fn source(id: &str) -> MediaSourceId {
+    MediaSourceId(id.into())
+}
+
+#[test]
+fn the_trickplay_of_a_version_is_read_with_its_item() {
+    let s = Setup::new();
+    let trickplay = s
+        .signed_in()
+        .trickplay(&film(), &source(SOURCE))
+        .unwrap()
+        .expect("the film has trickplay");
+    // Three sizes on offer: the smallest one wide enough.
+    assert_eq!(
+        trickplay,
+        Trickplay {
+            width: 320,
+            height: 180,
+            columns: 10,
+            rows: 10,
+            count: 660,
+            interval: Duration::from_secs(10),
+        }
+    );
+    let asked = s.fake.last("GET", &format!("/Items/{FILM}"));
+    assert_eq!(asked.param("fields"), Some("Trickplay"));
+    assert_eq!(asked.param("userId"), Some(USER_ID));
+}
+
+#[test]
+fn each_version_has_its_own_trickplay() {
+    let s = Setup::new();
+    let second = s
+        .signed_in()
+        .trickplay(&film(), &source("5a000000000000000000000000000002"))
+        .unwrap()
+        .expect("the second version has trickplay");
+    // Its only size is narrower than wanted: it is the one shown, at its own interval.
+    assert_eq!(
+        (second.width, second.columns, second.count, second.interval),
+        (240, 8, 66, Duration::from_secs(60))
+    );
+}
+
+#[test]
+fn an_item_without_trickplay_has_none() {
+    let s = Setup::new();
+    s.fake.state.lock().unwrap().no_trickplay = true;
+    assert_eq!(s.signed_in().trickplay(&film(), &source(SOURCE)), Ok(None));
+}
+
+#[test]
+fn a_version_the_trickplay_does_not_list_has_none() {
+    let s = Setup::new();
+    assert_eq!(
+        s.signed_in().trickplay(&film(), &source("nowhere")),
+        Ok(None)
+    );
+}
+
+#[test]
+fn a_tile_is_asked_by_its_number_in_the_size_shown() {
+    let s = Setup::new();
+    let server = s.signed_in();
+    let trickplay = server.trickplay(&film(), &source(SOURCE)).unwrap().unwrap();
+    let tile = server
+        .trickplay_tile(&film(), &source(SOURCE), &trickplay, 3)
+        .unwrap();
+    assert_eq!(tile, TILE);
+    let asked = s
+        .fake
+        .last("GET", &format!("/Videos/{FILM}/Trickplay/320/3.jpg"));
+    assert_eq!(asked.param("mediaSourceId"), Some(SOURCE));
+}
+
+#[test]
+fn a_tile_request_carries_the_token_in_its_header_never_in_its_address() {
+    let s = Setup::new();
+    let server = s.signed_in();
+    let trickplay = server.trickplay(&film(), &source(SOURCE)).unwrap().unwrap();
+    server
+        .trickplay_tile(&film(), &source(SOURCE), &trickplay, 0)
+        .unwrap();
+    let asked = s
+        .fake
+        .last("GET", &format!("/Videos/{FILM}/Trickplay/320/0.jpg"));
+    assert!(asked.authorization.unwrap().contains(TOKEN));
+    assert!(
+        asked.query.iter().all(|(_, value)| !value.contains(TOKEN)),
+        "{:?}",
+        asked.query
+    );
+}
+
+#[test]
+fn a_tile_the_server_does_not_have_is_not_found() {
+    let s = Setup::new();
+    let server = s.signed_in();
+    let missing = Trickplay {
+        width: 480,
+        ..server.trickplay(&film(), &source(SOURCE)).unwrap().unwrap()
+    };
+    assert_eq!(
+        server.trickplay_tile(&film(), &source(SOURCE), &missing, 0),
+        Err(ProviderError::NotFound)
+    );
+}

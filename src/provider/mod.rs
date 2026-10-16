@@ -106,6 +106,22 @@ pub trait MediaServer: Send + Sync {
     fn favourites(&self) -> Result<Vec<Favourite>, ProviderError>;
     /// Puts a film or a series in the user's list, or takes it out.
     fn set_favourite(&self, item: &ItemId, favourite: bool) -> Result<(), ProviderError>;
+
+    /// How the trickplay thumbnails of one version are laid out, at the size to show; none when
+    /// the server made none for it.
+    fn trickplay(
+        &self,
+        film: &ItemId,
+        source: &MediaSourceId,
+    ) -> Result<Option<Trickplay>, ProviderError>;
+    /// One tile of those thumbnails: a JPEG holding up to `columns` by `rows` of them.
+    fn trickplay_tile(
+        &self,
+        film: &ItemId,
+        source: &MediaSourceId,
+        trickplay: &Trickplay,
+        tile: u32,
+    ) -> Result<Vec<u8>, ProviderError>;
 }
 
 /// A film, a series or an episode, as a row of the Home lists it.

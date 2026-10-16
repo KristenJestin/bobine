@@ -49,6 +49,16 @@
       "Type": "Writer"
     }
   ],
+  "Trickplay": {
+    "5a000000000000000000000000000001": {
+      "160": { "Width": 160, "Height": 90, "TileWidth": 10, "TileHeight": 10, "ThumbnailCount": 660, "Interval": 10000, "Bandwidth": 24000 },
+      "320": { "Width": 320, "Height": 180, "TileWidth": 10, "TileHeight": 10, "ThumbnailCount": 660, "Interval": 10000, "Bandwidth": 61000 },
+      "640": { "Width": 640, "Height": 360, "TileWidth": 5, "TileHeight": 5, "ThumbnailCount": 660, "Interval": 10000, "Bandwidth": 190000 }
+    },
+    "5a000000000000000000000000000002": {
+      "240": { "Width": 240, "Height": 134, "TileWidth": 8, "TileHeight": 8, "ThumbnailCount": 66, "Interval": 60000, "Bandwidth": 12000 }
+    }
+  },
   "MediaSources": [
     {
       "Protocol": "File",
