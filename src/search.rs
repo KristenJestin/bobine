@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 use bobine::provider::{Film, PersonHit, SearchResults, SeriesHit};
 
 use crate::film_page;
+use crate::navigation::Screen;
 
 /// How long the query must stay unchanged before the server is asked.
 pub const DEBOUNCE: Duration = Duration::from_millis(250);
@@ -378,6 +379,19 @@ pub fn scroll_to_show(lines: &[Line], selected: usize, scrolled: f32, view: f32)
 /// Ctrl+K, with nothing else held.
 pub fn is_shortcut(key: &str, control: bool, others: bool) -> bool {
     control && !others && key == "k"
+}
+
+/// Whether the palette opens over `screen`: not on the login (no server yet) nor in the player.
+pub fn opens_from(screen: Screen) -> bool {
+    matches!(
+        screen,
+        Screen::Home
+            | Screen::Library
+            | Screen::Series
+            | Screen::FilmDetail
+            | Screen::SeriesDetail
+            | Screen::Person
+    )
 }
 
 #[cfg(test)]
@@ -773,5 +787,21 @@ mod tests {
         assert!(!is_shortcut("k", false, false));
         assert!(!is_shortcut("k", true, true));
         assert!(!is_shortcut("j", true, false));
+    }
+
+    #[test]
+    fn search_opens_from_the_series_grid_and_a_series_page() {
+        for screen in [
+            Screen::Home,
+            Screen::Library,
+            Screen::Series,
+            Screen::FilmDetail,
+            Screen::SeriesDetail,
+            Screen::Person,
+        ] {
+            assert!(opens_from(screen), "{screen:?}");
+        }
+        assert!(!opens_from(Screen::Login));
+        assert!(!opens_from(Screen::Player));
     }
 }

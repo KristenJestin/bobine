@@ -2,6 +2,7 @@
 //! main button plays, the one after an episode, the end-of-episode countdown and the labels. The
 //! version and track chips and the playback plan are the film page's.
 
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use bobine::provider::{
@@ -154,6 +155,42 @@ pub fn asks_episodes(shown: Option<&Loadable<Vec<Episode>>>, again: bool) -> boo
     again || matches!(shown, None | Some(Loadable::Failed(_)))
 }
 
+/// The episodes of `season` came back for `refresh`. `own`: it is the refresh's own question,
+/// the only one whose answer releases the hold of a mark; a tab click asks under the newest
+/// refresh too, and may land before it.
+pub fn land_episodes(
+    episodes: &mut HashMap<ItemId, Loadable<Vec<Episode>>>,
+    refreshes: &mut Refreshes,
+    refresh: u64,
+    own: bool,
+    season: ItemId,
+    answer: Loadable<Vec<Episode>>,
+) {
+    let shown = if own {
+        refreshes.landed(refresh)
+    } else {
+        refreshes.is_newest(refresh)
+    };
+    if shown {
+        episodes.insert(season, answer);
+    } else if matches!(episodes.get(&season), Some(Loadable::Loading)) {
+        // Nothing newer may come for this season (the refresh can fail): forgotten, the next
+        // click on its tab asks again. A list already shown stays drawn.
+        episodes.remove(&season);
+    }
+}
+
+/// A click on an episode, or the card's own countdown, starts it: whether it can, the page not
+/// waiting. Only then does another episode chosen take the card away; a click the page ignores
+/// leaves it counting down.
+pub fn starts_episode(waiting: bool, card: &mut UpNext) -> bool {
+    if waiting {
+        return false;
+    }
+    card.cancel();
+    true
+}
+
 /// The chips' choices once the episode the main button plays is known anew: kept while it stays
 /// the same, else that episode's defaults.
 pub fn choices_after(
@@ -224,9 +261,11 @@ pub struct Refreshes {
 }
 
 impl Refreshes {
-    /// A new refresh: its number.
-    pub fn ask(&mut self) -> u64 {
-        self.asked += 1;
+    /// A new refresh: its number, taken from `counter`, which counts over every page, so that
+    /// no two pages ever share one.
+    pub fn ask(&mut self, counter: &mut u64) -> u64 {
+        *counter += 1;
+        self.asked = *counter;
         self.asked
     }
 
@@ -761,10 +800,23 @@ mod tests {
     }
 
     #[test]
+    fn a_click_while_the_page_waits_keeps_the_card() {
+        let server = FakeServer::new(1, true);
+        let now = Instant::now();
+        let mut card = UpNext::default();
+        card.start(episode(&server, 2, 5), page(), now);
+        assert!(!starts_episode(true, &mut card));
+        assert_eq!(card.episode().map(|e| e.item.id.clone()), Some(id(2, 5)));
+        // Once the page is free, another episode chosen takes the card away.
+        assert!(starts_episode(false, &mut card));
+        assert!(card.episode().is_none());
+    }
+
+    #[test]
     fn an_older_answer_does_not_overwrite_a_newer_one() {
-        let mut refreshes = Refreshes::default();
-        let first = refreshes.ask();
-        let second = refreshes.ask();
+        let (mut refreshes, mut counter) = (Refreshes::default(), 0);
+        let first = refreshes.ask(&mut counter);
+        let second = refreshes.ask(&mut counter);
         assert_ne!(first, second);
         assert_eq!(refreshes.newest(), second);
         // The second lands first; the first, late, is dropped.
@@ -775,18 +827,111 @@ mod tests {
     }
 
     #[test]
+    fn an_answer_for_a_closed_page_never_reaches_a_reopened_one() {
+        let mut counter = 0;
+        // The page is asked, closed, and the same series opened again at the same depth.
+        let mut closed = Refreshes::default();
+        let old = closed.ask(&mut counter);
+        let mut reopened = Refreshes::default();
+        let new = reopened.ask(&mut counter);
+        assert_ne!(old, new);
+        // The old answer lands late on the reopened page: it is not its answer.
+        assert!(!reopened.is_newest(old));
+        assert!(!reopened.landed(old));
+        assert!(reopened.landed(new));
+    }
+
+    #[test]
     fn a_mark_holds_the_page_until_the_refresh_after_it_lands() {
-        let mut refreshes = Refreshes::default();
-        let before = refreshes.ask();
+        let (mut refreshes, mut counter) = (Refreshes::default(), 0);
+        let before = refreshes.ask(&mut counter);
         assert!(!refreshes.holding());
         refreshes.hold();
         assert!(refreshes.holding());
-        let after = refreshes.ask();
+        let after = refreshes.ask(&mut counter);
         // A refresh asked before the mark is older: it does not release.
         assert!(!refreshes.landed(before));
         assert!(refreshes.holding());
         assert!(refreshes.landed(after));
         assert!(!refreshes.holding());
+    }
+
+    fn some_episodes() -> Loadable<Vec<Episode>> {
+        Loadable::Ready(Vec::new())
+    }
+
+    #[test]
+    fn only_the_refresh_releases_the_hold() {
+        let (mut refreshes, mut counter) = (Refreshes::default(), 0);
+        let mut episodes = HashMap::new();
+        let season = ItemId("season-2".into());
+        // A mark landed: the page holds, and the refresh after it is asked.
+        refreshes.ask(&mut counter);
+        refreshes.hold();
+        let refresh = refreshes.ask(&mut counter);
+        // A tab click's answer, for the newest refresh, lands first: it shows, the hold stays.
+        land_episodes(
+            &mut episodes,
+            &mut refreshes,
+            refresh,
+            false,
+            season.clone(),
+            some_episodes(),
+        );
+        assert!(matches!(episodes.get(&season), Some(Loadable::Ready(_))));
+        assert!(refreshes.holding());
+        // The refresh's own answer releases it.
+        land_episodes(
+            &mut episodes,
+            &mut refreshes,
+            refresh,
+            true,
+            season,
+            some_episodes(),
+        );
+        assert!(!refreshes.holding());
+    }
+
+    #[test]
+    fn a_season_left_loading_by_a_dropped_answer_is_asked_again() {
+        let (mut refreshes, mut counter) = (Refreshes::default(), 0);
+        let mut episodes = HashMap::new();
+        let season = ItemId("season-2".into());
+        // A mark lands while another season's tab is clicked: the tab's episodes are asked
+        // under refresh N, then the page holds and asks N + 1.
+        let stale = refreshes.ask(&mut counter);
+        episodes.insert(season.clone(), Loadable::Loading);
+        refreshes.hold();
+        refreshes.ask(&mut counter);
+        // The tab's answer is dropped, and N + 1 then fails: nothing is left to fill the tab.
+        land_episodes(
+            &mut episodes,
+            &mut refreshes,
+            stale,
+            false,
+            season.clone(),
+            some_episodes(),
+        );
+        assert!(asks_episodes(episodes.get(&season), false));
+    }
+
+    #[test]
+    fn a_dropped_answer_leaves_the_list_shown_drawn() {
+        let (mut refreshes, mut counter) = (Refreshes::default(), 0);
+        let mut episodes = HashMap::new();
+        let season = ItemId("season-2".into());
+        let stale = refreshes.ask(&mut counter);
+        episodes.insert(season.clone(), some_episodes());
+        refreshes.ask(&mut counter);
+        land_episodes(
+            &mut episodes,
+            &mut refreshes,
+            stale,
+            false,
+            season.clone(),
+            Loadable::Failed("Le serveur ne répond pas."),
+        );
+        assert!(matches!(episodes.get(&season), Some(Loadable::Ready(_))));
     }
 
     #[test]
