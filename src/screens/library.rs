@@ -145,9 +145,14 @@ fn grid_screen<T: Listed + 'static>(
         .grid
         .shown_film(top_row * columns)
         .map(|first| letter_of(first.title()));
-    // The highlight goes from letter to letter instead of changing at once.
+    // The highlight goes from letter to letter instead of changing at once; while the bar is
+    // hidden it only keeps its place, so that it shows at the right letter and does not glide.
     if let Some(index) = current.and_then(letter_index) {
-        shown.highlight.set(index as f32, now);
+        if letters > 0. {
+            shown.highlight.set(index as f32, now);
+        } else {
+            shown.highlight.jump(index as f32);
+        }
     }
     let highlight = shown.highlight.value(now);
     if shown.appear.moving(now)
