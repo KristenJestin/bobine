@@ -58,6 +58,7 @@ icons! {
     VolumeX => "volume-x",
     Maximize => "maximize",
     Minimize => "minimize",
+    Star => "star",
 }
 
 /// The asset source of the window: the icons above and nothing else.
@@ -103,9 +104,64 @@ pub fn icon(name: IconName, size: f32) -> Div {
         .child(name)
 }
 
+/// A piece of a line that holds ratings: its text, or the star that begins a rating.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Run<'a> {
+    Text(&'a str),
+    Star,
+}
+
+/// A line cut at each `★` the data writes before a rating, so that the star is drawn as an
+/// icon: a glyph of the font is an outline, whatever the font.
+pub fn runs(text: &str) -> Vec<Run<'_>> {
+    let mut runs = Vec::new();
+    for (at, piece) in text.split('★').enumerate() {
+        if at > 0 {
+            runs.push(Run::Star);
+        }
+        let piece = piece.trim();
+        if !piece.is_empty() {
+            runs.push(Run::Text(piece));
+        }
+    }
+    runs
+}
+
+/// `text` on a line, each rating's `★` drawn as the star icon, `size` pixels, in the colour of
+/// the text.
+pub fn with_stars(text: &str, size: f32) -> Div {
+    div()
+        .flex()
+        .items_center()
+        .gap(px(4.))
+        .children(runs(text).into_iter().map(|run| match run {
+            Run::Text(piece) => div().child(piece.to_string()),
+            Run::Star => icon(IconName::Star, size),
+        }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_rating_is_cut_into_its_star_and_its_number() {
+        assert_eq!(runs("★ 7.8"), [Run::Star, Run::Text("7.8")]);
+    }
+
+    #[test]
+    fn a_line_with_a_rating_in_it_is_cut_around_the_star() {
+        assert_eq!(
+            runs("2025 · ★ 6.0 · commencé"),
+            [Run::Text("2025 ·"), Run::Star, Run::Text("6.0 · commencé"),]
+        );
+    }
+
+    #[test]
+    fn a_line_without_a_star_stays_one_piece() {
+        assert_eq!(runs("2025 · commencé"), [Run::Text("2025 · commencé")]);
+        assert_eq!(runs(""), []);
+    }
 
     #[test]
     fn every_icon_drawn_is_embedded() {

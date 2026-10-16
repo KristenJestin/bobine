@@ -22,7 +22,7 @@ use gpui_kit::{
 };
 
 use crate::film_page;
-use crate::icons::{IconName, icon};
+use crate::icons::{IconName, icon, with_stars};
 use crate::images;
 use crate::navigation::Screen;
 use crate::series_page;
@@ -108,6 +108,7 @@ fn picture(
 
 /// A small dark pill over a poster.
 fn badge(text: impl Into<gpui_kit::SharedString>) -> Div {
+    let text: gpui_kit::SharedString = text.into();
     div()
         .px(px(7.))
         .py(px(3.))
@@ -115,7 +116,7 @@ fn badge(text: impl Into<gpui_kit::SharedString>) -> Div {
         .bg(rgba(0x09090acc))
         .text_size(px(11.))
         .font_weight(FontWeight::SEMIBOLD)
-        .child(text.into())
+        .child(with_stars(&text, 11.))
 }
 
 /// What a poster shows top right.

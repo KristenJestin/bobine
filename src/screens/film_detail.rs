@@ -18,7 +18,7 @@ use gpui_kit::{
 
 use super::{centered, note, picture, poster, progress_bar, row_heading};
 use crate::film_page::{self, Choices, From};
-use crate::icons::{IconName, icon};
+use crate::icons::{IconName, icon, with_stars};
 use crate::images;
 use crate::menu;
 use crate::shell::{Chip, Loadable, Shell};
@@ -278,14 +278,14 @@ pub(super) fn meta_line(parts: Vec<String>) -> Div {
         .gap(px(10.))
         .text_size(px(14.))
         .text_color(theme::muted())
-        .children(meta.next())
+        .children(meta.next().map(|part| with_stars(&part, 14.)))
         .children(meta.map(|part| {
             div()
                 .flex()
                 .items_center()
                 .gap(px(10.))
                 .child(div().w(px(1.)).h(px(12.)).bg(theme::line()))
-                .child(part)
+                .child(with_stars(&part, 14.))
         }))
 }
 
