@@ -53,8 +53,6 @@ pub struct Started {
     pub title: String,
     pub subtitle: String,
     pub opened: Result<Playback, ProviderError>,
-    /// The episode after, for the card at the end of an episode.
-    pub next: Option<Episode>,
 }
 
 /// Opens the playback of `target`, off the window's thread: it blocks on the server.
@@ -81,7 +79,6 @@ pub fn start(server: &dyn MediaServer, target: &PlayTarget) -> Result<Started, S
                 title: plan.title.clone(),
                 subtitle: parts.join(" · "),
                 opened: server.play(&plan.film, &plan.source),
-                next: None,
                 plan,
             })
         }
@@ -103,13 +100,13 @@ pub fn start(server: &dyn MediaServer, target: &PlayTarget) -> Result<Started, S
             if let Some(source) = choices.source(&episode.versions) {
                 subtitle.push_str(&format!(" · {}", film_page::version_label(source)));
             }
-            let (opened, next) = series_page::open_episode(server, episode, &plan.source);
+            // No card for the episode after: it counts down over a series page, and the Home has
+            // none. The Home shows it under "Prochain épisode" when it is back.
             Ok(Started {
+                opened: server.play(&plan.film, &plan.source),
                 plan,
                 title,
                 subtitle,
-                opened,
-                next,
             })
         }
     }
@@ -225,6 +222,30 @@ pub fn progress(title: &Title) -> Option<f32> {
     film_page::progress(item(title)?)
 }
 
+/// Which cards of a row are near enough to the window to be drawn with their picture: those in
+/// view and one more each side, so that a card scrolled into view is already there. `scrolled`:
+/// how far the row went sideways; `inset`: the room before the first card.
+pub fn cards_in_view(
+    scrolled: f32,
+    viewport: f32,
+    card: f32,
+    gap: f32,
+    inset: f32,
+    count: usize,
+) -> std::ops::Range<usize> {
+    let step = card + gap;
+    let first = ((scrolled - inset) / step).floor() as i64 - 1;
+    let last = ((scrolled + viewport - inset) / step).ceil() as i64 + 1;
+    (first.max(0) as usize).min(count)..(last.max(0) as usize).min(count)
+}
+
+/// Whether a row of the page is near enough to the window for its pictures to be asked: the
+/// page went `scrolled` down, a row stands `top` from its top and is `height` tall, and a
+/// screenful more each side is near enough.
+pub fn row_in_view(top: f32, height: f32, scrolled: f32, viewport: f32) -> bool {
+    top < scrolled + 2. * viewport && top + height > scrolled - viewport
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -247,6 +268,40 @@ mod tests {
 
     fn started(server: &FakeServer) -> Vec<Title> {
         server.continue_watching().unwrap()
+    }
+
+    // What is asked of the server, and when.
+
+    #[test]
+    fn a_row_asks_for_the_pictures_in_view_and_one_card_each_side() {
+        // 340 px cards, 16 px apart, 40 px before the first, in a 1440 px window.
+        assert_eq!(cards_in_view(0., 1440., 340., 16., 40., 16), 0..5);
+    }
+
+    #[test]
+    fn a_row_scrolled_sideways_asks_for_the_cards_now_in_view() {
+        // Five cards gone: the sixth is the first in view.
+        let scrolled = 40. + 5. * 356.;
+        let range = cards_in_view(scrolled, 1440., 340., 16., 40., 16);
+        assert_eq!(range, 4..11);
+    }
+
+    #[test]
+    fn a_row_scrolled_to_its_end_asks_for_no_card_it_does_not_have() {
+        assert_eq!(cards_in_view(5000., 1440., 340., 16., 40., 8), 8..8);
+        assert_eq!(cards_in_view(0., 1440., 340., 16., 40., 3), 0..3);
+        assert_eq!(cards_in_view(0., 1440., 340., 16., 40., 0), 0..0);
+    }
+
+    #[test]
+    fn a_row_far_below_the_fold_asks_for_no_picture() {
+        // 810 px window, page not scrolled: rows up to two screens down are near enough.
+        assert!(row_in_view(600., 240., 0., 810.));
+        assert!(row_in_view(1500., 240., 0., 810.));
+        assert!(!row_in_view(1700., 240., 0., 810.));
+        // Scrolled down, the rows above are not.
+        assert!(!row_in_view(100., 240., 1500., 810.));
+        assert!(row_in_view(900., 240., 1500., 810.));
     }
 
     // The buttons.
@@ -286,7 +341,6 @@ mod tests {
             server.state.lock().unwrap().record.plays,
             [(ItemId(FILM.into()), begun.plan.source.clone())]
         );
-        assert_eq!(begun.next, None);
     }
 
     #[test]
@@ -304,7 +358,7 @@ mod tests {
     }
 
     #[test]
-    fn a_series_from_the_header_plays_its_next_episode_and_keeps_the_one_after() {
+    fn a_series_from_the_header_plays_its_next_episode() {
         let server = server();
         let begun = start(&server, &PlayTarget::Series(ItemId(SERIES.into()))).unwrap();
         assert_eq!(begun.plan.film, ItemId("series-0-s2-e4".into()));
@@ -314,10 +368,6 @@ mod tests {
             begun.subtitle.starts_with("S2 · É4 · Le Signal"),
             "{}",
             begun.subtitle
-        );
-        assert_eq!(
-            begun.next.map(|next| next.item.id),
-            Some(ItemId("series-0-s2-e5".into()))
         );
     }
 
@@ -339,10 +389,6 @@ mod tests {
         assert_eq!(
             server.state.lock().unwrap().record.plays,
             [(ItemId("series-0-s2-e4".into()), begun.plan.source.clone())]
-        );
-        assert_eq!(
-            begun.next.map(|next| next.item.id),
-            Some(ItemId("series-0-s2-e5".into()))
         );
     }
 

@@ -12,6 +12,8 @@ pub enum Screen {
     Player,
     Series,
     SeriesDetail,
+    /// All of a row of the Home: what was started, the next episodes, what a library gained.
+    HomeList,
 }
 
 impl Screen {
@@ -24,7 +26,7 @@ impl Screen {
     pub fn shows_back_link(self) -> bool {
         matches!(
             self,
-            Screen::FilmDetail | Screen::SeriesDetail | Screen::Person
+            Screen::FilmDetail | Screen::SeriesDetail | Screen::Person | Screen::HomeList
         )
     }
 
@@ -38,6 +40,7 @@ impl Screen {
             Screen::Person => "Personne",
             Screen::Player => "Lecteur",
             Screen::Series => "Séries",
+            Screen::HomeList => "Liste",
         }
     }
 }
@@ -308,6 +311,30 @@ mod tests {
         assert_eq!(nav.current(), Screen::SeriesDetail);
         assert!(nav.back());
         assert_eq!(nav.current(), Screen::Series);
+    }
+
+    #[test]
+    fn a_full_list_has_a_back_link_to_the_home_and_no_pill_bar() {
+        let mut nav = Navigator::new();
+        nav.switch_root(Screen::Home);
+        nav.open(Screen::HomeList);
+        assert!(!Screen::HomeList.shows_pill_bar());
+        assert!(Screen::HomeList.shows_back_link());
+        assert_eq!(nav.back_label(), Some("Accueil"));
+        assert!(nav.back());
+        assert_eq!(nav.current(), Screen::Home);
+    }
+
+    #[test]
+    fn a_title_opened_from_a_full_list_goes_back_to_the_list() {
+        let mut nav = Navigator::new();
+        nav.switch_root(Screen::Home);
+        nav.open(Screen::HomeList);
+        nav.open(Screen::SeriesDetail);
+        assert_eq!(nav.back_label(), Some("Liste"));
+        nav.open(Screen::Player);
+        assert!(nav.back() && nav.back());
+        assert_eq!(nav.current(), Screen::HomeList);
     }
 
     #[test]

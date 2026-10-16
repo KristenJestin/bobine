@@ -4,7 +4,7 @@
 
 use std::time::{Duration, Instant};
 
-use bobine::provider::{Feature, FeatureKind, ImageRef};
+use bobine::provider::{Feature, FeatureKind, ImageRef, ItemId};
 
 use crate::film_page;
 use crate::motion;
@@ -148,6 +148,13 @@ impl Carousel {
 /// the backdrops blend all along, the texts one after the other so that two never overlap.
 pub fn text_levels(level: f32) -> (f32, f32) {
     ((1. - 2. * level).max(0.), (2. * level - 1.).max(0.))
+}
+
+/// Where the title shown is in a list asked again, if it still is.
+pub fn kept(shown: Option<&ItemId>, features: &[Feature]) -> Option<usize> {
+    features
+        .iter()
+        .position(|feature| Some(&feature.id) == shown)
 }
 
 /// What the header writes as the title: its logo, else its name.
@@ -416,6 +423,16 @@ mod tests {
         carousel.retarget(2, None, t0 + secs(5));
         assert_eq!((carousel.len(), carousel.current()), (2, 0));
         assert_eq!(carousel.progress(t0 + secs(5)), 0.);
+    }
+
+    #[test]
+    fn the_title_shown_is_found_again_in_the_list_asked_again() {
+        let mut other = feature(FeatureKind::Series);
+        other.id = ItemId("title-2".into());
+        let list = [other, feature(FeatureKind::Film)];
+        assert_eq!(kept(Some(&ItemId("title-1".into())), &list), Some(1));
+        assert_eq!(kept(Some(&ItemId("title-9".into())), &list), None);
+        assert_eq!(kept(None, &list), None);
     }
 
     #[test]

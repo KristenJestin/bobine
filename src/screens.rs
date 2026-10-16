@@ -3,6 +3,7 @@
 
 mod film_detail;
 mod home;
+mod home_list;
 mod library;
 mod login;
 mod person;
@@ -35,13 +36,14 @@ pub fn render(
 ) -> AnyElement {
     match screen {
         Screen::Login => login::render(shell, window, cx).into_any_element(),
-        Screen::Home => home::render(shell, cx).into_any_element(),
+        Screen::Home => home::render(shell, window, cx).into_any_element(),
         Screen::Library => library::render(shell, window, cx).into_any_element(),
         Screen::FilmDetail => film_detail::render(shell, window, cx).into_any_element(),
         Screen::Person => person::render(shell, window, cx).into_any_element(),
         Screen::Player => player::empty(cx).into_any_element(),
         Screen::Series => library::render_series(shell, window, cx).into_any_element(),
         Screen::SeriesDetail => series_detail::render(shell, window, cx).into_any_element(),
+        Screen::HomeList => home_list::render(shell, window, cx).into_any_element(),
     }
 }
 

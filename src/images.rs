@@ -30,6 +30,8 @@ pub const PHOTO: u32 = 200;
 pub const THUMB: u32 = 120;
 pub const CARD: u32 = 720;
 pub const BACKDROP: u32 = 1920;
+/// A title drawn as an image, in the header of the Home.
+pub const LOGO: u32 = 600;
 
 /// The least recently used values go first once their sizes add up beyond the budget.
 pub struct Lru<K, V> {

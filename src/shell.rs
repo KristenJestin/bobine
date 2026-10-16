@@ -1,9 +1,11 @@
 //! The root view: the screen the navigator points at, framed by the pill bar or the back link.
 
+mod home;
 mod pages;
 mod palette;
 mod series;
 
+pub use home::{HomePage, ListPage};
 pub use pages::{Chip, DetailPage, LibraryPage, Loadable, LoginForm, OpenConnector};
 pub use palette::{PersonPage, SearchState};
 pub use series::SeriesPage;
@@ -113,7 +115,11 @@ pub struct Shell {
     pub login: Option<LoginForm>,
     /// The login was just shown: its address field takes the focus at the next draw.
     login_focus_due: bool,
-    pub home: pages::HomePage,
+    pub home: HomePage,
+    /// The full list of a row of the Home, while one is open.
+    pub list: Option<ListPage>,
+    /// Makes the header change title by itself, while the Home shows.
+    hero_ticker: Option<Task<()>>,
     pub library: pages::LibraryPage<FilmItem>,
     pub series: pages::LibraryPage<Series>,
     /// The film pages open, the last one on top: one per `Screen::FilmDetail` of the navigator.
@@ -185,6 +191,8 @@ impl Shell {
             login: None,
             login_focus_due: false,
             home: Default::default(),
+            list: None,
+            hero_ticker: None,
             library: Default::default(),
             series: Default::default(),
             details: Vec::new(),
@@ -455,7 +463,10 @@ impl Render for Shell {
         }
         let page = (
             screen,
-            self.details.len() + self.series_pages.len() + self.people.len(),
+            self.details.len()
+                + self.series_pages.len()
+                + self.people.len()
+                + usize::from(self.list.is_some()),
         );
         if page != self.page {
             self.turned_forward = page.1 > self.page.1;
