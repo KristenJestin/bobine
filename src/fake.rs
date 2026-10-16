@@ -997,7 +997,7 @@ mod tests {
             let sorts_before =
                 |title: &&str| title.to_lowercase() < letter.to_lowercase().to_string();
             assert!(all[..before].iter().all(sorts_before), "{letter}");
-            assert!(!all[before..].iter().any(|t| sorts_before(&t)), "{letter}");
+            assert!(!all[before..].iter().any(sorts_before), "{letter}");
         }
     }
 }
