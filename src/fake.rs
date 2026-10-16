@@ -14,7 +14,7 @@ use bobine::provider::{
     MediaSource, MediaSourceId, Page, PersonHit, PersonTitles, PlaySessionId, Playback,
     PlaybackReport, Playlist, PlaylistEntry, ProviderError, SearchResults, Season, Segment, Series,
     SeriesDetail, SeriesHit, ServerInfo, StreamUrl, SubtitleTrack, Title, Token, TokenStore,
-    TranscodeRequest, Trickplay, VideoRange, VideoTrack,
+    Trailers, TranscodeRequest, Trickplay, VideoRange, VideoTrack,
 };
 
 pub const USER: &str = "camille";
@@ -117,6 +117,8 @@ pub struct Record {
     pub playlists_listed: u32,
     /// The playlists read whole, in the order they were asked.
     pub playlist_reads: Vec<ItemId>,
+    /// The titles whose trailer file was asked for, in order.
+    pub trailer_asks: Vec<ItemId>,
 }
 
 /// A change asked of a playlist.
@@ -225,6 +227,12 @@ pub struct State {
     pub playlists_made: usize,
     /// The id of the user the next login or restore gives a session to.
     pub user_id: String,
+    /// The trailers every film and every series has.
+    pub trailers: Trailers,
+    /// What `local_trailer` gives as the stream.
+    pub trailer_stream: String,
+    /// `local_trailer` fails with this once it was asked.
+    pub trailer_error: Option<ProviderError>,
 }
 
 /// Where the fake server pretends to be.
@@ -650,6 +658,9 @@ impl FakeServer {
                 unreadable_playlists: Vec::new(),
                 playlists_made: 0,
                 user_id: USER_ID.into(),
+                trailers: Trailers::default(),
+                trailer_stream: "file:///nowhere-trailer.mp4".into(),
+                trailer_error: None,
             })),
             info: ServerInfo {
                 id: "server-1".into(),
@@ -889,6 +900,7 @@ impl MediaServer for FakeServer {
         let found = self.find(film)?;
         self.state().record.film_pages.push(film.clone());
         let others = self.state().films.clone();
+        let trailers = self.state().trailers.clone();
         Ok(FilmDetail {
             overview: Some(FILM_OVERVIEW.into()),
             genres: vec!["Drame".into(), "Aventure".into()],
@@ -919,6 +931,7 @@ impl MediaServer for FakeServer {
                 versions().split_off(1)
             },
             favourite: self.state().favourites.contains(&found.id),
+            trailers,
             // The first film of the tests is a logo, the others are written, as on the Home.
             logo: (found.id.0 == FILM)
                 .then(|| image(&found.id.0, ImageKind::Logo))
@@ -1080,6 +1093,7 @@ impl MediaServer for FakeServer {
         Ok(SeriesDetail {
             series: Self::counted(&state, found),
             favourite: state.favourites.contains(series),
+            trailers: state.trailers.clone(),
             // As on the Home, the first series is a logo and the others are written.
             logo: (state.series.first().map(|s| &s.id) == Some(series))
                 .then(|| image(&series.0, ImageKind::Logo))
@@ -1549,6 +1563,15 @@ impl MediaServer for FakeServer {
         let mut state = self.state();
         state.record.segment_asks.push(item.clone());
         Ok(state.segments.clone())
+    }
+
+    fn local_trailer(&self, item: &ItemId) -> Result<StreamUrl, ProviderError> {
+        let mut state = self.state();
+        state.record.trailer_asks.push(item.clone());
+        if let Some(error) = state.trailer_error.clone() {
+            return Err(error);
+        }
+        Ok(StreamUrl::new(state.trailer_stream.clone()))
     }
 }
 

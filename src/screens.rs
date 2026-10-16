@@ -18,6 +18,8 @@ mod settings;
 pub mod skip;
 
 pub use card::{Card, Cards, Offer, Open, Play, Quick};
+#[cfg(test)]
+pub use film_detail::{FILM_TRAILER, SERIES_TRAILER};
 pub use home::HeroView;
 pub use home::pill as notice_pill;
 pub use series_detail::up_next_card;
