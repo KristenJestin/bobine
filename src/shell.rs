@@ -369,6 +369,18 @@ impl Shell {
             film.title,
             film.subtitle,
         );
+        self.begin_playback(session, reporting, window, cx);
+        Ok(())
+    }
+
+    /// Puts `session` on the window: the player screen opens on it.
+    fn begin_playback(
+        &mut self,
+        session: Session,
+        reporting: Option<Reporting>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let ticker = cx.spawn_in(window, async move |this, cx| {
             loop {
                 cx.background_executor().timer(PLAYER_TICK).await;
@@ -406,7 +418,6 @@ impl Shell {
         self.lay_out_video(window);
         self.navigator.open(Screen::Player);
         cx.notify();
-        Ok(())
     }
 
     /// Closes the player: the video surface and mpv go before anything else does. The server is
