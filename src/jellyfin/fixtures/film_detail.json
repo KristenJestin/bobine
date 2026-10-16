@@ -66,6 +66,8 @@
       "Type": "Default",
       "Container": "mkv",
       "Name": "The Quiet Harbour - 2160p",
+      "DefaultAudioStreamIndex": 2,
+      "DefaultSubtitleStreamIndex": 4,
       "IsRemote": false,
       "RunTimeTicks": 66000000000,
       "SupportsDirectPlay": true,

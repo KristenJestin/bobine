@@ -10,7 +10,7 @@ use bobine::provider::{
     SeriesDetail,
 };
 
-use crate::film_page::{self, Choices};
+use crate::film_page::{self, Carried, Choices};
 use crate::shell::Loadable;
 
 /// How long the "Next episode" card counts down before the next episode plays.
@@ -197,20 +197,26 @@ pub fn choices_after(
     shown: Option<&Episode>,
     chosen: Option<Choices>,
     fresh: Option<&Episode>,
+    carried: &Carried,
 ) -> Option<Choices> {
     let fresh = fresh?;
     match chosen {
         Some(chosen) if shown.is_some_and(|shown| shown.item.id == fresh.item.id) => Some(chosen),
-        _ => Some(Choices::new(&fresh.versions)),
+        _ => Some(Choices::carrying(&fresh.versions, carried.clone())),
     }
 }
 
 /// What `episode` plays with: the chips' choices when it is the episode they were made for, else
 /// its defaults.
-pub fn choices_for(next: Option<&Episode>, chosen: Option<&Choices>, episode: &Episode) -> Choices {
+pub fn choices_for(
+    next: Option<&Episode>,
+    chosen: Option<&Choices>,
+    episode: &Episode,
+    carried: &Carried,
+) -> Choices {
     match (next, chosen) {
         (Some(next), Some(chosen)) if next.item.id == episode.item.id => chosen.clone(),
-        _ => Choices::new(&episode.versions),
+        _ => Choices::carrying(&episode.versions, carried.clone()),
     }
 }
 
@@ -983,10 +989,14 @@ mod tests {
         let mut chosen = Choices::new(&next.versions);
         crate::shell::Chip::Audio.choose(&mut chosen, &next.versions, Some(7));
         assert_ne!(chosen, Choices::new(&next.versions));
-        assert_eq!(choices_for(Some(&next), Some(&chosen), &next), chosen);
+        let none = Carried::default();
+        assert_eq!(
+            choices_for(Some(&next), Some(&chosen), &next, &none),
+            chosen
+        );
         // Another episode of the list plays with its own defaults.
         assert_eq!(
-            choices_for(Some(&next), Some(&chosen), &other),
+            choices_for(Some(&next), Some(&chosen), &other, &none),
             Choices::new(&other.versions)
         );
     }
@@ -999,19 +1009,72 @@ mod tests {
         crate::shell::Chip::Audio.choose(&mut chosen, &next.versions, Some(7));
         let mut refreshed = next.clone();
         refreshed.item.resume = Some(Duration::from_secs(31 * 60));
+        let none = Carried::default();
         assert_eq!(
-            choices_after(Some(&next), Some(chosen.clone()), Some(&refreshed)),
+            choices_after(Some(&next), Some(chosen.clone()), Some(&refreshed), &none),
             Some(chosen.clone())
         );
         assert_eq!(
-            choices_after(Some(&next), Some(chosen), Some(&other)),
+            choices_after(Some(&next), Some(chosen), Some(&other), &none),
             Some(Choices::new(&other.versions))
         );
         assert_eq!(
-            choices_after(None, None, Some(&next)),
+            choices_after(None, None, Some(&next), &none),
             Some(Choices::new(&next.versions))
         );
-        assert_eq!(choices_after(Some(&next), None, None), None);
+        assert_eq!(choices_after(Some(&next), None, None, &none), None);
+    }
+
+    /// An episode of the fake server, in the film's versions: several audio and subtitle tracks.
+    fn with_tracks(server: &FakeServer, number: u32) -> Episode {
+        let mut episode = episode(server, 2, number);
+        episode.versions = crate::fake::versions();
+        episode
+    }
+
+    #[test]
+    fn a_hand_picked_language_is_carried_to_the_next_episode() {
+        let server = FakeServer::new(1, true);
+        let (played, after) = (with_tracks(&server, 4), with_tracks(&server, 5));
+        let mut chosen = Choices::new(&played.versions);
+        // French audio and the English subtitles, where the server chose English audio and the
+        // full French subtitles.
+        crate::shell::Chip::Audio.choose(&mut chosen, &played.versions, Some(1));
+        crate::shell::Chip::Subtitle.choose(&mut chosen, &played.versions, Some(5));
+        let carried = chosen.carried();
+        // The card at the end, or a play from the page.
+        let next = choices_for(None, None, &after, &carried);
+        assert_eq!((next.audio, next.subtitle), (Some(1), Some(5)));
+        // The main button once the page is back.
+        let next = choices_after(Some(&played), Some(chosen), Some(&after), &carried).unwrap();
+        assert_eq!((next.audio, next.subtitle), (Some(1), Some(5)));
+    }
+
+    #[test]
+    fn the_next_episode_without_that_language_takes_the_servers_indexes() {
+        let server = FakeServer::new(1, true);
+        let (played, mut after) = (with_tracks(&server, 4), with_tracks(&server, 5));
+        let mut chosen = Choices::new(&played.versions);
+        crate::shell::Chip::Audio.choose(&mut chosen, &played.versions, Some(1));
+        crate::shell::Chip::Subtitle.choose(&mut chosen, &played.versions, Some(5));
+        // The episode after has neither French audio nor English subtitles.
+        let source = &mut after.versions[0];
+        source.audio.retain(|track| track.index != 1);
+        source.subtitles.retain(|track| track.index != 5);
+        let next = choices_for(None, None, &after, &chosen.carried());
+        assert_eq!((next.audio, next.subtitle), (Some(2), Some(4)));
+    }
+
+    #[test]
+    fn tracks_the_server_chose_are_not_carried() {
+        let server = FakeServer::new(1, true);
+        let (played, mut after) = (with_tracks(&server, 4), with_tracks(&server, 5));
+        let chosen = Choices::new(&played.versions);
+        // The server chooses otherwise for the episode after.
+        after.versions[0].default_audio = Some(1);
+        after.versions[0].default_subtitle = Some(None);
+        let next = choices_for(None, None, &after, &chosen.carried());
+        assert_eq!((next.audio, next.subtitle), (Some(1), None));
     }
 
     #[test]
