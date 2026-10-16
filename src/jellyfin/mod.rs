@@ -11,10 +11,10 @@ mod tests;
 
 use crate::provider::{
     Collection, CollectionCard, CollectionDetail, Connector, Episode, ExternalSubtitle, Favourite,
-    Film, FilmDetail, FilmQuery, FilmSort, FilterChoices, ImageKind, ImageRef, ItemId, Library,
-    MediaServer, MediaSourceId, Page, PersonTitles, PlaySessionId, Playback, PlaybackReport,
-    ProviderError, SearchResults, Season, Series, SeriesDetail, ServerInfo, StreamUrl, Token,
-    TokenStore,
+    Feature, Film, FilmDetail, FilmQuery, FilmSort, FilterChoices, ImageKind, ImageRef, ItemId,
+    Library, MediaServer, MediaSourceId, Page, PersonTitles, PlaySessionId, Playback,
+    PlaybackReport, ProviderError, SearchResults, Season, Series, SeriesDetail, ServerInfo,
+    StreamUrl, Title, Token, TokenStore,
 };
 use account::{AccountFile, Login};
 use dto::{
@@ -194,6 +194,7 @@ impl Jellyfin {
         let sort = match query.sort {
             FilmSort::Title => "SortName",
             FilmSort::DateAdded => "DateCreated,SortName",
+            FilmSort::LastAdded => "DateLastContentAdded,SortName",
             FilmSort::ReleaseYear => "ProductionYear,SortName",
             FilmSort::Rating => "CommunityRating,SortName",
         };
@@ -322,19 +323,22 @@ impl MediaServer for Jellyfin {
         Ok(FilterChoices { genres, decades })
     }
 
-    fn continue_watching(&self) -> Result<Vec<Film>, ProviderError> {
+    fn continue_watching(&self) -> Result<Vec<Title>, ProviderError> {
         let found: QueryResult = self.http.get(
             "continue watching",
             "/UserItems/Resume",
             &[
                 self.user(),
-                ("includeItemTypes", "Movie".into()),
+                ("includeItemTypes", "Movie,Episode".into()),
                 ("mediaTypes", "Video".into()),
+                // An episode started from the Home plays without its page: it needs its
+                // versions now.
+                ("fields", "MediaSources".into()),
                 ("imageTypeLimit", "1".into()),
                 ("enableImageTypes", "Primary,Backdrop".into()),
             ],
         )?;
-        Ok(found.items.iter().map(Item::film).collect())
+        Ok(found.items.into_iter().map(Item::title).collect())
     }
 
     fn film(&self, film: &ItemId) -> Result<FilmDetail, ProviderError> {
@@ -506,6 +510,7 @@ impl MediaServer for Jellyfin {
         let kind = match image.kind {
             ImageKind::Primary => "Primary",
             ImageKind::Backdrop => "Backdrop",
+            ImageKind::Logo => "Logo",
         };
         self.http.get_bytes(
             "image",
@@ -671,6 +676,67 @@ impl MediaServer for Jellyfin {
             ],
         )?;
         Ok(found.items.into_iter().next().map(Item::episode))
+    }
+
+    fn next_episodes(&self, limit: u32) -> Result<Vec<Episode>, ProviderError> {
+        let found: QueryResult = self.http.get(
+            "next up",
+            "/Shows/NextUp",
+            &[
+                self.user(),
+                ("limit", limit.to_string()),
+                ("enableResumable", "true".into()),
+                ("imageTypeLimit", "1".into()),
+                ("enableImageTypes", "Primary,Backdrop".into()),
+                ("fields", EPISODE_FIELDS.into()),
+            ],
+        )?;
+        Ok(found.items.into_iter().map(Item::episode).collect())
+    }
+
+    /// Not an item list: Jellyfin answers this one with a bare array. The episodes of a series
+    /// library come grouped under their series.
+    fn latest(&self, library: &ItemId, limit: u32) -> Result<Vec<Title>, ProviderError> {
+        let found: Vec<Item> = self.http.get(
+            "latest",
+            "/Items/Latest",
+            &[
+                self.user(),
+                ("parentId", library.0.clone()),
+                ("limit", limit.to_string()),
+                ("imageTypeLimit", "1".into()),
+                ("enableImageTypes", "Primary,Backdrop".into()),
+            ],
+        )?;
+        // Two episodes of one series, or one episode beside its series, are one entry.
+        let mut titles: Vec<Title> = Vec::new();
+        for title in found.into_iter().map(Item::latest) {
+            if !titles.iter().any(|seen| seen.id() == title.id()) {
+                titles.push(title);
+            }
+        }
+        Ok(titles)
+    }
+
+    /// The simplest honest choice: the newest titles, films and series, that the user has not
+    /// watched, and that have a backdrop to fill the header.
+    fn featured(&self, limit: u32) -> Result<Vec<Feature>, ProviderError> {
+        let found = self.items(
+            "featured",
+            &[
+                ("includeItemTypes", "Movie,Series".into()),
+                ("recursive", "true".into()),
+                ("sortBy", "DateCreated".into()),
+                ("sortOrder", "Descending".into()),
+                ("isPlayed", "false".into()),
+                ("imageTypes", "Backdrop".into()),
+                ("limit", limit.to_string()),
+                ("fields", "Overview,OfficialRating".into()),
+                ("imageTypeLimit", "1".into()),
+                ("enableImageTypes", "Backdrop,Logo".into()),
+            ],
+        )?;
+        Ok(found.items.iter().map(Item::feature).collect())
     }
 
     fn collections(&self) -> Result<Vec<CollectionCard>, ProviderError> {

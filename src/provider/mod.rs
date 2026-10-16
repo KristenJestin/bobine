@@ -49,8 +49,8 @@ pub trait MediaServer: Send + Sync {
     fn films(&self, library: &ItemId, query: &FilmQuery) -> Result<Page<Film>, ProviderError>;
     /// The genres and decades of a library's titles, to filter its grid by.
     fn filter_choices(&self, library: &ItemId) -> Result<FilterChoices, ProviderError>;
-    /// The films the user started and did not finish, the latest first.
-    fn continue_watching(&self) -> Result<Vec<Film>, ProviderError>;
+    /// The films and episodes the user started and did not finish, the latest first.
+    fn continue_watching(&self) -> Result<Vec<Title>, ProviderError>;
     fn film(&self, film: &ItemId) -> Result<FilmDetail, ProviderError>;
     /// The collection the film belongs to, with its other films. Apart from `film` because the
     /// server gives no direct link from a film to its collections: the lookup costs several
@@ -86,6 +86,15 @@ pub trait MediaServer: Send + Sync {
     fn search(&self, query: &str, per_group: u32) -> Result<SearchResults, ProviderError>;
     /// The films and series a person took part in, the newest first.
     fn person_titles(&self, person: &ItemId) -> Result<PersonTitles, ProviderError>;
+    /// What to watch next in every series in progress, at most `limit` episodes: the one
+    /// started, else the one after the last watched. Episodes started count here too, so the
+    /// caller leaves out those it already lists as started.
+    fn next_episodes(&self, limit: u32) -> Result<Vec<Episode>, ProviderError>;
+    /// What was added to a library lately, the newest first, at most `limit` titles.
+    fn latest(&self, library: &ItemId, limit: u32) -> Result<Vec<Title>, ProviderError>;
+    /// A few recent titles the user has not watched, films and series, each with a backdrop:
+    /// what the top of the Home shows in turn. At most `limit`.
+    fn featured(&self, limit: u32) -> Result<Vec<Feature>, ProviderError>;
 
     /// Every collection of the user, by name. One call, not pages: a server holds tens of them.
     fn collections(&self) -> Result<Vec<CollectionCard>, ProviderError>;
@@ -95,6 +104,50 @@ pub trait MediaServer: Send + Sync {
     fn favourites(&self) -> Result<Vec<Favourite>, ProviderError>;
     /// Puts a film or a series in the user's list, or takes it out.
     fn set_favourite(&self, item: &ItemId, favourite: bool) -> Result<(), ProviderError>;
+}
+
+/// A film, a series or an episode, as a row of the Home lists it.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Title {
+    Film(Film),
+    Series(Series),
+    Episode(Episode),
+}
+
+impl Title {
+    pub fn id(&self) -> &ItemId {
+        match self {
+            Title::Film(film) => &film.id,
+            Title::Series(series) => &series.id,
+            Title::Episode(episode) => &episode.item.id,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FeatureKind {
+    Film,
+    Series,
+}
+
+/// A title the top of the Home shows: what its large header says of it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Feature {
+    pub kind: FeatureKind,
+    pub id: ItemId,
+    pub title: String,
+    pub year: Option<i32>,
+    pub community_rating: Option<f32>,
+    /// The age rating, `PG-13`, `TV-MA`…
+    pub official_rating: Option<String>,
+    /// A film's; a series has none.
+    pub runtime: Option<Duration>,
+    pub overview: Option<String>,
+    pub backdrop: Option<ImageRef>,
+    /// The title drawn as an image, when the server has one.
+    pub logo: Option<ImageRef>,
+    /// Where the viewer stopped in a film they started.
+    pub resume: Option<Duration>,
 }
 
 /// A series as a list shows it.
@@ -218,6 +271,8 @@ pub struct Library {
 pub enum FilmSort {
     Title,
     DateAdded,
+    /// When the latest content came in: for a series, its newest episode.
+    LastAdded,
     ReleaseYear,
     Rating,
 }
@@ -261,11 +316,13 @@ pub struct Page<T> {
     pub total: u32,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ImageKind {
     /// A film's poster, a person's photo.
     Primary,
     Backdrop,
+    /// A title drawn as an image, with a transparent background.
+    Logo,
 }
 
 /// An image the server holds; the tag changes when the image does.

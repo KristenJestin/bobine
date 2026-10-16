@@ -4,6 +4,7 @@
 mod collection_detail;
 mod film_detail;
 mod home;
+mod home_list;
 mod library;
 mod lists;
 mod login;
@@ -12,6 +13,7 @@ pub mod player;
 pub mod search;
 mod series_detail;
 
+pub use home::HeroView;
 pub use series_detail::up_next_card;
 
 use bobine::provider::{Film, Series};
@@ -22,7 +24,7 @@ use gpui_kit::{
 };
 
 use crate::film_page;
-use crate::icons::{IconName, icon};
+use crate::icons::{IconName, icon, with_stars};
 use crate::images;
 use crate::navigation::Screen;
 use crate::series_page;
@@ -37,13 +39,14 @@ pub fn render(
 ) -> AnyElement {
     match screen {
         Screen::Login => login::render(shell, window, cx).into_any_element(),
-        Screen::Home => home::render(shell, cx).into_any_element(),
+        Screen::Home => home::render(shell, window, cx).into_any_element(),
         Screen::Library => library::render(shell, window, cx).into_any_element(),
         Screen::FilmDetail => film_detail::render(shell, window, cx).into_any_element(),
         Screen::Person => person::render(shell, window, cx).into_any_element(),
         Screen::Player => player::empty(cx).into_any_element(),
         Screen::Series => library::render_series(shell, window, cx).into_any_element(),
         Screen::SeriesDetail => series_detail::render(shell, window, cx).into_any_element(),
+        Screen::HomeList => home_list::render(shell, window, cx).into_any_element(),
         Screen::Collections => lists::render_collections(shell, window, cx).into_any_element(),
         Screen::CollectionDetail => collection_detail::render(shell, window, cx).into_any_element(),
         Screen::MyList => lists::render_my_list(shell, window, cx).into_any_element(),
@@ -110,6 +113,7 @@ fn picture(
 
 /// A small dark pill over a poster.
 fn badge(text: impl Into<gpui_kit::SharedString>) -> Div {
+    let text: gpui_kit::SharedString = text.into();
     div()
         .px(px(7.))
         .py(px(3.))
@@ -117,7 +121,7 @@ fn badge(text: impl Into<gpui_kit::SharedString>) -> Div {
         .bg(rgba(0x09090acc))
         .text_size(px(11.))
         .font_weight(FontWeight::SEMIBOLD)
-        .child(text.into())
+        .child(with_stars(&text, 11.))
 }
 
 /// What a poster shows top right.

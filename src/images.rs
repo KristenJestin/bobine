@@ -30,6 +30,8 @@ pub const PHOTO: u32 = 200;
 pub const THUMB: u32 = 120;
 pub const CARD: u32 = 720;
 pub const BACKDROP: u32 = 1920;
+/// A title drawn as an image, in the header of the Home.
+pub const LOGO: u32 = 600;
 
 /// The least recently used values go first once their sizes add up beyond the budget.
 pub struct Lru<K, V> {
@@ -93,7 +95,7 @@ impl<K: Hash + Eq + Clone, V> Lru<K, V> {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Key {
     item: String,
-    backdrop: bool,
+    kind: ImageKind,
     tag: String,
     width: u32,
 }
@@ -102,7 +104,7 @@ impl Key {
     pub fn new(image: &ImageRef, width: u32) -> Self {
         Self {
             item: image.item.0.clone(),
-            backdrop: image.kind == ImageKind::Backdrop,
+            kind: image.kind,
             tag: image.tag.clone(),
             width,
         }
@@ -298,6 +300,22 @@ mod tests {
         std::iter::from_fn(|| images.next_fetch())
             .map(|(_, image)| image.item.0)
             .collect()
+    }
+
+    #[test]
+    fn a_logo_a_poster_and_a_backdrop_of_one_item_are_three_images() {
+        let of = |kind| {
+            Key::new(
+                &ImageRef {
+                    item: bobine::provider::ItemId("film-1".into()),
+                    kind,
+                    tag: "t".into(),
+                },
+                POSTER,
+            )
+        };
+        let keys = [ImageKind::Primary, ImageKind::Backdrop, ImageKind::Logo].map(of);
+        assert!(keys[0] != keys[1] && keys[0] != keys[2] && keys[1] != keys[2]);
     }
 
     #[test]

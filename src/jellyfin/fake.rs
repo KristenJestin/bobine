@@ -43,11 +43,14 @@ fn fixture(name: &str) -> Value {
         "person_episodes" => include_str!("fixtures/person_episodes.json"),
         "playback_info" => include_str!("fixtures/playback_info.json"),
         "series" => include_str!("fixtures/series.json"),
+        "latest_series" => include_str!("fixtures/latest_series.json"),
         "series_detail" => include_str!("fixtures/series_detail.json"),
         "series_similar" => include_str!("fixtures/series_similar.json"),
         "seasons" => include_str!("fixtures/seasons.json"),
         "episodes" => include_str!("fixtures/episodes.json"),
         "next_up" => include_str!("fixtures/next_up.json"),
+        "next_up_across" => include_str!("fixtures/next_up_across.json"),
+        "featured" => include_str!("fixtures/featured.json"),
         _ => panic!("no fixture {name}"),
     };
     serde_json::from_str(text).unwrap()
@@ -352,6 +355,17 @@ fn generated_films(count: usize) -> Vec<Value> {
         .collect()
 }
 
+/// An item list cut to the `Limit` asked.
+fn limited(mut list: Value, seen: &Seen) -> Value {
+    if let Some(limit) = seen.param("Limit") {
+        list["Items"]
+            .as_array_mut()
+            .unwrap()
+            .truncate(limit.parse().unwrap());
+    }
+    list
+}
+
 /// An item as the server shows it to a user whose list holds `state.favourites`.
 fn favourite_of(state: &State, id: &str, mut item: Value) -> Value {
     item["UserData"]["IsFavorite"] = json!(state.favourites.iter().any(|f| f == id));
@@ -415,6 +429,7 @@ fn answer(state: &State, seen: &Seen) -> Answer {
             (Some(LETTERS_LIBRARY), _) => Answer::Json(200, films(seen, "letters")),
             (Some(SERIES_LIBRARY), Some("Series")) => Answer::Json(200, films(seen, "series")),
             (None, Some("BoxSet")) => Answer::Json(200, fixture("boxsets")),
+            (None, Some("Movie,Series")) => Answer::Json(200, limited(fixture("featured"), seen)),
             (Some("b0000000000000000000000000000001"), _) => {
                 Answer::Json(200, of_types(fixture("boxset_sea_stories"), seen))
             }
@@ -472,8 +487,30 @@ fn answer(state: &State, seen: &Seen) -> Answer {
         }
         ("GET", "/Shows/NextUp") => match seen.param("SeriesId") {
             Some(SERIES) if !state.all_watched => Answer::Json(200, fixture("next_up")),
+            None if !state.all_watched => {
+                Answer::Json(200, limited(fixture("next_up_across"), seen))
+            }
             _ => Answer::Json(200, json!({ "Items": [], "TotalRecordCount": 0 })),
         },
+        // Not an item list: the newest of a library, as a bare array, `Limit` of them.
+        ("GET", "/Items/Latest") => {
+            let name = match seen.param("ParentId") {
+                Some(FILMS_LIBRARY) => "films",
+                Some(SERIES_LIBRARY) => "latest_series",
+                _ => return Answer::Empty(404),
+            };
+            let limit: usize = seen
+                .param("Limit")
+                .map_or(usize::MAX, |s| s.parse().unwrap());
+            let items: Vec<Value> = fixture(name)
+                .as_array()
+                .unwrap()
+                .iter()
+                .take(limit)
+                .cloned()
+                .collect();
+            Answer::Json(200, Value::Array(items))
+        }
         ("POST" | "DELETE", path)
             if [FILM, SEASON, EPISODE]
                 .iter()

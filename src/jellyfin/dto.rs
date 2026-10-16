@@ -1,9 +1,9 @@
 //! Jellyfin's JSON, as much of it as Bobine reads, and its translation into the port's types.
 
 use crate::provider::{
-    AudioTrack, CastMember, CollectionCard, Episode, Film, ImageKind, ImageRef, ItemId, Library,
-    LibraryKind, MediaSource, MediaSourceId, PersonHit, PersonTitles, Season, Series, SeriesHit,
-    ServerInfo, SubtitleTrack, VideoRange, VideoTrack,
+    AudioTrack, CastMember, CollectionCard, Episode, Feature, FeatureKind, Film, ImageKind,
+    ImageRef, ItemId, Library, LibraryKind, MediaSource, MediaSourceId, PersonHit, PersonTitles,
+    Season, Series, SeriesHit, ServerInfo, SubtitleTrack, Title, VideoRange, VideoTrack,
 };
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -266,6 +266,68 @@ impl Item {
                 .into_iter()
                 .map(MediaSourceInfo::into_source)
                 .collect(),
+        }
+    }
+
+    /// What a row of the Home lists: an episode, a series, else a film.
+    pub fn title(self) -> Title {
+        match self.kind.as_deref() {
+            Some("Episode") => Title::Episode(self.episode()),
+            Some("Series") => Title::Series(self.series()),
+            _ => Title::Film(self.film()),
+        }
+    }
+
+    /// What a library's latest list holds: `/Items/Latest` groups the episodes of a series only
+    /// when several came in, so a lone one comes as the episode, and is listed as its series.
+    pub fn latest(self) -> Title {
+        if self.kind.as_deref() != Some("Episode") {
+            return self.title();
+        }
+        let Some(id) = self.series_id.clone() else {
+            return self.title();
+        };
+        let poster = self.series_primary_image_tag.as_ref().map(|tag| ImageRef {
+            item: ItemId(id.clone()),
+            kind: ImageKind::Primary,
+            tag: tag.clone(),
+        });
+        Title::Series(Series {
+            id: ItemId(id),
+            title: self.series_name.unwrap_or_default(),
+            year: None,
+            end_year: None,
+            community_rating: None,
+            unwatched: 0,
+            poster,
+            backdrop: None,
+        })
+    }
+
+    /// What the top of the Home says of a film or a series.
+    pub fn feature(&self) -> Feature {
+        let film = self.film();
+        let series = self.kind.as_deref() == Some("Series");
+        Feature {
+            kind: if series {
+                FeatureKind::Series
+            } else {
+                FeatureKind::Film
+            },
+            id: film.id,
+            title: film.title,
+            year: film.year,
+            community_rating: film.community_rating,
+            official_rating: self.official_rating.clone(),
+            runtime: film.runtime.filter(|_| !series),
+            overview: self.overview.clone().filter(|text| !text.is_empty()),
+            backdrop: film.backdrop,
+            logo: self.image_tags.get("Logo").map(|tag| ImageRef {
+                item: ItemId(self.id.clone()),
+                kind: ImageKind::Logo,
+                tag: tag.clone(),
+            }),
+            resume: film.resume.filter(|_| !series),
         }
     }
 

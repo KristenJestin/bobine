@@ -11,7 +11,7 @@ use gpui_kit::{
 };
 
 use super::picture;
-use crate::icons::{IconName, icon};
+use crate::icons::{IconName, icon, with_stars};
 use crate::images;
 use crate::search::{self, Hit, Line};
 use crate::shell::Shell;
@@ -306,7 +306,7 @@ fn result(
                             .text_size(px(12.))
                             .text_color(theme::muted())
                             .truncate()
-                            .child(caption),
+                            .child(with_stars(&caption, 12.)),
                     )
                 }),
         )

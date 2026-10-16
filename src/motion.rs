@@ -10,6 +10,8 @@ use gpui_kit::Rgba;
 const QUICK: Duration = Duration::from_millis(160);
 /// Going to a page and back.
 const PAGE: Duration = Duration::from_millis(220);
+/// One title of the Home's header giving way to the next.
+const CROSSFADE: Duration = Duration::from_millis(700);
 
 /// How many times slower every move is: the headless harness slows them down to photograph
 /// their frames. Always 1 in the application.
@@ -29,6 +31,10 @@ pub fn quick() -> Duration {
 
 pub fn page() -> Duration {
     slowed(PAGE)
+}
+
+pub fn crossfade() -> Duration {
+    slowed(CROSSFADE)
 }
 
 /// Fast at first, gentle at the end.

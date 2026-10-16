@@ -7,11 +7,11 @@ use std::time::Duration;
 
 use bobine::provider::{
     AudioTrack, CastMember, Collection, CollectionCard, CollectionDetail, Connector, Episode,
-    ExternalSubtitle, Favourite, Film, FilmDetail, FilmQuery, FilmSort, FilterChoices, ImageKind,
-    ImageRef, ItemId, Library, LibraryKind, MediaServer, MediaSource, MediaSourceId, Page,
-    PersonHit, PersonTitles, PlaySessionId, Playback, PlaybackReport, ProviderError, SearchResults,
-    Season, Series, SeriesDetail, SeriesHit, ServerInfo, StreamUrl, SubtitleTrack, VideoRange,
-    VideoTrack,
+    ExternalSubtitle, Favourite, Feature, FeatureKind, Film, FilmDetail, FilmQuery, FilmSort,
+    FilterChoices, ImageKind, ImageRef, ItemId, Library, LibraryKind, MediaServer, MediaSource,
+    MediaSourceId, Page, PersonHit, PersonTitles, PlaySessionId, Playback, PlaybackReport,
+    ProviderError, SearchResults, Season, Series, SeriesDetail, SeriesHit, ServerInfo, StreamUrl,
+    SubtitleTrack, Title, VideoRange, VideoTrack,
 };
 
 pub const USER: &str = "camille";
@@ -149,7 +149,7 @@ fn select<T: Clone>(items: &[T], query: &FilmQuery, facts: impl Fn(&T) -> Facts)
     let total = kept.len() as u32;
     kept.sort_by(|(added_a, a, _), (added_b, b, _)| {
         let by = match query.sort {
-            FilmSort::DateAdded => added_a.cmp(added_b),
+            FilmSort::DateAdded | FilmSort::LastAdded => added_a.cmp(added_b),
             FilmSort::Title => Ordering::Equal,
             FilmSort::ReleaseYear => a.year.cmp(&b.year),
             FilmSort::Rating => a.rating.partial_cmp(&b.rating).unwrap_or(Ordering::Equal),
@@ -353,7 +353,9 @@ pub fn episodes() -> Vec<Episode> {
         for (s, &(season, size)) in season_sizes(n).iter().enumerate() {
             for number in 1..=size {
                 let id = format!("series-{n}-s{season}-e{number}");
-                let watched = n == 0 && (season == 1 || (season == 2 && number <= 3));
+                // The third series is begun too: its first two episodes are watched.
+                let watched = (n == 0 && (season == 1 || (season == 2 && number <= 3)))
+                    || (n == 2 && number <= 2);
                 let resume =
                     (n == 0 && season == 2 && number == 4).then(|| Duration::from_secs(30 * 60));
                 all.push(Episode {
@@ -386,6 +388,11 @@ pub fn episodes() -> Vec<Episode> {
     }
     all
 }
+
+const FILM_OVERVIEW: &str = "Trois frères traversent un plateau gelé pour rapporter le corps de leur \
+     père, avant que la route ne ferme pour l'hiver.";
+const SERIES_OVERVIEW: &str = "Sous la glace de l'Arctique, l'équipage d'une station de recherche perd \
+     le contact avec la surface et découvre qu'il n'est pas seul.";
 
 const CAST: [(&str, &str); 18] = [
     ("Paul Mercier", "Anton"),
@@ -576,13 +583,14 @@ impl MediaServer for FakeServer {
         Ok(Page { items, total })
     }
 
-    fn continue_watching(&self) -> Result<Vec<Film>, ProviderError> {
-        Ok(self
-            .state()
-            .films
-            .iter()
-            .filter(|f| f.resume.is_some())
+    fn continue_watching(&self) -> Result<Vec<Title>, ProviderError> {
+        let state = self.state();
+        let films = state.films.iter().filter(|f| f.resume.is_some());
+        let episodes = state.episodes.iter().filter(|e| e.item.resume.is_some());
+        Ok(films
             .cloned()
+            .map(Title::Film)
+            .chain(episodes.cloned().map(Title::Episode))
             .collect())
     }
 
@@ -591,11 +599,7 @@ impl MediaServer for FakeServer {
         self.state().record.film_pages.push(film.clone());
         let others = self.state().films.clone();
         Ok(FilmDetail {
-            overview: Some(
-                "Trois frères traversent un plateau gelé pour rapporter le corps de leur père, \
-                 avant que la route ne ferme pour l'hiver."
-                    .into(),
-            ),
+            overview: Some(FILM_OVERVIEW.into()),
             genres: vec!["Drame".into(), "Aventure".into()],
             official_rating: Some("12+".into()),
             directors: vec!["Inès Vallard".into()],
@@ -746,6 +750,7 @@ impl MediaServer for FakeServer {
         let height = match image.kind {
             ImageKind::Primary => width * 3 / 2,
             ImageKind::Backdrop => width * 9 / 16,
+            ImageKind::Logo => width / 3,
         };
         Ok(gradient(&image.item.0, width.max(1), height.max(1)))
     }
@@ -782,11 +787,7 @@ impl MediaServer for FakeServer {
         Ok(SeriesDetail {
             series: Self::counted(&state, found),
             favourite: state.favourites.contains(series),
-            overview: Some(
-                "Sous la glace de l'Arctique, l'équipage d'une station de recherche perd le \
-                 contact avec la surface et découvre qu'il n'est pas seul."
-                    .into(),
-            ),
+            overview: Some(SERIES_OVERVIEW.into()),
             genres: vec!["Science-fiction".into(), "Drame".into()],
             official_rating: Some("12+".into()),
             cast: CAST
@@ -893,6 +894,99 @@ impl MediaServer for FakeServer {
                 .cloned()
                 .collect(),
         })
+    }
+
+    /// Like Jellyfin: the next episode of each series the user has begun, never one of a
+    /// series they have not touched, started episodes included.
+    fn next_episodes(&self, limit: u32) -> Result<Vec<Episode>, ProviderError> {
+        let begun: Vec<ItemId> = {
+            let state = self.state();
+            state
+                .series
+                .iter()
+                .filter(|series| {
+                    state.episodes.iter().any(|e| {
+                        e.series == series.id && (e.item.watched || e.item.resume.is_some())
+                    })
+                })
+                .map(|series| series.id.clone())
+                .collect()
+        };
+        let mut next = Vec::new();
+        for series in begun.iter().take(limit as usize) {
+            next.extend(self.next_up(series)?);
+        }
+        Ok(next)
+    }
+
+    fn latest(&self, library: &ItemId, limit: u32) -> Result<Vec<Title>, ProviderError> {
+        let state = self.state();
+        let limit = limit as usize;
+        Ok(match library.0.as_str() {
+            FILMS_LIBRARY => state
+                .films
+                .iter()
+                .take(limit)
+                .cloned()
+                .map(Title::Film)
+                .collect(),
+            _ => state
+                .series
+                .iter()
+                .take(limit)
+                .map(|series| Title::Series(Self::counted(&state, series)))
+                .collect(),
+        })
+    }
+
+    /// The films and the series the user has not finished, one of each in turn, the second
+    /// with its title as a logo.
+    fn featured(&self, limit: u32) -> Result<Vec<Feature>, ProviderError> {
+        let state = self.state();
+        let films = state
+            .films
+            .iter()
+            .filter(|f| !f.watched)
+            .map(|film| Feature {
+                kind: FeatureKind::Film,
+                id: film.id.clone(),
+                title: film.title.clone(),
+                year: film.year,
+                community_rating: film.community_rating,
+                official_rating: Some("12+".into()),
+                runtime: film.runtime,
+                overview: Some(FILM_OVERVIEW.into()),
+                backdrop: film.backdrop.clone(),
+                logo: None,
+                resume: film.resume,
+            });
+        let series = state.series.iter().enumerate().map(|(n, series)| Feature {
+            kind: FeatureKind::Series,
+            id: series.id.clone(),
+            title: series.title.clone(),
+            year: series.year,
+            community_rating: series.community_rating,
+            official_rating: Some("16+".into()),
+            runtime: None,
+            overview: Some(SERIES_OVERVIEW.into()),
+            backdrop: series.backdrop.clone(),
+            // One title is a logo, the others are written: both are drawn.
+            logo: (n == 0)
+                .then(|| image(&series.id.0, ImageKind::Logo))
+                .flatten(),
+            resume: None,
+        });
+        let mut films = films.peekable();
+        let mut series = series.peekable();
+        let mut turn = true;
+        let mut features = Vec::new();
+        while features.len() < limit as usize && (films.peek().is_some() || series.peek().is_some())
+        {
+            let next = if turn { films.next() } else { series.next() };
+            features.extend(next);
+            turn = !turn;
+        }
+        Ok(features)
     }
 
     fn person_titles(&self, person: &ItemId) -> Result<PersonTitles, ProviderError> {

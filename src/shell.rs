@@ -1,10 +1,12 @@
 //! The root view: the screen the navigator points at, framed by the pill bar or the back link.
 
+mod home;
 mod lists;
 mod pages;
 mod palette;
 mod series;
 
+pub use home::{HomePage, ListPage};
 pub use lists::{CollectionPage, CollectionsPage, MyListPage};
 pub use pages::{Chip, DetailPage, GONE, LibraryPage, Loadable, LoginForm, OpenConnector, Tool};
 pub use palette::{PersonPage, SearchState};
@@ -17,8 +19,8 @@ use std::time::{Duration, Instant};
 
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    Animation, AnimationExt, Context, FocusHandle, Focusable, IntoElement, KeyDownEvent, Pixels,
-    Render, SharedString, Size, Subscription, Task, Window, div, px,
+    Animation, AnimationExt, Context, Entity, FocusHandle, Focusable, IntoElement, KeyDownEvent,
+    Pixels, Render, SharedString, Size, Subscription, Task, Window, div, px,
 };
 
 use bobine::provider::{Connector, Episode, Film as FilmItem, MediaServer, Series};
@@ -115,7 +117,13 @@ pub struct Shell {
     pub login: Option<LoginForm>,
     /// The login was just shown: its address field takes the focus at the next draw.
     login_focus_due: bool,
-    pub home: pages::HomePage,
+    pub home: HomePage,
+    /// The full list of a row of the Home, while one is open.
+    pub list: Option<ListPage>,
+    /// Makes the header change title by itself, while the Home shows.
+    hero_ticker: Option<Task<()>>,
+    /// The Home's header, drawn apart: its ticks redraw it alone, not the whole page.
+    pub hero_view: Entity<screens::HeroView>,
     pub library: pages::LibraryPage<FilmItem>,
     pub series: pages::LibraryPage<Series>,
     /// The film pages open, the last one on top: one per `Screen::FilmDetail` of the navigator.
@@ -185,6 +193,8 @@ pub struct Film {
 
 impl Shell {
     pub fn new(font: Option<SharedString>, open: OpenConnector, cx: &mut Context<Self>) -> Self {
+        let this = cx.weak_entity();
+        let hero_view = cx.new(|_| screens::HeroView::new(this));
         let mut shell = Self {
             navigator: Navigator::new(),
             focus: cx.focus_handle(),
@@ -197,6 +207,9 @@ impl Shell {
             login: None,
             login_focus_due: false,
             home: Default::default(),
+            list: None,
+            hero_ticker: None,
+            hero_view,
             library: Default::default(),
             series: Default::default(),
             details: Vec::new(),
@@ -224,6 +237,19 @@ impl Shell {
         };
         shell.begin(open, cx);
         shell
+    }
+
+    /// A frame was drawn: the page and its header are two views of one frame, which count once.
+    #[cfg(feature = "harness")]
+    pub fn note_frame(&mut self) {
+        let now = Instant::now();
+        if self
+            .frames
+            .last()
+            .is_none_or(|last| now.duration_since(*last) > Duration::from_millis(3))
+        {
+            self.frames.push(now);
+        }
     }
 
     /// Opens the player on `media`. Its addresses go straight to mpv: nothing here keeps or
@@ -438,7 +464,7 @@ impl Render for Shell {
             self.series.menus.close();
         }
         #[cfg(feature = "harness")]
-        self.frames.push(Instant::now());
+        self.note_frame();
         // Escape needs the focus; a click on a button must not lose it for good. A text field
         // keeps it while it has it; the login's first field takes it when nothing has.
         let login_shown = self.login.is_some() && self.navigator.current() == Screen::Login;
@@ -483,6 +509,7 @@ impl Render for Shell {
             self.details.len()
                 + self.series_pages.len()
                 + self.people.len()
+                + usize::from(self.list.is_some())
                 + self.collection_pages.len(),
         );
         if page != self.page {

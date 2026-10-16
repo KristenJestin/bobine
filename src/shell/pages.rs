@@ -9,8 +9,8 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use bobine::provider::{
-    Collection, Connector, Episode, Film, FilmDetail, FilmQuery, FilterChoices, ItemId,
-    LibraryKind, MediaServer, MediaSource, Page, Playback as Opened, PlaybackReport, ProviderError,
+    Collection, Connector, Episode, FilmDetail, FilmQuery, FilterChoices, ItemId, LibraryKind,
+    MediaServer, MediaSource, Page, Playback as Opened, PlaybackReport, ProviderError,
 };
 use gpui_kit::prelude::*;
 use gpui_kit::{
@@ -18,7 +18,7 @@ use gpui_kit::{
     Subscription, Task, TouchPhase, UniformListScrollHandle, Window, point, px,
 };
 
-use super::{Film as Playing, Shell};
+use super::{Film as Playing, HomePage, Shell};
 use crate::favourite::{ListPage, Toggle};
 use crate::film_page::{self, Choices, From, Plan};
 use crate::grid::{Grid, Listed, RETRY_AFTER};
@@ -53,11 +53,6 @@ pub struct LoginForm {
     pub error: Option<&'static str>,
     pub busy: bool,
     _address_changed: Subscription,
-}
-
-#[derive(Default)]
-pub struct HomePage {
-    pub resume: Option<Loadable<Vec<Film>>>,
 }
 
 /// The menus of the tools above a grid.
@@ -225,6 +220,8 @@ impl<T: Listed> LibraryPage<T> {
 #[derive(Debug, PartialEq, Eq)]
 pub enum Arrival {
     Home,
+    /// A full list of the Home: what was started or comes next changed with the playback.
+    HomeList,
     /// The user's list is asked again each time it shows: a title put in it elsewhere shows.
     MyList,
     Collections,
@@ -238,6 +235,7 @@ pub enum Arrival {
 pub fn arrival(screen: Screen, films_known: bool, series_known: bool) -> Arrival {
     match screen {
         Screen::Home => Arrival::Home,
+        Screen::HomeList => Arrival::HomeList,
         Screen::MyList => Arrival::MyList,
         Screen::Collections => Arrival::Collections,
         Screen::CollectionDetail => Arrival::Collection,
@@ -252,11 +250,19 @@ pub fn arrival(screen: Screen, films_known: bool, series_known: bool) -> Arrival
 pub enum Reload {
     Series(usize),
     Film(usize),
+    Home,
+    /// A full list of the Home.
+    List,
 }
 
-/// What is asked again after a playback, on `screen`, the one back to: the series page on top,
-/// else the film page on top, if any.
+/// What is asked again after a playback, on `screen`, the one back to: the Home or one of its
+/// lists, else the series page on top, else the film page on top, if any.
 pub fn reload_after_playback(screen: Screen, films: usize, series: usize) -> Option<Reload> {
+    match screen {
+        Screen::Home => return Some(Reload::Home),
+        Screen::HomeList => return Some(Reload::List),
+        _ => {}
+    }
     if screen == Screen::SeriesDetail {
         return series.checked_sub(1).map(Reload::Series);
     }
@@ -267,6 +273,8 @@ pub fn reload_after_playback(screen: Screen, films: usize, series: usize) -> Opt
 pub enum Origin {
     Film(usize, ItemId),
     Series(usize, ItemId),
+    /// The header or a card of the Home or of one of its lists.
+    Home,
 }
 
 /// The wheel or the touchpad over a detail page: the page goes up and down, the row under the
@@ -438,6 +446,7 @@ impl Shell {
         self.series_pages.clear();
         self.up_next.cancel();
         self.people.clear();
+        self.list = None;
         self.collection_pages.clear();
         self.search = None;
         self.navigator.switch_root(Screen::Login);
@@ -531,6 +540,7 @@ impl Shell {
         self.details.clear();
         self.series_pages.clear();
         self.people.clear();
+        self.list = None;
         self.collection_pages.clear();
         self.search = None;
         // The atlas holds the old images until they are dropped from it.
@@ -584,6 +594,7 @@ impl Shell {
         self.series_pages.clear();
         self.up_next.cancel();
         self.people.clear();
+        self.list = None;
         self.collection_pages.clear();
         self.arrived(cx);
         cx.notify();
@@ -595,6 +606,7 @@ impl Shell {
             Screen::FilmDetail => drop(self.details.pop()),
             Screen::SeriesDetail => drop(self.series_pages.pop()),
             Screen::Person => drop(self.people.pop()),
+            Screen::HomeList => self.list = None,
             Screen::CollectionDetail => drop(self.collection_pages.pop()),
             _ => {}
         }
@@ -616,28 +628,13 @@ impl Shell {
         );
         match arrival {
             Arrival::Home => self.load_home(cx),
+            Arrival::HomeList => self.refresh_list(cx),
             Arrival::MyList => self.load_my_list(cx),
             Arrival::Collections => self.load_collections(cx),
             Arrival::Collection => self.reload_collection(cx),
             Arrival::Library(kind) => self.load_library(kind, cx),
             Arrival::Nothing => {}
         }
-    }
-
-    pub fn load_home(&mut self, cx: &mut Context<Self>) {
-        if self.home.resume.is_none() {
-            self.home.resume = Some(Loadable::Loading);
-        }
-        self.ask(
-            cx,
-            |server| server.continue_watching(),
-            |shell, films, cx| {
-                shell.home.resume = Some(match films {
-                    Ok(films) => Loadable::Ready(films),
-                    Err(error) => Loadable::Failed(shell.failed(error, cx)),
-                });
-            },
-        );
     }
 
     /// The first library of `kind` of the user, then its first page.
@@ -1162,7 +1159,7 @@ impl Shell {
     }
 
     /// The page a play button was pressed on: no longer busy, and why it did not play.
-    fn tried(&mut self, origin: &Origin, error: Option<&'static str>) {
+    pub(super) fn tried(&mut self, origin: &Origin, error: Option<&'static str>) {
         let (busy, shown) = match origin {
             Origin::Film(depth, id) => match self.detail_page(*depth, id) {
                 Some(page) => (&mut page.busy, &mut page.error),
@@ -1172,6 +1169,7 @@ impl Shell {
                 Some(page) if &page.id == id => (&mut page.busy, &mut page.error),
                 _ => return,
             },
+            Origin::Home => (&mut self.home.busy, &mut self.home.error),
         };
         *busy = false;
         if error.is_some() {
@@ -1257,6 +1255,20 @@ impl Shell {
                 return;
             }
             Some(Reload::Film(depth)) => depth,
+            Some(Reload::Home) => {
+                self.reload_home_after(reports, cx);
+                return;
+            }
+            Some(Reload::List) => {
+                self.ask(
+                    cx,
+                    move |_| {
+                        let _ = reports.join();
+                    },
+                    |shell, (), cx| shell.refresh_list(cx),
+                );
+                return;
+            }
             None => return,
         };
         let id = self.details[depth].id.clone();
@@ -1354,6 +1366,7 @@ impl Shell {
                             cx.drop_image(gone, None);
                         }
                     }
+                    shell.notify_hero(cx);
                     shell.fetch_images(cx);
                     shell.wake_for_image_retries(cx);
                 },
@@ -1365,6 +1378,19 @@ impl Shell {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bobine::provider::Film;
+
+    #[test]
+    fn the_home_and_its_lists_reload_after_a_playback() {
+        assert_eq!(
+            reload_after_playback(Screen::Home, 0, 0),
+            Some(Reload::Home)
+        );
+        assert_eq!(
+            reload_after_playback(Screen::HomeList, 0, 0),
+            Some(Reload::List)
+        );
+    }
 
     #[test]
     fn the_series_page_reloads_after_a_playback() {
@@ -1376,7 +1402,7 @@ mod tests {
             reload_after_playback(Screen::FilmDetail, 2, 1),
             Some(Reload::Film(1))
         );
-        assert_eq!(reload_after_playback(Screen::Home, 0, 0), None);
+        assert_eq!(reload_after_playback(Screen::Player, 0, 0), None);
     }
 
     use crate::fake::{FILMS_LIBRARY, FakeServer};
@@ -1578,6 +1604,7 @@ mod tests {
     fn ma_liste_is_asked_again_each_time_it_shows() {
         assert_eq!(arrival(Screen::MyList, true, true), Arrival::MyList);
         assert_eq!(arrival(Screen::Home, true, true), Arrival::Home);
+        assert_eq!(arrival(Screen::HomeList, true, true), Arrival::HomeList);
         assert_eq!(
             arrival(Screen::Collections, true, true),
             Arrival::Collections
