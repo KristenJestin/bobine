@@ -920,8 +920,14 @@ impl Render for Shell {
                 .absolute()
                 .size_full(),
             )
-            // A light shade over the top of a backdrop, under the bar.
-            .when(screen.shows_back_link(), |root| root.child(bar_fade()))
+            // A light shade over the top of a backdrop, under the bar. It comes with the page.
+            .when(screen.has_backdrop(), |root| {
+                root.child(bar_fade().with_animation(
+                    ("shade-turn", turns as usize),
+                    Animation::new(motion::page()).with_easing(motion::ease_out),
+                    |shade, t| shade.opacity(t),
+                ))
+            })
             .when(screen.shows_pill_bar(), |root| {
                 root.child(pill_bar(highlight, account, window, cx))
             })

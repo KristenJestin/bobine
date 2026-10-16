@@ -35,6 +35,14 @@ impl Screen {
         )
     }
 
+    /// Pages that draw a backdrop under the bar, which a shade at the top keeps readable.
+    pub fn has_backdrop(self) -> bool {
+        matches!(
+            self,
+            Screen::FilmDetail | Screen::SeriesDetail | Screen::CollectionDetail
+        )
+    }
+
     /// The word the back link of a detail page uses for the screen it goes back to.
     fn name(self) -> &'static str {
         match self {
@@ -205,6 +213,15 @@ mod tests {
         assert!(Screen::FilmDetail.shows_pill_bar());
         assert!(!Screen::Home.shows_back_link());
         assert!(!Screen::Library.shows_back_link());
+    }
+
+    #[test]
+    fn the_shade_at_the_top_is_for_the_pages_with_a_backdrop_and_not_the_person_page() {
+        assert!(Screen::FilmDetail.has_backdrop());
+        assert!(Screen::SeriesDetail.has_backdrop());
+        assert!(Screen::CollectionDetail.has_backdrop());
+        assert!(!Screen::Person.has_backdrop());
+        assert!(!Screen::Home.has_backdrop());
     }
 
     #[test]
