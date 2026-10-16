@@ -4,8 +4,8 @@
 
 use bobine::provider::{ItemId, TmdbIndex};
 use bobine::requests::{
-    Availability, CollectionOutcome, Discovered, MediaKind, RequestError, RequestStatus,
-    SeasonOffer, ServerCheck, TmdbId,
+    Availability, Discovered, MediaKind, RequestError, RequestStatus, SeasonOffer, ServerCheck,
+    TmdbId,
 };
 
 /// The library page of a title of the request server, when the library holds it.
@@ -128,39 +128,6 @@ pub fn check_lines(check: &ServerCheck) -> (String, Option<String>) {
     (format!("Connected to Seerr {}.", check.version), owner)
 }
 
-/// Names in a sentence: `A`, `A and B`, `A, B and C`.
-fn names(titles: &[String]) -> String {
-    match titles {
-        [] => String::new(),
-        [one] => one.clone(),
-        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
-    }
-}
-
-/// How a collection request went, film by film.
-pub fn collection_line(outcome: &CollectionOutcome, films: &[Discovered]) -> String {
-    let named = |ids: &[TmdbId]| -> Vec<String> {
-        ids.iter()
-            .filter_map(|id| films.iter().find(|f| f.tmdb == *id))
-            .map(|film| film.title.clone())
-            .collect()
-    };
-    let requested = named(&outcome.requested);
-    let missed = named(&outcome.not_requested);
-    let mut line = String::new();
-    if !requested.is_empty() {
-        line.push_str(&format!("Requested {}.", names(&requested)));
-    }
-    if !missed.is_empty() {
-        if !line.is_empty() {
-            line.push(' ');
-        }
-        let why = outcome.failure.as_ref().map_or("", error_line);
-        line.push_str(&format!("Not requested: {}. {why}", names(&missed)));
-    }
-    line.trim_end().to_string()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -264,34 +231,6 @@ mod tests {
         picker.toggle(2);
         picker.toggle(3);
         assert_eq!(picker.chosen(), [2, 3]);
-    }
-
-    #[test]
-    fn a_partial_collection_request_says_which_films_were_not_requested() {
-        let films = [
-            titled(3, "Winter Light", Availability::Missing),
-            titled(4, "Winter's End", Availability::Missing),
-            titled(5, "Spring", Availability::Missing),
-        ];
-        let outcome = CollectionOutcome {
-            requested: vec![3],
-            not_requested: vec![4, 5],
-            failure: Some(RequestError::Quota),
-        };
-        assert_eq!(
-            collection_line(&outcome, &films),
-            "Requested Winter Light. Not requested: Winter's End and Spring. Your request quota \
-             is reached."
-        );
-        let all = CollectionOutcome {
-            requested: vec![3, 4],
-            not_requested: Vec::new(),
-            failure: None,
-        };
-        assert_eq!(
-            collection_line(&all, &films),
-            "Requested Winter Light and Winter's End."
-        );
     }
 
     #[test]
