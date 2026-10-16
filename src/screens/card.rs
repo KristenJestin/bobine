@@ -185,8 +185,13 @@ impl Render for Card {
         if self.fade.moving(now) {
             window.request_animation_frame();
         }
-        let play = self.play_button(offer.play, window, cx);
-        let quick = offer.quick.map(|quick| self.corner(quick, window, cx));
+        // The buttons come with the pointer: unseen, they would take the clicks that open the
+        // page.
+        let shown = self.fade.visible(now);
+        let play = shown.then(|| self.play_button(offer.play, window, cx));
+        let quick = (offer.quick)
+            .filter(|_| shown)
+            .map(|quick| self.corner(quick, window, cx));
         let name = &self.name;
         let layer = div()
             .id("card-hover")
@@ -202,7 +207,7 @@ impl Render for Card {
                 card.fade.set(*hovered, Instant::now());
                 cx.notify();
             }))
-            .child(play.opacity(level))
+            .children(play.map(|play| play.opacity(level)))
             .children(quick.map(|quick| quick.opacity(level)));
         let shell = self.shell.clone();
         let open = offer.open;

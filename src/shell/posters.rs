@@ -268,7 +268,15 @@ mod tests {
             .unwrap_or_else(|| panic!("{selector} was not drawn"))
     }
 
+    /// The pointer over the card `id`, which brings its buttons.
+    fn hover(cx: &mut VisualTestContext, id: &ElementId) {
+        let card = bounds(cx, "card-hover", id);
+        cx.simulate_mouse_move(card.center(), None, Modifiers::none());
+        cx.run_until_parked();
+    }
+
     fn click(cx: &mut VisualTestContext, what: &str, id: &ElementId) {
+        hover(cx, id);
         let at = bounds(cx, what, id).center();
         cx.simulate_mouse_move(at, None, Modifiers::none());
         cx.simulate_click(at, Modifiers::none());
@@ -321,6 +329,9 @@ mod tests {
         let (id, _) = poster(&window, cx, |_| true);
         assert_eq!(veil(&window, cx, &id), 0.);
         let card = bounds(cx, "card-hover", &id);
+
+        hover(cx, &id);
+        assert_eq!(veil(&window, cx, &id), 1.);
         // The play button in the middle, the two buttons in the top right corner.
         let play = bounds(cx, "card-play", &id);
         assert!(card.contains(&play.center()));
@@ -328,10 +339,6 @@ mod tests {
             let button = bounds(cx, button, &id);
             assert!(button.top() < card.top() + px(40.) && button.right() > card.right() - px(80.));
         }
-
-        cx.simulate_mouse_move(card.center(), None, Modifiers::none());
-        cx.run_until_parked();
-        assert_eq!(veil(&window, cx, &id), 1.);
 
         cx.simulate_mouse_move(point(px(5.), px(5.)), None, Modifiers::none());
         cx.run_until_parked();
@@ -357,8 +364,9 @@ mod tests {
         let (shell_before, cards_before) = draws(&window, cx);
 
         // In, over the play button and the corner's buttons, and out.
+        cx.simulate_mouse_move(card.center(), None, Modifiers::none());
+        cx.run_until_parked();
         for at in [
-            card.center(),
             bounds(cx, "card-my-list", &id).center(),
             bounds(cx, "card-watched", &id).center(),
             aside,
@@ -665,5 +673,34 @@ mod tests {
             !quick(&window, cx, &id).watched.now,
             "the poster still says watched"
         );
+    }
+
+    /// The buttons show with the pointer: before it came, a click where they will be opens the
+    /// page, as a click anywhere else on the card does.
+    #[gpui_kit::test]
+    fn a_click_on_a_cards_centre_or_corner_without_hover_opens_the_page(cx: &mut TestAppContext) {
+        for corner in [false, true] {
+            let (server, window, cx) = home(cx);
+            let (id, film) = poster(&window, cx, |target| matches!(target, PlayTarget::Film(_)));
+            let card = bounds(cx, "card-hover", &id);
+            let at = if corner {
+                point(card.right() - px(20.), card.top() + px(20.))
+            } else {
+                card.center()
+            };
+            // The pointer never moved over it: a page that came under it.
+            cx.simulate_click(at, Modifiers::none());
+            cx.run_until_parked();
+            assert_eq!(screen(&window, cx), Screen::FilmDetail, "corner: {corner}");
+            let opened = window
+                .read_with(cx, |shell, _| {
+                    shell.details.last().map(|page| page.id.clone())
+                })
+                .unwrap();
+            assert_eq!(opened, Some(film));
+            let record = &server.state.lock().unwrap().record;
+            assert!(record.plays.is_empty() && record.favourite_calls.is_empty());
+            assert!(record.watched.is_empty());
+        }
     }
 }
