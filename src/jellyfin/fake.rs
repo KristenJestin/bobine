@@ -129,7 +129,13 @@ pub struct State {
     pub no_transcoding: bool,
     /// The extracted subtitle comes from another host, as an absolute address.
     pub absolute_delivery: bool,
+    /// The entries put in the playlist that holds titles so far: a series goes in as its
+    /// episodes, as Jellyfin 10.9 and later do.
+    pub playlist_added: usize,
 }
+
+/// How many episodes the series of the pages puts in a playlist.
+pub const SERIES_EPISODES: usize = 3;
 
 /// How long a held search request waits for the others before it is let go anyway.
 const GATE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
@@ -584,15 +590,17 @@ fn answer(state: &State, seen: &Seen) -> Answer {
         }
         ("GET", path) if path.starts_with(&images) => Answer::Bytes(IMAGE.to_vec()),
         ("GET", path) if path == format!("/Playlists/{PLAYLIST}/Items") => {
-            Answer::Json(200, fixture("playlist_items"))
+            let mut items = limited(fixture("playlist_items"), seen);
+            let total = items["TotalRecordCount"].as_u64().unwrap() as usize;
+            items["TotalRecordCount"] = json!(total + state.playlist_added);
+            Answer::Json(200, items)
         }
         ("GET", path) if path.starts_with("/Playlists/") && path.ends_with("/Items") => {
             Answer::Json(200, json!({ "Items": [], "TotalRecordCount": 0 }))
         }
         ("POST", "/Playlists") => Answer::Json(200, json!({ "Id": NEW_PLAYLIST })),
-        ("POST" | "DELETE", path) if path == format!("/Playlists/{PLAYLIST}/Items") => {
-            Answer::Empty(204)
-        }
+        ("POST", path) if path == format!("/Playlists/{PLAYLIST}/Items") => Answer::Empty(204),
+        ("DELETE", path) if path == format!("/Playlists/{PLAYLIST}/Items") => Answer::Empty(204),
         _ => Answer::Empty(404),
     }
 }
@@ -714,7 +722,17 @@ impl FakeServer {
                         if gated {
                             state.gate_arrivals += 1;
                         }
-                        (answer(&state, &seen), state.image_delay, gated)
+                        let answer = answer(&state, &seen);
+                        if seen.method == "POST"
+                            && seen.path == format!("/Playlists/{PLAYLIST}/Items")
+                            && matches!(answer, Answer::Empty(204))
+                        {
+                            state.playlist_added += match seen.param("ids") {
+                                Some(SERIES) => SERIES_EPISODES,
+                                _ => 1,
+                            };
+                        }
+                        (answer, state.image_delay, gated)
                     };
                     if gated {
                         let state = Arc::clone(&state);

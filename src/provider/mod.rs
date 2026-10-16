@@ -119,14 +119,17 @@ pub trait MediaServer: Send + Sync {
     fn favourites(&self) -> Result<Vec<Favourite>, ProviderError>;
     /// Puts a film or a series in the user's list, or takes it out.
     fn set_favourite(&self, item: &ItemId, favourite: bool) -> Result<(), ProviderError>;
-    /// The user's playlists of films and episodes, by name, each with what it holds.
-    fn playlists(&self) -> Result<Vec<Playlist>, ProviderError>;
+    /// The user's playlists of films and episodes, by name, each with its first `first` entries
+    /// (all of them when `None`) and how many it holds. A playlist the server will not read is
+    /// left out.
+    fn playlists(&self, first: Option<usize>) -> Result<Vec<Playlist>, ProviderError>;
     /// What a playlist holds, in its order, the episodes with their versions.
     fn playlist(&self, playlist: &ItemId) -> Result<Vec<PlaylistEntry>, ProviderError>;
     /// Makes a playlist named `name` that holds `item`: its id.
     fn create_playlist(&self, name: &str, item: &ItemId) -> Result<ItemId, ProviderError>;
-    /// Puts a film, an episode or a series at the end of a playlist.
-    fn add_to_playlist(&self, playlist: &ItemId, item: &ItemId) -> Result<(), ProviderError>;
+    /// Puts a film, an episode or a series at the end of a playlist: how many entries it put
+    /// in. A series goes in as its episodes.
+    fn add_to_playlist(&self, playlist: &ItemId, item: &ItemId) -> Result<usize, ProviderError>;
     /// Takes one entry out of a playlist.
     fn remove_from_playlist(&self, playlist: &ItemId, entry: &EntryId)
     -> Result<(), ProviderError>;
@@ -499,8 +502,10 @@ pub enum Favourite {
 pub struct Playlist {
     pub id: ItemId,
     pub name: String,
-    /// What it holds, in its order.
+    /// What it holds, in its order: all of it, or its first entries only, as asked.
     pub entries: Vec<PlaylistEntry>,
+    /// How many entries it holds.
+    pub count: usize,
 }
 
 /// One place in a playlist: a title may be in it twice, so the place is what is taken out.
@@ -508,6 +513,8 @@ pub struct Playlist {
 pub struct PlaylistEntry {
     pub id: EntryId,
     pub title: Title,
+    /// The poster a list shows for it: a film's or a series' own, an episode's series'.
+    pub poster: Option<ImageRef>,
 }
 
 /// The id of a place in a playlist.

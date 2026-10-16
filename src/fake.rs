@@ -131,7 +131,8 @@ pub struct KeptPlaylist {
     pub entries: Vec<(EntryId, ItemId)>,
 }
 
-/// The playlists the fake server starts with: films, an episode and a series in the first.
+/// The playlists the fake server starts with: films, and episodes in the second. A series put
+/// in a playlist is put in as its episodes, as Jellyfin does, so none holds a series.
 pub fn playlists() -> Vec<KeptPlaylist> {
     let kept = |id: &str, name: &str, items: &[&str]| KeptPlaylist {
         id: ItemId(id.into()),
@@ -151,7 +152,7 @@ pub fn playlists() -> Vec<KeptPlaylist> {
         kept(
             "playlist-watchlist",
             "Watchlist",
-            &["film-1", "series-1-s1-e2", "series-2", "film-0"],
+            &["film-1", "series-1-s1-e2", "series-2-s1-e1", "film-0"],
         ),
     ]
 }
@@ -207,8 +208,10 @@ pub struct State {
     /// be reached).
     pub logout_error: Option<ProviderError>,
     pub playlists: Vec<KeptPlaylist>,
-    /// Changing a playlist fails (a server that refuses it).
-    pub playlist_fails: bool,
+    /// Changing a playlist fails with this (a server that refuses it).
+    pub playlist_refusal: Option<ProviderError>,
+    /// Taking out these entries is refused, as a playlist the user may not change.
+    pub refused_entries: Vec<EntryId>,
     /// How many playlists were made so far, for the ids of the next.
     pub playlists_made: usize,
     /// The id of the user the next login or restore gives a session to.
@@ -631,7 +634,8 @@ impl FakeServer {
                 logout_delay: std::time::Duration::ZERO,
                 logout_error: None,
                 playlists: playlists(),
-                playlist_fails: false,
+                playlist_refusal: None,
+                refused_entries: Vec::new(),
                 playlists_made: 0,
                 user_id: USER_ID.into(),
             })),
@@ -726,16 +730,19 @@ impl FakeServer {
             .entries
             .iter()
             .filter_map(|(entry, item)| {
-                let title = if let Some(film) = state.films.iter().find(|f| &f.id == item) {
-                    Title::Film(film.clone())
-                } else if let Some(series) = state.series.iter().find(|s| &s.id == item) {
-                    Title::Series(Self::counted(state, series))
+                let (title, poster) = if let Some(film) = state.films.iter().find(|f| &f.id == item)
+                {
+                    (Title::Film(film.clone()), film.poster.clone())
                 } else {
-                    Title::Episode(state.episodes.iter().find(|e| &e.item.id == item)?.clone())
+                    let episode = state.episodes.iter().find(|e| &e.item.id == item)?;
+                    let series = state.series.iter().find(|s| s.id == episode.series);
+                    let poster = series.and_then(|series| series.poster.clone());
+                    (Title::Episode(episode.clone()), poster)
                 };
                 Some(PlaylistEntry {
                     id: entry.clone(),
                     title,
+                    poster,
                 })
             })
             .collect()
@@ -743,11 +750,26 @@ impl FakeServer {
 
     /// A change of a playlist: recorded, and refused when the server refuses them.
     fn change_playlist(state: &mut State, call: PlaylistCall) -> Result<(), ProviderError> {
-        state.record.playlist_calls.push(call);
-        if state.playlist_fails {
+        if let PlaylistCall::Remove(_, entry) = &call
+            && state.refused_entries.contains(entry)
+        {
+            state.record.playlist_calls.push(call);
             return Err(ProviderError::Forbidden);
         }
-        Ok(())
+        state.record.playlist_calls.push(call);
+        match &state.playlist_refusal {
+            Some(error) => Err(error.clone()),
+            None => Ok(()),
+        }
+    }
+
+    /// What putting `item` in a playlist puts in: a series' episodes, in order; else the item.
+    fn put_in(state: &State, item: &ItemId) -> Vec<ItemId> {
+        if state.series.iter().any(|series| &series.id == item) {
+            let episodes = state.episodes.iter().filter(|e| &e.series == item);
+            return episodes.map(|episode| episode.item.id.clone()).collect();
+        }
+        vec![item.clone()]
     }
 }
 
@@ -1352,15 +1374,21 @@ impl MediaServer for FakeServer {
         Ok(())
     }
 
-    fn playlists(&self) -> Result<Vec<Playlist>, ProviderError> {
+    fn playlists(&self, first: Option<usize>) -> Result<Vec<Playlist>, ProviderError> {
         let state = self.state();
         let mut found: Vec<Playlist> = state
             .playlists
             .iter()
-            .map(|playlist| Playlist {
-                id: playlist.id.clone(),
-                name: playlist.name.clone(),
-                entries: Self::entries(&state, playlist),
+            .map(|playlist| {
+                let mut entries = Self::entries(&state, playlist);
+                let count = entries.len();
+                entries.truncate(first.unwrap_or(count));
+                Playlist {
+                    id: playlist.id.clone(),
+                    name: playlist.name.clone(),
+                    entries,
+                    count,
+                }
             })
             .collect();
         found.sort_by_key(|playlist| playlist.name.to_lowercase());
@@ -1382,32 +1410,40 @@ impl MediaServer for FakeServer {
         Self::change_playlist(&mut state, PlaylistCall::Create(name.into(), item.clone()))?;
         state.playlists_made += 1;
         let id = ItemId(format!("playlist-new-{}", state.playlists_made));
+        let entries = Self::put_in(&state, item)
+            .into_iter()
+            .enumerate()
+            .map(|(n, item)| (EntryId(format!("{}-entry-{n}", id.0)), item))
+            .collect();
         state.playlists.push(KeptPlaylist {
             id: id.clone(),
             name: name.into(),
-            entries: vec![(EntryId(format!("{}-entry-0", id.0)), item.clone())],
+            entries,
         });
         Ok(id)
     }
 
-    fn add_to_playlist(&self, playlist: &ItemId, item: &ItemId) -> Result<(), ProviderError> {
+    fn add_to_playlist(&self, playlist: &ItemId, item: &ItemId) -> Result<usize, ProviderError> {
         let mut state = self.state();
         Self::change_playlist(
             &mut state,
             PlaylistCall::Add(playlist.clone(), item.clone()),
         )?;
+        let added = Self::put_in(&state, item);
         let found = state
             .playlists
             .iter_mut()
             .find(|p| &p.id == playlist)
             .ok_or(ProviderError::NotFound)?;
-        let entry = EntryId(format!(
-            "{}-entry-{}",
-            playlist.0,
-            found.entries.len() + 100
-        ));
-        found.entries.push((entry, item.clone()));
-        Ok(())
+        for item in &added {
+            let entry = EntryId(format!(
+                "{}-entry-{}",
+                playlist.0,
+                found.entries.len() + 100
+            ));
+            found.entries.push((entry, item.clone()));
+        }
+        Ok(added.len())
     }
 
     fn remove_from_playlist(

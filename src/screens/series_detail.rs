@@ -491,9 +491,9 @@ pub fn up_next_card(
             "NEXT EPISODE",
             series_page::player_title(episode).1,
         ),
-        Next::Entry(_, entry) => (
+        Next::Entry(entry) => (
             playlists::still(&entry.title),
-            "UP NEXT",
+            "Up next",
             playlists::name(&entry.title),
         ),
     };

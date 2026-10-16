@@ -469,6 +469,18 @@ impl Item {
         }
     }
 
+    /// The poster a list shows for the item: an episode's series' poster, not its wide still.
+    pub fn list_poster(&self) -> Option<ImageRef> {
+        if self.kind.as_deref() != Some("Episode") {
+            return self.primary();
+        }
+        Some(ImageRef {
+            item: ItemId(self.series_id.clone()?),
+            kind: ImageKind::Primary,
+            tag: self.series_primary_image_tag.clone()?,
+        })
+    }
+
     fn primary(&self) -> Option<ImageRef> {
         self.image_tags.get("Primary").map(|tag| ImageRef {
             item: ItemId(self.id.clone()),

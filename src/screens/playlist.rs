@@ -10,7 +10,7 @@ use bobine::provider::{ItemId, PlaylistEntry};
 use gpui_kit::prelude::*;
 use gpui_kit::{
     AnyElement, Bounds, Context, Div, FontWeight, IntoElement, MouseButton, MouseDownEvent, Pixels,
-    Stateful, Window, anchored, canvas, deferred, div, point, px, rgba, uniform_list,
+    SharedString, Stateful, Window, anchored, canvas, deferred, div, point, px, rgba, uniform_list,
 };
 
 use super::note;
@@ -37,10 +37,7 @@ pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -
         return div().into_any_element();
     };
     let (len, status) = match &page.entries {
-        Loadable::Ready(entries) if entries.is_empty() => (
-            0,
-            Some("This playlist is empty. Add a film or an episode from its page."),
-        ),
+        Loadable::Ready(entries) if entries.is_empty() => (0, Some(playlists::EMPTY)),
         Loadable::Ready(entries) => (entries.len(), None),
         Loadable::Failed(why) => (0, Some(*why)),
         Loadable::Loading => (0, Some("Loading…")),
@@ -119,7 +116,8 @@ pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -
 }
 
 /// A title of the playlist: its place, its picture, what it is, and its buttons. A click on the
-/// line opens its page; the buttons play it, or take it out.
+/// line opens its page; the buttons play it, or take it out. "Remove" shows only while the
+/// pointer is over the line, and stands apart from Play.
 fn line(
     shell: &mut Shell,
     at: usize,
@@ -130,20 +128,28 @@ fn line(
     let still = shell.image(playlists::still(&entry.title), images::POSTER, cx);
     let opened = entry.title.clone();
     let removed = entry.id.clone();
+    let (name, caption) = (
+        playlists::name(&entry.title),
+        playlists::caption(&entry.title),
+    );
+    let group = SharedString::from(format!("playlist-entry-{at}"));
     let play = round_button(("playlist-entry-play", at), IconName::Play, window, cx).on_click(
         cx.listener(move |shell, _, window, cx| {
             cx.stop_propagation();
-            shell.play_entry(at, window, cx);
+            shell.play_entry(entry.clone(), false, window, cx);
         }),
     );
-    let remove = round_button(("playlist-entry-remove", at), IconName::X, window, cx)
+    let remove = theme::ghost_button(("playlist-entry-remove", at), None, "Remove", window, cx)
         .debug_selector(move || format!("playlist-entry-remove {at}"))
+        .invisible()
+        .group_hover(group.clone(), |style| style.visible())
         .on_click(cx.listener(move |shell, _, _, cx| {
             cx.stop_propagation();
             shell.remove_entry(removed.clone(), cx);
         }));
     div().px(px(MARGIN - 12.)).pb(px(8.)).child(
         theme::eased(("playlist-entry", at), theme::Shades::line(), window, cx)
+            .group(group)
             .h(px(LINE - 8.))
             .px(px(12.))
             .rounded(px(theme::RADIUS))
@@ -183,16 +189,23 @@ fn line(
                             .text_size(px(14.))
                             .font_weight(FontWeight::SEMIBOLD)
                             .truncate()
-                            .child(playlists::name(&entry.title)),
+                            .child(name),
                     )
                     .child(
                         div()
                             .text_size(px(12.))
                             .text_color(theme::dim())
-                            .child(playlists::caption(&entry.title)),
+                            .child(caption),
                     ),
             )
-            .child(div().flex().gap(px(8.)).child(play).child(remove)),
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(24.))
+                    .child(remove)
+                    .child(play),
+            ),
     )
 }
 
@@ -267,6 +280,7 @@ pub fn add_menu(
     };
     let lines = picker.lines();
     let error = picker.error;
+    let told = picker.told.clone();
     let naming = menu.naming.clone();
     let anchor = menu.anchor;
 
@@ -361,6 +375,7 @@ pub fn add_menu(
             .child("New playlist…")
             .into_any_element(),
     });
+    let said = error.is_some() || told.is_some();
     rows.extend(error.map(|why| {
         div()
             .px(px(12.))
@@ -371,10 +386,21 @@ pub fn add_menu(
             .child(why)
             .into_any_element()
     }));
+    rows.extend(told.filter(|_| error.is_none()).map(|said| {
+        div()
+            .debug_selector(|| "playlist-told".into())
+            .px(px(12.))
+            .py(px(8.))
+            .flex_none()
+            .text_size(px(12.))
+            .text_color(theme::muted())
+            .child(said)
+            .into_any_element()
+    }));
 
     let window_size = window.viewport_size();
     // The rule and the field or "New playlist…" are counted apart.
-    let wanted = menu::height(rows.len() - 2) + FIELD + if error.is_some() { 32. } else { 0. };
+    let wanted = menu::height(rows.len() - 2) + FIELD + if said { 32. } else { 0. };
     // Opened with no button to stand under: a third of the way down, in the middle.
     let button = anchor.unwrap_or_else(|| {
         Bounds::new(

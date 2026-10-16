@@ -328,8 +328,9 @@ impl Refreshes {
 pub enum Next {
     /// The episode after, on its series page.
     Episode(Episode),
-    /// The title after in the playlist being played, at its place there.
-    Entry(usize, PlaylistEntry),
+    /// The entry after in the playlist being played: the card plays the one it shows, wherever
+    /// the page moved it since.
+    Entry(PlaylistEntry),
 }
 
 /// The "Next episode" card: counts down, then gives the episode to play, unless cancelled.

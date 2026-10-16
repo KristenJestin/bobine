@@ -15,6 +15,7 @@ use crate::input::TextInput;
 use crate::motion::{self, Fade};
 use crate::navigation::Screen;
 use crate::playlists::{self, Picker};
+use crate::series_page::{Next, Refreshes};
 
 pub struct PlaylistPage {
     pub id: ItemId,
@@ -23,6 +24,43 @@ pub struct PlaylistPage {
     pub scroll: UniformListScrollHandle,
     /// A title is being opened for the player: nothing else starts.
     pub busy: bool,
+    /// Each read of the playlist is numbered: one asked before a later read lands late, and is
+    /// dropped.
+    asked: Refreshes,
+    /// The entries taken out whose answer has not come: a read that lands meanwhile, asked
+    /// before the server took them out, leaves them out all the same.
+    removing: Vec<EntryId>,
+}
+
+impl PlaylistPage {
+    fn new(id: ItemId, name: String) -> Self {
+        Self {
+            id,
+            name,
+            entries: Loadable::Loading,
+            scroll: UniformListScrollHandle::new(),
+            busy: false,
+            asked: Refreshes::default(),
+            removing: Vec::new(),
+        }
+    }
+
+    /// The read numbered `number` came: it shows, unless a later read was asked since; what
+    /// is being taken out stays out. A failed read leaves what was drawn.
+    fn landed(&mut self, number: u64, read: Result<Vec<PlaylistEntry>, &'static str>) -> bool {
+        if !self.asked.is_newest(number) {
+            return false;
+        }
+        self.entries = match read {
+            Ok(mut entries) => {
+                entries.retain(|entry| !self.removing.contains(&entry.id));
+                Loadable::Ready(entries)
+            }
+            Err(_) if matches!(self.entries, Loadable::Ready(_)) => return false,
+            Err(why) => Loadable::Failed(why),
+        };
+        true
+    }
 }
 
 /// The "Add to playlist" menu, while it shows (it stays fading out after it closed).
@@ -72,7 +110,8 @@ impl Shell {
         });
         self.ask(
             cx,
-            |server| server.playlists(),
+            // The checks need what each playlist holds, whole.
+            |server| server.playlists(None),
             move |shell, found, cx| {
                 let found = match found {
                     Ok(found) => Loadable::Ready(found),
@@ -150,13 +189,13 @@ impl Shell {
                 if let Err(error) = &answer {
                     shell.failed(error.clone(), cx);
                 }
-                let said = shell
+                shell
                     .playlist_menu
                     .as_mut()
                     .filter(|menu| menu.picker.item == item)
                     .and_then(|menu| menu.picker.picked(&playlist, &answer));
-                if answer.is_err() {
-                    shell.show_notice(said.unwrap_or(playlists::FAILED), cx);
+                if let Err(error) = &answer {
+                    shell.show_notice(playlists::refusal(error), cx);
                 }
                 cx.notify();
             },
@@ -198,13 +237,13 @@ impl Shell {
                 if let Err(error) = &answer {
                     shell.failed(error.clone(), cx);
                 }
-                let said = shell
+                shell
                     .playlist_menu
                     .as_mut()
                     .filter(|menu| menu.picker.item == item)
                     .and_then(|menu| menu.picker.made(token, &answer));
-                if answer.is_err() {
-                    shell.show_notice(said.unwrap_or(playlists::FAILED), cx);
+                if let Err(error) = &answer {
+                    shell.show_notice(playlists::refusal(error), cx);
                 }
                 cx.notify();
             },
@@ -231,13 +270,8 @@ impl Shell {
                 .map(|playlist| playlist.name.clone()),
             _ => None,
         };
-        self.playlist_pages.push(PlaylistPage {
-            id,
-            name: name.unwrap_or_default(),
-            entries: Loadable::Loading,
-            scroll: UniformListScrollHandle::new(),
-            busy: false,
-        });
+        self.playlist_pages
+            .push(PlaylistPage::new(id, name.unwrap_or_default()));
         self.navigator.open(Screen::Playlist);
         self.load_playlist_page(self.playlist_pages.len() - 1, cx);
         cx.notify();
@@ -252,31 +286,28 @@ impl Shell {
 
     /// What the playlist at `depth` holds, asked anew; what was drawn stays if it fails.
     pub(super) fn load_playlist_page(&mut self, depth: usize, cx: &mut Context<Self>) {
-        let id = self.playlist_pages[depth].id.clone();
+        let page = &mut self.playlist_pages[depth];
+        let id = page.id.clone();
+        let number = page.asked.ask(&mut self.refreshes_asked);
         let asked = id.clone();
         let stamp = self.marks.stamp();
         self.ask(
             cx,
             move |server| server.playlist(&asked),
             move |shell, entries, cx| {
-                let entries = match entries {
+                let read = match entries {
                     Ok(entries) => {
                         shell
                             .marks
                             .listed(stamp, entries.iter().map(|entry| &entry.title));
-                        Loadable::Ready(entries)
+                        Ok(entries)
                     }
-                    Err(error) => {
-                        let said = shell.failed(error, cx);
-                        match shell.playlist_page(depth, &id) {
-                            Some(page) if matches!(page.entries, Loadable::Ready(_)) => return,
-                            _ => Loadable::Failed(said),
-                        }
-                    }
+                    Err(error) => Err(shell.failed(error, cx)),
                 };
                 if let Some(page) = shell.playlist_page(depth, &id) {
-                    page.entries = entries;
+                    page.landed(number, read);
                 }
+                cx.notify();
             },
         );
     }
@@ -288,32 +319,43 @@ impl Shell {
         }
     }
 
-    /// "Play all": the first title, then each after it through the card.
+    /// "Play all": the first title, then each after it through the card; a title that cannot
+    /// play is passed over.
     pub fn play_all(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.play_entry(0, window, cx);
+        let first = match self.playlist_pages.last().map(|page| &page.entries) {
+            Some(Loadable::Ready(entries)) => entries.first().cloned(),
+            _ => None,
+        };
+        if let Some(first) = first {
+            self.play_entry(first, true, window, cx);
+        }
     }
 
-    /// Plays the title at `at` of the playlist on top: a film or an episode itself, a series its
-    /// next episode. The title after it is kept for the card at its end.
-    pub fn play_entry(&mut self, at: usize, window: &mut Window, cx: &mut Context<Self>) {
+    /// Plays `entry` of the playlist on top. The entry after it, as the page shows them now, is
+    /// kept for the card at its end. `go_on`: playing the playlist through, so an entry with
+    /// nothing to play gives way to the one after it.
+    pub fn play_entry(
+        &mut self,
+        entry: PlaylistEntry,
+        go_on: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let depth = self.playlist_pages.len().wrapping_sub(1);
         let Some(page) = self.playlist_pages.last_mut() else {
-            return;
-        };
-        let Loadable::Ready(entries) = &page.entries else {
             return;
         };
         if page.busy {
             return;
         }
-        let Some(entry) = entries.get(at) else {
-            return;
-        };
         let Some(server) = self.server.clone() else {
             return;
         };
         let target = PlayTarget::of(&entry.title);
-        let next = playlists::after(entries, at);
+        let next = match &page.entries {
+            Loadable::Ready(entries) => playlists::after(entries, &entry.id),
+            _ => None,
+        };
         let origin = Origin::Playlist(depth, page.id.clone());
         page.busy = true;
         self.up_next.cancel();
@@ -345,9 +387,13 @@ impl Shell {
                         let said = shell.failed(error, cx);
                         shell.tried(&origin, Some(said), cx);
                     }
-                    Err(StartError::NothingToPlay) => {
-                        shell.tried(&origin, Some("Nothing to play for this title."), cx);
-                    }
+                    Err(StartError::NothingToPlay) => match next {
+                        Some(Next::Entry(next)) if go_on => {
+                            shell.tried(&origin, None, cx);
+                            shell.play_entry(next, true, window, cx);
+                        }
+                        _ => shell.tried(&origin, Some("Nothing to play for this title."), cx),
+                    },
                 }
                 cx.notify();
             })
@@ -368,8 +414,9 @@ impl Shell {
         }
     }
 
-    /// Takes `entry` out of the playlist on top: it leaves the page at once, and comes back to
-    /// its place, with a word, if the server refuses.
+    /// Takes `entry` out of the playlist on top: it leaves the page at once. If the server
+    /// refuses, the page reads the playlist again, as the server holds it, and says why: other
+    /// changes may have moved the entries since, so it is not put back at its old place.
     pub fn remove_entry(&mut self, entry: EntryId, cx: &mut Context<Self>) {
         let depth = self.playlist_pages.len().wrapping_sub(1);
         let Some(page) = self.playlist_pages.last_mut() else {
@@ -378,26 +425,29 @@ impl Shell {
         let Loadable::Ready(entries) = &mut page.entries else {
             return;
         };
-        let Some((at, gone)) = playlists::take_out(entries, &entry) else {
+        if !playlists::take_out(entries, &entry) {
             return;
-        };
+        }
+        page.removing.push(entry.clone());
+        // A read asked before is of the playlist as it was: it no longer shows.
+        page.asked.ask(&mut self.refreshes_asked);
         let id = page.id.clone();
         let playlist = id.clone();
+        let removed = entry.clone();
         cx.notify();
         self.ask(
             cx,
-            move |server| server.remove_from_playlist(&playlist, &entry),
+            move |server| server.remove_from_playlist(&playlist, &removed),
             move |shell, answer, cx| {
-                let Err(error) = answer else {
+                let Some(page) = shell.playlist_page(depth, &id) else {
                     return;
                 };
-                shell.failed(error, cx);
-                if let Some(page) = shell.playlist_page(depth, &id)
-                    && let Loadable::Ready(entries) = &mut page.entries
-                {
-                    playlists::put_back(entries, at, gone);
+                page.removing.retain(|removing| removing != &entry);
+                if let Err(error) = answer {
+                    shell.failed(error.clone(), cx);
+                    shell.load_playlist_page(depth, cx);
+                    shell.show_notice(playlists::refusal(&error), cx);
                 }
-                shell.show_notice(playlists::FAILED, cx);
                 cx.notify();
             },
         );
@@ -420,8 +470,6 @@ mod tests {
         change: impl FnOnce(&mut crate::fake::State),
     ) -> (FakeServer, WindowHandle<Shell>) {
         let server = FakeServer::new(12, true);
-        // No player starts in a test: what was asked to play is what it would have played.
-        server.state.lock().unwrap().play_error = Some(ProviderError::Unreachable("no".into()));
         change(&mut server.state.lock().unwrap());
         let connector: Arc<dyn bobine::provider::Connector> = Arc::new(server.clone());
         let window = cx.add_window(|_, cx| {
@@ -470,6 +518,49 @@ mod tests {
             .collect()
     }
 
+    /// The next playback starts on a fake player: what it is told comes through the returned
+    /// queue.
+    fn arm_player(
+        window: &WindowHandle<Shell>,
+        cx: &mut TestAppContext,
+    ) -> std::rc::Rc<std::cell::RefCell<Vec<crate::player::PlayerEvent>>> {
+        let player = crate::player::fake::FakePlayer::default();
+        let queued = player.queued.clone();
+        window
+            .update(cx, |shell, _, _| shell.fake_player = Some(player))
+            .unwrap();
+        queued
+    }
+
+    /// The title playing reaches its real end: the player goes, back to the page.
+    fn end_of_title(
+        queued: &std::rc::Rc<std::cell::RefCell<Vec<crate::player::PlayerEvent>>>,
+        cx: &mut TestAppContext,
+    ) {
+        use crate::player::PlayerEvent;
+        queued.borrow_mut().extend([
+            PlayerEvent::Loaded,
+            PlayerEvent::Duration(2820.),
+            PlayerEvent::Position(2820.),
+            PlayerEvent::EndOfFile,
+        ]);
+        cx.executor().advance_clock(super::super::PLAYER_TICK * 2);
+        cx.run_until_parked();
+    }
+
+    /// What the card over the page offers.
+    fn offered(window: &WindowHandle<Shell>, cx: &mut TestAppContext) -> Option<Next> {
+        window
+            .read_with(cx, |shell, _| shell.up_next.episode().cloned())
+            .unwrap()
+    }
+
+    fn screen(window: &WindowHandle<Shell>, cx: &mut TestAppContext) -> Screen {
+        window
+            .read_with(cx, |shell, _| shell.navigator.current())
+            .unwrap()
+    }
+
     #[gpui_kit::test]
     fn a_playlist_opens_with_its_items_in_order_and_play_all_plays_them_in_sequence(
         cx: &mut TestAppContext,
@@ -478,7 +569,10 @@ mod tests {
         let entries = shown(&window, cx);
         assert_eq!(entries, server.playlist(&ItemId(WATCHLIST.into())).unwrap());
         let ids: Vec<&str> = entries.iter().map(|e| e.title.id().0.as_str()).collect();
-        assert_eq!(ids, ["film-1", "series-1-s1-e2", "series-2", "film-0"]);
+        assert_eq!(
+            ids,
+            ["film-1", "series-1-s1-e2", "series-2-s1-e1", "film-0"]
+        );
         window
             .read_with(cx, |shell, _| {
                 assert_eq!(shell.navigator.current(), Screen::Playlist);
@@ -486,37 +580,113 @@ mod tests {
             })
             .unwrap();
 
+        let mut queued = arm_player(&window, cx);
         window
             .update(cx, |shell, window, cx| shell.play_all(window, cx))
             .unwrap();
         cx.run_until_parked();
         assert_eq!(played(&server), [ItemId("film-1".into())]);
+        assert_eq!(screen(&window, cx), Screen::Player);
 
         // Each end: the card over the page offers the title after, and plays it.
-        let series_next = crate::series_page::next_to_play(&server, &ItemId("series-2".into()))
-            .unwrap()
-            .expect("the series has a next episode");
-        for (at, expected) in [
-            (1, ItemId("series-1-s1-e2".into())),
-            (2, series_next.item.id),
-            (3, ItemId("film-0".into())),
-        ] {
+        for (at, entry) in entries.iter().enumerate().skip(1) {
+            end_of_title(&queued, cx);
+            assert_eq!(screen(&window, cx), Screen::Playlist);
+            assert_eq!(
+                offered(&window, cx),
+                Some(Next::Entry(entry.clone())),
+                "the card offers title {at}"
+            );
+            queued = arm_player(&window, cx);
             window
-                .update(cx, |shell, window, cx| {
-                    let next = playlists::after(&entries, at - 1).expect("a title after");
-                    shell.start_up_next(next, window, cx);
-                    assert!(shell.up_next.episode().is_some(), "the card counts down");
-                    shell.play_up_next_now(window, cx);
-                })
+                .update(cx, |shell, window, cx| shell.play_up_next_now(window, cx))
                 .unwrap();
             cx.run_until_parked();
-            assert_eq!(played(&server).last(), Some(&expected), "title {at}");
+            assert_eq!(played(&server).last(), Some(entry.title.id()));
         }
+        end_of_title(&queued, cx);
+        assert_eq!(offered(&window, cx), None, "nothing after the last");
+    }
+
+    #[gpui_kit::test]
+    fn the_card_plays_the_entry_it_shows_when_one_is_removed_during_the_countdown(
+        cx: &mut TestAppContext,
+    ) {
+        let (server, window) = on_watchlist(cx, |_| {});
+        let entries = shown(&window, cx);
+        let queued = arm_player(&window, cx);
+        window
+            .update(cx, |shell, window, cx| shell.play_all(window, cx))
+            .unwrap();
+        cx.run_until_parked();
+        end_of_title(&queued, cx);
+        assert_eq!(offered(&window, cx), Some(Next::Entry(entries[1].clone())));
+
+        // The title that just played is taken out while the card counts down: the others move
+        // up by one.
+        window
+            .update(cx, |shell, _, cx| {
+                shell.remove_entry(entries[0].id.clone(), cx)
+            })
+            .unwrap();
+        cx.run_until_parked();
+        assert_eq!(shown(&window, cx)[0], entries[1]);
+
+        arm_player(&window, cx);
+        window
+            .update(cx, |shell, window, cx| shell.play_up_next_now(window, cx))
+            .unwrap();
+        cx.run_until_parked();
+        assert_eq!(played(&server).last(), Some(entries[1].title.id()));
+    }
+
+    #[gpui_kit::test]
+    fn play_all_skips_a_title_that_cannot_play_and_goes_on_to_the_next(cx: &mut TestAppContext) {
+        // The episode second in the playlist has no file left.
+        let (server, window) = on_watchlist(cx, |state| {
+            let episode = state.episodes.iter_mut();
+            let mut episode = episode.filter(|e| e.item.id.0 == "series-1-s1-e2");
+            episode.next().unwrap().versions.clear();
+        });
+        let entries = shown(&window, cx);
+        let queued = arm_player(&window, cx);
+        window
+            .update(cx, |shell, window, cx| shell.play_all(window, cx))
+            .unwrap();
+        cx.run_until_parked();
+        end_of_title(&queued, cx);
+        arm_player(&window, cx);
+        window
+            .update(cx, |shell, window, cx| shell.play_up_next_now(window, cx))
+            .unwrap();
+        cx.run_until_parked();
         assert_eq!(
-            playlists::after(&entries, 3),
-            None,
-            "nothing after the last"
+            played(&server),
+            [ItemId("film-1".into()), entries[2].title.id().clone()],
+            "the episode with nothing to play is passed over"
         );
+        assert_eq!(screen(&window, cx), Screen::Player);
+        let said = window.read_with(cx, |shell, _| shell.notice).unwrap();
+        assert_eq!(said, None);
+    }
+
+    #[gpui_kit::test]
+    fn a_title_played_alone_that_cannot_play_says_so(cx: &mut TestAppContext) {
+        let (server, window) = on_watchlist(cx, |state| {
+            let episode = state.episodes.iter_mut();
+            let mut episode = episode.filter(|e| e.item.id.0 == "series-1-s1-e2");
+            episode.next().unwrap().versions.clear();
+        });
+        let entries = shown(&window, cx);
+        window
+            .update(cx, |shell, window, cx| {
+                shell.play_entry(entries[1].clone(), false, window, cx)
+            })
+            .unwrap();
+        cx.run_until_parked();
+        assert!(played(&server).is_empty());
+        let said = window.read_with(cx, |shell, _| shell.notice).unwrap();
+        assert_eq!(said, Some("Nothing to play for this title."));
     }
 
     #[gpui_kit::test]
@@ -543,19 +713,95 @@ mod tests {
     }
 
     #[gpui_kit::test]
-    fn a_refused_removal_is_put_back_and_explained_to_the_viewer(cx: &mut TestAppContext) {
-        let (server, window) = on_watchlist(cx, |state| state.playlist_fails = true);
+    fn a_refused_removal_reads_the_playlist_again_and_says_why(cx: &mut TestAppContext) {
+        let (server, window) = on_watchlist(cx, |_| {});
         let before = shown(&window, cx);
+        server.state.lock().unwrap().refused_entries = vec![before[1].id.clone()];
         window
             .update(cx, |shell, _, cx| {
                 shell.remove_entry(before[1].id.clone(), cx)
             })
             .unwrap();
         cx.run_until_parked();
-        assert_eq!(shown(&window, cx), before, "back at its place");
+        assert_eq!(shown(&window, cx), before, "as the server holds it");
         let said = window.read_with(cx, |shell, _| shell.notice).unwrap();
-        assert_eq!(said, Some(playlists::FAILED));
+        assert_eq!(said, Some("You can't change this playlist."));
         assert_eq!(server.playlist(&ItemId(WATCHLIST.into())).unwrap(), before);
+    }
+
+    #[gpui_kit::test]
+    fn two_quick_removals_with_one_refused_show_what_the_server_holds(cx: &mut TestAppContext) {
+        let (server, window) = on_watchlist(cx, |_| {});
+        let before = shown(&window, cx);
+        server.state.lock().unwrap().refused_entries = vec![before[1].id.clone()];
+        // The second, then the first, before either answer comes: the refused one is no
+        // longer at the place it was taken from.
+        window
+            .update(cx, |shell, _, cx| {
+                shell.remove_entry(before[1].id.clone(), cx);
+                shell.remove_entry(before[0].id.clone(), cx);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        let on_server = server.playlist(&ItemId(WATCHLIST.into())).unwrap();
+        assert_eq!(on_server, before[1..]);
+        assert_eq!(shown(&window, cx), on_server);
+    }
+
+    #[gpui_kit::test]
+    fn a_read_asked_before_a_removal_does_not_bring_it_back(cx: &mut TestAppContext) {
+        let (server, window) = on_watchlist(cx, |_| {});
+        let before = shown(&window, cx);
+        window
+            .update(cx, |shell, _, cx| {
+                // A read of the playlist as it is, then the removal, then another read.
+                shell.reload_playlist(cx);
+                shell.remove_entry(before[0].id.clone(), cx);
+                shell.reload_playlist(cx);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        let on_server = server.playlist(&ItemId(WATCHLIST.into())).unwrap();
+        assert_eq!(on_server, before[1..]);
+        assert_eq!(shown(&window, cx), on_server);
+    }
+
+    fn page() -> PlaylistPage {
+        PlaylistPage::new(ItemId(WATCHLIST.into()), "Watchlist".into())
+    }
+
+    #[test]
+    fn a_read_older_than_the_last_is_dropped() {
+        let entries = FakeServer::new(12, false)
+            .playlist(&ItemId(WATCHLIST.into()))
+            .unwrap();
+        let mut counter = 0;
+        let mut page = page();
+        let older = page.asked.ask(&mut counter);
+        let newer = page.asked.ask(&mut counter);
+        assert!(page.landed(newer, Ok(entries[1..].to_vec())));
+        assert!(
+            !page.landed(older, Ok(entries.clone())),
+            "late, and dropped"
+        );
+        assert!(matches!(&page.entries, Loadable::Ready(shown) if shown[..] == entries[1..]));
+    }
+
+    #[test]
+    fn a_read_landing_while_an_entry_is_taken_out_leaves_it_out() {
+        let entries = FakeServer::new(12, false)
+            .playlist(&ItemId(WATCHLIST.into()))
+            .unwrap();
+        let mut counter = 0;
+        let mut page = page();
+        page.removing.push(entries[0].id.clone());
+        let read = page.asked.ask(&mut counter);
+        assert!(page.landed(read, Ok(entries.clone())));
+        assert!(matches!(&page.entries, Loadable::Ready(shown) if shown[..] == entries[1..]));
+        // A failed read leaves what was drawn.
+        let read = page.asked.ask(&mut counter);
+        assert!(!page.landed(read, Err("no")));
+        assert!(matches!(&page.entries, Loadable::Ready(shown) if shown[..] == entries[1..]));
     }
 
     /// The page of a film in no playlist, its "Add to playlist" menu opened by a click on its
@@ -628,7 +874,7 @@ mod tests {
     }
 
     fn held_by(server: &FakeServer, name: &str, item: &ItemId) -> bool {
-        let playlists = server.playlists().unwrap();
+        let playlists = server.playlists(None).unwrap();
         let found = playlists.iter().find(|p| p.name == name);
         found.is_some_and(|p| playlists::holds(&p.entries, item))
     }
@@ -669,7 +915,9 @@ mod tests {
 
     #[gpui_kit::test]
     fn a_refused_change_is_put_back_and_explained_to_the_viewer(cx: &mut TestAppContext) {
-        let (server, window, film) = menu_on_a_film(cx, |state| state.playlist_fails = true);
+        let (server, window, film) = menu_on_a_film(cx, |state| {
+            state.playlist_refusal = Some(ProviderError::Forbidden)
+        });
 
         click(&window, cx, "playlist-line Late night");
         assert_eq!(
@@ -685,14 +933,123 @@ mod tests {
                 let menu = shell.playlist_menu.as_ref().unwrap();
                 assert_eq!(
                     menu.picker.error,
-                    Some(playlists::FAILED),
+                    Some("You can't change this playlist."),
                     "said in the menu"
                 );
-                assert_eq!(shell.notice, Some(playlists::FAILED), "and over the page");
+                assert_eq!(
+                    shell.notice,
+                    Some("You can't change this playlist."),
+                    "and over the page"
+                );
             })
             .unwrap();
         assert!(!held_by(&server, "Late night", &film));
         assert!(!held_by(&server, "Road trip", &film));
+    }
+
+    #[gpui_kit::test]
+    fn a_change_refused_for_another_reason_says_the_generic_words(cx: &mut TestAppContext) {
+        let (_server, window, _) = menu_on_a_film(cx, |state| {
+            state.playlist_refusal = Some(ProviderError::Server(500))
+        });
+        click(&window, cx, "playlist-line Late night");
+        let said = window.read_with(cx, |shell, _| shell.notice).unwrap();
+        assert_eq!(said, Some(playlists::FAILED));
+    }
+
+    #[gpui_kit::test]
+    fn a_series_added_from_its_page_goes_in_as_its_episodes_and_says_how_many(
+        cx: &mut TestAppContext,
+    ) {
+        let (server, window, _) = menu_on_a_film(cx, |_| {});
+        let series = ItemId(crate::fake::SERIES.into());
+        window
+            .update(cx, |shell, _, cx| {
+                shell.close_playlist_menu(cx);
+                shell.open_series(series.clone(), cx);
+            })
+            .unwrap();
+        click(&window, cx, "series-playlist");
+        click(&window, cx, "playlist-line Late night");
+        let episodes: Vec<ItemId> = server
+            .state
+            .lock()
+            .unwrap()
+            .episodes
+            .iter()
+            .filter(|e| e.series == series)
+            .map(|e| e.item.id.clone())
+            .collect();
+        let late = server.playlists(None).unwrap().remove(0);
+        let held: Vec<&ItemId> = late.entries.iter().map(|e| e.title.id()).collect();
+        assert_eq!(held[5..], episodes.iter().collect::<Vec<_>>()[..]);
+        assert!(
+            !playlists::holds(&late.entries, &series),
+            "never the series"
+        );
+        let told = window.read_with(cx, |shell, _| {
+            shell.playlist_menu.as_ref().unwrap().picker.told.clone()
+        });
+        assert_eq!(
+            told.unwrap(),
+            Some(format!("Added {} episodes.", episodes.len()))
+        );
+        let mut visual = gpui_kit::VisualTestContext::from_window(window.into(), cx);
+        visual.run_until_parked();
+        assert!(
+            visual.debug_bounds("playlist-told").is_some(),
+            "in the menu"
+        );
+    }
+
+    /// A playlist's title playing on a fake player, the menu of its "Add to playlist" button
+    /// opened by a click.
+    fn menu_in_the_player(cx: &mut TestAppContext) -> WindowHandle<Shell> {
+        let (_server, window) = on_watchlist(cx, |_| {});
+        arm_player(&window, cx);
+        window
+            .update(cx, |shell, window, cx| shell.play_all(window, cx))
+            .unwrap();
+        cx.run_until_parked();
+        assert_eq!(screen(&window, cx), Screen::Player);
+        // The pointer moved: the controls show, at once.
+        window
+            .update(cx, |shell, _, cx| {
+                let playback = shell.playback.as_mut().unwrap();
+                playback.session.mouse_moved(Instant::now());
+                playback.controls_fade = Fade::starting_at(motion::quick(), true);
+                cx.notify();
+            })
+            .unwrap();
+        click(&window, cx, "player-playlist");
+        window
+    }
+
+    #[gpui_kit::test]
+    fn the_players_add_to_playlist_button_opens_the_menu_for_what_plays(cx: &mut TestAppContext) {
+        let window = menu_in_the_player(cx);
+        window
+            .read_with(cx, |shell, _| {
+                let menu = shell.playlist_menu.as_ref().expect("the menu opened");
+                assert!(menu.open && menu.anchor.is_some(), "under its button");
+                assert_eq!(menu.picker.item, ItemId("film-1".into()));
+            })
+            .unwrap();
+    }
+
+    #[gpui_kit::test]
+    fn escape_closes_the_menu_in_the_player_and_the_player_stays(cx: &mut TestAppContext) {
+        let window = menu_in_the_player(cx);
+        let mut visual = gpui_kit::VisualTestContext::from_window(window.into(), cx);
+        visual.simulate_keystrokes("escape");
+        visual.run_until_parked();
+        window
+            .read_with(cx, |shell, _| {
+                assert!(!shell.playlist_menu_is_open());
+                assert_eq!(shell.navigator.current(), Screen::Player);
+                assert!(shell.playback.is_some());
+            })
+            .unwrap();
     }
 
     #[gpui_kit::test]

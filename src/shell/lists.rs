@@ -62,64 +62,43 @@ impl MyListPage {
     }
 }
 
-/// The Lists: the favorites' card, then a card for each playlist.
+/// The Lists: a row of the favorites, then a card for each playlist.
 #[derive(Default)]
 pub struct ListsPage {
+    /// Each with its first titles only, those its card draws.
     pub playlists: Option<Loadable<Vec<Playlist>>>,
-    pub scroll: UniformListScrollHandle,
+    pub scroll: ScrollHandle,
+    /// The row of the favorites scrolls sideways.
+    pub favorites: ScrollHandle,
     /// Each time the playlists are asked, numbered like the favorites.
     asked: Refreshes,
 }
 
-/// What a card of the Lists opens.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Opens {
-    Favorites,
-    Playlist(ItemId),
-}
-
-/// A card of the Lists, as it is drawn: a mosaic of its first posters, its name and its count.
+/// A playlist's card of the Lists, as it is drawn: a mosaic of its first posters, its name and
+/// its count.
 #[derive(Clone, Debug)]
 pub struct ListCard {
+    pub id: ItemId,
     pub name: String,
     pub caption: String,
     pub posters: Vec<ImageRef>,
-    pub opens: Opens,
 }
 
 impl ListsPage {
-    /// The cards: the favorites first, then the playlists the server gave, by name.
-    pub fn cards(&self, favourites: Option<&Loadable<Vec<Favourite>>>) -> Vec<ListCard> {
-        let favourites = match favourites {
-            Some(Loadable::Ready(items)) => Some(items),
-            _ => None,
-        };
-        let favorites = ListCard {
-            name: "Favorites".into(),
-            caption: favourites
-                .map(|items| playlists::titles(items.len()))
-                .unwrap_or_default(),
-            posters: favourites
-                .map(|items| {
-                    playlists::mosaic(items.iter().map(|favourite| match favourite {
-                        Favourite::Film(film) => film.poster.as_ref(),
-                        Favourite::Series(series) => series.poster.as_ref(),
-                    }))
-                })
-                .unwrap_or_default(),
-            opens: Opens::Favorites,
-        };
+    /// The playlists' cards, by name, as the server gave them.
+    pub fn cards(&self) -> Vec<ListCard> {
         let found = match &self.playlists {
             Some(Loadable::Ready(found)) => found.as_slice(),
             _ => &[],
         };
-        std::iter::once(favorites)
-            .chain(found.iter().map(|playlist| ListCard {
+        found
+            .iter()
+            .map(|playlist| ListCard {
+                id: playlist.id.clone(),
                 name: playlist.name.clone(),
-                caption: playlists::titles(playlist.entries.len()),
+                caption: playlists::titles(playlist.count),
                 posters: playlists::playlist_mosaic(&playlist.entries),
-                opens: Opens::Playlist(playlist.id.clone()),
-            }))
+            })
             .collect()
     }
 }
@@ -370,7 +349,8 @@ impl Shell {
         let number = self.lists.asked.ask(&mut self.refreshes_asked);
         self.ask(
             cx,
-            |server| server.playlists(),
+            // A card draws its first posters and its count: only those are asked.
+            |server| server.playlists(Some(playlists::MOSAIC)),
             move |shell, found, cx| {
                 let found = match found {
                     Ok(found) => Loadable::Ready(found),
@@ -383,7 +363,7 @@ impl Shell {
         );
     }
 
-    /// The favorites' card of the Lists.
+    /// "See all" on the favorites' row of the Lists.
     pub fn open_favorites(&mut self, cx: &mut Context<Self>) {
         self.forward.clear();
         self.navigator.open(Screen::Favorites);
@@ -479,16 +459,50 @@ mod tests {
         window
             .update(cx, |shell, _, _| {
                 assert_eq!(shell.navigator.current(), Screen::MyList);
-                let cards = shell.lists.cards(shell.my_list.items.as_ref());
+                let cards = shell.lists.cards();
                 let names: Vec<&str> = cards.iter().map(|card| card.name.as_str()).collect();
-                // The favorites first, then each playlist by name.
-                assert_eq!(names, ["Favorites", "Late night", "Watchlist"]);
-                assert_eq!(cards[0].caption, "4 titles");
-                assert_eq!(cards[1].caption, "5 titles");
-                assert_eq!(cards[1].posters.len(), 4, "a two by two mosaic");
-                assert_eq!(cards[2].caption, "4 titles");
-                assert_eq!(cards[0].opens, Opens::Favorites);
-                assert!(matches!(&cards[1].opens, Opens::Playlist(id) if id.0 == "playlist-late"));
+                // Each playlist by name.
+                assert_eq!(names, ["Late night", "Watchlist"]);
+                assert_eq!(cards[0].caption, "5 titles");
+                assert_eq!(cards[0].posters.len(), 4, "a two by two mosaic");
+                assert_eq!(cards[1].caption, "4 titles");
+                assert_eq!(cards[0].id, ItemId("playlist-late".into()));
+            })
+            .unwrap();
+        // The favorites first, as a row of posters, above the playlists' cards.
+        let mut visual = gpui_kit::VisualTestContext::from_window(window.into(), cx);
+        visual.run_until_parked();
+        let row = visual
+            .debug_bounds("lists-favorites")
+            .expect("the favorites' row");
+        let card = visual.debug_bounds("list-card Late night").expect("a card");
+        assert!(row.bottom() <= card.top(), "the favorites come first");
+        assert!(
+            visual.debug_bounds("list-card Favorites").is_none(),
+            "not a card"
+        );
+        // "See all" opens them all.
+        let at = visual.debug_bounds("lists-see-all").unwrap().center();
+        visual.simulate_click(at, gpui_kit::Modifiers::none());
+        visual.run_until_parked();
+        let screen = window.read_with(cx, |shell, _| shell.navigator.current());
+        assert_eq!(screen.unwrap(), Screen::Favorites);
+    }
+
+    #[gpui_kit::test]
+    fn a_playlist_card_reads_only_its_first_titles_and_counts_them_all(cx: &mut TestAppContext) {
+        let (_server, window) = signed_in(cx);
+        window
+            .update(cx, |shell, _, cx| shell.select(NavEntry::MyList, cx))
+            .unwrap();
+        cx.run_until_parked();
+        window
+            .read_with(cx, |shell, _| {
+                let Some(Loadable::Ready(found)) = &shell.lists.playlists else {
+                    panic!("the playlists are not shown");
+                };
+                assert_eq!(found[0].entries.len(), playlists::MOSAIC);
+                assert_eq!(found[0].count, 5);
             })
             .unwrap();
     }

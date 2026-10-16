@@ -8,6 +8,27 @@ use crate::shell::Loadable;
 
 /// What the window says when the server did not take a change of a playlist.
 pub const FAILED: &str = "The playlist could not be changed.";
+/// What it says when the server answers that this user may not change it.
+pub const FORBIDDEN: &str = "You can't change this playlist.";
+/// What the Lists say when the user has no playlist.
+pub const NONE: &str =
+    "No playlists yet. Choose “Add to playlist” on a movie or a series to make one.";
+/// What a playlist's page says when it holds nothing.
+pub const EMPTY: &str = "Add a movie, a series or an episode from its page.";
+
+/// Why a change of a playlist did not take, for the viewer.
+pub fn refusal(error: &ProviderError) -> &'static str {
+    match error {
+        ProviderError::Forbidden => FORBIDDEN,
+        _ => FAILED,
+    }
+}
+
+/// What the menu says once the server put in more than the title: a series goes in as its
+/// episodes.
+pub fn added(count: usize) -> Option<String> {
+    (count > 1).then(|| format!("Added {count} episodes."))
+}
 
 /// How many posters a card's mosaic shows: two by two.
 pub const MOSAIC: usize = 4;
@@ -15,15 +36,6 @@ pub const MOSAIC: usize = 4;
 /// `0 titles`, `1 title`, `3 titles`.
 pub fn titles(count: usize) -> String {
     plural(count, "title", "titles")
-}
-
-/// The picture of a title in a list: a film's or a series' poster, an episode's still.
-pub fn poster(title: &Title) -> Option<&ImageRef> {
-    match title {
-        Title::Film(film) => film.poster.as_ref(),
-        Title::Series(series) => series.poster.as_ref(),
-        Title::Episode(episode) => episode.item.poster.as_ref(),
-    }
 }
 
 /// The posters a card's mosaic shows: those of its first titles that have one, four at most.
@@ -36,9 +48,9 @@ pub fn mosaic<'a>(posters: impl IntoIterator<Item = Option<&'a ImageRef>>) -> Ve
         .collect()
 }
 
-/// The posters of a playlist's card.
+/// The posters of a playlist's card: an episode shows its series' poster.
 pub fn playlist_mosaic(entries: &[PlaylistEntry]) -> Vec<ImageRef> {
-    mosaic(entries.iter().map(|entry| poster(&entry.title)))
+    mosaic(entries.iter().map(|entry| entry.poster.as_ref()))
 }
 
 /// A title's wide picture, for the card of the next one: a film's or a series' backdrop, else
@@ -75,36 +87,24 @@ pub fn caption(title: &Title) -> String {
     }
 }
 
-/// What the card offers once the title at `at` ended: the one after it, if any.
-pub fn after(entries: &[PlaylistEntry], at: usize) -> Option<Next> {
-    let next = at + 1;
-    entries
-        .get(next)
-        .map(|entry| Next::Entry(next, entry.clone()))
-}
-
-/// Takes `entry` out of what the page shows, at once: where it was, to put it back if the
-/// server refuses.
-pub fn take_out(
-    entries: &mut Vec<PlaylistEntry>,
-    entry: &EntryId,
-) -> Option<(usize, PlaylistEntry)> {
+/// What the card offers once `entry` ended: the entry after it, as the page shows them now;
+/// none after the last, or once `entry` is no longer there.
+pub fn after(entries: &[PlaylistEntry], entry: &EntryId) -> Option<Next> {
     let at = entries.iter().position(|shown| &shown.id == entry)?;
-    Some((at, entries.remove(at)))
+    entries.get(at + 1).cloned().map(Next::Entry)
 }
 
-/// The server refused to take `entry` out: it is back where it was.
-pub fn put_back(entries: &mut Vec<PlaylistEntry>, at: usize, entry: PlaylistEntry) {
-    entries.insert(at.min(entries.len()), entry);
+/// Takes `entry` out of what the page shows, at once; whether it was there.
+pub fn take_out(entries: &mut Vec<PlaylistEntry>, entry: &EntryId) -> bool {
+    let before = entries.len();
+    entries.retain(|shown| &shown.id != entry);
+    entries.len() < before
 }
 
-/// Whether `entries` hold `item`: the title itself, or, for a series, one of its episodes (a
-/// series put in a playlist is put in as its episodes).
+/// Whether `entries` hold `item` itself. A series is never held: it goes in as its episodes,
+/// and one of them in a playlist does not put the series there.
 pub fn holds(entries: &[PlaylistEntry], item: &ItemId) -> bool {
-    entries.iter().any(|entry| match &entry.title {
-        Title::Episode(episode) => &episode.item.id == item || &episode.series == item,
-        title => title.id() == item,
-    })
+    entries.iter().any(|entry| entry.title.id() == item)
 }
 
 /// A line of the "Add to playlist" menu.
@@ -138,6 +138,8 @@ pub struct Picker {
     made: u32,
     /// Why the last change did not take.
     pub error: Option<&'static str>,
+    /// What the last change put in, when it was more than the title: a series' episodes.
+    pub told: Option<String>,
 }
 
 impl Picker {
@@ -150,6 +152,7 @@ impl Picker {
             making: Vec::new(),
             made: 0,
             error: None,
+            told: None,
         }
     }
 
@@ -185,25 +188,32 @@ impl Picker {
             return None;
         }
         self.error = None;
+        self.told = None;
         self.added.push(id.clone());
         self.pending.push(id.clone());
         Some(id.clone())
     }
 
-    /// The server answered the press on `id`. A refusal takes the check back; returns what to
-    /// tell the viewer then.
+    /// The server answered the press on `id`: how many entries it put in, said when a series
+    /// went in as its episodes. A refusal takes the check back; returns what to tell the viewer
+    /// then.
     pub fn picked(
         &mut self,
         id: &ItemId,
-        answer: &Result<(), ProviderError>,
+        answer: &Result<usize, ProviderError>,
     ) -> Option<&'static str> {
         self.pending.retain(|pending| pending != id);
-        if answer.is_ok() {
-            return None;
+        match answer {
+            Ok(count) => {
+                self.told = added(*count);
+                None
+            }
+            Err(error) => {
+                self.added.retain(|added| added != id);
+                self.error = Some(refusal(error));
+                self.error
+            }
         }
-        self.added.retain(|added| added != id);
-        self.error = Some(FAILED);
-        self.error
     }
 
     /// "New playlist…" with `name` typed: the line shows at once, checked. Returns what to ask
@@ -214,6 +224,7 @@ impl Picker {
             return None;
         }
         self.error = None;
+        self.told = None;
         self.made += 1;
         self.making.push(Making {
             token: self.made,
@@ -237,9 +248,9 @@ impl Picker {
                 }
                 None
             }
-            Err(_) => {
+            Err(error) => {
                 self.making.retain(|making| making.token != token);
-                self.error = Some(FAILED);
+                self.error = Some(refusal(error));
                 self.error
             }
         }
@@ -261,21 +272,22 @@ mod tests {
     #[test]
     fn the_title_after_one_is_the_next_in_the_playlist_and_none_after_the_last() {
         let entries = watchlist(&FakeServer::new(12, false));
-        assert_eq!(after(&entries, 0), Some(Next::Entry(1, entries[1].clone())));
-        assert_eq!(after(&entries, entries.len() - 1), None);
+        assert_eq!(
+            after(&entries, &entries[0].id),
+            Some(Next::Entry(entries[1].clone()))
+        );
+        assert_eq!(after(&entries, &entries.last().unwrap().id), None);
+        assert_eq!(after(&entries, &EntryId("gone".into())), None);
     }
 
     #[test]
-    fn an_entry_taken_out_goes_back_to_its_place_when_refused() {
+    fn an_entry_taken_out_leaves_the_page_at_once() {
         let mut entries = watchlist(&FakeServer::new(12, false));
         let before = entries.clone();
-        let (at, gone) = take_out(&mut entries, &before[1].id).unwrap();
-        assert_eq!(at, 1);
+        assert!(take_out(&mut entries, &before[1].id));
         assert_eq!(entries.len(), before.len() - 1);
-        assert!(!entries.contains(&gone));
-        put_back(&mut entries, at, gone);
-        assert_eq!(entries, before);
-        assert!(take_out(&mut entries, &EntryId("gone".into())).is_none());
+        assert!(!entries.contains(&before[1]));
+        assert!(!take_out(&mut entries, &EntryId("gone".into())));
     }
 
     #[test]
@@ -288,13 +300,13 @@ mod tests {
         assert!(matches!(entries[1].title, Title::Episode(_)));
         assert!(lines[1].0.contains(" · S1 · E2 · "), "{lines:?}");
         assert_eq!(lines[1].1, "S1 · E2");
-        assert!(lines[2].1.starts_with("Series"), "{lines:?}");
+        assert_eq!(lines[2].1, "S1 · E1");
     }
 
     fn picker_of(item: &str) -> Picker {
         let mut picker = Picker::new(ItemId(item.into()));
         let server = FakeServer::new(12, false);
-        picker.playlists = Some(Loadable::Ready(server.playlists().unwrap()));
+        picker.playlists = Some(Loadable::Ready(server.playlists(None).unwrap()));
         picker
     }
 
@@ -313,12 +325,44 @@ mod tests {
             checked(&picker),
             [("Late night".into(), true), ("Watchlist".into(), false)]
         );
-        // A series is held through its episodes as well.
-        let picker = picker_of("series-1");
+        let picker = picker_of("series-1-s1-e2");
         assert_eq!(
             checked(&picker),
             [("Late night".into(), false), ("Watchlist".into(), true)]
         );
+    }
+
+    #[test]
+    fn an_episode_in_a_playlist_does_not_check_its_series() {
+        let picker = picker_of("series-1");
+        assert_eq!(
+            checked(&picker),
+            [("Late night".into(), false), ("Watchlist".into(), false)]
+        );
+    }
+
+    #[test]
+    fn a_series_added_says_how_many_episodes_went_in() {
+        let mut picker = picker_of("series-3");
+        let late = ItemId("playlist-late".into());
+        picker.pick(&late);
+        assert_eq!(picker.picked(&late, &Ok(24)), None);
+        assert_eq!(picker.told.as_deref(), Some("Added 24 episodes."));
+        // A film puts itself in: the check says it.
+        let mut picker = picker_of("film-6");
+        picker.pick(&late);
+        picker.picked(&late, &Ok(1));
+        assert_eq!(picker.told, None);
+    }
+
+    #[test]
+    fn a_refusal_says_you_cant_change_this_playlist_on_a_403() {
+        assert_eq!(
+            refusal(&ProviderError::Forbidden),
+            "You can't change this playlist."
+        );
+        assert_eq!(refusal(&ProviderError::Server(500)), FAILED);
+        assert_eq!(refusal(&ProviderError::NotFound), FAILED);
     }
 
     #[test]
@@ -330,14 +374,14 @@ mod tests {
         assert_eq!(picker.pick(&watchlist), None, "already checked");
         assert_eq!(
             picker.picked(&watchlist, &Err(ProviderError::Forbidden)),
-            Some(FAILED)
+            Some(FORBIDDEN)
         );
         assert!(!checked(&picker)[1].1);
-        assert_eq!(picker.error, Some(FAILED));
+        assert_eq!(picker.error, Some(FORBIDDEN));
         // Picked again, it is asked again, and the word goes.
         assert_eq!(picker.pick(&watchlist), Some(watchlist.clone()));
         assert_eq!(picker.error, None);
-        assert_eq!(picker.picked(&watchlist, &Ok(())), None);
+        assert_eq!(picker.picked(&watchlist, &Ok(1)), None);
         assert!(checked(&picker)[1].1);
     }
 
@@ -393,7 +437,7 @@ mod tests {
     fn a_playlist_card_shows_the_posters_of_its_first_titles_in_order() {
         let server = FakeServer::new(12, false);
         let late = server
-            .playlists()
+            .playlists(None)
             .unwrap()
             .into_iter()
             .find(|p| p.name == "Late night")
@@ -406,5 +450,18 @@ mod tests {
             .map(|id| ItemId(id.into()))
             .to_vec();
         assert_eq!(shown, first);
+    }
+
+    #[test]
+    fn an_episode_shows_its_series_poster_in_the_mosaic() {
+        let entries = watchlist(&FakeServer::new(12, false));
+        let shown: Vec<ItemId> = playlist_mosaic(&entries)
+            .into_iter()
+            .map(|poster| poster.item)
+            .collect();
+        let posters: Vec<ItemId> = ["film-1", "series-1", "series-2", "film-0"]
+            .map(|id| ItemId(id.into()))
+            .to_vec();
+        assert_eq!(shown, posters);
     }
 }

@@ -12,9 +12,7 @@ mod settings;
 mod skip;
 
 pub use home::{HomePage, ListPage};
-pub use lists::{
-    CollectionPage, CollectionsPage, ListCard, ListsPage, MyListPage, Opens, PlayerList,
-};
+pub use lists::{CollectionPage, CollectionsPage, ListCard, ListsPage, MyListPage, PlayerList};
 pub use pages::{Chip, DetailPage, GONE, LibraryPage, Loadable, LoginForm, OpenConnector, Tool};
 pub use palette::{PersonPage, SearchState};
 pub use playlists::{PlaylistMenu, PlaylistPage};
@@ -203,6 +201,9 @@ pub struct Shell {
     /// no player starts in a test, so this is what the player would have been given.
     #[cfg(test)]
     planned: Vec<(bobine::provider::ItemId, Duration)>,
+    /// The player the next playback starts on, in a test: no mpv, no window.
+    #[cfg(test)]
+    fake_player: Option<crate::player::fake::FakePlayer>,
     /// The highlight of each entry of the pill bar eases from one section to the next.
     nav_pills: [Fade; NavEntry::ALL.len()],
     pub images: Images,
@@ -359,6 +360,8 @@ impl Shell {
             forward: Vec::new(),
             #[cfg(test)]
             planned: Vec::new(),
+            #[cfg(test)]
+            fake_player: None,
             nav_pills: [Fade::new(motion::quick()); NavEntry::ALL.len()],
             images: Images::default(),
             cards: Default::default(),

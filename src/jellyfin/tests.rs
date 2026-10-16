@@ -2943,7 +2943,7 @@ fn titles_of(entries: &[PlaylistEntry]) -> Vec<String> {
 #[test]
 fn the_playlists_are_listed_by_name_each_with_its_titles_in_order() {
     let s = Setup::new();
-    let playlists = s.signed_in().playlists().unwrap();
+    let playlists = s.signed_in().playlists(None).unwrap();
     let names: Vec<&str> = playlists.iter().map(|p| p.name.as_str()).collect();
     // A playlist of music has nothing to play here.
     assert_eq!(names, ["Rainy Sundays", "Watchlist"]);
@@ -2956,13 +2956,75 @@ fn the_playlists_are_listed_by_name_each_with_its_titles_in_order() {
         EntryId("a1000000000000000000000000000002".into())
     );
     assert!(matches!(playlists[0].entries[1].title, Title::Episode(_)));
+    assert_eq!(playlists[0].count, 4, "the server's count");
     assert!(playlists[1].entries.is_empty());
+}
+
+#[test]
+fn the_lists_cards_ask_only_four_titles_and_the_count() {
+    let s = Setup::new();
+    let playlists = s.signed_in().playlists(Some(4)).unwrap();
+    let asked = s.fake.last("GET", &format!("/Playlists/{PLAYLIST}/Items"));
+    assert_eq!(asked.param("limit"), Some("4"));
+    assert_eq!(playlists[0].count, 4, "from TotalRecordCount");
+    // The whole lists, for the menu's checks, ask no limit.
+    s.signed_in().playlists(None).unwrap();
+    let asked = s.fake.last("GET", &format!("/Playlists/{PLAYLIST}/Items"));
+    assert_eq!(asked.param("limit"), None);
+}
+
+#[test]
+fn a_playlist_that_cannot_be_read_is_left_out_and_the_others_listed() {
+    for status in [403, 404] {
+        let s = Setup::new();
+        let watchlist = "/Playlists/p0000000000000000000000000000002/Items";
+        s.fake.state.lock().unwrap().broken = vec![(watchlist.into(), status)];
+        for first in [Some(4), None] {
+            let playlists = s.signed_in().playlists(first).unwrap();
+            let names: Vec<&str> = playlists.iter().map(|p| p.name.as_str()).collect();
+            assert_eq!(names, ["Rainy Sundays"], "{status}");
+        }
+    }
+}
+
+#[test]
+fn the_playlists_are_read_one_after_another() {
+    let s = Setup::new();
+    s.signed_in().playlists(None).unwrap();
+    let asked: Vec<String> = s
+        .fake
+        .seen()
+        .into_iter()
+        .filter(|r| r.path.starts_with("/Playlists/"))
+        .map(|r| r.path)
+        .collect();
+    assert_eq!(
+        asked,
+        [
+            format!("/Playlists/{PLAYLIST}/Items"),
+            "/Playlists/p0000000000000000000000000000002/Items".into(),
+        ],
+        "in the order of the list"
+    );
+}
+
+#[test]
+fn an_episode_in_a_playlist_shows_its_series_poster() {
+    let s = Setup::new();
+    let entries = s.signed_in().playlist(&rainy_sundays()).unwrap();
+    let poster = entries[1].poster.as_ref().expect("the series' poster");
+    assert_eq!(
+        poster.item,
+        ItemId("50000000000000000000000000000001".into())
+    );
+    assert_eq!(poster.tag, "poster-tw");
+    assert_eq!(entries[0].poster, None, "a film with no poster");
 }
 
 #[test]
 fn the_playlists_are_asked_as_the_users_playlists() {
     let s = Setup::new();
-    s.signed_in().playlists().unwrap();
+    s.signed_in().playlists(None).unwrap();
     let asked = s
         .fake
         .seen()
@@ -3009,12 +3071,24 @@ fn a_new_playlist_is_made_with_the_title_in_it() {
 #[test]
 fn a_title_is_added_at_the_end_of_a_playlist() {
     let s = Setup::new();
-    s.signed_in()
+    let added = s
+        .signed_in()
         .add_to_playlist(&rainy_sundays(), &film())
         .unwrap();
+    assert_eq!(added, 1);
     let asked = s.fake.last("POST", &format!("/Playlists/{PLAYLIST}/Items"));
     assert_eq!(asked.param("ids"), Some(FILM));
     assert_eq!(asked.param("userId"), Some(USER_ID));
+}
+
+#[test]
+fn a_series_added_to_a_playlist_becomes_its_episodes() {
+    let s = Setup::new();
+    let added = s
+        .signed_in()
+        .add_to_playlist(&rainy_sundays(), &ItemId(SERIES.into()))
+        .unwrap();
+    assert_eq!(added, SERIES_EPISODES, "the entries the server put in");
 }
 
 #[test]

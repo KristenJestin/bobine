@@ -1521,6 +1521,23 @@ impl Shell {
             }
         };
         self.tried(&origin, None, cx);
+        // A test plays on a fake player, through the rest of this path: what the end offers.
+        #[cfg(test)]
+        if let Some(player) = self.fake_player.take() {
+            let display = Box::new(crate::video::fake::FakeDisplay::default());
+            let session = crate::player::session::Session::new(
+                Box::new(player),
+                display,
+                playing.title,
+                playing.subtitle,
+            );
+            self.begin_playback(session, None, window, cx);
+            if let Some(playback) = &mut self.playback {
+                playback.playing = Some(opened.film.clone());
+            }
+            self.playback_started(&opened.film, next, cx);
+            return;
+        }
         let options = self.mpv_options.clone();
         let Some(server) = self.server.clone() else {
             return;

@@ -478,7 +478,7 @@ impl Shell {
     fn play_next(&mut self, next: Next, window: &mut Window, cx: &mut Context<Self>) {
         match next {
             Next::Episode(episode) => self.play_episode(episode, window, cx),
-            Next::Entry(at, _) => self.play_entry(at, window, cx),
+            Next::Entry(entry) => self.play_entry(entry, true, window, cx),
         }
     }
 
@@ -489,7 +489,7 @@ impl Shell {
                 let page = self.series_pages.last()?;
                 Some((self.series_pages.len() - 1, page.id.clone()))
             }
-            Next::Entry(..) => {
+            Next::Entry(_) => {
                 let page = self.playlist_pages.last()?;
                 Some((self.playlist_pages.len() - 1, page.id.clone()))
             }

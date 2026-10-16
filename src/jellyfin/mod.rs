@@ -240,34 +240,43 @@ impl Jellyfin {
         self.http.get(what, "/Items", &query)
     }
 
-    /// What a playlist holds, in its order; only what plays here: films, episodes, series.
+    /// What a playlist holds, in its order, its first `limit` entries only if given, and how
+    /// many it holds; only what plays here: films and episodes (a series put in a playlist is
+    /// put in as its episodes).
     fn entries(
         &self,
         playlist: &ItemId,
         fields: &str,
-    ) -> Result<Vec<PlaylistEntry>, ProviderError> {
+        limit: Option<usize>,
+    ) -> Result<(Vec<PlaylistEntry>, usize), ProviderError> {
+        let mut query = vec![
+            self.user(),
+            ("fields", fields.into()),
+            ("imageTypeLimit", "1".into()),
+            ("enableImageTypes", "Primary,Backdrop".into()),
+        ];
+        query.extend(limit.map(|limit| ("limit", limit.to_string())));
         let found: QueryResult = self.http.get(
             "playlist",
             &format!("/Playlists/{}/Items", encode(&playlist.0)),
-            &[
-                self.user(),
-                ("fields", fields.into()),
-                ("imageTypeLimit", "1".into()),
-                ("enableImageTypes", "Primary,Backdrop".into()),
-            ],
+            &query,
         )?;
-        Ok(found
+        let count = found.total_record_count.unwrap_or(found.items.len() as u32) as usize;
+        let entries = found
             .items
             .into_iter()
-            .filter(|item| matches!(item.kind.as_deref(), Some("Movie" | "Episode" | "Series")))
+            .filter(|item| matches!(item.kind.as_deref(), Some("Movie" | "Episode")))
             .filter_map(|item| {
                 let id = EntryId(item.playlist_item_id.clone()?);
+                let poster = item.list_poster();
                 Some(PlaylistEntry {
                     id,
                     title: item.title()?,
+                    poster,
                 })
             })
-            .collect())
+            .collect();
+        Ok((entries, count))
     }
 
     /// One page of the items of a kind (`Movie`, `Series`) in a library, in the order asked.
@@ -992,8 +1001,10 @@ impl MediaServer for Jellyfin {
         }
     }
 
-    /// One request for the playlists, then one per playlist for what it holds, all at once.
-    fn playlists(&self) -> Result<Vec<Playlist>, ProviderError> {
+    /// One request for the playlists, then one per playlist for what it holds, one after
+    /// another: a user has a few. One the server will not read (shared, then taken away) is
+    /// left out rather than failing the others.
+    fn playlists(&self, first: Option<usize>) -> Result<Vec<Playlist>, ProviderError> {
         let found = self.items(
             "playlists",
             &[
@@ -1002,36 +1013,30 @@ impl MediaServer for Jellyfin {
                 ("sortBy", "SortName".into()),
             ],
         )?;
-        let playlists: Vec<&Item> = found
-            .items
-            .iter()
-            .filter(|item| item.media_type.as_deref() != Some("Audio"))
-            .collect();
-        std::thread::scope(|scope| {
-            let asked: Vec<_> = playlists
-                .iter()
-                .map(|item| {
-                    let id = ItemId(item.id.clone());
-                    scope.spawn(move || self.entries(&id, ""))
-                })
-                .collect();
-            playlists
-                .iter()
-                .zip(asked)
-                .map(|(item, entries)| {
-                    Ok(Playlist {
-                        id: ItemId(item.id.clone()),
-                        name: item.name.clone(),
-                        entries: entries.join().expect("a playlist request panicked")?,
-                    })
-                })
-                .collect()
-        })
+        let mut playlists = Vec::new();
+        for item in found.items {
+            if item.media_type.as_deref() == Some("Audio") {
+                continue;
+            }
+            let id = ItemId(item.id);
+            let (entries, count) = match self.entries(&id, "", first) {
+                Ok(read) => read,
+                Err(ProviderError::Forbidden | ProviderError::NotFound) => continue,
+                Err(error) => return Err(error),
+            };
+            playlists.push(Playlist {
+                id,
+                name: item.name,
+                entries,
+                count,
+            });
+        }
+        Ok(playlists)
     }
 
     /// An episode played from the playlist plays without its page: it needs its versions now.
     fn playlist(&self, playlist: &ItemId) -> Result<Vec<PlaylistEntry>, ProviderError> {
-        self.entries(playlist, EPISODE_FIELDS)
+        Ok(self.entries(playlist, EPISODE_FIELDS, None)?.0)
     }
 
     fn create_playlist(&self, name: &str, item: &ItemId) -> Result<ItemId, ProviderError> {
@@ -1049,12 +1054,17 @@ impl MediaServer for Jellyfin {
         Ok(ItemId(made.id))
     }
 
-    fn add_to_playlist(&self, playlist: &ItemId, item: &ItemId) -> Result<(), ProviderError> {
+    /// The server answers nothing of what it put in: its count, before and after, says it.
+    fn add_to_playlist(&self, playlist: &ItemId, item: &ItemId) -> Result<usize, ProviderError> {
+        let (_, before) = self.entries(playlist, "", Some(0))?;
         self.http.post_empty(
             "add to the playlist",
             &format!("/Playlists/{}/Items", encode(&playlist.0)),
             &[("ids", item.0.clone()), self.user()],
-        )
+        )?;
+        // Put in, but not counted again: one entry, as for a film or an episode.
+        let after = self.entries(playlist, "", Some(0)).map(|(_, count)| count);
+        Ok(after.map_or(1, |after| after.saturating_sub(before)))
     }
 
     fn remove_from_playlist(
