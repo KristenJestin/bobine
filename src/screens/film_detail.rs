@@ -8,7 +8,7 @@ use std::cell::Cell;
 use std::rc::Rc;
 use std::time::Instant;
 
-use bobine::provider::{CastMember, Film, FilmDetail, MediaSource};
+use bobine::provider::{CastMember, Film, FilmDetail, ItemId, MediaSource};
 use gpui_kit::prelude::*;
 use gpui_kit::{
     AnyElement, Bounds, Context, Div, FontWeight, IntoElement, MouseDownEvent, Pixels,
@@ -84,9 +84,11 @@ pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -
                 shell,
                 &collection.name,
                 Some(caption),
+                Some((collection.id.clone(), "collection-link")),
                 &films,
                 Some(&detail.film),
                 &collection_scroll,
+                window,
                 cx,
             )
             .into_any_element(),
@@ -98,9 +100,11 @@ pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -
                 shell,
                 "Titres proches",
                 None,
+                None,
                 &detail.similar,
                 None,
                 &similar_scroll,
+                window,
                 cx,
             )
             .into_any_element(),
@@ -639,14 +643,21 @@ pub(super) fn cast_row(
         )
 }
 
-/// A heading and posters; `current` is outlined and not clickable.
+/// A heading and posters; `current` is outlined and not clickable. `link`: where the heading
+/// leads, as a pill after its caption (the collection's page).
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one row's parts, put together once"
+)]
 fn poster_row(
     shell: &mut Shell,
     title: &str,
     caption: Option<String>,
+    link: Option<(ItemId, &'static str)>,
     films: &[Film],
     current: Option<&Film>,
     scroll: &ScrollHandle,
+    window: &mut Window,
     cx: &mut Context<Shell>,
 ) -> Div {
     let posters: Vec<Stateful<Div>> = films
@@ -658,13 +669,41 @@ fn poster_row(
             poster(shell, film, ROW_POSTER, id, outlined, cx)
         })
         .collect();
-    row(title, caption, posters, scroll)
+    let link = link.map(|(target, id)| {
+        theme::eased(id, theme::Shades::veil(), window, cx)
+            .flex()
+            .items_center()
+            .gap(px(4.))
+            .px(px(8.))
+            .py(px(3.))
+            .rounded(px(6.))
+            .text_size(px(13.))
+            .text_color(theme::muted())
+            .cursor_pointer()
+            .child("Voir la collection")
+            .child(icon(IconName::ChevronRight, 13.))
+            .on_click(cx.listener(move |shell, _, _, cx| {
+                shell.open_collection(target.clone(), cx);
+            }))
+    });
+    row_with(title, caption, link, posters, scroll)
 }
 
 /// A heading, and cards in a row that scrolls sideways under the window's edges.
 pub(super) fn row(
     title: &str,
     caption: Option<String>,
+    cards: Vec<Stateful<Div>>,
+    scroll: &ScrollHandle,
+) -> Div {
+    row_with(title, caption, None, cards, scroll)
+}
+
+/// A row whose heading also holds a link, after its caption.
+fn row_with(
+    title: &str,
+    caption: Option<String>,
+    link: Option<Stateful<Div>>,
     cards: Vec<Stateful<Div>>,
     scroll: &ScrollHandle,
 ) -> Div {
@@ -684,7 +723,8 @@ pub(super) fn row(
                         .text_size(px(13.))
                         .text_color(theme::dim())
                         .child(caption)
-                })),
+                }))
+                .children(link),
         )
         .child(
             div()

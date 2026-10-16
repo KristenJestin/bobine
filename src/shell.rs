@@ -5,6 +5,7 @@ mod pages;
 mod palette;
 mod series;
 
+pub use lists::{CollectionPage, CollectionsPage, MyListPage};
 pub use pages::{Chip, DetailPage, LibraryPage, Loadable, LoginForm, OpenConnector};
 pub use palette::{PersonPage, SearchState};
 pub use series::SeriesPage;
@@ -134,6 +135,10 @@ pub struct Shell {
     fullscreen_kept: bool,
     /// The person pages open, the last one on top: one per `Screen::Person` of the navigator.
     pub people: Vec<PersonPage>,
+    pub collections: CollectionsPage,
+    /// The collection pages open, the last one on top: one per `Screen::CollectionDetail`.
+    pub collection_pages: Vec<CollectionPage>,
+    pub my_list: MyListPage,
     /// The search palette, while it shows (it stays fading out after it closed).
     pub search: Option<SearchState>,
     pub images: Images,
@@ -199,6 +204,9 @@ impl Shell {
             up_next_fade: Presence::new(motion::quick()),
             fullscreen_kept: false,
             people: Vec::new(),
+            collections: Default::default(),
+            collection_pages: Vec::new(),
+            my_list: Default::default(),
             search: None,
             images: Images::default(),
             image_wake: None,
@@ -460,7 +468,10 @@ impl Render for Shell {
         }
         let page = (
             screen,
-            self.details.len() + self.series_pages.len() + self.people.len(),
+            self.details.len()
+                + self.series_pages.len()
+                + self.people.len()
+                + self.collection_pages.len(),
         );
         if page != self.page {
             self.turned_forward = page.1 > self.page.1;

@@ -250,6 +250,7 @@ impl Shell {
         self.series_pages.clear();
         self.up_next.cancel();
         self.people.clear();
+        self.collection_pages.clear();
         self.search = None;
         self.navigator.switch_root(Screen::Login);
         cx.notify();
@@ -337,9 +338,12 @@ impl Shell {
         self.home = HomePage::default();
         self.library = LibraryPage::default();
         self.series = LibraryPage::default();
+        self.collections = Default::default();
+        self.my_list = Default::default();
         self.details.clear();
         self.series_pages.clear();
         self.people.clear();
+        self.collection_pages.clear();
         self.search = None;
         // The atlas holds the old images until they are dropped from it.
         for gone in self.images.cache.drain() {
@@ -392,6 +396,7 @@ impl Shell {
         self.series_pages.clear();
         self.up_next.cancel();
         self.people.clear();
+        self.collection_pages.clear();
         self.arrived(cx);
         cx.notify();
     }
@@ -402,6 +407,7 @@ impl Shell {
             Screen::FilmDetail => drop(self.details.pop()),
             Screen::SeriesDetail => drop(self.series_pages.pop()),
             Screen::Person => drop(self.people.pop()),
+            Screen::CollectionDetail => drop(self.collection_pages.pop()),
             _ => {}
         }
         self.up_next.cancel();
@@ -415,8 +421,17 @@ impl Shell {
 
     /// A root screen shows: what it lists may have changed since (a film watched, resumed).
     fn arrived(&mut self, cx: &mut Context<Self>) {
-        match self.navigator.current() {
-            Screen::Home => self.load_home(cx),
+        let screen = self.navigator.current();
+        if screen.reloads_on_arrival() {
+            match screen {
+                Screen::MyList => self.load_my_list(cx),
+                _ => self.load_home(cx),
+            }
+            return;
+        }
+        match screen {
+            Screen::Collections => self.load_collections(cx),
+            Screen::CollectionDetail => self.reload_collection(cx),
             Screen::Library if self.library.library.is_none() => {
                 self.load_library(LibraryKind::Films, cx)
             }
