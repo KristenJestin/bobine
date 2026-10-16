@@ -497,7 +497,7 @@ impl MediaServer for Jellyfin {
         let found: QueryResult = self.http.get(
             "seasons",
             &format!("/Shows/{}/Seasons", encode(&series.0)),
-            &[self.user()],
+            &[self.user(), ("isMissing", "false".into())],
         )?;
         Ok(found.items.iter().map(Item::season).collect())
     }
@@ -509,6 +509,7 @@ impl MediaServer for Jellyfin {
             &[
                 self.user(),
                 ("seasonId", season.0.clone()),
+                ("isMissing", "false".into()),
                 ("fields", EPISODE_FIELDS.into()),
             ],
         )?;

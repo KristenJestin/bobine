@@ -918,6 +918,8 @@ fn the_seasons_of_a_series_in_order() {
     assert_eq!(seasons[1].id, ItemId(SEASON.into()));
     let asked = s.fake.last("GET", &format!("/Shows/{SERIES}/Seasons"));
     assert_eq!(asked.param("userId"), Some(USER_ID));
+    // A season the library only knows by name, without a file, is not offered.
+    assert_eq!(asked.param("isMissing"), Some("false"));
 }
 
 #[test]
@@ -953,6 +955,8 @@ fn the_episodes_of_a_season_with_still_runtime_state_and_versions() {
     let asked = s.fake.last("GET", &format!("/Shows/{SERIES}/Episodes"));
     assert_eq!(asked.param("SeasonId"), Some(SEASON));
     assert_eq!(asked.param("userId"), Some(USER_ID));
+    // Nor is an episode without a file: auto-next would choose it.
+    assert_eq!(asked.param("isMissing"), Some("false"));
     let fields = asked.param("Fields").unwrap();
     assert!(
         fields.contains("MediaSources") && fields.contains("Overview"),
