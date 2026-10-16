@@ -504,7 +504,8 @@ const META_LINE: f32 = 22.;
 
 /// The bar between two facts covers the digits' box, from the cap height to the baseline: taller,
 /// it reads as sitting above the text. Read from the font the line is drawn with (`font`, the
-/// shell's, else the window's), as GPUI places a line: half the leading above the ascent.
+/// shell's, else the window's), as GPUI places a line: half the leading above the ascent. The
+/// digits are drawn on whole pixels (Inter's 10.2 px take 11 rows), so the bar's height is too.
 fn meta_bar(font: Option<SharedString>, window: &Window) -> (Pixels, Pixels) {
     let mut style = window.text_style();
     if let Some(family) = font {
@@ -515,7 +516,7 @@ fn meta_bar(font: Option<SharedString>, window: &Window) -> (Pixels, Pixels) {
     let size = px(META_SIZE);
     let ascent = text.ascent(id, size);
     let descent = text.descent(id, size).abs();
-    let cap = text.cap_height(id, size);
+    let cap = text.cap_height(id, size).ceil();
     let baseline = (px(META_LINE) - ascent - descent) / 2. + ascent;
     (baseline - cap, cap)
 }
