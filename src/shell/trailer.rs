@@ -18,53 +18,56 @@ impl Shell {
             return;
         };
         let ytdlp = self.ytdlp;
-        let (origin, item, title, trailer) = if self.navigator.current() == Screen::SeriesDetail {
-            let depth = self.series_pages.len().wrapping_sub(1);
-            let Some(page) = self.series_pages.last_mut() else {
-                return;
+        let (origin, item, title, trailer, fallback) =
+            if self.navigator.current() == Screen::SeriesDetail {
+                let depth = self.series_pages.len().wrapping_sub(1);
+                let Some(page) = self.series_pages.last_mut() else {
+                    return;
+                };
+                let Loadable::Ready(detail) = &page.detail else {
+                    return;
+                };
+                let Some(trailer) = trailer::choose(&detail.trailers, ytdlp) else {
+                    return;
+                };
+                if page.busy {
+                    return;
+                }
+                page.busy = true;
+                page.error = None;
+                let title = detail.series.title.clone();
+                (
+                    Origin::Series(depth, page.id.clone()),
+                    page.id.clone(),
+                    title,
+                    trailer,
+                    trailer::remote(&detail.trailers, ytdlp),
+                )
+            } else {
+                let depth = self.details.len().wrapping_sub(1);
+                let Some(page) = self.details.last_mut() else {
+                    return;
+                };
+                let Loadable::Ready(detail) = &page.detail else {
+                    return;
+                };
+                let Some(trailer) = trailer::choose(&detail.trailers, ytdlp) else {
+                    return;
+                };
+                if page.busy {
+                    return;
+                }
+                page.busy = true;
+                page.error = None;
+                let title = detail.film.title.clone();
+                (
+                    Origin::Film(depth, page.id.clone()),
+                    page.id.clone(),
+                    title,
+                    trailer,
+                    trailer::remote(&detail.trailers, ytdlp),
+                )
             };
-            let Loadable::Ready(detail) = &page.detail else {
-                return;
-            };
-            let Some(trailer) = trailer::choose(&detail.trailers, ytdlp) else {
-                return;
-            };
-            if page.busy {
-                return;
-            }
-            page.busy = true;
-            page.error = None;
-            let title = detail.series.title.clone();
-            (
-                Origin::Series(depth, page.id.clone()),
-                page.id.clone(),
-                title,
-                trailer,
-            )
-        } else {
-            let depth = self.details.len().wrapping_sub(1);
-            let Some(page) = self.details.last_mut() else {
-                return;
-            };
-            let Loadable::Ready(detail) = &page.detail else {
-                return;
-            };
-            let Some(trailer) = trailer::choose(&detail.trailers, ytdlp) else {
-                return;
-            };
-            if page.busy {
-                return;
-            }
-            page.busy = true;
-            page.error = None;
-            let title = detail.film.title.clone();
-            (
-                Origin::Film(depth, page.id.clone()),
-                page.id.clone(),
-                title,
-                trailer,
-            )
-        };
         let playing = Playing {
             title,
             subtitle: Some("Trailer".into()),
@@ -77,6 +80,7 @@ impl Shell {
                     origin,
                     Ok(StreamUrl::new(address)),
                     true,
+                    None,
                     playing,
                     window,
                     cx,
@@ -89,7 +93,7 @@ impl Shell {
                 cx.spawn_in(window, async move |this, cx| {
                     let stream = task.await;
                     this.update_in(cx, |shell, window, cx| {
-                        shell.start_trailer(origin, stream, false, playing, window, cx);
+                        shell.start_trailer(origin, stream, false, fallback, playing, window, cx);
                         cx.notify();
                     })
                     .ok();
@@ -101,12 +105,18 @@ impl Shell {
     }
 
     /// The trailer's address is known: the player starts, with no reports and no film around
-    /// it. `ytdl`: the address is a page for the `yt-dlp` hook to resolve.
+    /// it. `ytdl`: the address is a page for the `yt-dlp` hook to resolve. `fallback`: the
+    /// trailer hosted elsewhere, tried when this one does not play.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "one trailer's parts, put together once"
+    )]
     fn start_trailer(
         &mut self,
         origin: Origin,
         stream: Result<StreamUrl, ProviderError>,
         ytdl: bool,
+        fallback: Option<String>,
         playing: Playing,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -132,6 +142,11 @@ impl Shell {
             }
             Err(error) => self.failed(error, cx),
         };
+        if let Some(address) = fallback {
+            let stream = Ok(StreamUrl::new(address));
+            self.start_trailer(origin, stream, true, None, playing, window, cx);
+            return;
+        }
         self.tried(&origin, Some(said), cx);
     }
 
@@ -698,5 +713,39 @@ mod tests {
         window
             .update(cx, |shell, _, _| assert!(shell.playback.is_none()))
             .unwrap();
+    }
+
+    #[gpui_kit::test]
+    fn a_failed_local_trailer_falls_back_to_the_remote_one(cx: &mut TestAppContext) {
+        let both = Trailers {
+            local: true,
+            remote: Some(ADDRESS.into()),
+        };
+        let (server, window) = signed_in_window(both, true, cx);
+        server.state.lock().unwrap().trailer_error =
+            Some(ProviderError::Unreachable("down".into()));
+        on_film(&window, cx);
+        press_trailer(&window, cx);
+        assert_eq!(
+            server.state.lock().unwrap().record.trailer_asks,
+            [ItemId(FILM.into())]
+        );
+        assert_eq!(opened(&window, cx), [(ADDRESS.to_string(), true)]);
+        assert_eq!(current(&window, cx), Screen::Player);
+    }
+
+    #[gpui_kit::test]
+    fn a_failed_local_trailer_does_not_fall_back_without_ytdlp(cx: &mut TestAppContext) {
+        let both = Trailers {
+            local: true,
+            remote: Some(ADDRESS.into()),
+        };
+        let (server, window) = signed_in_window(both, false, cx);
+        server.state.lock().unwrap().trailer_error =
+            Some(ProviderError::Unreachable("down".into()));
+        on_film(&window, cx);
+        press_trailer(&window, cx);
+        assert!(opened(&window, cx).is_empty());
+        assert_eq!(current(&window, cx), Screen::FilmDetail);
     }
 }

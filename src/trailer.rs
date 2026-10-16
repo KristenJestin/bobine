@@ -24,11 +24,13 @@ pub fn choose(trailers: &Trailers, ytdlp: bool) -> Option<Trailer> {
     if trailers.local {
         return Some(Trailer::Local);
     }
-    trailers
-        .remote
-        .clone()
-        .filter(|_| ytdlp)
-        .map(Trailer::Remote)
+    remote(trailers, ytdlp).map(Trailer::Remote)
+}
+
+/// The trailer hosted elsewhere, if `yt-dlp` can play it: what a local one that fails falls
+/// back on.
+pub fn remote(trailers: &Trailers, ytdlp: bool) -> Option<String> {
+    trailers.remote.clone().filter(|_| ytdlp)
 }
 
 /// The options of a trailer's mpv: those of every mpv, and the `yt-dlp` hook only for a page
