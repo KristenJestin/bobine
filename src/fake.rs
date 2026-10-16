@@ -2,6 +2,8 @@
 //! headless harness shows the screens with it. It records what it is asked (logins, reports,
 //! watched marks) and never touches a network, a keyring or a file.
 
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -11,11 +13,13 @@ use bobine::provider::{
     FilmSort, FilterChoices, ImageKind, ImageRef, ItemId, Library, LibraryKind, MediaServer,
     MediaSource, MediaSourceId, Page, PersonHit, PersonTitles, PlaySessionId, Playback,
     PlaybackReport, Playlist, PlaylistEntry, ProviderError, SearchResults, Season, Segment, Series,
-    SeriesDetail, SeriesHit, ServerInfo, StreamUrl, SubtitleTrack, Title, TranscodeRequest,
-    Trickplay, VideoRange, VideoTrack,
+    SeriesDetail, SeriesHit, ServerInfo, StreamUrl, SubtitleTrack, Title, Token, TokenStore,
+    TranscodeRequest, Trickplay, VideoRange, VideoTrack,
 };
 
 pub const USER: &str = "camille";
+/// The id the fake server gives its user.
+pub const USER_ID: &str = "user-1";
 pub const PASSWORD: &str = "marée haute";
 pub const FILMS_LIBRARY: &str = "films";
 /// The film every page of the tests opens: started, with two versions and three subtitles.
@@ -26,6 +30,56 @@ pub const TRANSCODE_SESSION: &str = "session-converted";
 /// The series every series page of the tests opens: three seasons, the first watched, the second
 /// stopped in its fourth episode.
 pub const SERIES: &str = "series-0";
+
+/// The system keyring in memory: the tests and the harness never reach the real one. Beside the
+/// library's `MemoryStore`, which is `cfg(test)` of the library and so out of reach of this
+/// binary and of its harness build.
+#[derive(Default)]
+pub struct MemoryKeyring {
+    pub secrets: Mutex<HashMap<String, Token>>,
+    /// The keyring cannot be reached: every call fails.
+    pub unreachable: AtomicBool,
+}
+
+impl MemoryKeyring {
+    fn reach(&self) -> Result<(), ProviderError> {
+        if self.unreachable.load(Ordering::SeqCst) {
+            return Err(ProviderError::Keyring("locked".into()));
+        }
+        Ok(())
+    }
+
+    /// What the keyring holds under `account`, as text, for a test to compare.
+    #[cfg(test)]
+    pub fn secret(&self, account: &str) -> Option<String> {
+        let secrets = self.secrets.lock().unwrap();
+        secrets
+            .get(account)
+            .map(|token| token.expose_secret().to_string())
+    }
+}
+
+impl TokenStore for MemoryKeyring {
+    fn save(&self, account: &str, token: &Token) -> Result<(), ProviderError> {
+        self.reach()?;
+        self.secrets
+            .lock()
+            .unwrap()
+            .insert(account.to_string(), token.clone());
+        Ok(())
+    }
+
+    fn load(&self, account: &str) -> Result<Option<Token>, ProviderError> {
+        self.reach()?;
+        Ok(self.secrets.lock().unwrap().get(account).cloned())
+    }
+
+    fn delete(&self, account: &str) -> Result<(), ProviderError> {
+        self.reach()?;
+        self.secrets.lock().unwrap().remove(account);
+        Ok(())
+    }
+}
 
 /// A report as the server got it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -157,6 +211,8 @@ pub struct State {
     pub playlist_fails: bool,
     /// How many playlists were made so far, for the ids of the next.
     pub playlists_made: usize,
+    /// The id of the user the next login or restore gives a session to.
+    pub user_id: String,
 }
 
 /// Where the fake server pretends to be.
@@ -166,6 +222,8 @@ pub const SERVER_ADDRESS: &str = "https://media.example.org";
 pub struct FakeServer {
     pub state: Arc<Mutex<State>>,
     info: ServerInfo,
+    /// Who the session is: read from the state when it opens.
+    user_id: String,
 }
 
 const TITLES: [&str; 16] = [
@@ -575,13 +633,22 @@ impl FakeServer {
                 playlists: playlists(),
                 playlist_fails: false,
                 playlists_made: 0,
+                user_id: USER_ID.into(),
             })),
             info: ServerInfo {
                 id: "server-1".into(),
                 name: "Salon".into(),
                 version: "10.11.0".into(),
             },
+            user_id: USER_ID.into(),
         }
+    }
+
+    /// The same server under another id, as a second server would be.
+    #[cfg(test)]
+    pub fn on_server(mut self, id: &str) -> Self {
+        self.info.id = id.into();
+        self
     }
 
     fn state(&self) -> std::sync::MutexGuard<'_, State> {
@@ -647,7 +714,10 @@ impl FakeServer {
     }
 
     fn session(&self) -> Arc<dyn MediaServer> {
-        Arc::new(self.clone())
+        Arc::new(Self {
+            user_id: self.state().user_id.clone(),
+            ..self.clone()
+        })
     }
 
     /// What a playlist holds, as the server shows it now; what it no longer knows is left out.
@@ -708,7 +778,9 @@ impl Connector for FakeServer {
     }
 
     fn restore(&self) -> Result<Option<Arc<dyn MediaServer>>, ProviderError> {
-        Ok(self.state().kept.then(|| self.session()))
+        // The guard is let go before `session` takes the state again.
+        let kept = self.state().kept;
+        Ok(kept.then(|| self.session()))
     }
 
     fn last_address(&self) -> Option<String> {
@@ -727,6 +799,10 @@ impl MediaServer for FakeServer {
 
     fn user_name(&self) -> &str {
         USER
+    }
+
+    fn user_id(&self) -> &str {
+        &self.user_id
     }
 
     fn libraries(&self) -> Result<Vec<Library>, ProviderError> {

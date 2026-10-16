@@ -424,8 +424,15 @@ mod tests {
         server.state.lock().unwrap().play_error = Some(ProviderError::Unreachable("no".into()));
         change(&mut server.state.lock().unwrap());
         let connector: Arc<dyn bobine::provider::Connector> = Arc::new(server.clone());
-        let window =
-            cx.add_window(|_, cx| Shell::new(None, Box::new(move || Ok(connector)), None, cx));
+        let window = cx.add_window(|_, cx| {
+            Shell::new(
+                None,
+                Box::new(move || Ok(connector)),
+                None,
+                Arc::new(crate::fake::MemoryKeyring::default()),
+                cx,
+            )
+        });
         cx.run_until_parked();
         window
             .update(cx, |shell, _, cx| {
@@ -560,8 +567,15 @@ mod tests {
         let server = FakeServer::new(12, true);
         change(&mut server.state.lock().unwrap());
         let connector: Arc<dyn bobine::provider::Connector> = Arc::new(server.clone());
-        let window =
-            cx.add_window(|_, cx| Shell::new(None, Box::new(move || Ok(connector)), None, cx));
+        let window = cx.add_window(|_, cx| {
+            Shell::new(
+                None,
+                Box::new(move || Ok(connector)),
+                None,
+                Arc::new(crate::fake::MemoryKeyring::default()),
+                cx,
+            )
+        });
         cx.run_until_parked();
         let film = ItemId("film-6".into());
         window

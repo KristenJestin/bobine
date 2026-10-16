@@ -27,6 +27,7 @@ mod reports;
 mod screens;
 mod scroll;
 mod search;
+mod secret_field;
 mod series_page;
 mod shell;
 mod start;
@@ -36,7 +37,7 @@ mod video;
 use std::sync::Arc;
 
 use bobine::jellyfin::JellyfinConnector;
-use bobine::provider::{Connector, ProviderError, SecretServiceStore};
+use bobine::provider::{Connector, ProviderError, SecretServiceStore, TokenStore};
 use gpui_kit::prelude::*;
 use gpui_kit::{App, Bounds, WindowBackgroundAppearance, WindowBounds, WindowOptions, px, size};
 
@@ -85,8 +86,17 @@ fn main() {
             // Nor the real settings.
             #[cfg(feature = "harness")]
             let settings = settings.filter(|_| harness.connector().is_none());
+            // Nor the real keyring.
+            #[cfg(feature = "harness")]
+            let secrets: Arc<dyn TokenStore> = if harness.connector().is_some() {
+                Arc::new(fake::MemoryKeyring::default())
+            } else {
+                Arc::new(SecretServiceStore)
+            };
+            #[cfg(not(feature = "harness"))]
+            let secrets: Arc<dyn TokenStore> = Arc::new(SecretServiceStore);
             let opened = cx.open_window(options, move |window, cx| {
-                let shell = cx.new(|cx| shell::Shell::new(font, open, settings, cx));
+                let shell = cx.new(|cx| shell::Shell::new(font, open, settings, secrets, cx));
                 // The video surface and mpv go before the window's surface does.
                 let closing = shell.downgrade();
                 window.on_window_should_close(cx, move |_, cx| {

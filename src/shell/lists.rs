@@ -456,8 +456,15 @@ mod tests {
     fn signed_in(cx: &mut TestAppContext) -> (FakeServer, WindowHandle<Shell>) {
         let server = FakeServer::new(12, true);
         let connector: Arc<dyn bobine::provider::Connector> = Arc::new(server.clone());
-        let window =
-            cx.add_window(|_, cx| Shell::new(None, Box::new(move || Ok(connector)), None, cx));
+        let window = cx.add_window(|_, cx| {
+            Shell::new(
+                None,
+                Box::new(move || Ok(connector)),
+                None,
+                Arc::new(crate::fake::MemoryKeyring::default()),
+                cx,
+            )
+        });
         cx.run_until_parked();
         (server, window)
     }

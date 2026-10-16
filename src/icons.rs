@@ -66,6 +66,9 @@ icons! {
     UserCircle => "user-circle",
     SignOut => "sign-out",
     Gear => "gear",
+    Monitor => "monitor",
+    Plug => "plug",
+    Info => "info",
     CornersOut => "corners-out",
     CornersIn => "corners-in",
 }

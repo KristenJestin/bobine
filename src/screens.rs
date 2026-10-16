@@ -14,6 +14,7 @@ pub mod player;
 pub mod playlist;
 pub mod search;
 mod series_detail;
+mod settings;
 pub mod skip;
 
 pub use card::{Card, Cards, Offer, Open, Play, Quick};
@@ -62,6 +63,7 @@ pub fn render(
         Screen::MyList => lists::render_lists(shell, window, cx).into_any_element(),
         Screen::Favorites => lists::render_my_list(shell, window, cx).into_any_element(),
         Screen::Playlist => playlist::render(shell, window, cx).into_any_element(),
+        Screen::Settings => settings::render(shell, window, cx).into_any_element(),
     }
 }
 

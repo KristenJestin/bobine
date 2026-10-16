@@ -8,6 +8,7 @@ mod playlists;
 mod posters;
 mod preview;
 mod series;
+mod settings;
 mod skip;
 
 pub use home::{HomePage, ListPage};
@@ -18,6 +19,7 @@ pub use pages::{Chip, DetailPage, GONE, LibraryPage, Loadable, LoginForm, OpenCo
 pub use palette::{PersonPage, SearchState};
 pub use playlists::{PlaylistMenu, PlaylistPage};
 pub use series::SeriesPage;
+pub use settings::{QualityMenu, SettingsPage};
 
 use std::cell::RefCell;
 use std::path::PathBuf;
@@ -33,7 +35,7 @@ use gpui_kit::{
 };
 
 use bobine::provider::{
-    Connector, Film as FilmItem, MediaServer, Playback as Opened, ProviderError, Series,
+    Connector, Film as FilmItem, MediaServer, Playback as Opened, ProviderError, Series, TokenStore,
 };
 
 use crate::chrome::{Account, AccountView, ButtonBounds, back_link, bar_fade, pill_bar};
@@ -132,6 +134,9 @@ pub struct Shell {
     /// What the viewer chose, and where it is kept (`None`: kept nowhere).
     pub settings: Settings,
     settings_path: Option<PathBuf>,
+    /// Where the secrets the settings hold are kept: the system keyring.
+    secrets: Arc<dyn TokenStore>,
+    pub settings_page: SettingsPage,
     /// What turns the other monitors black, from the first film on; `None` after that when the
     /// compositor cannot (no layer shell): the switch is not offered.
     screens: Option<Screens>,
@@ -297,6 +302,7 @@ impl Shell {
         font: Option<SharedString>,
         open: OpenConnector,
         settings_path: Option<PathBuf>,
+        secrets: Arc<dyn TokenStore>,
         cx: &mut Context<Self>,
     ) -> Self {
         let settings = settings_path
@@ -314,6 +320,8 @@ impl Shell {
             wayland: None,
             settings,
             settings_path,
+            secrets,
+            settings_page: SettingsPage::default(),
             screens: None,
             screens_tried: false,
             window_seen: blackout::Steady::default(),
@@ -524,10 +532,7 @@ impl Shell {
     /// The switch was pressed: the option changes, is kept, and applies at once.
     pub fn toggle_blackout(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.settings.black_out_other_monitors = !self.settings.black_out_other_monitors;
-        if let Some(path) = &self.settings_path {
-            // Not kept, the option still holds until Bobine quits.
-            let _ = self.settings.save(path);
-        }
+        self.keep_settings();
         self.follow_blackout(window, cx);
         cx.notify();
     }
@@ -821,6 +826,7 @@ impl Render for Shell {
             self.series.menus.close();
             self.account_menu.close();
             self.close_playlist_menu(cx);
+            self.settings_page.menus.close();
         }
         self.follow_playlist_menu(window);
         #[cfg(feature = "harness")]
@@ -895,7 +901,8 @@ impl Render for Shell {
                 + usize::from(self.list.is_some())
                 + self.collection_pages.len()
                 + self.playlist_pages.len()
-                + usize::from(self.navigator.current() == Screen::Favorites),
+                + usize::from(self.navigator.current() == Screen::Favorites)
+                + usize::from(screen == Screen::Settings),
         );
         if page != self.page {
             self.turned_forward = page.1 > self.page.1;
@@ -1056,7 +1063,7 @@ impl Render for Shell {
                 |root, label| root.child(back_link(label, window, cx)),
             )
             .children(screens::playlist::add_menu(self, window, cx))
-            .children(self.notice_pill(screen, window))
+            .children(self.notice_pill(screen, window, cx))
             .children(screens::search::palette(self, window, cx))
     }
 }
