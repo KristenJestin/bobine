@@ -369,6 +369,7 @@ pub fn series() -> Vec<Series> {
                 unwatched: 0,
                 poster: image(&id, ImageKind::Primary),
                 backdrop: image(&id, ImageKind::Backdrop),
+                season: None,
                 id: ItemId(id),
             }
         })
