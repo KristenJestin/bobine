@@ -398,7 +398,7 @@ impl Render for Shell {
             self.fullscreen_kept = false;
         } else if self.fullscreen_kept
             && self.up_next.episode().is_none()
-            && !self.series_pages.last().is_some_and(|page| page.busy)
+            && !self.series_pages.last().is_some_and(SeriesPage::waiting)
         {
             self.fullscreen_kept = false;
             if window.is_fullscreen() {

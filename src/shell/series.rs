@@ -46,6 +46,11 @@ pub struct SeriesPage {
 }
 
 impl SeriesPage {
+    /// A mark or a playback is on its way, or the refresh after a mark is: nothing else starts.
+    pub fn waiting(&self) -> bool {
+        self.busy || self.refreshes.holding()
+    }
+
     /// The episodes of the season shown.
     pub fn shown_episodes(&self) -> Option<&Loadable<Vec<Episode>>> {
         self.episodes.get(&self.seasons.get(self.season)?.id)
@@ -173,6 +178,9 @@ impl Shell {
             return;
         };
         let Some(season) = page.seasons.get(page.season).map(|s| s.id.clone()) else {
+            // No season: the refresh has nothing more to land.
+            let newest = page.refreshes.newest();
+            page.refreshes.landed(newest);
             return;
         };
         if page.episodes.contains_key(&season) && !again {
@@ -251,7 +259,7 @@ impl Shell {
         let Some(page) = self.series_pages.last_mut() else {
             return;
         };
-        if page.busy {
+        if page.waiting() {
             return;
         }
         page.busy = true;
@@ -264,7 +272,11 @@ impl Shell {
             };
             page.busy = false;
             match marked {
-                Ok(()) => shell.load_series(depth, false, None, cx),
+                Ok(()) => {
+                    // The list shown is from before the mark until the refresh lands.
+                    page.refreshes.hold();
+                    shell.load_series(depth, false, None, cx);
+                }
                 Err(said) => page.error = Some(said),
             }
         });
@@ -311,7 +323,7 @@ impl Shell {
         let Some(page) = self.series_pages.last_mut() else {
             return;
         };
-        if page.busy {
+        if page.waiting() {
             return;
         }
         let choices = match (&page.next, &page.choices) {
@@ -410,7 +422,7 @@ impl Shell {
             Instant::now(),
             now_asked,
             top.map(|page| (depth, &page.id)),
-            top.is_some_and(|page| page.busy),
+            top.is_some_and(SeriesPage::waiting),
         )
     }
 

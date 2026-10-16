@@ -119,7 +119,7 @@ impl Shown {
             choices: page.choices.clone(),
             chips: page.chips.clone(),
             error: page.error,
-            busy: page.busy,
+            busy: page.waiting(),
         }
     }
 }

@@ -158,10 +158,13 @@ pub fn toggle_season_watched(
 }
 
 /// The refreshes of a series page: each is numbered when asked, and only the answers of the
-/// newest are shown, so that an older one landing late does not overwrite it.
+/// newest are shown, so that an older one landing late does not overwrite it. After a mark, the
+/// page holds until a refresh lands, so that a second click does not act on the list from
+/// before the mark.
 #[derive(Default)]
 pub struct Refreshes {
     asked: u64,
+    holding: bool,
 }
 
 impl Refreshes {
@@ -180,9 +183,22 @@ impl Refreshes {
         refresh == self.asked
     }
 
-    /// The last answer of `refresh` landed: whether it is shown.
+    /// A mark reached the server: the page holds until a refresh asked from now lands.
+    pub fn hold(&mut self) {
+        self.holding = true;
+    }
+
+    /// The last answer of `refresh` landed: whether it is shown. The newest releases the hold.
     pub fn landed(&mut self, refresh: u64) -> bool {
-        self.is_newest(refresh)
+        let newest = self.is_newest(refresh);
+        if newest {
+            self.holding = false;
+        }
+        newest
+    }
+
+    pub fn holding(&self) -> bool {
+        self.holding
     }
 }
 
@@ -697,6 +713,21 @@ mod tests {
         assert!(refreshes.landed(second));
         assert!(!refreshes.is_newest(first));
         assert!(!refreshes.landed(first));
+    }
+
+    #[test]
+    fn a_mark_holds_the_page_until_the_refresh_after_it_lands() {
+        let mut refreshes = Refreshes::default();
+        let before = refreshes.ask();
+        assert!(!refreshes.holding());
+        refreshes.hold();
+        assert!(refreshes.holding());
+        let after = refreshes.ask();
+        // A refresh asked before the mark is older: it does not release.
+        assert!(!refreshes.landed(before));
+        assert!(refreshes.holding());
+        assert!(refreshes.landed(after));
+        assert!(!refreshes.holding());
     }
 
     #[test]
