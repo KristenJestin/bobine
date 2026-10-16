@@ -1542,6 +1542,10 @@ impl Shell {
         let Some(server) = self.server.clone() else {
             return;
         };
+        // A test never reaches the real player.
+        if cfg!(test) {
+            panic!("a test started a playback without setting Shell::fake_player");
+        }
         let mpv = match Libmpv::new(&options) {
             Ok(mpv) => Arc::new(mpv),
             Err(error) => {

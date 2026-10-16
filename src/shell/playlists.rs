@@ -773,6 +773,16 @@ mod tests {
     }
 
     #[gpui_kit::test]
+    #[should_panic(expected = "a test started a playback without setting Shell::fake_player")]
+    fn a_test_playing_without_the_fake_player_panics_before_the_real_one(cx: &mut TestAppContext) {
+        let (_server, window) = on_watchlist(cx, |_| {});
+        window
+            .update(cx, |shell, window, cx| shell.play_all(window, cx))
+            .unwrap();
+        cx.run_until_parked();
+    }
+
+    #[gpui_kit::test]
     fn play_all_skips_a_title_that_cannot_play_and_goes_on_to_the_next(cx: &mut TestAppContext) {
         // The episode second in the playlist has no file left.
         let (server, window) = on_watchlist(cx, |state| {
