@@ -620,6 +620,10 @@ enum Target {
     Letter(char),
     /// The empty top left, over no chip and no poster.
     Corner,
+    /// The account button of the pill bar.
+    Account,
+    /// "Sign out" in the account menu.
+    SignOut,
     /// The player's seek bar, this far along it (0 to 1).
     SeekBar(f32),
 }
@@ -692,6 +696,19 @@ impl Acts {
                 (4.5, "open audio", Click(Chip(crate::shell::Chip::Audio))),
                 (5.5, "click outside", Click(Blank)),
                 (6.5, "escape goes back", Key("escape")),
+            ],
+            // The account menu of the pill bar: it closes by Escape and by a click outside, and
+            // "Sign out" brings the login back with the address filled in.
+            "account" => vec![
+                (0.5, "open the menu", Click(Account)),
+                (1.5, "escape closes the menu", Key("escape")),
+                (2.5, "open the menu", Click(Account)),
+                (3.5, "click outside", Click(Corner)),
+                (4.5, "open the menu", Click(Account)),
+                (5.5, "click the button again", Click(Account)),
+                (6.5, "open the menu", Click(Account)),
+                (7.5, "sign out", Click(SignOut)),
+                (9.5, "the login is back", Mark),
             ],
             "scroll" => vec![
                 (0.5, "wheel down over the cast", wheel(false)),
@@ -1093,6 +1110,15 @@ fn position(target: Target, shell: &Shell, window: &Window) -> Point<Pixels> {
             )
         }),
         Target::Corner => Some(point(px(40.), px(30.))),
+        Target::Account => center(shell.account_button_bounds()),
+        // The menu opens under the button, its right edge on the button's: a gap, a border and
+        // a padding, the header, the rule, then the line.
+        Target::SignOut => shell.account_button_bounds().map(|button| {
+            point(
+                button.right() - px(100.),
+                button.bottom() + px(menu::GAP + 7. + 44. + 13. + menu::LINE / 2.),
+            )
+        }),
         Target::Blank => Some(point(size.width * 0.75, size.height * 0.3)),
         Target::TracksButton => Some(point(size.width - px(127.), px(48.))),
         Target::Picture => Some(point(size.width * 0.3, size.height * 0.5)),
@@ -1262,7 +1288,11 @@ fn state(label: &str, shell: &Shell, cx: &App) -> String {
     if let Some(form) = &shell.login
         && screen == Screen::Login
     {
-        return format!("SELECT {label}: {:?}", form.address.read(cx).selected());
+        return format!(
+            "SELECT {label}: {:?} address={:?}",
+            form.address.read(cx).selected(),
+            form.address.read(cx).text(),
+        );
     }
     if let Some(search) = &shell.search {
         return format!(

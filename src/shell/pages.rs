@@ -19,6 +19,7 @@ use gpui_kit::{
 };
 
 use super::{Film as Playing, HomePage, Shell};
+use crate::chrome::Account;
 use crate::fallback::Fallback;
 use crate::favourite::{self, ListPage, Toggle};
 use crate::film_page::{self, Choices, From, Plan};
@@ -574,6 +575,14 @@ impl Shell {
     fn signed_in(&mut self, server: Arc<dyn MediaServer>, cx: &mut Context<Self>) {
         self.server = Some(server);
         self.login = None;
+        self.reset_session(cx);
+        self.navigator.switch_root(Screen::Home);
+        self.load_home(cx);
+    }
+
+    /// Forgets what the session before showed: the pages, the images, the menus.
+    fn reset_session(&mut self, cx: &mut Context<Self>) {
+        self.account_menu.close();
         self.home = HomePage::default();
         self.library = LibraryPage::default();
         self.series = LibraryPage::default();
@@ -590,8 +599,70 @@ impl Shell {
             cx.drop_image(gone, None);
         }
         self.images = images::Images::default();
-        self.navigator.switch_root(Screen::Home);
-        self.load_home(cx);
+    }
+
+    pub fn toggle_account_menu(&mut self, cx: &mut Context<Self>) {
+        self.account_menu.toggle(Account);
+        cx.notify();
+    }
+
+    /// The mouse went down outside the open account menu, maybe on its button.
+    pub fn pressed_outside_account_menu(
+        &mut self,
+        position: Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        let on = self
+            .account_button
+            .get()
+            .is_some_and(|bounds| bounds.contains(&position))
+            .then_some(Account);
+        self.account_menu.pressed_outside(on);
+        cx.notify();
+    }
+
+    /// Leaves the account. A film playing stops first: its last reports need the token. The
+    /// server is told off the window's thread; the login shows once it answered or gave up (the
+    /// HTTP timeout bounds it), so that a login made meanwhile never meets a late logout.
+    pub fn sign_out(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let (Some(server), Some(connector)) = (self.server.clone(), self.connector.clone()) else {
+            return;
+        };
+        if self.signing_out {
+            return;
+        }
+        self.signing_out = true;
+        self.account_menu.close();
+        if self.playback.is_some() {
+            if window.is_fullscreen() {
+                window.toggle_fullscreen();
+            }
+            self.release_tiles(window, cx);
+        }
+        let reports = self.stop_playback();
+        self.follow_blackout(window, cx);
+        let task = cx
+            .background_executor()
+            .spawn(async move { start::sign_out(&*server, &*connector, reports) });
+        cx.spawn(async move |this, cx| {
+            let out = task.await;
+            this.update(cx, |shell, cx| shell.signed_out(out, cx)).ok();
+        })
+        .detach();
+        cx.notify();
+    }
+
+    /// The server was told and the token left the keyring: the login shows, from the server's
+    /// address when it is known.
+    fn signed_out(&mut self, out: start::SignedOut, cx: &mut Context<Self>) {
+        self.signing_out = false;
+        self.reset_session(cx);
+        self.show_login(out.why, cx);
+        if let (Some(address), Some(form)) = (out.address, &self.login) {
+            form.address
+                .update(cx, |field, cx| field.set_text(&address, cx));
+        }
+        cx.notify();
     }
 
     /// What the user is told; an expired session brings the login back.
@@ -1112,6 +1183,10 @@ impl Shell {
     /// Escape cancels the next episode's card, else closes the open menu, else goes back.
     pub fn escape(&mut self, cx: &mut Context<Self>) {
         if self.cancel_up_next(cx) {
+            return;
+        }
+        if self.account_menu.escape() {
+            cx.notify();
             return;
         }
         if let Some((menus, _)) = self.chip_menus()
