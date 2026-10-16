@@ -23,6 +23,10 @@ wayland-backend = { version = "0.3", features = ["client_system"] }
 wayland-client = "0.31"
 wayland-egl = "0.32"
 wayland-protocols = { version = "0.32", features = ["client", "staging", "unstable"] }
+# The other monitors turn black during a fullscreen film (#13): a layer-shell surface on each, and
+# GPUI's id for the window's monitor, a v5 UUID of its name. Both already come with GPUI.
+uuid = { version = "1", features = ["v5"] }
+wayland-protocols-wlr = { version = "0.3", features = ["client"] }
 
 [features]
 default = ["fast"]

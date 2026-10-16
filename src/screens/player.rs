@@ -8,12 +8,13 @@ use std::sync::Arc;
 
 use gpui_kit::{
     App, ClickEvent, Context, Div, FontWeight, IntoElement, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, ObjectFit, RenderImage, Stateful, Window, div, img,
+    MouseMoveEvent, MouseUpEvent, ObjectFit, RenderImage, Rgba, Stateful, Window, div, img,
     linear_color_stop, linear_gradient, px, rgb, rgba,
 };
 
 use super::empty_screen;
 use crate::icons::{IconName, icon};
+use crate::motion;
 use crate::player::controls::{BOTTOM_CONTROLS_HEIGHT, SKIP_SECONDS};
 use crate::player::segments::Button;
 use crate::player::session::{Choice, Session};
@@ -28,6 +29,10 @@ pub const EDGE: f32 = 40.;
 pub const TIME_BOX_WIDTH: f32 = 76.;
 /// The preview floats this far above the controls.
 const PREVIEW_GAP: f32 = 14.;
+/// The "Black out other screens" switch: its track, and the gap around its knob.
+const SWITCH_WIDTH: f32 = 34.;
+const SWITCH_HEIGHT: f32 = 20.;
+const SWITCH_GAP: f32 = 2.;
 
 /// The player screen with no film to play.
 pub fn empty(_cx: &mut Context<Shell>) -> impl IntoElement {
@@ -42,6 +47,9 @@ pub struct Shown {
     pub skip: Option<(Button, f32)>,
     /// "Conversion par le serveur".
     pub notice: f32,
+    /// Where the "Black out other screens" switch is, from off (0) to on (1); `None` when the
+    /// compositor cannot cover a monitor, and the switch is not offered.
+    pub blackout: Option<f32>,
     /// What floats over the seek bar where the pointer is.
     pub preview: Option<Preview>,
 }
@@ -88,7 +96,7 @@ pub fn render(
     });
     // Only an open panel closes on a click outside; one fading out is just drawn.
     let outside = session.panel_open().then(|| outside_panel(cx));
-    let panel = (shown.panel > 0.).then(|| panel(session, shown.panel, window, cx));
+    let panel = (shown.panel > 0.).then(|| panel(session, shown.panel, shown.blackout, window, cx));
     let notice = (shown.notice > 0.).then(|| conversion_notice(shown.notice));
     div()
         .id("player")
@@ -464,6 +472,7 @@ fn outside_panel(cx: &mut Context<Shell>) -> Stateful<Div> {
 fn panel(
     session: &Session,
     shown: f32,
+    blackout: Option<f32>,
     window: &mut Window,
     cx: &mut Context<Shell>,
 ) -> Stateful<Div> {
@@ -514,6 +523,87 @@ fn panel(
         .child(audio.mb(px(26.)))
         .child(section_title("SOUS-TITRES"))
         .child(subtitles)
+        .when_some(blackout, |panel, on| {
+            panel.child(blackout_switch(on, open, window, cx))
+        })
+}
+
+/// "Black out other screens", under the tracks: a line with a switch, `on` of the way to on.
+fn blackout_switch(
+    on: f32,
+    open: bool,
+    window: &mut Window,
+    cx: &mut Context<Shell>,
+) -> Stateful<Div> {
+    let track = switch_track(on, theme::accent());
+    let knob = switch_knob(on, theme::accent());
+    theme::eased("player-blackout", theme::Shades::line(), window, cx)
+        .mt(px(18.))
+        .px(px(12.))
+        .py(px(9.))
+        .rounded(px(8.))
+        .when(open, |line| {
+            line.cursor_pointer()
+                .on_click(cx.listener(|shell, _, window, cx| {
+                    shell.toggle_blackout(window, cx);
+                }))
+        })
+        .flex()
+        .items_center()
+        .justify_between()
+        .text_size(px(14.))
+        .child("Black out other screens")
+        .child(
+            div()
+                .relative()
+                .w(px(SWITCH_WIDTH))
+                .h(px(SWITCH_HEIGHT))
+                .rounded_full()
+                .bg(track)
+                .child(
+                    div()
+                        .absolute()
+                        .top(px(SWITCH_GAP))
+                        .left(px(SWITCH_GAP + on * (SWITCH_WIDTH - SWITCH_HEIGHT)))
+                        .size(px(SWITCH_HEIGHT - 2. * SWITCH_GAP))
+                        .rounded_full()
+                        .bg(knob),
+                ),
+        )
+}
+
+/// The panel's colour behind the off track, which is translucent white.
+const PANEL: u32 = 0x0e0e10;
+
+/// The switch's track: faint when off, the accent when on.
+fn switch_track(on: f32, accent: Rgba) -> Rgba {
+    motion::mix(rgba(0xffffff33), accent, on)
+}
+
+/// The knob follows the track: light on the dark off track, and, once on, whichever of dark or
+/// light reads on the accent, so the switch shows whatever the accent is.
+fn switch_knob(on: f32, accent: Rgba) -> Rgba {
+    let light = rgb(0xffffff);
+    let dark = rgb(PANEL);
+    // Past this luminance dark reads better than white.
+    let on_accent = if luminance(accent) > 0.18 {
+        dark
+    } else {
+        light
+    };
+    motion::mix(light, on_accent, on)
+}
+
+/// The WCAG relative luminance of an opaque colour.
+fn luminance(color: Rgba) -> f32 {
+    let channel = |c: f32| {
+        if c <= 0.03928 {
+            c / 12.92
+        } else {
+            ((c + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    0.2126 * channel(color.r) + 0.7152 * channel(color.g) + 0.0722 * channel(color.b)
 }
 
 fn section_title(label: &'static str) -> Div {
@@ -568,4 +658,48 @@ fn choices(
         .gap(px(4.))
         .text_size(px(14.))
         .children(lines)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn contrast(a: Rgba, b: Rgba) -> f32 {
+        let (a, b) = (luminance(a), luminance(b));
+        (a.max(b) + 0.05) / (a.min(b) + 0.05)
+    }
+
+    /// A translucent colour over the panel.
+    fn over_panel(color: Rgba) -> Rgba {
+        motion::mix(rgb(PANEL), Rgba { a: 1., ..color }, color.a)
+    }
+
+    const ACCENTS: [u32; 4] = [0xf4f4f5, 0xffffff, 0x4ade80, 0x1d4ed8];
+
+    #[test]
+    fn the_knob_reads_on_the_track_whatever_the_accent_is() {
+        for accent in ACCENTS {
+            let accent = rgb(accent);
+            for on in [0., 1.] {
+                let track = over_panel(switch_track(on, accent));
+                let knob = switch_knob(on, accent);
+                assert!(
+                    contrast(knob, track) >= 3.,
+                    "accent {accent:?}, on {on}: contrast {}",
+                    contrast(knob, track)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_knob_eases_with_the_track() {
+        let accent = rgb(0xf4f4f5);
+        let (off, half, on) = (
+            switch_knob(0., accent),
+            switch_knob(0.5, accent),
+            switch_knob(1., accent),
+        );
+        assert!(luminance(off) > luminance(half) && luminance(half) > luminance(on));
+    }
 }
