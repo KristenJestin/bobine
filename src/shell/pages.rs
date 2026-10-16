@@ -199,6 +199,18 @@ impl<T: Listed> LibraryPage<T> {
         !self.grid.has_stale() || self.appear.value(now) > GONE
     }
 
+    /// The first page of the list was asked again until it was given up, and no list is there:
+    /// the failure is shown, with a way to try again.
+    pub fn gave_up(&self) -> bool {
+        self.grid.total.is_none() && self.grid.gave_up(0)
+    }
+
+    /// "Réessayer": the first page is asked anew, as many times as the first time.
+    pub fn retry(&mut self) {
+        self.grid.forget_failures();
+        self.error = None;
+    }
+
     /// The count in the header: none while the new list is awaited, the old total is not its.
     pub fn header_count(&self) -> Option<u32> {
         if self.grid.has_stale() {
@@ -775,6 +787,22 @@ impl Shell {
             self.ask_series(0..1, cx);
         } else if changed {
             self.ask_films(0..1, cx);
+        }
+        cx.notify();
+    }
+
+    /// "Réessayer", when the first page of the list was given up: it is asked again.
+    pub fn retry_list(&mut self, cx: &mut Context<Self>) {
+        match self.navigator.current() {
+            Screen::Library => {
+                self.library.retry();
+                self.ask_films(0..1, cx);
+            }
+            Screen::Series => {
+                self.series.retry();
+                self.ask_series(0..1, cx);
+            }
+            _ => return,
         }
         cx.notify();
     }
@@ -1749,6 +1777,46 @@ mod tests {
         page.follow_list(retry);
         assert!(!page.grid.has_stale());
         assert_eq!(page.grid.total, Some(1027));
+    }
+
+    /// The first page fails every time it is asked, up to the last try, from `t`.
+    fn give_up(page: &mut LibraryPage<Film>, t: Instant) -> Instant {
+        let epoch = page.grid.epoch();
+        let mut now = t;
+        for _ in 0..=crate::grid::MAX_RETRIES {
+            assert_eq!(page.pages_wanted(0..40, now), [0]);
+            page.grid.failed(epoch, 0, now);
+            now += crate::grid::RETRY_AFTER;
+        }
+        now
+    }
+
+    #[test]
+    fn a_first_page_given_up_during_the_fade_shows_the_failure_and_can_be_tried_again() {
+        let (mut page, t) = fading(Instant::now());
+        assert!(!page.gave_up());
+        let now = give_up(&mut page, t);
+        page.follow_list(now);
+        assert!(page.gave_up());
+        assert_eq!(page.pages_wanted(0..40, now), Vec::<u32>::new());
+        page.retry();
+        assert!(!page.gave_up());
+        assert_eq!(page.pages_wanted(0..40, now), [0]);
+        // The server is back: the list lands in the old one's place.
+        page.loaded(page.grid.epoch(), 0, answer(&page, 0));
+        page.follow_list(now);
+        assert!(!page.grid.has_stale());
+        assert_eq!(page.grid.total, Some(1027));
+    }
+
+    #[test]
+    fn a_first_page_that_still_has_tries_left_is_not_given_up() {
+        let (mut page, t) = fading(Instant::now());
+        let epoch = page.grid.epoch();
+        for _ in 0..crate::grid::MAX_RETRIES {
+            page.grid.failed(epoch, 0, t);
+        }
+        assert!(!page.gave_up());
     }
 
     #[test]
