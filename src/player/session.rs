@@ -734,15 +734,9 @@ mod tests {
         with_segments(&mut f, true);
         let start = Instant::now();
         at(&mut f, start, 20.);
-        assert_eq!(
-            f.session.skip_button().unwrap().label.text(),
-            "Passer le résumé"
-        );
+        assert_eq!(f.session.skip_button().unwrap().label.text(), "Skip recap");
         at(&mut f, start, 60.);
-        assert_eq!(
-            f.session.skip_button().unwrap().label.text(),
-            "Passer l'intro"
-        );
+        assert_eq!(f.session.skip_button().unwrap().label.text(), "Skip intro");
         assert_eq!(f.session.press_skip(), None);
         assert_eq!(seeks(&f), [Call::Seek(Seek::To(130.))]);
         assert_eq!(f.session.seeks(), 1);
@@ -825,7 +819,7 @@ mod tests {
         at(&mut f, start, 2750.);
         assert_eq!(
             f.session.skip_button().unwrap().label.text(),
-            "Passer le générique"
+            "Skip credits"
         );
         assert_eq!(f.session.press_skip(), Some(WindowRequest::EndPlayback));
         // What mpv says before the end comes does not move the position back.
@@ -843,7 +837,7 @@ mod tests {
         at(&mut f, start, 2750.);
         assert_eq!(
             f.session.skip_button().unwrap().label.text(),
-            "Épisode suivant"
+            "Next episode"
         );
         assert_eq!(
             f.session.key("enter", false, false),

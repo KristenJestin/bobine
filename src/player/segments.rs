@@ -22,11 +22,11 @@ pub enum Label {
 impl Label {
     pub fn text(self) -> &'static str {
         match self {
-            Self::Intro => "Passer l'intro",
-            Self::Recap => "Passer le résumé",
-            Self::Preview => "Passer l'aperçu",
-            Self::Credits => "Passer le générique",
-            Self::NextEpisode => "Épisode suivant",
+            Self::Intro => "Skip intro",
+            Self::Recap => "Skip recap",
+            Self::Preview => "Skip preview",
+            Self::Credits => "Skip credits",
+            Self::NextEpisode => "Next episode",
         }
     }
 }
@@ -124,7 +124,7 @@ mod tests {
         let segments = episode_segments();
         let button = button_at(&segments, 60., true).unwrap();
         assert_eq!(button.label, Label::Intro);
-        assert_eq!(button.label.text(), "Passer l'intro");
+        assert_eq!(button.label.text(), "Skip intro");
         assert_eq!(button.press, Press::SeekTo(130.));
     }
 
@@ -132,7 +132,7 @@ mod tests {
     fn during_a_recap_the_button_skips_the_summary() {
         let segments = episode_segments();
         let button = button_at(&segments, 10., true).unwrap();
-        assert_eq!(button.label.text(), "Passer le résumé");
+        assert_eq!(button.label.text(), "Skip recap");
         assert_eq!(button.press, Press::SeekTo(40.));
     }
 
@@ -140,7 +140,7 @@ mod tests {
     fn during_a_preview_the_button_skips_it() {
         let segments = [segment(SegmentKind::Preview, 100, 130)];
         let button = button_at(&segments, 100., false).unwrap();
-        assert_eq!(button.label.text(), "Passer l'aperçu");
+        assert_eq!(button.label.text(), "Skip preview");
         assert_eq!(button.press, Press::SeekTo(130.));
     }
 
@@ -163,7 +163,7 @@ mod tests {
     fn the_credits_of_an_episode_with_a_next_one_offer_it() {
         let segments = episode_segments();
         let button = button_at(&segments, 2750., true).unwrap();
-        assert_eq!(button.label.text(), "Épisode suivant");
+        assert_eq!(button.label.text(), "Next episode");
         assert_eq!(button.press, Press::NextEpisode);
     }
 
@@ -171,7 +171,7 @@ mod tests {
     fn the_credits_of_a_last_episode_or_a_film_end_the_playback() {
         let segments = episode_segments();
         let button = button_at(&segments, 2750., false).unwrap();
-        assert_eq!(button.label.text(), "Passer le générique");
+        assert_eq!(button.label.text(), "Skip credits");
         assert_eq!(button.press, Press::EndPlayback);
     }
 

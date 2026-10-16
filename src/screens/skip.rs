@@ -1,4 +1,4 @@
-//! The skip button of the player ("Passer l'intro", "Épisode suivant"…): bottom right, over the
+//! The skip button of the player ("Skip intro", "Next episode"…): bottom right, over the
 //! picture. It rides above the bottom controls while they show, and drops back to the margin
 //! when they go.
 
