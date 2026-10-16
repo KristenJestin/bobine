@@ -35,11 +35,7 @@ pub fn render(shell: &mut Shell, _: &mut Window, cx: &mut Context<Shell>) -> imp
     let (counts, body) = match titles {
         Ok(titles) => {
             let mut sections: Vec<Div> = Vec::new();
-            let counts = format!(
-                "{} · {}",
-                plural(titles.films.len(), "film", "films"),
-                plural(titles.series.len(), "series", "series")
-            );
+            let counts = counts(titles.films.len(), titles.series.len());
             if !titles.films.is_empty() {
                 let cards: Vec<_> = titles
                     .films
@@ -50,7 +46,7 @@ pub fn render(shell: &mut Shell, _: &mut Window, cx: &mut Context<Shell>) -> imp
                             .into_any_element()
                     })
                     .collect();
-                sections.push(section("Films", cards));
+                sections.push(section("Movies", cards));
             }
             if !titles.series.is_empty() {
                 let cards: Vec<_> = titles
@@ -130,6 +126,15 @@ pub fn render(shell: &mut Shell, _: &mut Window, cx: &mut Context<Shell>) -> imp
 }
 
 /// A heading and its titles, wrapping onto as many lines as they need.
+/// `2 movies · 1 series`, under the person's name.
+fn counts(films: usize, series: usize) -> String {
+    format!(
+        "{} · {}",
+        plural(films, "movie", "movies"),
+        plural(series, "series", "series")
+    )
+}
+
 fn section(title: &'static str, cards: Vec<gpui_kit::AnyElement>) -> Div {
     div()
         .flex()
@@ -207,4 +212,15 @@ fn series_card(
         draw: Rc::new(draw),
     };
     card(shell, ("person-series", index).into(), offer, cx)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_count_of_a_person_page_says_2_movies() {
+        assert_eq!(counts(2, 1), "2 movies · 1 series");
+        assert_eq!(counts(1, 0), "1 movie · 0 series");
+    }
 }

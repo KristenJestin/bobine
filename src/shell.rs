@@ -299,6 +299,11 @@ pub struct Film {
 }
 
 impl Shell {
+    /// The font the window is drawn with, when it is not the system's.
+    pub fn font(&self) -> Option<SharedString> {
+        self.font.clone()
+    }
+
     pub fn new(
         font: Option<SharedString>,
         open: OpenConnector,

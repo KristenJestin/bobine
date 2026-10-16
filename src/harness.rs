@@ -404,7 +404,7 @@ fn show_screen(
                 ItemId(crate::fake::FILMS_LIBRARY.into()),
                 bobine::provider::LibraryKind::Films,
             ),
-            Some("Films".to_string()),
+            Some("Movies".to_string()),
         )),
         _ => None,
     };
@@ -808,7 +808,7 @@ impl Acts {
                 (8.5, "f leaves fullscreen", Key("f")),
                 (11.5, "windowed", Mark),
                 (12.5, "f goes fullscreen again", Key("f")),
-                (15.5, "the film stops in fullscreen", Leave),
+                (15.5, "the movie stops in fullscreen", Leave),
                 (18.5, "stopped", Mark),
             ],
             // The Settings screen from the account menu: the quality menu, the switch, a secret
@@ -1672,7 +1672,7 @@ fn play(mut args: Args, shell: &Entity<Shell>, window: &mut Window, cx: &mut App
                                 external_subtitles: &[],
                             };
                             let film = Film {
-                                title: "Second film".to_string(),
+                                title: "Second movie".to_string(),
                                 subtitle: None,
                                 list: None,
                             };
@@ -1727,7 +1727,7 @@ fn play_file(
         title: args
             .title
             .clone()
-            .unwrap_or_else(|| "Test film".to_string()),
+            .unwrap_or_else(|| "Test movie".to_string()),
         subtitle: Some("local file · direct play".to_string()),
         list: None,
     };

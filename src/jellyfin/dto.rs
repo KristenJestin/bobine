@@ -460,11 +460,7 @@ impl Item {
             runtime: film.runtime.filter(|_| !series),
             overview: self.overview.clone().filter(|text| !text.is_empty()),
             backdrop: film.backdrop,
-            logo: self.image_tags.get("Logo").map(|tag| ImageRef {
-                item: ItemId(self.id.clone()),
-                kind: ImageKind::Logo,
-                tag: tag.clone(),
-            }),
+            logo: self.logo(),
             resume: film.resume.filter(|_| !series),
         }
     }
@@ -478,6 +474,15 @@ impl Item {
             item: ItemId(self.series_id.clone()?),
             kind: ImageKind::Primary,
             tag: self.series_primary_image_tag.clone()?,
+        })
+    }
+
+    /// The title drawn as an image, when the server has one.
+    pub fn logo(&self) -> Option<ImageRef> {
+        self.image_tags.get("Logo").map(|tag| ImageRef {
+            item: ItemId(self.id.clone()),
+            kind: ImageKind::Logo,
+            tag: tag.clone(),
         })
     }
 

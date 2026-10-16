@@ -8,17 +8,18 @@ use std::cell::Cell;
 use std::rc::Rc;
 use std::time::Instant;
 
-use bobine::provider::{CastMember, Film, FilmDetail, ItemId, MediaSource, PersonHit};
+use bobine::provider::{CastMember, Film, FilmDetail, ImageRef, ItemId, MediaSource, PersonHit};
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    AnyElement, Bounds, Context, Div, FontWeight, IntoElement, MouseButton, MouseDownEvent, Pixels,
-    Point, ScrollHandle, SharedString, Stateful, Window, anchored, canvas, deferred, div,
-    linear_color_stop, linear_gradient, point, px, rgb, rgba,
+    AnyElement, Bounds, Context, Div, FontWeight, IntoElement, MouseButton, MouseDownEvent,
+    ObjectFit, Pixels, Point, ScrollHandle, SharedString, Stateful, Window, anchored, canvas,
+    deferred, div, img, linear_color_stop, linear_gradient, point, px, rgb, rgba,
 };
 
 use super::{centered, note, picture, poster, progress_bar, row_heading};
 use crate::favourite;
 use crate::film_page::{self, Choices, Fact, From};
+use crate::hero;
 use crate::icons::{IconName, icon, with_stars};
 use crate::images;
 use crate::menu;
@@ -219,10 +220,17 @@ fn hero(
 
     let chips = chips_row(&detail.versions, choices, menu, chips, window, cx);
 
-    let meta_line = facts_line(film_page::meta(detail), NavEntry::Films, window, cx);
+    let meta_line = facts_line(
+        film_page::meta(detail),
+        NavEntry::Films,
+        shell.font(),
+        window,
+        cx,
+    );
 
+    let title = heading(shell, &film.title, detail.logo.as_ref(), window, cx);
     hero_frame(backdrop, height).child(
-        hero_text(film.title.clone())
+        hero_text_under(title)
             .child(meta_line)
             .children((!detail.directors.is_empty()).then(|| {
                 div()
@@ -334,6 +342,11 @@ pub(super) fn hero_frame(
 
 /// The column of text at the bottom left of the hero, under its title.
 pub(super) fn hero_text(title: String) -> Div {
+    hero_text_under(title_text(title))
+}
+
+/// The column of text at the bottom left of the hero, under `heading`: a title or its logo.
+pub(super) fn hero_text_under(heading: impl IntoElement) -> Div {
     div()
         .absolute()
         .left(px(EDGE))
@@ -342,21 +355,93 @@ pub(super) fn hero_text(title: String) -> Div {
         .flex()
         .flex_col()
         .gap(px(14.))
-        .child(
-            div()
-                .text_size(px(44.))
-                .line_height(px(50.))
-                .font_weight(FontWeight::BOLD)
-                .child(title),
-        )
+        .child(heading)
+}
+
+fn title_text(title: String) -> Div {
+    div()
+        .debug_selector(|| "detail-title".to_string())
+        .text_size(px(44.))
+        .line_height(px(50.))
+        .font_weight(FontWeight::BOLD)
+        .child(title)
+}
+
+/// The title of a film or series page: its logo, at the size it fits in the room, once the
+/// picture is here, fading in; its name in text until then, and when the server has no logo, so
+/// that the page is never without a title.
+pub(super) fn heading(
+    shell: &mut Shell,
+    title: &str,
+    logo: Option<&ImageRef>,
+    window: &mut Window,
+    cx: &mut Context<Shell>,
+) -> AnyElement {
+    let drawn = logo
+        .zip(shell.image(logo, images::LOGO, cx))
+        .and_then(|(logo, image)| {
+            let size = image.size(0);
+            let fit =
+                hero::logo_fit_in((size.width.0 as f32, size.height.0 as f32), hero::PAGE_LOGO)?;
+            Some((logo, image, fit))
+        });
+    let Some((logo, image, (width, height))) = drawn else {
+        return title_text(title.to_string()).into_any_element();
+    };
+    let fade = window.use_keyed_state(
+        SharedString::from(format!("page-logo-{}", logo.item.0)),
+        cx,
+        |_, _| Fade::new(motion::page()),
+    );
+    // The executor's clock, which the tests drive.
+    let now = cx.background_executor().now();
+    fade.update(cx, |fade, _| fade.set(true, now));
+    let fade = *fade.read(cx);
+    if fade.moving(now) {
+        window.request_animation_frame();
+    }
+    logo_over_title(
+        img(image)
+            .debug_selector(|| "detail-logo".to_string())
+            .w(px(width))
+            .h(px(height))
+            .object_fit(ObjectFit::Contain),
+        title_text(title.to_string()),
+        TEXT_WIDTH,
+        fade.level(now),
+    )
+    .debug_selector(|| "detail-heading".to_string())
+    .into_any_element()
+}
+
+/// A logo come in place of its title: the logo's box holds the place, the logo fades in
+/// (`level`) while the title, `width` wide and laid at its foot, fades out. The title shows alone
+/// until the logo is here, so the heading is never empty.
+pub(super) fn logo_over_title(logo: impl IntoElement, title: Div, width: f32, level: f32) -> Div {
+    div()
+        .relative()
+        .child(div().opacity(level).child(logo))
+        .when(level < 1., |heading| {
+            heading.child(
+                div()
+                    .absolute()
+                    .left_0()
+                    .bottom_0()
+                    .w(px(width))
+                    .opacity(1. - level)
+                    .child(title),
+            )
+        })
 }
 
 /// `2025 | ★ 6.0 | 2 h 11`: the facts under a title, apart.
-pub(super) fn meta_line(parts: Vec<String>) -> Div {
+pub(super) fn meta_line(parts: Vec<String>, font: Option<SharedString>, window: &Window) -> Div {
     meta_row(
         parts
             .iter()
-            .map(|part| with_stars(part, 14.).into_any_element()),
+            .map(|part| with_stars(part, META_SIZE).into_any_element()),
+        font,
+        window,
     )
 }
 
@@ -365,13 +450,18 @@ pub(super) fn meta_line(parts: Vec<String>) -> Div {
 pub(super) fn facts_line(
     facts: Vec<Fact>,
     library: NavEntry,
+    font: Option<SharedString>,
     window: &mut Window,
     cx: &mut Context<Shell>,
 ) -> Div {
-    meta_row(facts.into_iter().map(|fact| match fact {
-        Fact::Text(text) => with_stars(&text, 14.).into_any_element(),
-        Fact::Genres(genres) => genre_links(genres, library, window, cx).into_any_element(),
-    }))
+    let parts: Vec<_> = facts
+        .into_iter()
+        .map(|fact| match fact {
+            Fact::Text(text) => with_stars(&text, META_SIZE).into_any_element(),
+            Fact::Genres(genres) => genre_links(genres, library, window, cx).into_any_element(),
+        })
+        .collect();
+    meta_row(parts, font, window)
 }
 
 /// The genres, a comma after each but the last, each answering the pointer.
@@ -417,22 +507,67 @@ fn genre_links(
         }))
 }
 
-fn meta_row(parts: impl IntoIterator<Item = AnyElement>) -> Div {
-    let mut meta = parts.into_iter();
+/// The size and the height of the meta line's text.
+const META_SIZE: f32 = 14.;
+const META_LINE: f32 = 22.;
+
+/// The bar between two facts covers the digits' box, from the cap height to the baseline: taller,
+/// it reads as sitting above the text. Read from the font the line is drawn with (`font`, the
+/// shell's, else the window's), as GPUI places a line: half the leading above the ascent. The
+/// digits are drawn on whole pixels (Inter's 10.2 px take 11 rows), so the bar's height is too.
+fn meta_bar(font: Option<SharedString>, window: &Window) -> (Pixels, Pixels) {
+    let mut style = window.text_style();
+    if let Some(family) = font {
+        style.font_family = family;
+    }
+    let text = window.text_system();
+    let id = text.resolve_font(&style.font());
+    let size = px(META_SIZE);
+    let ascent = text.ascent(id, size);
+    let descent = text.descent(id, size).abs();
+    let cap = text.cap_height(id, size).ceil();
+    let baseline = (px(META_LINE) - ascent - descent) / 2. + ascent;
+    (baseline - cap, cap)
+}
+
+fn meta_row(
+    parts: impl IntoIterator<Item = AnyElement>,
+    font: Option<SharedString>,
+    window: &Window,
+) -> Div {
+    let (top, height) = meta_bar(font, window);
+    let mut meta = parts.into_iter().enumerate();
+    let part = |index: usize, part: AnyElement| {
+        div()
+            .debug_selector(move || format!("meta-part {index}"))
+            .flex()
+            .items_center()
+            .child(part)
+    };
     div()
         .flex()
         .items_center()
         .gap(px(10.))
-        .text_size(px(14.))
+        .text_size(px(META_SIZE))
+        .line_height(px(META_LINE))
         .text_color(theme::muted())
-        .children(meta.next())
-        .children(meta.map(|part| {
+        .children(meta.next().map(|(index, first)| part(index, first)))
+        .children(meta.map(|(index, next)| {
             div()
                 .flex()
                 .items_center()
                 .gap(px(10.))
-                .child(div().w(px(1.)).h(px(12.)).bg(theme::line()))
-                .child(part)
+                .child(
+                    div().h(px(META_LINE)).child(
+                        div()
+                            .debug_selector(move || format!("meta-separator {index}"))
+                            .w(px(1.))
+                            .mt(top)
+                            .h(height)
+                            .bg(theme::line()),
+                    ),
+                )
+                .child(part(index, next))
         }))
 }
 
