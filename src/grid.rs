@@ -40,6 +40,15 @@ pub fn count(total: u32) -> String {
     format!("{grouped} {noun}")
 }
 
+/// The row at the top of a list scrolled by `scrolled` pixels. `contents` is the height of all
+/// the rows together: one row is a share of it, not the height of what is in view.
+pub fn top_row(scrolled: f32, contents: f32, rows: usize) -> usize {
+    if rows == 0 || contents <= 0. || scrolled <= 0. {
+        return 0;
+    }
+    ((scrolled / (contents / rows as f32)) as usize).min(rows - 1)
+}
+
 /// What a grid shows: films or series.
 pub trait Listed: Clone {
     fn id(&self) -> &ItemId;
@@ -172,6 +181,27 @@ impl<T: Listed> Grid<T> {
 mod tests {
     use super::*;
     use crate::fake::FakeServer;
+
+    #[test]
+    fn the_top_row_is_the_scroll_over_one_rows_height() {
+        // 100 rows of 300 px: scrolled to the 61st row's top.
+        assert_eq!(top_row(60. * 300., 100. * 300., 100), 60);
+        assert_eq!(top_row(60. * 300. + 299., 100. * 300., 100), 60);
+    }
+
+    #[test]
+    fn the_top_row_is_the_first_before_any_scroll_or_measure() {
+        assert_eq!(top_row(0., 30_000., 100), 0);
+        assert_eq!(top_row(-12., 30_000., 100), 0);
+        assert_eq!(top_row(500., 0., 0), 0);
+        assert_eq!(top_row(500., 0., 10), 0);
+    }
+
+    #[test]
+    fn the_top_row_never_passes_the_last_one() {
+        assert_eq!(top_row(1.0e9, 30_000., 100), 99);
+    }
+
     use crate::library_tools::Tools;
     use bobine::provider::MediaServer;
 

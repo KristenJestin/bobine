@@ -134,15 +134,10 @@ fn grid_screen<T: Listed + 'static>(
     // The letter the top of the grid is at, when the bar is showing.
     let top_row = {
         let state = scroll.0.borrow();
-        let row = state
+        let contents = state
             .last_item_size
-            .map_or(0., |size| f32::from(size.item.height));
-        let scrolled = -f32::from(state.base_handle.offset().y);
-        if row > 0. {
-            (scrolled / row).max(0.) as usize
-        } else {
-            0
-        }
+            .map_or(0., |size| f32::from(size.contents.height));
+        grid::top_row(-f32::from(state.base_handle.offset().y), contents, rows)
     };
     let current = shown
         .grid
