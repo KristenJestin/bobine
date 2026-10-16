@@ -41,6 +41,15 @@ pub struct JellyfinConnector {
 }
 
 /// The name the server shows for this device: the machine's.
+/// Whether `path` is a whole address (a remote subtitle's) and not a path of the server.
+fn is_absolute(path: &str) -> bool {
+    let starts_with = |scheme: &str| {
+        path.get(..scheme.len())
+            .is_some_and(|start| start.eq_ignore_ascii_case(scheme))
+    };
+    starts_with("http://") || starts_with("https://")
+}
+
 fn device_name() -> String {
     std::fs::read_to_string("/proc/sys/kernel/hostname")
         .ok()
@@ -311,7 +320,7 @@ impl Jellyfin {
     /// gives; an older one may not. An absolute address is another host's (a remote subtitle):
     /// as it is, never with our token.
     fn served(&self, path: &str) -> String {
-        if path.starts_with("http") {
+        if is_absolute(path) {
             return path.to_string();
         }
         let mut url = format!("{}{path}", self.http.base());

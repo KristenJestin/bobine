@@ -1515,6 +1515,29 @@ fn an_absolute_delivery_url_is_used_as_it_is_without_a_token() {
 }
 
 #[test]
+fn only_an_http_or_https_address_is_absolute() {
+    use super::is_absolute;
+    for absolute in [
+        "http://subtitles.example.test/3.srt",
+        "https://subtitles.example.test/3.srt",
+        "HTTPS://subtitles.example.test/3.srt",
+        "Http://subtitles.example.test/3.srt",
+    ] {
+        assert!(is_absolute(absolute), "{absolute}");
+    }
+    for relative in [
+        "/Videos/1/Subtitles/3/0/Stream.srt",
+        "httpd/Stream.srt",
+        "http-stream.srt",
+        "https",
+        "ftp://subtitles.example.test/3.srt",
+        "",
+    ] {
+        assert!(!is_absolute(relative), "{relative}");
+    }
+}
+
+#[test]
 fn a_version_the_server_cannot_convert_says_so() {
     let s = Setup::new();
     s.fake.state.lock().unwrap().no_transcoding = true;
