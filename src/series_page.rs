@@ -6,8 +6,8 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use bobine::provider::{
-    Episode, ItemId, MediaServer, MediaSourceId, Playback, ProviderError, Season, Series,
-    SeriesDetail,
+    Episode, ItemId, MediaServer, MediaSourceId, Playback, PlaylistEntry, ProviderError, Season,
+    Series, SeriesDetail,
 };
 
 use crate::film_page::{self, Carried, Choices, Fact};
@@ -203,7 +203,7 @@ pub fn land_episodes(
 /// A click on an episode, or the card's own countdown, starts it: whether it can, the page not
 /// waiting. Only then does another episode chosen take the card away; a click the page ignores
 /// leaves it counting down.
-pub fn starts_episode(waiting: bool, card: &mut UpNext) -> bool {
+pub fn starts_episode<T>(waiting: bool, card: &mut UpNext<T>) -> bool {
     if waiting {
         return false;
     }
@@ -254,12 +254,12 @@ pub fn open_episode(
 
 /// The episode the card offers once the player is left: the one after, only when the file ended
 /// at its real end; none when the viewer left, or when the stream was cut.
-pub fn offered_on_leaving(
+pub fn offered_on_leaving<T>(
     ended: bool,
-    next: Option<Episode>,
+    next: Option<T>,
     position: f64,
     duration: f64,
-) -> Option<Episode> {
+) -> Option<T> {
     next.filter(|_| ended && reached_the_end(position, duration))
 }
 
@@ -323,16 +323,34 @@ impl Refreshes {
     }
 }
 
+/// What the card offers once a playback ended.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Next {
+    /// The episode after, on its series page.
+    Episode(Episode),
+    /// The title after in the playlist being played, at its place there.
+    Entry(usize, PlaylistEntry),
+}
+
 /// The "Next episode" card: counts down, then gives the episode to play, unless cancelled.
-/// It belongs to the series page it showed over, at its depth among the series pages.
-#[derive(Default)]
-pub struct UpNext {
-    pending: Option<(Episode, Instant)>,
+/// It belongs to the page it showed over: a series page, or a playlist's, at its depth among
+/// those pages, with what it shows.
+pub struct UpNext<T = Episode> {
+    pending: Option<(T, Instant)>,
     page: Option<(usize, ItemId)>,
 }
 
-impl UpNext {
-    pub fn start(&mut self, episode: Episode, page: (usize, ItemId), now: Instant) {
+impl<T> Default for UpNext<T> {
+    fn default() -> Self {
+        Self {
+            pending: None,
+            page: None,
+        }
+    }
+}
+
+impl<T> UpNext<T> {
+    pub fn start(&mut self, episode: T, page: (usize, ItemId), now: Instant) {
         self.pending = Some((episode, now));
         self.page = Some(page);
     }
@@ -342,7 +360,7 @@ impl UpNext {
         self.page = None;
     }
 
-    pub fn episode(&self) -> Option<&Episode> {
+    pub fn episode(&self) -> Option<&T> {
         self.pending.as_ref().map(|(episode, _)| episode)
     }
 
@@ -373,7 +391,7 @@ impl UpNext {
         now_asked: bool,
         top: Option<(usize, &ItemId)>,
         busy: bool,
-    ) -> Option<Episode> {
+    ) -> Option<T> {
         let (_, since) = self.pending.as_ref()?;
         let page = self.page.as_ref().map(|(depth, id)| (*depth, id));
         if top != page {

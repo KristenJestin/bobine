@@ -11,6 +11,7 @@ mod lists;
 mod login;
 mod person;
 pub mod player;
+mod playlist;
 pub mod search;
 mod series_detail;
 pub mod skip;
@@ -58,7 +59,9 @@ pub fn render(
         Screen::HomeList => home_list::render(shell, window, cx).into_any_element(),
         Screen::Collections => lists::render_collections(shell, window, cx).into_any_element(),
         Screen::CollectionDetail => collection_detail::render(shell, window, cx).into_any_element(),
-        Screen::MyList => lists::render_my_list(shell, window, cx).into_any_element(),
+        Screen::MyList => lists::render_lists(shell, window, cx).into_any_element(),
+        Screen::Favorites => lists::render_my_list(shell, window, cx).into_any_element(),
+        Screen::Playlist => playlist::render(shell, window, cx).into_any_element(),
     }
 }
 

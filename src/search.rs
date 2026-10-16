@@ -891,6 +891,8 @@ mod tests {
             Screen::Collections,
             Screen::CollectionDetail,
             Screen::MyList,
+            Screen::Favorites,
+            Screen::Playlist,
         ] {
             assert!(opens_from(screen), "{screen:?}");
         }

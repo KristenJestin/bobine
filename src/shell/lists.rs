@@ -1,8 +1,9 @@
-//! The user's list ("My list") and the collections: what the pages show of them, and how it
-//! comes from the server. Every call runs off the window's thread, like the others.
+//! The Lists (the favorites and the playlists) and the collections: what the pages show of
+//! them, and how it comes from the server. Every call runs off the window's thread, like the
+//! others.
 
 use bobine::provider::{
-    CollectionCard, CollectionDetail, Favourite, ImageRef, ItemId, ProviderError,
+    CollectionCard, CollectionDetail, Favourite, ImageRef, ItemId, Playlist, ProviderError,
 };
 use gpui_kit::{Context, ScrollHandle, UniformListScrollHandle};
 
@@ -11,6 +12,7 @@ use super::pages::Loadable;
 use crate::favourite::{self, ListPage, Toggle};
 use crate::lists::PosterQueue;
 use crate::navigation::Screen;
+use crate::playlists;
 use crate::poster_actions::Action;
 use crate::series_page::Refreshes;
 
@@ -57,6 +59,68 @@ impl MyListPage {
             self.items = Some(items);
         }
         newest
+    }
+}
+
+/// The Lists: the favorites' card, then a card for each playlist.
+#[derive(Default)]
+pub struct ListsPage {
+    pub playlists: Option<Loadable<Vec<Playlist>>>,
+    pub scroll: UniformListScrollHandle,
+    /// Each time the playlists are asked, numbered like the favorites.
+    asked: Refreshes,
+}
+
+/// What a card of the Lists opens.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Opens {
+    Favorites,
+    Playlist(ItemId),
+}
+
+/// A card of the Lists, as it is drawn: a mosaic of its first posters, its name and its count.
+#[derive(Clone, Debug)]
+pub struct ListCard {
+    pub name: String,
+    pub caption: String,
+    pub posters: Vec<ImageRef>,
+    pub opens: Opens,
+}
+
+impl ListsPage {
+    /// The cards: the favorites first, then the playlists the server gave, by name.
+    pub fn cards(&self, favourites: Option<&Loadable<Vec<Favourite>>>) -> Vec<ListCard> {
+        let favourites = match favourites {
+            Some(Loadable::Ready(items)) => Some(items),
+            _ => None,
+        };
+        let favorites = ListCard {
+            name: "Favorites".into(),
+            caption: favourites
+                .map(|items| playlists::titles(items.len()))
+                .unwrap_or_default(),
+            posters: favourites
+                .map(|items| {
+                    playlists::mosaic(items.iter().map(|favourite| match favourite {
+                        Favourite::Film(film) => film.poster.as_ref(),
+                        Favourite::Series(series) => series.poster.as_ref(),
+                    }))
+                })
+                .unwrap_or_default(),
+            opens: Opens::Favorites,
+        };
+        let found = match &self.playlists {
+            Some(Loadable::Ready(found)) => found.as_slice(),
+            _ => &[],
+        };
+        std::iter::once(favorites)
+            .chain(found.iter().map(|playlist| ListCard {
+                name: playlist.name.clone(),
+                caption: playlists::titles(playlist.entries.len()),
+                posters: playlists::playlist_mosaic(&playlist.entries),
+                opens: Opens::Playlist(playlist.id.clone()),
+            }))
+            .collect()
     }
 }
 
@@ -299,6 +363,34 @@ impl Shell {
         );
     }
 
+    /// The Lists, each time they show: the favorites, and the playlists.
+    pub fn load_lists(&mut self, cx: &mut Context<Self>) {
+        self.load_my_list(cx);
+        Loadable::asking(&mut self.lists.playlists);
+        let number = self.lists.asked.ask(&mut self.refreshes_asked);
+        self.ask(
+            cx,
+            |server| server.playlists(),
+            move |shell, found, cx| {
+                let found = match found {
+                    Ok(found) => Loadable::Ready(found),
+                    Err(error) => Loadable::Failed(shell.failed(error, cx)),
+                };
+                if shell.lists.asked.is_newest(number) {
+                    shell.lists.playlists = Some(found);
+                }
+            },
+        );
+    }
+
+    /// The favorites' card of the Lists.
+    pub fn open_favorites(&mut self, cx: &mut Context<Self>) {
+        self.forward.clear();
+        self.navigator.open(Screen::Favorites);
+        self.load_my_list(cx);
+        cx.notify();
+    }
+
     pub fn open_collection(&mut self, id: ItemId, cx: &mut Context<Self>) {
         self.forward.clear();
         self.collection_pages.push(CollectionPage {
@@ -355,6 +447,44 @@ impl Shell {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::fake::FakeServer;
+    use crate::navigation::NavEntry;
+    use gpui_kit::{TestAppContext, WindowHandle};
+    use std::sync::Arc;
+
+    /// The Home of a fake server, signed in.
+    fn signed_in(cx: &mut TestAppContext) -> (FakeServer, WindowHandle<Shell>) {
+        let server = FakeServer::new(12, true);
+        let connector: Arc<dyn bobine::provider::Connector> = Arc::new(server.clone());
+        let window =
+            cx.add_window(|_, cx| Shell::new(None, Box::new(move || Ok(connector)), None, cx));
+        cx.run_until_parked();
+        (server, window)
+    }
+
+    #[gpui_kit::test]
+    fn favorites_and_playlists_are_listed_on_the_lists_page(cx: &mut TestAppContext) {
+        let (_server, window) = signed_in(cx);
+        window
+            .update(cx, |shell, _, cx| shell.select(NavEntry::MyList, cx))
+            .unwrap();
+        cx.run_until_parked();
+        window
+            .update(cx, |shell, _, _| {
+                assert_eq!(shell.navigator.current(), Screen::MyList);
+                let cards = shell.lists.cards(shell.my_list.items.as_ref());
+                let names: Vec<&str> = cards.iter().map(|card| card.name.as_str()).collect();
+                // The favorites first, then each playlist by name.
+                assert_eq!(names, ["Favorites", "Late night", "Watchlist"]);
+                assert_eq!(cards[0].caption, "4 titles");
+                assert_eq!(cards[1].caption, "5 titles");
+                assert_eq!(cards[1].posters.len(), 4, "a two by two mosaic");
+                assert_eq!(cards[2].caption, "4 titles");
+                assert_eq!(cards[0].opens, Opens::Favorites);
+                assert!(matches!(&cards[1].opens, Opens::Playlist(id) if id.0 == "playlist-late"));
+            })
+            .unwrap();
+    }
 
     fn shown(page: &MyListPage) -> Option<usize> {
         match &page.items {

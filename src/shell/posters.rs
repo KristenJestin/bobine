@@ -72,7 +72,7 @@ impl Shell {
                         page.button().0.follow(wanted);
                     }
                 }
-                if self.navigator.current() == Screen::MyList {
+                if self.navigator.current() == Screen::Favorites {
                     self.load_my_list(cx);
                 }
             }

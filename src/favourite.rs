@@ -115,8 +115,8 @@ pub fn press(page: &mut dyn ListPage) -> Option<Pressed> {
 
 /// The server answered `pressed`. Only the page that pressed it takes the answer (a page closed
 /// meanwhile has no one to take it, even if the same title was opened in its place); on a
-/// success every other page of the same title shows the change too. Returns whether the user's
-/// list, if it is the screen shown, has to be asked again.
+/// success every other page of the same title shows the change too. Returns whether the
+/// favorites, if they are the screen shown, have to be asked again.
 pub fn answered<'a>(
     pages: impl IntoIterator<Item = &'a mut dyn ListPage>,
     current: Screen,
@@ -133,7 +133,7 @@ pub fn answered<'a>(
             page.button().0.follow(pressed.wanted);
         }
     }
-    answer.is_ok() && current == Screen::MyList
+    answer.is_ok() && current == Screen::Favorites
 }
 
 /// The page numbered `generation`, at `depth` of its stack, if it is still open there: the read
@@ -505,9 +505,9 @@ mod tests {
     fn my_list_is_asked_again_when_the_change_is_answered_on_top_of_it() {
         let mut stack = [Page::new("film-a", 1, true)];
         let pressed = press(&mut stack[0]).unwrap();
-        // My list → film → remove → Escape before the answer: My list is the screen shown,
+        // Favorites → film → remove → Escape before the answer: the favorites are the screen shown,
         // and it was asked while the server was taking the change.
-        assert!(answer_to(&mut stack, Screen::MyList, &pressed, Ok(())));
+        assert!(answer_to(&mut stack, Screen::Favorites, &pressed, Ok(())));
     }
 
     #[test]
@@ -519,7 +519,7 @@ mod tests {
         let pressed = press(&mut stack[0]).unwrap();
         assert!(!answer_to(
             &mut stack,
-            Screen::MyList,
+            Screen::Favorites,
             &pressed,
             Err(ProviderError::Server(500))
         ));
