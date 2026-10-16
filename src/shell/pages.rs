@@ -8,8 +8,8 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use bobine::provider::{
-    Collection, Connector, Episode, Film, FilmDetail, FilmQuery, ItemId, LibraryKind, MediaServer,
-    MediaSource, Page, Playback as Opened, PlaybackReport, ProviderError,
+    Collection, Connector, Episode, Film, FilmDetail, FilmQuery, FilterChoices, ItemId,
+    LibraryKind, MediaServer, MediaSource, Page, Playback as Opened, PlaybackReport, ProviderError,
 };
 use gpui_kit::prelude::*;
 use gpui_kit::{
@@ -19,11 +19,12 @@ use gpui_kit::{
 
 use super::{Film as Playing, Shell};
 use crate::film_page::{self, Choices, From, Plan};
-use crate::grid::{self, Grid, Listed};
+use crate::grid::{Grid, Listed};
 use crate::images::{self, Key};
 use crate::input::TextInput;
+use crate::library_tools::Tools;
 use crate::menu::Menus;
-use crate::motion::{self, Presence};
+use crate::motion::{self, Glide, Presence};
 use crate::navigation::{NavEntry, Screen};
 use crate::player::libmpv::Libmpv;
 use crate::reports::Reporting;
@@ -57,11 +58,40 @@ pub struct HomePage {
     pub resume: Option<Loadable<Vec<Film>>>,
 }
 
+/// The menus of the tools above a grid.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Tool {
+    Genre,
+    Decade,
+    Sort,
+}
+
+impl Tool {
+    pub const ALL: [Tool; 3] = [Tool::Genre, Tool::Decade, Tool::Sort];
+}
+
 /// The films or the series of the first library of their kind of the user.
 pub struct LibraryPage<T> {
     pub library: Option<Loadable<ItemId>>,
     pub grid: Grid<T>,
     pub scroll: UniformListScrollHandle,
+    /// The filters and the order, kept for as long as the program runs.
+    pub tools: Tools,
+    /// The genres and decades to choose from, asked once the library is known.
+    pub choices: Option<Loadable<FilterChoices>>,
+    /// Why the list could not be had, when its first page failed.
+    pub error: Option<&'static str>,
+    pub menus: Menus<Tool>,
+    /// The menu drawn, kept while it fades out.
+    pub menu_fade: Presence<Tool>,
+    /// Where each tool's chip was last drawn, so its menu opens under it.
+    pub chips: [ChipBounds; 3],
+    /// How much of the list shows: it comes in when a list arrives and after a jump.
+    pub appear: Glide,
+    /// The list whose arrival `appear` has already played.
+    pub appeared: Option<u64>,
+    /// The index of the title to scroll to, found by a letter of the alphabet bar.
+    pub jump: Option<usize>,
 }
 
 impl<T> Default for LibraryPage<T> {
@@ -70,7 +100,47 @@ impl<T> Default for LibraryPage<T> {
             library: None,
             grid: Grid::default(),
             scroll: UniformListScrollHandle::default(),
+            tools: Tools::default(),
+            choices: None,
+            error: None,
+            menus: Menus::default(),
+            menu_fade: Presence::new(motion::quick()),
+            chips: Default::default(),
+            appear: Glide::new(1., motion::page()),
+            appeared: None,
+            jump: None,
         }
+    }
+}
+
+impl<T: Listed> LibraryPage<T> {
+    /// Changes the filters or the order. When they did change, the list starts over from the
+    /// top: the pages of the old one are forgotten and its late answers will not be taken.
+    pub fn change(&mut self, change: impl FnOnce(&mut Tools)) -> bool {
+        let before = self.tools.clone();
+        change(&mut self.tools);
+        if self.tools == before {
+            return false;
+        }
+        self.grid.restart();
+        self.error = None;
+        self.jump = None;
+        self.menus.close();
+        self.scroll
+            .0
+            .borrow()
+            .base_handle
+            .set_offset(point(px(0.), px(0.)));
+        true
+    }
+
+    /// The server counted `index` titles before a letter, for the list asked under `epoch`: the
+    /// grid goes there, unless the list has changed since.
+    pub fn found_letter(&mut self, epoch: u64, index: u32) {
+        let Some(total) = self.grid.total.filter(|_| self.grid.is_current(epoch)) else {
+            return;
+        };
+        self.jump = Some(index.min(total.saturating_sub(1)) as usize);
     }
 }
 
@@ -509,18 +579,20 @@ impl Shell {
             return;
         };
         let library = library.clone();
+        let (tools, epoch) = (shown.tools.clone(), shown.grid.epoch());
         for page in shown.grid.pages_to_ask(items.clone(), Instant::now()) {
-            let library = library.clone();
+            let (library, tools) = (library.clone(), tools.clone());
             self.ask(
                 cx,
-                move |server| fetch(server, &library, &grid::query(page)),
+                move |server| fetch(server, &library, &tools.query(page)),
                 move |shell, items, cx| match items {
-                    Ok(items) => page_of(shell).grid.loaded(page, items),
+                    Ok(items) => page_of(shell).grid.loaded(epoch, page, items),
                     Err(error) => {
-                        page_of(shell).grid.failed(page, Instant::now());
-                        if page_of(shell).grid.total.is_none() {
+                        let shown = page_of(shell);
+                        shown.grid.failed(epoch, page, Instant::now());
+                        if shown.grid.total.is_none() && shown.grid.is_current(epoch) {
                             let said = shell.failed(error, cx);
-                            page_of(shell).library = Some(Loadable::Failed(said));
+                            page_of(shell).error = Some(said);
                         }
                     }
                 },
@@ -987,5 +1059,91 @@ mod tests {
             Some(Reload::Film(1))
         );
         assert_eq!(reload_after_playback(Screen::Home, 0, 0), None);
+    }
+
+    use crate::fake::{FILMS_LIBRARY, FakeServer};
+    use bobine::provider::MediaServer;
+
+    /// A films page whose first page of a 1284-film library has arrived.
+    fn films_page() -> LibraryPage<Film> {
+        let server = FakeServer::new(1284, true);
+        let mut page = LibraryPage::<Film>::default();
+        page.grid.pages_to_ask(0..8, Instant::now());
+        let first = server
+            .films(&ItemId(FILMS_LIBRARY.into()), &page.tools.query(0))
+            .unwrap();
+        page.grid.loaded(page.grid.epoch(), 0, first);
+        page
+    }
+
+    #[test]
+    fn changing_a_filter_starts_the_list_over_from_the_top() {
+        let mut page = films_page();
+        page.scroll
+            .0
+            .borrow()
+            .base_handle
+            .set_offset(point(px(0.), px(-900.)));
+        page.jump = Some(40);
+        assert!(page.change(|tools| tools.filters.genre = Some("Drame".into())));
+        assert_eq!(page.tools.filters.genre.as_deref(), Some("Drame"));
+        assert_eq!(page.grid.total, None);
+        assert_eq!(page.jump, None);
+        assert_eq!(page.scroll.0.borrow().base_handle.offset().y, px(0.));
+    }
+
+    #[test]
+    fn changing_the_order_starts_the_list_over_too() {
+        let mut page = films_page();
+        assert!(page.change(|tools| tools.sort = crate::library_tools::Sort::Title));
+        assert_eq!(page.grid.total, None);
+    }
+
+    #[test]
+    fn choosing_what_is_already_chosen_changes_nothing() {
+        let mut page = films_page();
+        assert!(!page.change(|tools| tools.filters.unwatched = false));
+        assert_eq!(page.grid.total, Some(1284));
+    }
+
+    #[test]
+    fn changing_the_tools_closes_the_open_menu() {
+        let mut page = films_page();
+        page.menus.toggle(Tool::Genre);
+        page.change(|tools| tools.filters.unwatched = true);
+        assert_eq!(page.menus.open(), None);
+    }
+
+    #[test]
+    fn the_tools_of_the_films_and_of_the_series_are_apart() {
+        let mut films = films_page();
+        let series = LibraryPage::<bobine::provider::Series>::default();
+        films.change(|tools| tools.filters.unwatched = true);
+        assert!(films.tools.narrowed());
+        assert!(!series.tools.narrowed());
+    }
+
+    #[test]
+    fn a_letter_found_takes_the_grid_to_its_title() {
+        let mut page = films_page();
+        page.found_letter(page.grid.epoch(), 412);
+        assert_eq!(page.jump, Some(412));
+    }
+
+    #[test]
+    fn a_letter_found_past_the_last_title_goes_to_the_last_one() {
+        // "Z" with no title under it counts every title before it.
+        let mut page = films_page();
+        page.found_letter(page.grid.epoch(), 1284);
+        assert_eq!(page.jump, Some(1283));
+    }
+
+    #[test]
+    fn a_letter_found_for_a_list_since_changed_goes_nowhere() {
+        let mut page = films_page();
+        let asked = page.grid.epoch();
+        page.change(|tools| tools.filters.unwatched = true);
+        page.found_letter(asked, 412);
+        assert_eq!(page.jump, None);
     }
 }

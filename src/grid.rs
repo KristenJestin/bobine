@@ -6,7 +6,7 @@ use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::time::{Duration, Instant};
 
-use bobine::provider::{Film, FilmQuery, FilmSort, Filters, ItemId, Page, Series};
+use bobine::provider::{Film, ItemId, Page, Series};
 
 /// Films per request.
 pub const PAGE: u32 = 100;
@@ -40,18 +40,6 @@ pub fn count(total: u32) -> String {
     format!("{grouped} {noun}")
 }
 
-/// The newest first.
-pub fn query(page: u32) -> FilmQuery {
-    FilmQuery {
-        sort: FilmSort::DateAdded,
-        descending: true,
-        filters: Filters::default(),
-        before: None,
-        start: page * PAGE,
-        limit: PAGE,
-    }
-}
-
 /// What a grid shows: films or series.
 pub trait Listed: Clone {
     fn id(&self) -> &ItemId;
@@ -72,6 +60,9 @@ impl Listed for Series {
 pub struct Grid<T> {
     /// Known once the first page came back.
     pub total: Option<u32>,
+    /// Which list this is: it changes each time the grid starts over, so that an answer meant
+    /// for the list before it is told apart and dropped.
+    epoch: u64,
     pages: HashMap<u32, Vec<T>>,
     asked: HashSet<u32>,
     /// How many times a page failed, and when it last did.
@@ -82,6 +73,7 @@ impl<T> Default for Grid<T> {
     fn default() -> Self {
         Self {
             total: None,
+            epoch: 0,
             pages: HashMap::new(),
             asked: HashSet::new(),
             failures: HashMap::new(),
@@ -90,6 +82,25 @@ impl<T> Default for Grid<T> {
 }
 
 impl<T: Listed> Grid<T> {
+    /// Starts over from the top, for new filters or a new order: nothing of the old list stays,
+    /// and the answers still on their way for it will not be taken.
+    pub fn restart(&mut self) {
+        self.epoch += 1;
+        self.total = None;
+        self.pages.clear();
+        self.asked.clear();
+        self.failures.clear();
+    }
+
+    pub fn epoch(&self) -> u64 {
+        self.epoch
+    }
+
+    /// Whether an answer asked for under `epoch` is still for the list shown.
+    pub fn is_current(&self, epoch: u64) -> bool {
+        epoch == self.epoch
+    }
+
     pub fn rows(&self, columns: usize) -> usize {
         (self.total.unwrap_or(0) as usize).div_ceil(columns.max(1))
     }
@@ -118,14 +129,20 @@ impl<T: Listed> Grid<T> {
         }
     }
 
-    pub fn loaded(&mut self, page: u32, films: Page<T>) {
+    pub fn loaded(&mut self, epoch: u64, page: u32, films: Page<T>) {
+        if !self.is_current(epoch) {
+            return;
+        }
         self.failures.remove(&page);
         self.total = Some(films.total);
         self.pages.insert(page, films.items);
     }
 
     /// The page may be asked again, a few times, once `RETRY_AFTER` has passed.
-    pub fn failed(&mut self, page: u32, now: Instant) {
+    pub fn failed(&mut self, epoch: u64, page: u32, now: Instant) {
+        if !self.is_current(epoch) {
+            return;
+        }
         self.asked.remove(&page);
         let failures = self.failures.get(&page).map_or(0, |&(count, _)| count);
         self.failures.insert(page, (failures + 1, now));
@@ -146,7 +163,18 @@ impl<T: Listed> Grid<T> {
 mod tests {
     use super::*;
     use crate::fake::FakeServer;
+    use crate::library_tools::Tools;
     use bobine::provider::MediaServer;
+
+    fn query(page: u32) -> bobine::provider::FilmQuery {
+        Tools::default().query(page)
+    }
+
+    fn some(server: &FakeServer, page: u32) -> Page<Film> {
+        server
+            .films(&ItemId(crate::fake::FILMS_LIBRARY.into()), &query(page))
+            .unwrap()
+    }
 
     #[test]
     fn eight_columns_at_1440_fewer_when_narrower() {
@@ -165,13 +193,6 @@ mod tests {
     }
 
     #[test]
-    fn films_are_sorted_by_date_added_newest_first() {
-        let q = query(3);
-        assert_eq!((q.sort, q.descending), (FilmSort::DateAdded, true));
-        assert_eq!((q.start, q.limit), (300, PAGE));
-    }
-
-    #[test]
     fn only_the_pages_of_the_visible_rows_are_asked_once() {
         let mut grid = Grid::<Film>::default();
         let now = Instant::now();
@@ -186,7 +207,7 @@ mod tests {
         let mut grid = Grid::<Film>::default();
         let now = Instant::now();
         assert_eq!(grid.pages_to_ask(0..8, now), [0]);
-        grid.failed(0, now);
+        grid.failed(grid.epoch(), 0, now);
         // The renders that follow the failure, one frame apart.
         for frame in 1..=100 {
             let later = now + Duration::from_millis(16 * frame);
@@ -199,7 +220,7 @@ mod tests {
         let mut grid = Grid::<Film>::default();
         let now = Instant::now();
         grid.pages_to_ask(0..8, now);
-        grid.failed(0, now);
+        grid.failed(grid.epoch(), 0, now);
         let after = now + RETRY_AFTER;
         assert_eq!(grid.pages_to_ask(0..8, after), [0]);
     }
@@ -211,7 +232,7 @@ mod tests {
         let mut asks = 0;
         for _ in 0..50 {
             asks += grid.pages_to_ask(0..8, now).len();
-            grid.failed(0, now);
+            grid.failed(grid.epoch(), 0, now);
             now += RETRY_AFTER;
         }
         assert_eq!(asks, 1 + MAX_RETRIES as usize);
@@ -222,7 +243,7 @@ mod tests {
         let mut grid = Grid::<Film>::default();
         let now = Instant::now();
         grid.pages_to_ask(0..8, now);
-        grid.failed(0, now);
+        grid.failed(grid.epoch(), 0, now);
         assert_eq!(grid.pages_to_ask(0..220, now), [1, 2]);
     }
 
@@ -232,11 +253,79 @@ mod tests {
         let mut grid = Grid::<Film>::default();
         assert_eq!(grid.rows(8), 0);
         let library = ItemId(crate::fake::FILMS_LIBRARY.into());
-        grid.loaded(0, server.films(&library, &query(0)).unwrap());
+        grid.loaded(0, 0, server.films(&library, &query(0)).unwrap());
         assert_eq!(grid.rows(8), 161);
         assert_eq!(grid.film(99).map(|f| f.id.0.as_str()), Some("film-99"));
         assert!(grid.film(100).is_none());
-        grid.loaded(12, server.films(&library, &query(12)).unwrap());
+        grid.loaded(0, 12, server.films(&library, &query(12)).unwrap());
         assert_eq!(grid.film(1283).map(|f| f.id.0.as_str()), Some("film-1283"));
+    }
+
+    #[test]
+    fn changing_a_filter_restarts_the_paging_from_the_top() {
+        let server = FakeServer::new(1284, true);
+        let mut grid = Grid::<Film>::default();
+        let now = Instant::now();
+        grid.pages_to_ask(0..8, now);
+        grid.loaded(grid.epoch(), 0, some(&server, 0));
+        grid.pages_to_ask(1000..1008, now);
+        grid.loaded(grid.epoch(), 10, some(&server, 10));
+        assert_eq!(grid.total, Some(1284));
+
+        grid.restart();
+        assert_eq!(grid.total, None);
+        assert_eq!(grid.rows(8), 0);
+        assert!(grid.film(0).is_none() && grid.film(1000).is_none());
+        // The pages asked before are asked again, for the new list.
+        assert_eq!(grid.pages_to_ask(0..8, now), [0]);
+    }
+
+    #[test]
+    fn an_older_answer_never_lands_into_the_new_list() {
+        let server = FakeServer::new(1284, true);
+        let mut grid = Grid::<Film>::default();
+        let now = Instant::now();
+        grid.pages_to_ask(0..8, now);
+        let before = grid.epoch();
+
+        grid.restart();
+        assert_ne!(grid.epoch(), before);
+        grid.loaded(before, 0, some(&server, 0));
+        assert_eq!(grid.total, None);
+        assert!(grid.film(0).is_none());
+
+        grid.pages_to_ask(0..8, now);
+        grid.loaded(grid.epoch(), 0, some(&server, 0));
+        assert_eq!(grid.total, Some(1284));
+    }
+
+    #[test]
+    fn a_failure_of_the_old_list_does_not_hold_back_the_new_one() {
+        let mut grid = Grid::<Film>::default();
+        let now = Instant::now();
+        grid.pages_to_ask(0..8, now);
+        let before = grid.epoch();
+        grid.restart();
+        assert_eq!(grid.pages_to_ask(0..8, now), [0]);
+
+        // The old page 0 fails late: the new page 0 is still on its way, not to be asked twice,
+        // nor counted as failed.
+        grid.failed(before, 0, now);
+        assert_eq!(
+            grid.pages_to_ask(0..8, now + RETRY_AFTER),
+            Vec::<u32>::new()
+        );
+        grid.failed(grid.epoch(), 0, now);
+        assert_eq!(grid.pages_to_ask(0..8, now + RETRY_AFTER), [0]);
+    }
+
+    #[test]
+    fn an_answer_is_taken_only_for_the_list_it_was_asked_for() {
+        let mut grid = Grid::<Film>::default();
+        let asked = grid.epoch();
+        assert!(grid.is_current(asked));
+        grid.restart();
+        assert!(!grid.is_current(asked));
+        assert!(grid.is_current(grid.epoch()));
     }
 }

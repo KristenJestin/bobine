@@ -11,7 +11,7 @@ use std::time::Instant;
 use bobine::provider::{CastMember, Film, FilmDetail, MediaSource};
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    AnyElement, Bounds, Context, Div, FontWeight, IntoElement, MouseDownEvent, Pixels,
+    AnyElement, Bounds, Context, Div, FontWeight, IntoElement, MouseDownEvent, Pixels, Point,
     ScrollHandle, SharedString, Stateful, Window, anchored, canvas, deferred, div,
     linear_color_stop, linear_gradient, point, px, rgb, rgba,
 };
@@ -26,10 +26,33 @@ use crate::theme;
 
 /// The menu open, and the one drawn with how much of it shows (it may be fading out).
 #[derive(Clone, Copy)]
-pub(super) struct MenuState {
-    pub open: Option<Chip>,
-    pub drawn: Option<(Chip, f32)>,
+pub(super) struct MenuState<K = Chip> {
+    pub open: Option<K>,
+    pub drawn: Option<(K, f32)>,
 }
+
+/// What the shell does when a chip is clicked, one of its choices is taken, or the mouse goes
+/// down outside its open menu: the film pages and the library grids each have their own.
+pub(super) struct Actions<K> {
+    pub toggle: fn(&mut Shell, K, &mut Context<Shell>),
+    pub choose: fn(&mut Shell, K, Option<i32>, &mut Context<Shell>),
+    pub outside: fn(&mut Shell, Point<Pixels>, &mut Context<Shell>),
+}
+
+impl<K> Clone for Actions<K> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<K> Copy for Actions<K> {}
+
+/// The chips of the film and series pages.
+pub(super) const CHIP_ACTIONS: Actions<Chip> = Actions {
+    toggle: Shell::toggle_menu,
+    choose: Shell::choose,
+    outside: Shell::pressed_outside_menu,
+};
 
 /// Where a chip was last drawn, shared with the shell.
 pub(super) type ChipBounds = Rc<Cell<Option<Bounds<Pixels>>>>;
@@ -316,11 +339,13 @@ pub(super) fn chips_row(
                 .collect();
             chip(
                 Chip::Version,
+                Chip::Version as usize,
                 "VERSION",
                 source.map(film_page::version_label),
                 options,
                 menu,
                 &chips[Chip::Version as usize],
+                CHIP_ACTIONS,
                 window,
                 cx,
             )
@@ -340,11 +365,13 @@ pub(super) fn chips_row(
                 .collect();
             chip(
                 Chip::Audio,
+                Chip::Audio as usize,
                 "AUDIO",
                 current.map(film_page::audio_label),
                 options,
                 menu,
                 &chips[Chip::Audio as usize],
+                CHIP_ACTIONS,
                 window,
                 cx,
             )
@@ -369,11 +396,13 @@ pub(super) fn chips_row(
             .collect();
             chip(
                 Chip::Subtitle,
+                Chip::Subtitle as usize,
                 "SOUS-TITRES",
                 Some(film_page::subtitle_label(current)),
                 options,
                 menu,
                 &chips[Chip::Subtitle as usize],
+                CHIP_ACTIONS,
                 window,
                 cx,
             )
@@ -385,13 +414,15 @@ pub(super) fn chips_row(
     clippy::too_many_arguments,
     reason = "one chip's state, read once per frame"
 )]
-pub(super) fn chip(
-    kind: Chip,
+pub(super) fn chip<K: Copy + PartialEq + 'static>(
+    kind: K,
+    id: usize,
     label: &'static str,
     value: Option<String>,
     options: Vec<(Option<i32>, String, bool)>,
-    menu: MenuState,
+    menu: MenuState<K>,
     bounds: &ChipBounds,
+    actions: Actions<K>,
     window: &mut Window,
     cx: &mut Context<Shell>,
 ) -> Div {
@@ -402,7 +433,7 @@ pub(super) fn chip(
         hover: theme::line(),
         press: rgb(0x2e2e33),
     };
-    let button = theme::eased(("chip", kind as usize), shades, window, cx)
+    let button = theme::eased(("chip", id), shades, window, cx)
         .flex()
         .items_center()
         .gap(px(8.))
@@ -412,7 +443,7 @@ pub(super) fn chip(
         .border_1()
         .border_color(if open { theme::muted() } else { theme::line() })
         .cursor_pointer()
-        .on_click(cx.listener(move |shell, _, _, cx| shell.toggle_menu(kind, cx)))
+        .on_click(cx.listener(move |shell, _, _, cx| (actions.toggle)(shell, kind, cx)))
         .child(
             div()
                 .text_size(px(10.))
@@ -439,49 +470,52 @@ pub(super) fn chip(
                 .absolute()
                 .inset_0(),
         )
-        .children(
-            under
-                .map(|(chip, (_, shown))| self::menu(chip, shown, open, kind, options, window, cx)),
-        )
+        .children(under.map(|(chip, (_, shown))| {
+            self::menu(chip, shown, open, kind, options, actions, window, cx)
+        }))
 }
 
 /// The choices of a chip, over the rest of the page, `shown` of the way in. Only an open menu
 /// answers the mouse: one fading out lets clicks through.
-fn menu(
+fn menu<K: Copy + 'static>(
     chip: Bounds<Pixels>,
     shown: f32,
     open: bool,
-    kind: Chip,
+    kind: K,
     options: Vec<(Option<i32>, String, bool)>,
+    actions: Actions<K>,
     window: &mut Window,
     cx: &mut Context<Shell>,
 ) -> impl IntoElement {
-    let lines: Vec<Stateful<Div>> = options
-        .into_iter()
-        .enumerate()
-        .map(|(index, (value, label, current))| {
-            theme::eased(("choice", index), theme::Shades::line(), window, cx)
-                .flex()
-                .items_center()
-                .gap(px(10.))
-                .flex_none()
-                .h(px(menu::LINE))
-                .px(px(12.))
-                .rounded(px(7.))
-                .text_size(px(13.))
-                .cursor_pointer()
-                .when(open, |line| {
-                    line.on_click(cx.listener(move |shell, _, _, cx| shell.choose(kind, value, cx)))
-                })
-                .child(
-                    div()
-                        .size(px(14.))
-                        .text_color(theme::accent())
-                        .when(current, |mark| mark.child(icon(IconName::Check, 14.))),
-                )
-                .child(label)
-        })
-        .collect();
+    let lines: Vec<Stateful<Div>> =
+        options
+            .into_iter()
+            .enumerate()
+            .map(|(index, (value, label, current))| {
+                theme::eased(("choice", index), theme::Shades::line(), window, cx)
+                    .flex()
+                    .items_center()
+                    .gap(px(10.))
+                    .flex_none()
+                    .h(px(menu::LINE))
+                    .px(px(12.))
+                    .rounded(px(7.))
+                    .text_size(px(13.))
+                    .cursor_pointer()
+                    .when(open, |line| {
+                        line.on_click(cx.listener(move |shell, _, _, cx| {
+                            (actions.choose)(shell, kind, value, cx)
+                        }))
+                    })
+                    .child(
+                        div()
+                            .size(px(14.))
+                            .text_color(theme::accent())
+                            .when(current, |mark| mark.child(icon(IconName::Check, 14.))),
+                    )
+                    .child(label)
+            })
+            .collect();
     let wanted = menu::height(lines.len());
     let window_height = f32::from(window.viewport_size().height);
     let (at, height) = menu::place(chip, wanted, window_height);
@@ -506,10 +540,10 @@ fn menu(
                     .border_1()
                     .border_color(theme::line())
                     .bg(theme::panel())
-                    .when(open, |menu| {
+                    .when(open, move |menu| {
                         menu.occlude().on_mouse_down_out(cx.listener(
-                            |shell, event: &MouseDownEvent, _, cx| {
-                                shell.pressed_outside_menu(event.position, cx);
+                            move |shell, event: &MouseDownEvent, _, cx| {
+                                (actions.outside)(shell, event.position, cx);
                             },
                         ))
                     })

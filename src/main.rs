@@ -11,6 +11,7 @@ mod harness;
 mod icons;
 mod images;
 mod input;
+mod library_tools;
 mod menu;
 mod motion;
 mod navigation;
