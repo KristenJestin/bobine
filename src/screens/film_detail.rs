@@ -26,6 +26,7 @@ use crate::motion::{self, Fade};
 use crate::navigation::NavEntry;
 use crate::shell::{Chip, Loadable, Shell};
 use crate::theme;
+use crate::trailer;
 
 /// The menu open, and the one drawn with how much of it shows (it may be fading out).
 #[derive(Clone, Copy)]
@@ -198,6 +199,8 @@ fn hero(
         )
         .on_click(cx.listener(|shell, _, window, cx| shell.play_film(From::Beginning, window, cx)))
     });
+    let trailer = trailer::choose(&detail.trailers, shell.ytdlp)
+        .map(|_| trailer_button(FILM_TRAILER, window, cx));
     let watched = theme::ghost_button("film-watched", Some(IconName::Check), "Watched", window, cx)
         .when(film.watched, |button| {
             button
@@ -212,6 +215,7 @@ fn hero(
         .when(busy, |row| row.opacity(0.6))
         .child(play)
         .children(from_start)
+        .children(trailer)
         .child(watched)
         .child(in_list);
 
@@ -305,6 +309,31 @@ pub(super) fn list_button(
         .text_color(motion::mix(theme::text(), theme::accent(), level))
         .border_color(motion::mix(rgb(0x3a3a40), theme::accent(), level))
         .on_click(cx.listener(|shell, _, _, cx| shell.toggle_favourite(cx)))
+}
+
+/// The Trailer buttons, by page: their ids, which are also the selectors every button carries.
+pub const FILM_TRAILER: &str = "film-trailer";
+pub const SERIES_TRAILER: &str = "series-trailer";
+
+/// "Trailer": it fades in the first time the page draws it, like what the page shows by
+/// itself. Like its neighbours, it has no dimming of its own: its row decides.
+pub(super) fn trailer_button(
+    id: &'static str,
+    window: &mut Window,
+    cx: &mut Context<Shell>,
+) -> Stateful<Div> {
+    let fade = window.use_keyed_state(SharedString::from(format!("{id}-fade")), cx, |_, _| {
+        Fade::new(motion::quick())
+    });
+    let now = Instant::now();
+    fade.update(cx, |fade, _| fade.set(true, now));
+    let fade = *fade.read(cx);
+    if fade.moving(now) {
+        window.request_animation_frame();
+    }
+    theme::ghost_button(id, Some(IconName::PlayCircle), "Trailer", window, cx)
+        .opacity(fade.level(now))
+        .on_click(cx.listener(|shell, _, window, cx| shell.play_trailer(window, cx)))
 }
 
 /// The backdrop over the whole width, darkened towards the text and the page below.
