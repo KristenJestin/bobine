@@ -197,9 +197,7 @@ fn seasons(shell: &mut Shell, shown: &Shown, window: &mut Window, cx: &mut Conte
         .enumerate()
         .map(|(index, season)| {
             let selected = index == shown.season;
-            let label = season
-                .number
-                .map_or_else(|| season.name.clone(), |n| format!("Saison {n}"));
+            let label = series_page::season_label(season);
             theme::eased(("season-tab", index), theme::Shades::line(), window, cx)
                 .relative()
                 .flex()

@@ -32,6 +32,15 @@ pub fn play_label(episode: &Episode) -> String {
     }
 }
 
+/// A season's tab: `Saison 2`, `Épisodes spéciaux` for season 0, else its name.
+pub fn season_label(season: &Season) -> String {
+    match season.number {
+        Some(0) => "Épisodes spéciaux".into(),
+        Some(n) => format!("Saison {n}"),
+        None => season.name.clone(),
+    }
+}
+
 /// `2021 – 2024`, `2023`.
 pub fn years(series: &Series) -> Option<String> {
     let start = series.year?;
@@ -89,7 +98,8 @@ pub fn player_title(episode: &Episode) -> (String, String) {
 }
 
 /// The episode the main button plays: Next Up (the one started, else the one after the last
-/// watched), else the first of the series, watched again. Blocks on the server.
+/// watched), else the first of the series, watched again: of its first season, not of its
+/// specials (season 0), unless it has nothing else. Blocks on the server.
 pub fn next_to_play(
     server: &dyn MediaServer,
     series: &ItemId,
@@ -97,7 +107,12 @@ pub fn next_to_play(
     if let Some(next) = server.next_up(series)? {
         return Ok(Some(next));
     }
-    let Some(first) = server.seasons(series)?.into_iter().next() else {
+    let seasons = server.seasons(series)?;
+    let Some(first) = seasons
+        .iter()
+        .find(|s| s.number.is_some_and(|n| n >= 1))
+        .or(seasons.first())
+    else {
         return Ok(None);
     };
     Ok(server.episodes(series, &first.id)?.into_iter().next())
@@ -279,6 +294,35 @@ mod tests {
                 e.item.resume = None;
             });
         assert_eq!(next(&server), id(1, 1));
+    }
+
+    #[test]
+    fn a_series_watched_to_the_end_starts_again_from_its_first_season_not_its_specials() {
+        let server = FakeServer::new(1, true);
+        let with_specials = ItemId("series-1".into());
+        let seasons = server.seasons(&with_specials).unwrap();
+        assert_eq!(seasons[0].number, Some(0));
+        server
+            .state
+            .lock()
+            .unwrap()
+            .episodes
+            .iter_mut()
+            .for_each(|e| e.item.watched = true);
+        let next = next_to_play(&server, &with_specials).unwrap().unwrap();
+        assert_eq!(next.item.id, ItemId("series-1-s1-e1".into()));
+    }
+
+    #[test]
+    fn the_specials_tab_says_episodes_speciaux() {
+        let server = FakeServer::new(1, true);
+        let seasons = server.seasons(&ItemId("series-1".into())).unwrap();
+        assert_eq!(season_label(&seasons[0]), "Épisodes spéciaux");
+        assert_eq!(season_label(&seasons[1]), "Saison 1");
+        let mut unnumbered = seasons[1].clone();
+        unnumbered.number = None;
+        unnumbered.name = "Hors-série".into();
+        assert_eq!(season_label(&unnumbered), "Hors-série");
     }
 
     #[test]

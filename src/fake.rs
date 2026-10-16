@@ -218,10 +218,14 @@ const EPISODE_TITLES: [&str; 6] = [
     "Silence radio",
 ];
 
-/// The seasons of a series and their number of episodes: the first series has three, as in the
-/// design, the others one.
-fn season_sizes(series: usize) -> &'static [u32] {
-    if series == 0 { &[3, 6, 5] } else { &[4] }
+/// The seasons of a series, by number, and their number of episodes: the first series has three,
+/// as in the design, the second its specials (season 0) before its season, the others one.
+fn season_sizes(series: usize) -> &'static [(u32, u32)] {
+    match series {
+        0 => &[(1, 3), (2, 6), (3, 5)],
+        1 => &[(0, 2), (1, 4)],
+        _ => &[(1, 4)],
+    }
 }
 
 /// Invented series. Their unwatched counts are worked out from their episodes when asked.
@@ -251,9 +255,8 @@ pub fn series() -> Vec<Series> {
 pub fn episodes() -> Vec<Episode> {
     let mut all = Vec::new();
     for (n, title) in SERIES_TITLES.iter().enumerate() {
-        for (s, size) in season_sizes(n).iter().enumerate() {
-            let season = s as u32 + 1;
-            for number in 1..=*size {
+        for (s, &(season, size)) in season_sizes(n).iter().enumerate() {
+            for number in 1..=size {
                 let id = format!("series-{n}-s{season}-e{number}");
                 let watched = n == 0 && (season == 1 || (season == 2 && number <= 3));
                 let resume =
@@ -705,13 +708,13 @@ impl MediaServer for FakeServer {
     }
 
     /// Like Jellyfin's Next Up: the episode started, else the one after the last watched, across
-    /// seasons; the first when none was watched; none once the last was.
+    /// seasons; the first when none was watched; none once the last was. Specials are left out.
     fn next_up(&self, series: &ItemId) -> Result<Option<Episode>, ProviderError> {
         let state = self.state();
         let episodes: Vec<&Episode> = state
             .episodes
             .iter()
-            .filter(|e| &e.series == series)
+            .filter(|e| &e.series == series && e.season_number != Some(0))
             .collect();
         if let Some(started) = episodes
             .iter()
