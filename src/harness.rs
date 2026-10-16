@@ -319,7 +319,7 @@ fn segments_of(length: f64) -> Vec<Segment> {
     vec![
         segment(SegmentKind::Recap, 0., 4.),
         segment(SegmentKind::Intro, 5., 15.),
-        segment(SegmentKind::Outro, length - 15., length),
+        segment(SegmentKind::Outro, (length - 15.).max(0.), length.max(0.)),
     ]
 }
 
@@ -1480,6 +1480,13 @@ fn cpu_percent(ticks: u64, seconds: f64, ticks_per_second: u64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn segments_of_a_media_shorter_than_the_credits_are_made_all_the_same() {
+        let segments = segments_of(10.);
+        assert_eq!(segments.len(), 3);
+        assert_eq!(segments[2].start, Duration::ZERO);
+    }
 
     #[test]
     fn cpu_ticks_adds_user_and_system_time() {
