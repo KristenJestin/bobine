@@ -363,7 +363,11 @@ impl Shell {
             notice: None,
             notice_fade: Presence::new(motion::quick()),
             notice_timer: None,
+            // A test never depends on what this machine has installed: it says so itself.
+            #[cfg(not(test))]
             ytdlp: crate::trailer::ytdlp_installed(),
+            #[cfg(test)]
+            ytdlp: false,
             #[cfg(test)]
             trailers_opened: Vec::new(),
             image_wake: None,

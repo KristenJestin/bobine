@@ -48,6 +48,7 @@ pub fn mpv_options(
 
 /// Whether `yt-dlp` is on this machine's `PATH`. Read once at start: the window asks on every
 /// frame whether to show the button.
+#[cfg(not(test))]
 pub fn ytdlp_installed() -> bool {
     std::env::var_os("PATH").is_some_and(|path| ytdlp_in(&path))
 }

@@ -631,6 +631,26 @@ mod tests {
     }
 
     #[gpui_kit::test]
+    fn a_shell_under_test_does_not_look_for_ytdlp_on_this_machine(cx: &mut TestAppContext) {
+        let server = FakeServer::new(6, true);
+        let connector: Arc<dyn bobine::provider::Connector> = Arc::new(server);
+        let window = cx.add_window(|_, cx| {
+            Shell::new(
+                None,
+                Box::new(move || Ok(connector)),
+                None,
+                Arc::new(crate::fake::MemoryKeyring::default()),
+                cx,
+            )
+        });
+        window
+            .update(cx, |shell, _, _| {
+                assert!(!shell.ytdlp, "a test says it itself")
+            })
+            .unwrap();
+    }
+
+    #[gpui_kit::test]
     fn a_late_trailer_answer_does_not_replace_the_film_that_plays(cx: &mut TestAppContext) {
         use crate::player::PlayerEvent;
         use crate::player::fake::FakePlayer;
