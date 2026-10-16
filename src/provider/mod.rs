@@ -215,6 +215,10 @@ pub struct Series {
     pub community_rating: Option<f32>,
     /// How many of its episodes the user has not watched.
     pub unwatched: u32,
+    /// Every one of its episodes is watched.
+    pub watched: bool,
+    /// In the user's list.
+    pub favourite: bool,
     pub poster: Option<ImageRef>,
     pub backdrop: Option<ImageRef>,
 }
@@ -404,6 +408,8 @@ pub struct Film {
     pub watched: bool,
     /// Where the viewer stopped, when they did not finish it.
     pub resume: Option<Duration>,
+    /// In the user's list.
+    pub favourite: bool,
     pub poster: Option<ImageRef>,
     pub backdrop: Option<ImageRef>,
 }

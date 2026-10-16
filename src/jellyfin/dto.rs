@@ -277,6 +277,7 @@ impl Item {
                 .map(|u| u.playback_position_ticks)
                 .filter(|&t| t > 0)
                 .map(duration),
+            favourite: user_data.is_some_and(|u| u.is_favorite),
             poster: self
                 .image_tags
                 .get("Primary")
@@ -304,6 +305,8 @@ impl Item {
                 .as_ref()
                 .and_then(|u| u.unplayed_item_count)
                 .unwrap_or(0),
+            watched: film.watched,
+            favourite: film.favourite,
             poster: film.poster,
             backdrop: film.backdrop,
         }
@@ -378,6 +381,9 @@ impl Item {
             end_year: None,
             community_rating: None,
             unwatched: 0,
+            // The episode says nothing of its series' state: the series page reads it.
+            watched: false,
+            favourite: false,
             poster,
             backdrop: None,
         })

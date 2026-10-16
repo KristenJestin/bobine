@@ -237,6 +237,7 @@ pub fn films(count: usize) -> Vec<Film> {
                     5 => Some(Duration::from_secs(20 * 60)),
                     _ => None,
                 },
+                favourite: false,
                 poster: image(&id, ImageKind::Primary),
                 backdrop: image(&id, ImageKind::Backdrop),
                 id: ItemId(id),
@@ -367,6 +368,8 @@ pub fn series() -> Vec<Series> {
                 end_year: (n % 3 != 1).then_some(year),
                 community_rating: Some(6.5 + (n * 3 % 20) as f32 / 10.),
                 unwatched: 0,
+                watched: false,
+                favourite: false,
                 poster: image(&id, ImageKind::Primary),
                 backdrop: image(&id, ImageKind::Backdrop),
                 id: ItemId(id),
@@ -407,6 +410,7 @@ pub fn episodes() -> Vec<Episode> {
                         runtime: Some(Duration::from_secs(48 * 60)),
                         watched,
                         resume,
+                        favourite: false,
                         poster: image(&id, ImageKind::Primary),
                         backdrop: None,
                         id: ItemId(id),
@@ -478,12 +482,21 @@ pub fn people() -> Vec<PersonHit> {
 impl FakeServer {
     /// A server with `count` films; `kept` when a session is kept from an earlier start.
     pub fn new(count: usize, kept: bool) -> Self {
+        let favourites = ["film-2", "film-7", "series-1", "series-4"].map(|id| ItemId(id.into()));
+        let mut films = films(count);
+        for film in &mut films {
+            film.favourite = favourites.contains(&film.id);
+        }
+        let mut series = series();
+        for series in &mut series {
+            series.favourite = favourites.contains(&series.id);
+        }
         Self {
             state: Arc::new(Mutex::new(State {
                 kept,
                 last_address: None,
-                films: films(count),
-                series: series(),
+                films,
+                series,
                 episodes: episodes(),
                 stream: "file:///nowhere.mkv".into(),
                 converted: "file:///nowhere-converted.m3u8".into(),
@@ -493,9 +506,7 @@ impl FakeServer {
                 transcode_fails: false,
                 people: people(),
                 search_delay: std::time::Duration::ZERO,
-                favourites: ["film-2", "film-7", "series-1", "series-4"]
-                    .map(|id| ItemId(id.into()))
-                    .to_vec(),
+                favourites: favourites.to_vec(),
                 favourite_fails: false,
                 favourite_delay: std::time::Duration::ZERO,
                 segments: Vec::new(),
@@ -525,13 +536,11 @@ impl FakeServer {
 
     /// A series as the server shows it now: its unwatched count follows its episodes.
     fn counted(state: &State, series: &Series) -> Series {
-        let unwatched = state
-            .episodes
-            .iter()
-            .filter(|e| e.series == series.id && !e.item.watched)
-            .count() as u32;
+        let episodes = || state.episodes.iter().filter(|e| e.series == series.id);
+        let unwatched = episodes().filter(|e| !e.item.watched).count() as u32;
         Series {
             unwatched,
+            watched: unwatched == 0 && episodes().next().is_some(),
             ..series.clone()
         }
     }
@@ -1165,6 +1174,12 @@ impl MediaServer for FakeServer {
         state.favourites.retain(|id| id != item);
         if favourite {
             state.favourites.push(item.clone());
+        }
+        for found in state.films.iter_mut().filter(|f| &f.id == item) {
+            found.favourite = favourite;
+        }
+        for found in state.series.iter_mut().filter(|s| &s.id == item) {
+            found.favourite = favourite;
         }
         Ok(())
     }

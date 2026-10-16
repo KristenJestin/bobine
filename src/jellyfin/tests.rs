@@ -2096,6 +2096,52 @@ fn series_can_be_sorted_by_when_their_latest_episode_came_in() {
 }
 
 #[test]
+fn a_title_in_a_list_says_whether_it_is_in_the_users_list() {
+    let s = Setup::new();
+    let server = s.signed_in();
+    let films = server
+        .films(
+            &ItemId(FILMS_LIBRARY.into()),
+            &query(FilmSort::Title, false, 0, 10),
+        )
+        .unwrap();
+    let favourite = |title: &str| {
+        films
+            .items
+            .iter()
+            .find(|f| f.title == title)
+            .unwrap()
+            .favourite
+    };
+    assert!(favourite("Amber Fields"));
+    assert!(!favourite("The Quiet Harbour"));
+    let shows = server
+        .series(&series_library(), &query(FilmSort::Title, false, 0, 10))
+        .unwrap();
+    let tidewater = shows.items.iter().find(|s| s.id == series()).unwrap();
+    assert!(tidewater.favourite);
+    assert!(!shows.items[1].favourite);
+}
+
+#[test]
+fn a_series_in_a_list_says_whether_all_of_it_is_watched() {
+    let s = Setup::new();
+    let page = s
+        .signed_in()
+        .series(&series_library(), &query(FilmSort::Title, false, 0, 10))
+        .unwrap();
+    let watched = |title: &str| {
+        page.items
+            .iter()
+            .find(|s| s.title == title)
+            .unwrap()
+            .watched
+    };
+    assert!(watched("Glass Orchard"));
+    assert!(!watched("Tidewater"));
+}
+
+#[test]
 fn a_series_in_a_list_has_its_years_rating_poster_and_unwatched_count() {
     let s = Setup::new();
     let page = s
