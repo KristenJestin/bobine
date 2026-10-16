@@ -1289,6 +1289,7 @@ impl Shell {
                 if let Some(playback) = &mut self.playback {
                     playback.next = next;
                 }
+                self.load_trickplay(opened.film.clone(), opened.source.clone(), cx);
             }
             Err(error) => {
                 // The words of the video surface or of mpv's error code: no address in them.

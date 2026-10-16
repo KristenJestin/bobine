@@ -4,6 +4,7 @@ mod home;
 mod lists;
 mod pages;
 mod palette;
+mod preview;
 mod series;
 
 pub use home::{HomePage, ListPage};
@@ -40,6 +41,7 @@ use crate::series_page::{self, UpNext};
 use crate::theme;
 use crate::video::Rect;
 use crate::video::subsurface::{VideoSurface, Wayland};
+use preview::SeekPreview;
 
 /// How often the player is asked what changed, and the controls checked for hiding.
 const PLAYER_TICK: Duration = Duration::from_millis(100);
@@ -181,6 +183,8 @@ pub struct Playback {
     reporting: Option<Reporting>,
     /// The episode after the one playing: the card offers it at the end.
     next: Option<Episode>,
+    /// The pointer over the seek bar: the time under it and the thumbnail of that moment.
+    seek: SeekPreview,
     _ticker: Task<()>,
     _bounds: Subscription,
 }
@@ -308,6 +312,7 @@ impl Shell {
             had_error: false,
             reporting,
             next: None,
+            seek: SeekPreview::new(),
             _ticker: ticker,
             _bounds: bounds,
         });
@@ -354,6 +359,7 @@ impl Shell {
         if window.is_fullscreen() && !self.fullscreen_kept {
             window.toggle_fullscreen();
         }
+        self.release_tiles(cx);
         let reports = self.stop_playback();
         self.navigator.back();
         if let Some(reports) = reports {
@@ -558,12 +564,17 @@ impl Render for Shell {
                         .controls_fade
                         .set(session.controls_visible(now), now);
                     playback.panel_fade.set(session.panel_open(), now);
-                    if playback.controls_fade.moving(now) || playback.panel_fade.moving(now) {
+                    let preview = playback.seek.draw(session.duration, now);
+                    if playback.controls_fade.moving(now)
+                        || playback.panel_fade.moving(now)
+                        || playback.seek.moving(now)
+                    {
                         window.request_animation_frame();
                     }
                     let shown = screens::player::Shown {
                         controls: playback.controls_fade.level(now),
                         panel: playback.panel_fade.level(now),
+                        preview,
                     };
                     screens::player::render(session, shown, window, cx).into_any_element()
                 }

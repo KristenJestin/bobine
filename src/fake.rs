@@ -77,8 +77,8 @@ pub struct State {
     pub favourite_delay: std::time::Duration,
     /// The trickplay layout every version has; none: the server made no trickplay images.
     pub trickplay: Option<Trickplay>,
-    /// What every tile of it is: a JPEG, as the server sends them.
-    pub tile: Vec<u8>,
+    /// The JPEGs the tiles are, in turn: tile 0 is the first, tile 3 the first again if three.
+    pub tiles: Vec<Vec<u8>>,
     /// How long a tile takes to come.
     pub tile_delay: std::time::Duration,
 }
@@ -464,7 +464,7 @@ impl FakeServer {
                 favourite_fails: false,
                 favourite_delay: std::time::Duration::ZERO,
                 trickplay: None,
-                tile: Vec::new(),
+                tiles: Vec::new(),
                 tile_delay: std::time::Duration::ZERO,
             })),
             info: ServerInfo {
@@ -1112,7 +1112,8 @@ impl MediaServer for FakeServer {
         if tile >= trickplay.tiles() {
             return Err(ProviderError::NotFound);
         }
-        Ok(state.tile.clone())
+        let at = tile as usize % state.tiles.len().max(1);
+        state.tiles.get(at).cloned().ok_or(ProviderError::NotFound)
     }
 }
 
