@@ -8,7 +8,7 @@ use bobine::provider::Segment;
 
 use super::controls::{Controls, KeyAction, key_action, subtitle_position};
 use super::segments::{Button, Label, Press, Prompt, button_at};
-use super::{Player, PlayerError, PlayerEvent, Seek, Track, TrackKind, tracks};
+use super::{Media, Player, PlayerError, PlayerEvent, Seek, Track, TrackKind, tracks};
 use crate::video::{Rect, VideoDisplay, placement};
 
 /// What the session asks of the window.
@@ -55,6 +55,9 @@ pub struct Session {
     ended: bool,
     /// The file is open and playing: the server may be told.
     loaded: bool,
+    /// When the file was open, and when its first picture came.
+    loaded_at: Option<Instant>,
+    first_frame_at: Option<Instant>,
     /// How many seeks the viewer asked for, so a seek can be told to the server.
     seeks: u64,
     /// What the server marked as skippable, by start, and whether an episode follows this one.
@@ -95,6 +98,8 @@ impl Session {
             subtitle_position: 100.,
             ended: false,
             loaded: false,
+            loaded_at: None,
+            first_frame_at: None,
             seeks: 0,
             segments: Vec::new(),
             has_next: false,
@@ -103,6 +108,36 @@ impl Session {
             pressed: None,
             skipped_to_end: false,
         }
+    }
+
+    /// Plays `media` instead of the film that did not play, where it was: what was said of
+    /// that one (its error, its loading, its end) goes with it.
+    pub fn restart(&mut self, media: Media<'_>) -> Result<(), PlayerError> {
+        self.error = None;
+        self.loaded = false;
+        self.loaded_at = None;
+        self.first_frame_at = None;
+        self.ended = false;
+        self.tracks.clear();
+        self.player.load(media)
+    }
+
+    /// The error is no longer the film's last word: something else is tried.
+    pub fn forget_error(&mut self) {
+        self.error = None;
+    }
+
+    /// The film cannot play, for a reason the player did not give.
+    pub fn fail(&mut self, error: PlayerError) {
+        self.error = Some(error);
+    }
+
+    pub fn loaded_at(&self) -> Option<Instant> {
+        self.loaded_at
+    }
+
+    pub fn first_frame_at(&self) -> Option<Instant> {
+        self.first_frame_at
     }
 
     /// What the server marked in this film or episode, by start.
@@ -189,6 +224,13 @@ impl Session {
         let fraction = f64::from(fraction.clamp(0., 1.));
         self.seeks += 1;
         self.player.seek(Seek::To(fraction * self.duration));
+    }
+
+    /// The pointer drags along the seek bar: the film follows to the nearest keyframe, which is
+    /// quick, and no seek is counted. The seek the server is told of is the one on release.
+    pub fn scrub_to_fraction(&mut self, fraction: f32) {
+        let fraction = f64::from(fraction.clamp(0., 1.));
+        self.player.seek(Seek::Rough(fraction * self.duration));
     }
 
     pub fn mouse_moved(&mut self, now: Instant) {
@@ -279,7 +321,13 @@ impl Session {
                 PlayerEvent::Tracks(tracks) => self.tracks = tracks,
                 PlayerEvent::EndOfFile => self.ended = true,
                 PlayerEvent::Error(error) => self.error = Some(error),
-                PlayerEvent::Loaded => self.loaded = true,
+                PlayerEvent::Loaded => {
+                    self.loaded = true;
+                    self.loaded_at = Some(now);
+                }
+                PlayerEvent::FirstFrame => {
+                    self.first_frame_at.get_or_insert(now);
+                }
                 // The film plays; a refused subtitle is simply not in the panel.
                 PlayerEvent::SubtitleFailed(_) => {}
             }
@@ -473,6 +521,24 @@ mod tests {
             f.calls(),
             [Call::Seek(Seek::To(1500.)), Call::Seek(Seek::To(6000.))]
         );
+    }
+
+    #[test]
+    fn a_drag_along_the_seek_bar_moves_the_film_without_counting_a_seek() {
+        let mut f = fixture();
+        f.session.duration = 6000.;
+        f.session.scrub_to_fraction(0.25);
+        f.session.scrub_to_fraction(0.5);
+        f.session.scrub_to_fraction(1.5);
+        assert_eq!(
+            f.calls(),
+            [
+                Call::Seek(Seek::Rough(1500.)),
+                Call::Seek(Seek::Rough(3000.)),
+                Call::Seek(Seek::Rough(6000.))
+            ]
+        );
+        assert_eq!(f.session.seeks(), 0);
     }
 
     #[test]

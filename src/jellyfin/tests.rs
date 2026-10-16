@@ -1293,6 +1293,7 @@ fn report(position: Duration, paused: bool) -> PlaybackReport {
         paused,
         audio_track: Some(2),
         subtitle_track: None,
+        method: PlayMethod::DirectPlay,
     }
 }
 
@@ -1341,6 +1342,248 @@ fn start_progress_and_stopped_reports_with_the_right_body() {
         let header = s.fake.last("POST", path).authorization.unwrap();
         assert!(header.contains(&format!("Token=\"{TOKEN}\"")), "{path}");
     }
+}
+
+/// The device id the client sends in its authorization header.
+fn device_id(s: &Setup) -> String {
+    let header = s
+        .fake
+        .last("POST", "/Sessions/Playing/Stopped")
+        .authorization
+        .unwrap();
+    header
+        .split("DeviceId=\"")
+        .nth(1)
+        .unwrap()
+        .split('"')
+        .next()
+        .unwrap()
+        .to_string()
+}
+
+#[test]
+fn the_first_play_asks_as_before_without_a_device_profile() {
+    let s = Setup::new();
+    s.signed_in()
+        .play(&film(), &MediaSourceId(SOURCE.into()))
+        .unwrap();
+    let body = s
+        .fake
+        .last("POST", &format!("/Items/{FILM}/PlaybackInfo"))
+        .json();
+    assert_eq!(body["EnableDirectPlay"], true);
+    assert_eq!(body["EnableDirectStream"], false);
+    assert_eq!(body["EnableTranscoding"], false);
+    assert_eq!(body["AutoOpenLiveStream"], false);
+    assert!(body.get("DeviceProfile").is_none(), "{body}");
+    assert!(body.get("MaxStreamingBitrate").is_none(), "{body}");
+}
+
+#[test]
+fn the_first_play_plays_the_file_whatever_the_server_says() {
+    let s = Setup::new();
+    s.fake.state.lock().unwrap().transcode_only = true;
+    let playback = s
+        .signed_in()
+        .play(&film(), &MediaSourceId(SOURCE.into()))
+        .unwrap();
+    let url = playback.stream.expose_for_player();
+    let prefix = format!("{}/Videos/{FILM}/stream?static=true&", s.fake.url);
+    assert!(url.starts_with(&prefix), "{url}");
+}
+
+#[test]
+fn transcoding_asks_the_server_without_direct_play_from_the_position() {
+    let s = Setup::new();
+    let playback = s
+        .signed_in()
+        .transcode(&TranscodeRequest {
+            film: film(),
+            source: MediaSourceId(SOURCE.into()),
+            start: Duration::from_secs(1200),
+            audio_track: Some(2),
+            subtitle_track: Some(4),
+        })
+        .unwrap();
+    assert_eq!(playback.session, PlaySessionId(TRANSCODE_SESSION.into()));
+    assert_eq!(
+        (playback.film.clone(), playback.source.0.as_str()),
+        (film(), SOURCE)
+    );
+    let url = playback.stream.expose_for_player();
+    assert!(
+        url.starts_with(&format!("{}/videos/{FILM}/master.m3u8?", s.fake.url)),
+        "{url}"
+    );
+    // The external subtitles still come as files beside the converted picture.
+    assert_eq!(playback.external_subtitles.len(), 2);
+
+    let asked = s.fake.last("POST", &format!("/Items/{FILM}/PlaybackInfo"));
+    assert_eq!(asked.param("userId"), Some(USER_ID));
+    let body = asked.json();
+    assert_eq!(body["MediaSourceId"], SOURCE);
+    assert_eq!(body["EnableDirectPlay"], false);
+    assert_eq!(body["EnableDirectStream"], false);
+    assert_eq!(body["EnableTranscoding"], true);
+    assert_eq!(body["StartTimeTicks"], 12_000_000_000_i64);
+    assert_eq!(body["AudioStreamIndex"], 2);
+    assert_eq!(body["SubtitleStreamIndex"], 4);
+}
+
+fn transcoded(s: &Setup, subtitle_track: Option<i32>) -> Playback {
+    s.signed_in()
+        .transcode(&TranscodeRequest {
+            film: film(),
+            source: MediaSourceId(SOURCE.into()),
+            start: Duration::ZERO,
+            audio_track: None,
+            subtitle_track,
+        })
+        .unwrap()
+}
+
+#[test]
+fn an_embedded_text_subtitle_chosen_comes_as_a_file_beside_the_conversion() {
+    let s = Setup::new();
+    let playback = transcoded(&s, Some(3));
+    let indexes: Vec<i32> = playback
+        .external_subtitles
+        .iter()
+        .map(|e| e.index)
+        .collect();
+    assert_eq!(indexes, [5, 6, 3]);
+    let url = playback.external_subtitles[2].url.expose_for_player();
+    assert_eq!(
+        url,
+        format!(
+            "{}/Videos/{FILM}/{SOURCE}/Subtitles/3/0/Stream.srt?ApiKey={TOKEN}",
+            s.fake.url
+        )
+    );
+    // Drawn into the picture, or not chosen: no file.
+    assert_eq!(transcoded(&s, Some(4)).external_subtitles.len(), 2);
+    assert_eq!(transcoded(&s, None).external_subtitles.len(), 2);
+}
+
+#[test]
+fn the_transcode_request_carries_the_device_profile_with_the_embedded_subtitles() {
+    let s = Setup::new();
+    s.signed_in()
+        .transcode(&TranscodeRequest {
+            film: film(),
+            source: MediaSourceId(SOURCE.into()),
+            start: Duration::ZERO,
+            audio_track: None,
+            subtitle_track: None,
+        })
+        .unwrap();
+    let body = s
+        .fake
+        .last("POST", &format!("/Items/{FILM}/PlaybackInfo"))
+        .json();
+    assert!(body["MaxStreamingBitrate"].as_u64().unwrap() >= 400_000_000);
+    let profile = &body["DeviceProfile"];
+    let transcoding = &profile["TranscodingProfiles"][0];
+    assert_eq!(transcoding["Type"], "Video");
+    assert_eq!(transcoding["Container"], "ts");
+    assert_eq!(transcoding["Protocol"], "hls");
+    assert_eq!(transcoding["VideoCodec"], "h264");
+    assert_eq!(transcoding["AudioCodec"], "aac");
+    let subtitles = profile["SubtitleProfiles"].as_array().unwrap();
+    for format in [
+        "subrip", "srt", "ass", "ssa", "webvtt", "vtt", "mov_text", "pgssub", "dvdsub", "dvbsub",
+    ] {
+        assert!(
+            subtitles
+                .iter()
+                .any(|p| p["Format"] == format && p["Method"] == "Embed"),
+            "{format} is not embedded"
+        );
+    }
+}
+
+#[test]
+fn a_version_the_server_cannot_convert_says_so() {
+    let s = Setup::new();
+    s.fake.state.lock().unwrap().no_transcoding = true;
+    let error = s
+        .signed_in()
+        .transcode(&TranscodeRequest {
+            film: film(),
+            source: MediaSourceId(SOURCE.into()),
+            start: Duration::ZERO,
+            audio_track: None,
+            subtitle_track: None,
+        })
+        .unwrap_err();
+    assert!(matches!(error, ProviderError::BadAnswer(_)), "{error:?}");
+}
+
+#[test]
+fn the_play_method_is_reported_in_every_report() {
+    let s = Setup::new();
+    let server = s.signed_in();
+    let transcoded = PlaybackReport {
+        method: PlayMethod::Transcode,
+        ..report(Duration::from_secs(1200), false)
+    };
+    server.report_started(&transcoded).unwrap();
+    server.report_progress(&transcoded).unwrap();
+    server.report_stopped(&transcoded).unwrap();
+    for path in [
+        "/Sessions/Playing",
+        "/Sessions/Playing/Progress",
+        "/Sessions/Playing/Stopped",
+    ] {
+        let body = s.fake.last("POST", path).json();
+        assert_eq!(body["PlayMethod"], "Transcode", "{path}");
+        assert_eq!(body["PlaySessionId"], PLAY_SESSION, "{path}");
+    }
+    server
+        .report_stopped(&report(Duration::from_secs(1300), false))
+        .unwrap();
+    let stopped = s.fake.last("POST", "/Sessions/Playing/Stopped").json();
+    assert_eq!(stopped["PlayMethod"], "DirectPlay");
+}
+
+#[test]
+fn the_encoding_is_stopped_when_a_transcode_stops() {
+    let s = Setup::new();
+    let server = s.signed_in();
+    server
+        .report_stopped(&PlaybackReport {
+            method: PlayMethod::Transcode,
+            ..report(Duration::from_secs(1300), false)
+        })
+        .unwrap();
+    let seen = s.fake.seen();
+    let stopped = seen
+        .iter()
+        .position(|r| r.path == "/Sessions/Playing/Stopped")
+        .unwrap();
+    let deleted = seen
+        .iter()
+        .position(|r| r.method == "DELETE" && r.path == "/Videos/ActiveEncodings")
+        .expect("the encoding is stopped");
+    assert!(stopped < deleted, "told stopped first");
+    let delete = &seen[deleted];
+    assert_eq!(delete.param("playSessionId"), Some(PLAY_SESSION));
+    assert_eq!(delete.param("deviceId"), Some(device_id(&s).as_str()));
+}
+
+#[test]
+fn a_direct_play_stop_has_no_encoding_to_stop() {
+    let s = Setup::new();
+    let server = s.signed_in();
+    server
+        .report_stopped(&report(Duration::from_secs(1300), false))
+        .unwrap();
+    assert!(
+        !s.fake
+            .seen()
+            .iter()
+            .any(|r| r.path == "/Videos/ActiveEncodings")
+    );
 }
 
 #[test]
@@ -1658,6 +1901,16 @@ fn the_token_never_in_debug_or_error_output() {
     let playback = server.play(&film(), &MediaSourceId(SOURCE.into())).unwrap();
     let detail = server.film(&film()).unwrap();
     let mut shown = format!("{playback:?} {playback:#?} {detail:?}");
+    let transcoded = server
+        .transcode(&TranscodeRequest {
+            film: film(),
+            source: MediaSourceId(SOURCE.into()),
+            start: Duration::ZERO,
+            audio_track: None,
+            subtitle_track: None,
+        })
+        .unwrap();
+    shown += &format!("{transcoded:?} {transcoded:#?}");
 
     s.fake.state.lock().unwrap().revoked = true;
     let expired = server.libraries().unwrap_err();
@@ -2092,6 +2345,114 @@ fn the_list_with_a_revoked_token_asks_to_sign_in_again() {
     assert_eq!(
         server.set_favourite(&film(), true),
         Err(ProviderError::SessionExpired)
+    );
+}
+
+fn source(id: &str) -> MediaSourceId {
+    MediaSourceId(id.into())
+}
+
+#[test]
+fn the_trickplay_of_a_version_is_read_with_its_item() {
+    let s = Setup::new();
+    let trickplay = s
+        .signed_in()
+        .trickplay(&film(), &source(SOURCE))
+        .unwrap()
+        .expect("the film has trickplay");
+    // Three sizes on offer: the smallest one wide enough.
+    assert_eq!(
+        trickplay,
+        Trickplay {
+            width: 320,
+            height: 180,
+            columns: 10,
+            rows: 10,
+            count: 660,
+            interval: Duration::from_secs(10),
+        }
+    );
+    let asked = s.fake.last("GET", &format!("/Items/{FILM}"));
+    assert_eq!(asked.param("fields"), Some("Trickplay"));
+    assert_eq!(asked.param("userId"), Some(USER_ID));
+}
+
+#[test]
+fn each_version_has_its_own_trickplay() {
+    let s = Setup::new();
+    let second = s
+        .signed_in()
+        .trickplay(&film(), &source("5a000000000000000000000000000002"))
+        .unwrap()
+        .expect("the second version has trickplay");
+    // Its only size is narrower than wanted: it is the one shown, at its own interval.
+    assert_eq!(
+        (second.width, second.columns, second.count, second.interval),
+        (240, 8, 66, Duration::from_secs(60))
+    );
+}
+
+#[test]
+fn an_item_without_trickplay_has_none() {
+    let s = Setup::new();
+    s.fake.state.lock().unwrap().no_trickplay = true;
+    assert_eq!(s.signed_in().trickplay(&film(), &source(SOURCE)), Ok(None));
+}
+
+#[test]
+fn a_version_the_trickplay_does_not_list_has_none() {
+    let s = Setup::new();
+    assert_eq!(
+        s.signed_in().trickplay(&film(), &source("nowhere")),
+        Ok(None)
+    );
+}
+
+#[test]
+fn a_tile_is_asked_by_its_number_in_the_size_shown() {
+    let s = Setup::new();
+    let server = s.signed_in();
+    let trickplay = server.trickplay(&film(), &source(SOURCE)).unwrap().unwrap();
+    let tile = server
+        .trickplay_tile(&film(), &source(SOURCE), &trickplay, 3)
+        .unwrap();
+    assert_eq!(tile, TILE);
+    let asked = s
+        .fake
+        .last("GET", &format!("/Videos/{FILM}/Trickplay/320/3.jpg"));
+    assert_eq!(asked.param("mediaSourceId"), Some(SOURCE));
+}
+
+#[test]
+fn a_tile_request_carries_the_token_in_its_header_never_in_its_address() {
+    let s = Setup::new();
+    let server = s.signed_in();
+    let trickplay = server.trickplay(&film(), &source(SOURCE)).unwrap().unwrap();
+    server
+        .trickplay_tile(&film(), &source(SOURCE), &trickplay, 0)
+        .unwrap();
+    let asked = s
+        .fake
+        .last("GET", &format!("/Videos/{FILM}/Trickplay/320/0.jpg"));
+    assert!(asked.authorization.unwrap().contains(TOKEN));
+    assert!(
+        asked.query.iter().all(|(_, value)| !value.contains(TOKEN)),
+        "{:?}",
+        asked.query
+    );
+}
+
+#[test]
+fn a_tile_the_server_does_not_have_is_not_found() {
+    let s = Setup::new();
+    let server = s.signed_in();
+    let missing = Trickplay {
+        width: 480,
+        ..server.trickplay(&film(), &source(SOURCE)).unwrap().unwrap()
+    };
+    assert_eq!(
+        server.trickplay_tile(&film(), &source(SOURCE), &missing, 0),
+        Err(ProviderError::NotFound)
     );
 }
 

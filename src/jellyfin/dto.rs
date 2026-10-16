@@ -3,8 +3,8 @@
 use crate::provider::{
     AudioTrack, CastMember, CollectionCard, Episode, Feature, FeatureKind, Film, ImageKind,
     ImageRef, ItemId, Library, LibraryKind, MediaSource, MediaSourceId, PersonHit, PersonTitles,
-    Season, Segment, SegmentKind, Series, SeriesHit, ServerInfo, SubtitleTrack, Title, VideoRange,
-    VideoTrack,
+    Season, Segment, SegmentKind, Series, SeriesHit, ServerInfo, SubtitleTrack, Title, Trickplay,
+    VideoRange, VideoTrack,
 };
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -153,6 +153,36 @@ pub struct Item {
     pub season_id: Option<String>,
     /// A collection's films, when asked for.
     pub child_count: Option<u32>,
+    /// The trickplay images, when asked for (`fields=Trickplay`): by version, then by width.
+    #[serde(default)]
+    pub trickplay: HashMap<String, HashMap<String, TrickplayInfo>>,
+}
+
+/// How one version's trickplay images are cut at one width. The interval is in milliseconds.
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "PascalCase", default)]
+pub struct TrickplayInfo {
+    pub width: u32,
+    pub height: u32,
+    pub tile_width: u32,
+    pub tile_height: u32,
+    pub thumbnail_count: u32,
+    pub interval: u64,
+}
+
+impl Item {
+    /// The trickplay to show for one version, if the server made any for it.
+    pub fn trickplay_of(&self, source: &str) -> Option<Trickplay> {
+        let sizes = self.trickplay.get(source)?;
+        Trickplay::choose(sizes.values().map(|info| Trickplay {
+            width: info.width,
+            height: info.height,
+            columns: info.tile_width,
+            rows: info.tile_height,
+            count: info.thumbnail_count,
+            interval: Duration::from_millis(info.interval),
+        }))
+    }
 }
 
 #[derive(Deserialize)]
@@ -174,6 +204,8 @@ pub struct MediaSourceInfo {
     pub container: Option<String>,
     #[serde(default)]
     pub media_streams: Vec<MediaStream>,
+    /// Relative to the server, with its own play session and token.
+    pub transcoding_url: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -192,6 +224,10 @@ pub struct MediaStream {
     pub is_forced: bool,
     #[serde(default)]
     pub is_external: bool,
+    /// In a conversion, how a subtitle comes: `External` for a file at `delivery_url`, relative
+    /// to the server and holding the token.
+    pub delivery_method: Option<String>,
+    pub delivery_url: Option<String>,
     pub width: Option<u32>,
     pub height: Option<u32>,
     pub channels: Option<u32>,

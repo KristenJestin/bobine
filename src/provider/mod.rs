@@ -6,9 +6,11 @@
 
 mod keyring;
 mod secret;
+mod trickplay;
 
 pub use keyring::{SecretServiceStore, TokenStore};
 pub use secret::{StreamUrl, Token};
+pub use trickplay::{Cell, Trickplay, WANTED_WIDTH};
 
 #[cfg(test)]
 pub use keyring::MemoryStore;
@@ -105,6 +107,24 @@ pub trait MediaServer: Send + Sync {
     /// Puts a film or a series in the user's list, or takes it out.
     fn set_favourite(&self, item: &ItemId, favourite: bool) -> Result<(), ProviderError>;
 
+    /// How the trickplay thumbnails of one version are laid out, at the size to show; none when
+    /// the server made none for it.
+    fn trickplay(
+        &self,
+        film: &ItemId,
+        source: &MediaSourceId,
+    ) -> Result<Option<Trickplay>, ProviderError>;
+    /// One tile of those thumbnails: a JPEG holding up to `columns` by `rows` of them.
+    fn trickplay_tile(
+        &self,
+        film: &ItemId,
+        source: &MediaSourceId,
+        trickplay: &Trickplay,
+        tile: u32,
+    ) -> Result<Vec<u8>, ProviderError>;
+    /// A new playback of a version the player could not play as it is: the server converts it,
+    /// from `request.start`, with the tracks asked.
+    fn transcode(&self, request: &TranscodeRequest) -> Result<Playback, ProviderError>;
     /// The stretches of a film or an episode the server marked (intro, credits…), by start. A
     /// server that does not know them, or an item without any, answers none: never an error.
     fn media_segments(&self, item: &ItemId) -> Result<Vec<Segment>, ProviderError>;
@@ -275,6 +295,13 @@ pub struct MediaSourceId(pub String);
 /// The id that ties the reports of one playback together.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PlaySessionId(pub String);
+
+/// How the server sends a version: the file as it is, or converted by the server.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlayMethod {
+    DirectPlay,
+    Transcode,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LibraryKind {
@@ -498,6 +525,19 @@ pub struct Playback {
     pub external_subtitles: Vec<ExternalSubtitle>,
 }
 
+/// What the server converts: a version, from where the viewer was, with the tracks they chose.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TranscodeRequest {
+    pub film: ItemId,
+    pub source: MediaSourceId,
+    pub start: Duration,
+    /// The server's indexes. The subtitle is an embedded one, which the server extracts into a
+    /// file or draws into the picture: an external file is added by the player, as in direct
+    /// play.
+    pub audio_track: Option<i32>,
+    pub subtitle_track: Option<i32>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExternalSubtitle {
     /// The subtitle track it is, by its index.
@@ -515,6 +555,7 @@ pub struct PlaybackReport {
     pub paused: bool,
     pub audio_track: Option<i32>,
     pub subtitle_track: Option<i32>,
+    pub method: PlayMethod,
 }
 
 /// What went wrong, said without the token or any URL that carries it.

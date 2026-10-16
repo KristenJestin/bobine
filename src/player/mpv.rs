@@ -5,7 +5,16 @@
 use super::{FirstSubtitle, Media, Player, PlayerError, PlayerEvent, Seek, TrackKind, tracks};
 
 /// The properties the player follows; mpv says when one changes.
-pub const OBSERVED: [&str; 6] = ["time-pos", "duration", "pause", "track-list", "aid", "sid"];
+/// `vo-configured` turns on with the first picture the video output gets.
+pub const OBSERVED: [&str; 7] = [
+    "time-pos",
+    "duration",
+    "pause",
+    "track-list",
+    "aid",
+    "sid",
+    "vo-configured",
+];
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MpvEvent {
@@ -217,6 +226,7 @@ impl<C: MpvClient> Player for MpvPlayer<C> {
         let (seconds, mode) = match seek {
             Seek::By(seconds) => (seconds, "relative"),
             Seek::To(seconds) => (seconds, "absolute"),
+            Seek::Rough(seconds) => (seconds, "absolute+keyframes"),
         };
         let _ = self.client.command(&["seek", &seconds.to_string(), mode]);
     }
@@ -267,6 +277,8 @@ impl<C: MpvClient> Player for MpvPlayer<C> {
                         .client
                         .get("pause")
                         .map(|paused| PlayerEvent::Paused(paused == "yes")),
+                    "vo-configured" => (self.client.get("vo-configured").as_deref() == Some("yes"))
+                        .then_some(PlayerEvent::FirstFrame),
                     _ => Some(PlayerEvent::Tracks(
                         tracks::from_mpv(|name| self.client.get(name))
                             .into_iter()
@@ -695,6 +707,16 @@ mod tests {
     }
 
     #[test]
+    fn a_rough_seek_lands_on_a_keyframe() {
+        let mut player = MpvPlayer::new(FakeMpv::default());
+        player.seek(Seek::Rough(3600.));
+        assert_eq!(
+            log(&player),
+            [line(&["seek", "3600", "absolute+keyframes"])]
+        );
+    }
+
+    #[test]
     fn volume_and_mute_set_their_properties() {
         let mut player = MpvPlayer::new(FakeMpv::default());
         player.set_volume(80.);
@@ -815,6 +837,20 @@ mod tests {
         assert_eq!(tracks.len(), 1);
         assert_eq!(tracks[0].kind, TrackKind::Audio);
         assert!(tracks[0].selected);
+    }
+
+    #[test]
+    fn the_first_picture_is_told_once_the_video_output_is_configured() {
+        let mpv = FakeMpv::with(&[("vo-configured", "no")], &[changed("vo-configured")]);
+        let mut player = MpvPlayer::new(mpv);
+        assert_eq!(player.events(), []);
+        player
+            .client()
+            .properties
+            .borrow_mut()
+            .insert("vo-configured".into(), "yes".into());
+        push(&player, &[changed("vo-configured")]);
+        assert_eq!(player.events(), [PlayerEvent::FirstFrame]);
     }
 
     fn push(player: &MpvPlayer<FakeMpv>, events: &[MpvEvent]) {

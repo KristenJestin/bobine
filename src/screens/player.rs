@@ -4,22 +4,30 @@
 //! window.
 
 use gpui_kit::prelude::*;
+use std::sync::Arc;
+
 use gpui_kit::{
     App, ClickEvent, Context, Div, FontWeight, IntoElement, MouseButton, MouseDownEvent,
-    MouseMoveEvent, Stateful, Window, div, linear_color_stop, linear_gradient, px, rgb, rgba,
+    MouseMoveEvent, MouseUpEvent, ObjectFit, RenderImage, Stateful, Window, div, img,
+    linear_color_stop, linear_gradient, px, rgb, rgba,
 };
 
 use super::empty_screen;
 use crate::icons::{IconName, icon};
-use crate::player::controls::SKIP_SECONDS;
+use crate::player::controls::{BOTTOM_CONTROLS_HEIGHT, SKIP_SECONDS};
 use crate::player::segments::Button;
 use crate::player::session::{Choice, Session};
+use crate::player::thumbnails::Crop;
 use crate::player::time;
 use crate::shell::Shell;
 use crate::theme;
 
 /// The margin of the controls from the edges of the window, after the design.
-const EDGE: f32 = 40.;
+pub const EDGE: f32 = 40.;
+/// How wide the box of a time alone is, so that the time sits centred under the pointer.
+pub const TIME_BOX_WIDTH: f32 = 76.;
+/// The preview floats this far above the controls.
+const PREVIEW_GAP: f32 = 14.;
 
 /// The player screen with no film to play.
 pub fn empty(_cx: &mut Context<Shell>) -> impl IntoElement {
@@ -32,6 +40,33 @@ pub struct Shown {
     pub panel: f32,
     /// The skip button and how much of it shows.
     pub skip: Option<(Button, f32)>,
+    /// "Conversion par le serveur".
+    pub notice: f32,
+    /// What floats over the seek bar where the pointer is.
+    pub preview: Option<Preview>,
+}
+
+/// The time under the pointer on the seek bar, and the thumbnail of that moment if the server
+/// has them.
+pub struct Preview {
+    /// How much of it shows, from 0 to 1.
+    pub opacity: f32,
+    /// Where the box starts, from the left of the window.
+    pub left: f32,
+    pub time: String,
+    /// The size of the thumbnail's frame, when the film has thumbnails at all.
+    pub frame: Option<(f32, f32)>,
+    /// The thumbnail in the frame and how much of it shows; none while its tile is not here.
+    pub thumb: Option<(Thumb, f32)>,
+}
+
+/// A tile's picture and where in it the thumbnail is.
+#[derive(Clone)]
+pub struct Thumb {
+    pub image: Arc<RenderImage>,
+    pub crop: Crop,
+    /// The size the whole tile picture is drawn at.
+    pub picture: (f32, f32),
 }
 
 pub fn render(
@@ -49,18 +84,31 @@ pub fn render(
             .child(shade(false))
             .child(title_bar(session, window, cx))
             .child(bottom_bar(session, window, cx))
+            .children(shown.preview.map(preview))
     });
     // Only an open panel closes on a click outside; one fading out is just drawn.
     let outside = session.panel_open().then(|| outside_panel(cx));
     let panel = (shown.panel > 0.).then(|| panel(session, shown.panel, window, cx));
+    let notice = (shown.notice > 0.).then(|| conversion_notice(shown.notice));
     div()
         .id("player")
         .size_full()
         .relative()
-        .on_mouse_move(cx.listener(|shell, _: &MouseMoveEvent, _, cx| {
+        .on_mouse_move(cx.listener(|shell, event: &MouseMoveEvent, window, cx| {
             shell.player_mouse_moved(cx);
+            shell.seek_drag(
+                f32::from(event.position.x),
+                event.pressed_button == Some(MouseButton::Left),
+                window,
+                cx,
+            );
         }))
+        .on_mouse_up(
+            MouseButton::Left,
+            cx.listener(|shell, _: &MouseUpEvent, _, cx| shell.seek_release(cx)),
+        )
         .children(controls)
+        .children(notice)
         .children(
             shown.skip.map(|(button, level)| {
                 super::skip::button(button, level, shown.controls, window, cx)
@@ -86,6 +134,28 @@ pub fn render(
                     ),
             )
         })
+}
+
+/// One line at the top, over the picture whether the controls show or not: the server
+/// converts the film, which the viewer may notice in its picture or its start.
+fn conversion_notice(shown: f32) -> Div {
+    div()
+        .absolute()
+        .top(px(30.))
+        .left_0()
+        .right_0()
+        .flex()
+        .justify_center()
+        .opacity(shown)
+        .child(
+            div()
+                .px(px(16.))
+                .py(px(8.))
+                .rounded(px(theme::RADIUS_LARGE))
+                .bg(theme::panel())
+                .text_size(px(13.))
+                .child("Conversion par le serveur"),
+        )
 }
 
 /// The darkening behind the controls, top or bottom, so they read over a bright picture.
@@ -198,14 +268,18 @@ fn bottom_bar(session: &Session, window: &mut Window, cx: &mut Context<Shell>) -
                 .cursor_pointer()
                 .on_mouse_down(
                     MouseButton::Left,
-                    cx.listener(move |shell, event: &MouseDownEvent, _, cx| {
-                        if let Some(playback) = &mut shell.playback {
-                            let x = f32::from(event.position.x) - EDGE;
-                            playback.session.seek_to_fraction(x / bar_width.max(1.));
-                        }
-                        cx.notify();
+                    cx.listener(|shell, event: &MouseDownEvent, window, cx| {
+                        shell.seek_press(f32::from(event.position.x), window, cx);
                     }),
                 )
+                .on_mouse_move(cx.listener(|shell, event: &MouseMoveEvent, window, cx| {
+                    shell.seek_hover(f32::from(event.position.x), window, cx);
+                }))
+                .on_hover(cx.listener(|shell, hovered: &bool, _, cx| {
+                    if !*hovered {
+                        shell.seek_left(cx);
+                    }
+                }))
                 .child(
                     div()
                         .relative()
@@ -259,6 +333,64 @@ fn bottom_bar(session: &Session, window: &mut Window, cx: &mut Context<Shell>) -
                             time::end_clock(time::local_now(), left)
                         )),
                 ),
+        )
+}
+
+/// Over the seek bar, where the pointer is: the thumbnail of that moment when there is one, with
+/// the time under it. It catches no mouse event.
+fn preview(preview: Preview) -> Div {
+    let Preview {
+        opacity,
+        left,
+        time,
+        frame,
+        thumb,
+    } = preview;
+    let width = frame.map_or(TIME_BOX_WIDTH, |(width, _)| width);
+    let framed = frame.is_some();
+    let frame = frame.map(|(width, height)| {
+        div()
+            .relative()
+            .w(px(width))
+            .h(px(height))
+            .overflow_hidden()
+            .bg(rgba(0x0e0e10e0))
+            .border_1()
+            .border_color(theme::line())
+            .children(thumb.map(|(thumb, shown)| {
+                div().absolute().inset_0().opacity(shown).child(
+                    img(thumb.image)
+                        .absolute()
+                        .left(px(-thumb.crop.left))
+                        .top(px(-thumb.crop.top))
+                        .w(px(thumb.picture.0))
+                        .h(px(thumb.picture.1))
+                        .object_fit(ObjectFit::Fill),
+                )
+            }))
+    });
+    div()
+        .absolute()
+        .left(px(left))
+        .bottom(px(BOTTOM_CONTROLS_HEIGHT + PREVIEW_GAP))
+        .w(px(width))
+        .opacity(opacity)
+        .flex()
+        .flex_col()
+        .items_center()
+        .gap(px(8.))
+        .children(frame)
+        .child(
+            div()
+                .px(px(10.))
+                .py(px(4.))
+                // Under the square frame the label is square too: GPUI clips to a rectangle,
+                // and the picture is a part of a bigger one, so the frame cannot be rounded.
+                .map(|label| if framed { label } else { label.rounded_full() })
+                .bg(rgba(0x0e0e10e0))
+                .text_size(px(13.))
+                .font_weight(FontWeight::SEMIBOLD)
+                .child(time),
         )
 }
 

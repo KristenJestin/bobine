@@ -5,8 +5,10 @@
 pub mod controls;
 pub mod libmpv;
 pub mod mpv;
+pub mod scrub;
 pub mod segments;
 pub mod session;
+pub mod thumbnails;
 pub mod time;
 pub mod tracks;
 
@@ -75,6 +77,8 @@ pub enum Seek {
     By(f64),
     /// Seconds from the start.
     To(f64),
+    /// Seconds from the start, to the nearest keyframe: quick, for the film to follow a drag.
+    Rough(f64),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -114,6 +118,8 @@ impl fmt::Display for PlayerError {
 pub enum PlayerEvent {
     /// The file is open and what `load` chose is applied: the film is playing.
     Loaded,
+    /// The first picture reached the video surface: the film decodes.
+    FirstFrame,
     /// Seconds from the start.
     Position(f64),
     Duration(f64),
