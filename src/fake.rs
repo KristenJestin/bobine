@@ -46,6 +46,7 @@ impl MemoryKeyring {
     }
 
     /// What the keyring holds under `account`, as text, for a test to compare.
+    #[cfg(test)]
     pub fn secret(&self, account: &str) -> Option<String> {
         let secrets = self.secrets.lock().unwrap();
         secrets

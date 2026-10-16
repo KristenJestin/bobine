@@ -12,7 +12,7 @@
 //! `bobine --screen login|home|home-rows|home-list-resume|home-list-next|home-list-latest|home-list-empty|library|detail|
 //! detail-rows|detail-cast|playing|series|series-page|series-rows|up-next|collections|collection-page|
 //! my-list|my-list-empty|film-list|series-list [--films N]
-//! [--media FILE] [--segments SECONDS] [--direct-fails] [--image-delay-ms N] [--photos-fail-once] [--scenario menu|scroll|select|panel|blackout|search|search-slow|search-keys|tools|tools-keys|home-rotate|home-hover|home-jump|home-scroll|home-lists|home-play|home-poster-hover|grid-poster-hover|skip]
+//! [--media FILE] [--segments SECONDS] [--direct-fails] [--image-delay-ms N] [--photos-fail-once] [--scenario menu|scroll|select|panel|blackout|settings|search|search-slow|search-keys|tools|tools-keys|home-rotate|home-hover|home-jump|home-scroll|home-lists|home-play|home-poster-hover|grid-poster-hover|skip]
 //! [--search-delay-ms N] [--favourite-delay-ms N] [--logout-delay-ms N] [--favourite-fails] [--slower N] --quit-at S`
 //!
 //! A scenario sends clicks, keys and scroll events to the window as the compositor would, at set
@@ -637,8 +637,14 @@ enum Target {
     Corner,
     /// The account button of the pill bar.
     Account,
+    /// "Settings" in the account menu.
+    Settings,
     /// "Sign out" in the account menu.
     SignOut,
+    /// The settings' default quality button.
+    Quality,
+    /// A line of its menu, from the first.
+    QualityChoice(usize),
     /// The player's seek bar, this far along it (0 to 1).
     SeekBar(f32),
     /// A point of the window, in pixels from its top left.
@@ -667,6 +673,14 @@ enum Act {
     Blackout,
     /// The player's back arrow pressed, as its click does.
     Leave,
+    /// A field for a secret added to the Integrations section, as the first integration will.
+    DemoSecret,
+    /// Text typed in that field.
+    TypeSecret(&'static str),
+    /// Its Save button pressed, as its click does.
+    SaveSecret,
+    /// Its Clear button pressed, as its click does.
+    ClearSecret,
     /// A touchpad gesture: its moves in pixels, from start to end.
     Swipe {
         over: Target,
@@ -782,6 +796,29 @@ impl Acts {
                 (12.5, "f goes fullscreen again", Key("f")),
                 (15.5, "the film stops in fullscreen", Leave),
                 (18.5, "stopped", Mark),
+            ],
+            // The Settings from the account menu: the quality menu, the switch, a secret field.
+            "settings" => vec![
+                (0.5, "open the account menu", Click(Account)),
+                (1.5, "open the settings", Click(Settings)),
+                (2.5, "settings", Mark),
+                (3.0, "open the quality menu", Click(Quality)),
+                (4.0, "quality menu", Mark),
+                (4.5, "choose 4 Mbps", Click(QualityChoice(4))),
+                (5.5, "chosen", Mark),
+                (6.0, "switch Black out other screens on", Blackout),
+                (6.5, "add a field for a secret", DemoSecret),
+                (
+                    7.0,
+                    "type the secret",
+                    TypeSecret("invented-key-0123456789"),
+                ),
+                (7.5, "typed", Mark),
+                (8.0, "save the secret", SaveSecret),
+                (9.0, "saved", Mark),
+                (9.5, "clear the secret", ClearSecret),
+                (10.5, "cleared", Mark),
+                (11.0, "escape goes back", Key("escape")),
             ],
             // Ctrl+K, typing, the arrows, Enter on a person, Escape from the person's page.
             "search" => vec![
@@ -1146,10 +1183,23 @@ fn position(target: Target, shell: &Shell, window: &Window) -> Point<Pixels> {
         Target::Account => center(shell.account_button_bounds()),
         // The menu opens under the button, its right edge on the button's: a gap, a border and
         // a padding, the header, the rule, then the line.
-        Target::SignOut => shell.account_button_bounds().map(|button| {
+        Target::Settings => shell.account_button_bounds().map(|button| {
             point(
                 button.right() - px(100.),
                 button.bottom() + px(menu::GAP + 7. + MENU_HEADER + MENU_RULE + menu::LINE / 2.),
+            )
+        }),
+        Target::SignOut => shell.account_button_bounds().map(|button| {
+            point(
+                button.right() - px(100.),
+                button.bottom() + px(menu::GAP + 7. + MENU_HEADER + MENU_RULE + menu::LINE * 1.5),
+            )
+        }),
+        Target::Quality => center(shell.settings_page.quality_button.get()),
+        Target::QualityChoice(line) => shell.settings_page.quality_button.get().map(|button| {
+            point(
+                button.right() - px(100.),
+                button.bottom() + px(menu::GAP + 7. + menu::LINE * (line as f32 + 0.5)),
             )
         }),
         Target::Blank => Some(point(size.width * 0.75, size.height * 0.3)),
@@ -1207,6 +1257,29 @@ fn send(act: &Act, shell: &Entity<Shell>, window: &mut Window, cx: &mut App) {
         }
         Act::Leave => {
             shell.update(cx, |shell, cx| shell.player_back(window, cx));
+            Vec::new()
+        }
+        Act::DemoSecret => {
+            shell.update(cx, |shell, cx| {
+                shell.add_secret_field("Demo key", "demo-key", cx);
+            });
+            Vec::new()
+        }
+        Act::TypeSecret(text) => {
+            let field = shell.read(cx).settings_page.secrets.last().cloned();
+            if let Some(field) = field {
+                field.update(cx, |field, cx| field.type_in(text, cx));
+            }
+            Vec::new()
+        }
+        Act::SaveSecret | Act::ClearSecret => {
+            let field = shell.read(cx).settings_page.secrets.last().cloned();
+            if let Some(field) = field {
+                field.update(cx, |field, cx| match act {
+                    Act::SaveSecret => field.save(cx),
+                    _ => field.clear(cx),
+                });
+            }
             Vec::new()
         }
         Act::Type(text) => {
@@ -1337,6 +1410,21 @@ fn state(label: &str, shell: &Shell, cx: &App) -> String {
             search.input.read(cx).text(),
             search.palette.hits().len(),
             search.palette.selected(),
+        );
+    }
+    if screen == Screen::Settings {
+        // What a secret is, never its value.
+        let secrets: Vec<(Option<&str>, Option<&str>)> = shell
+            .settings_page
+            .secrets
+            .iter()
+            .map(|field| (field.read(cx).shown(), field.read(cx).error()))
+            .collect();
+        return format!(
+            "SETTINGS {label}: quality={} blackout={} menu_open={} secrets={secrets:?}",
+            shell.settings.default_quality.label(),
+            shell.settings.black_out_other_monitors,
+            shell.settings_page.menus.open().is_some(),
         );
     }
     if let Some(playback) = &shell.playback {
