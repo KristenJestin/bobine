@@ -104,6 +104,9 @@ pub struct ListPage {
 impl Shell {
     /// Asks everything the Home shows. What is drawn stays drawn until the new answer comes.
     pub fn load_home(&mut self, cx: &mut Context<Self>) {
+        // The pointer may have been over the header when the Home was left, and its leaving
+        // never heard: the header says again whether it is over it.
+        self.home.hovered = false;
         self.home.asked += 1;
         let asked = self.home.asked;
         let home = &mut self.home;
