@@ -3412,4 +3412,40 @@ mod tests {
         }
         assert!(height <= 2. && width <= 40., "quiet: {width} x {height}");
     }
+
+    #[gpui_kit::test]
+    fn buttons_in_a_row_share_one_height(cx: &mut gpui_kit::TestAppContext) {
+        let (_server, window) = signed_in_window(cx);
+        // The Home header, a movie page and a series page: a filled button beside outlined ones.
+        let rows: [(&[&str], fn(&mut Shell, &mut Context<Shell>)); 3] = [
+            (&["play-1", "more-1"], |shell, cx| {
+                shell.select(NavEntry::Home, cx)
+            }),
+            (&["film-play", "film-watched", "film-list"], |shell, cx| {
+                shell.open_film(ItemId(crate::fake::FILM.into()), cx)
+            }),
+            (&["series-play", "series-list"], |shell, cx| {
+                shell.open_series(ItemId(crate::fake::SERIES.into()), cx)
+            }),
+        ];
+        for (buttons, open) in rows {
+            window
+                .update(cx, |shell, _, cx| {
+                    shell.select(NavEntry::Home, cx);
+                    open(shell, cx);
+                })
+                .unwrap();
+            let mut visual = drawn(&window, cx);
+            for button in buttons {
+                let bounds = visual
+                    .debug_bounds(Box::leak(button.to_string().into_boxed_str()))
+                    .unwrap_or_else(|| panic!("{button} was not drawn"));
+                assert_eq!(
+                    bounds.size.height,
+                    px(crate::theme::BUTTON_HEIGHT),
+                    "{button}"
+                );
+            }
+        }
+    }
 }
