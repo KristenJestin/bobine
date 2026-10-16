@@ -111,39 +111,52 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let stream = match stream {
-            Ok(stream) => stream,
-            Err(error) => {
-                let said = self.failed(error, cx);
-                self.tried(&origin, Some(said), cx);
-                return;
+        let said = match stream {
+            Ok(stream) => {
+                self.tried(&origin, None, cx);
+                match self.open_trailer(&stream, ytdl, &playing, window, cx) {
+                    Ok(()) => return,
+                    Err(error) => {
+                        // The words of the video surface or of mpv's error code: no address in
+                        // them.
+                        eprintln!("bobine: the trailer does not play: {error}");
+                        "Cannot play the trailer."
+                    }
+                }
             }
+            Err(error) => self.failed(error, cx),
         };
-        self.tried(&origin, None, cx);
-        if let Err(error) = self.open_trailer(&stream, ytdl, playing, window, cx) {
-            // The words of the video surface or of mpv's error code: no address in them.
-            eprintln!("bobine: the trailer does not play: {error}");
-            self.tried(&origin, Some("Cannot play the trailer."), cx);
-        }
+        self.tried(&origin, Some(said), cx);
     }
 
-    #[cfg(not(test))]
+    /// What makes a trailer no watching, for the player and for the tests alike: its own mpv
+    /// options, and a playback with nothing to report to, no conversion or quality to fall
+    /// back on, and no next episode.
     fn open_trailer(
         &mut self,
         stream: &StreamUrl,
         ytdl: bool,
-        playing: Playing,
+        playing: &Playing,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
+        let options = trailer::mpv_options(&self.mpv_options, ytdl);
+        let session = self.trailer_session(stream, options, playing, window)?;
+        self.begin_playback(session, None, window, cx);
+        Ok(())
+    }
+
+    #[cfg(not(test))]
+    fn trailer_session(
+        &mut self,
+        stream: &StreamUrl,
+        options: Vec<(&'static str, &'static str)>,
+        playing: &Playing,
+        window: &mut Window,
+    ) -> Result<crate::player::session::Session, String> {
         use crate::player::libmpv::Libmpv;
         use crate::player::{FirstSubtitle, Media, Stream};
 
-        // The hook only for what needs it: a film's address never goes through `yt-dlp`.
-        let mut options = self.mpv_options.clone();
-        if ytdl {
-            options.push(("ytdl", "yes"));
-        }
         let mpv = Libmpv::new(&options).map_err(|error| error.to_string())?;
         let media = Media {
             stream: Stream {
@@ -155,34 +168,36 @@ impl Shell {
             subtitle: FirstSubtitle::Default,
             external_subtitles: &[],
         };
-        self.play(std::sync::Arc::new(mpv), media, playing, None, window, cx)
+        let playing = Playing {
+            title: playing.title.clone(),
+            subtitle: playing.subtitle.clone(),
+            list: None,
+        };
+        self.open_session(std::sync::Arc::new(mpv), media, playing, window)
     }
 
-    /// No player starts in a test: what it would have been given is kept, and a session on a
-    /// fake player stands in, so that leaving it can be tried.
+    /// No player starts in a test: what it would have been given is kept, and a fake player
+    /// stands in for it.
     #[cfg(test)]
-    fn open_trailer(
+    fn trailer_session(
         &mut self,
         stream: &StreamUrl,
-        ytdl: bool,
-        playing: Playing,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Result<(), String> {
+        options: Vec<(&'static str, &'static str)>,
+        playing: &Playing,
+        _window: &mut Window,
+    ) -> Result<crate::player::session::Session, String> {
         use crate::player::fake::FakePlayer;
         use crate::player::session::Session;
         use crate::video::fake::FakeDisplay;
 
         self.trailers_opened
-            .push((stream.expose_for_player().to_string(), ytdl));
-        let session = Session::new(
+            .push((stream.expose_for_player().to_string(), options));
+        Ok(Session::new(
             Box::new(FakePlayer::default()),
             Box::new(FakeDisplay::default()),
-            playing.title,
-            playing.subtitle,
-        );
-        self.begin_playback(session, None, window, cx);
-        Ok(())
+            playing.title.clone(),
+            playing.subtitle.clone(),
+        ))
     }
 }
 
@@ -268,12 +283,19 @@ mod tests {
             .unwrap()
     }
 
+    /// Each address the player was given, with whether its mpv had the `yt-dlp` hook on.
     fn opened(
         window: &gpui_kit::WindowHandle<Shell>,
         cx: &mut TestAppContext,
     ) -> Vec<(String, bool)> {
         window
-            .update(cx, |shell, _, _| shell.trailers_opened.clone())
+            .update(cx, |shell, _, _| {
+                shell
+                    .trailers_opened
+                    .iter()
+                    .map(|(address, options)| (address.clone(), options.contains(&("ytdl", "yes"))))
+                    .collect()
+            })
             .unwrap()
     }
 
@@ -361,6 +383,11 @@ mod tests {
             .update(cx, |shell, window, cx| {
                 let playback = shell.playback.as_ref().expect("the trailer plays");
                 assert!(playback.reporting.is_none(), "nothing to report to");
+                assert!(playback.fallback.is_none(), "no conversion to fall back on");
+                assert!(
+                    !playback.session.quality_offered(),
+                    "and no default quality applied"
+                );
                 // Long enough for any progress to be due.
                 for _ in 0..3 {
                     shell.tick(window, cx);

@@ -209,10 +209,10 @@ pub struct Shell {
     notice_timer: Option<Task<()>>,
     /// `yt-dlp` is installed, read once at start: a trailer hosted elsewhere plays through it.
     pub ytdlp: bool,
-    /// Each trailer the player was given, with whether it needed the `yt-dlp` hook: no player
-    /// starts in a test.
+    /// Each trailer the player was given, with the options of its mpv: no player starts in a
+    /// test.
     #[cfg(test)]
-    trailers_opened: Vec<(String, bool)>,
+    trailers_opened: Vec<(String, Vec<(&'static str, &'static str)>)>,
     /// The wake-up planned for an image to ask again, and when.
     image_wake: Option<(Instant, Task<()>)>,
     /// The page shown at the last draw, and how many times it changed: each change slides the
@@ -411,6 +411,19 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
+        let session = self.open_session(mpv, media, film, window)?;
+        self.begin_playback(session, reporting, window, cx);
+        Ok(())
+    }
+
+    /// The video surface under the window and mpv loading `media`, not yet on the window.
+    fn open_session(
+        &mut self,
+        mpv: Arc<Libmpv>,
+        media: Media<'_>,
+        film: Film,
+        window: &mut Window,
+    ) -> Result<Session, String> {
         let wayland = match &self.wayland {
             Some(wayland) => wayland.clone(),
             None => self
@@ -425,14 +438,12 @@ impl Shell {
         let display = VideoSurface::new(wayland, mpv.clone())?;
         let mut player = MpvPlayer::new(mpv);
         player.load(media).map_err(|e| e.to_string())?;
-        let session = Session::new(
+        Ok(Session::new(
             Box::new(player),
             Box::new(display),
             film.title,
             film.subtitle,
-        );
-        self.begin_playback(session, reporting, window, cx);
-        Ok(())
+        ))
     }
 
     /// Puts `session` on the window: the player screen opens on it.

@@ -31,6 +31,19 @@ pub fn choose(trailers: &Trailers, ytdlp: bool) -> Option<Trailer> {
         .map(Trailer::Remote)
 }
 
+/// The options of a trailer's mpv: those of every mpv, and the `yt-dlp` hook only for a page
+/// address, so that a film's address never goes through `yt-dlp`.
+pub fn mpv_options(
+    every: &[(&'static str, &'static str)],
+    ytdl: bool,
+) -> Vec<(&'static str, &'static str)> {
+    let mut options = every.to_vec();
+    if ytdl {
+        options.push(("ytdl", "yes"));
+    }
+    options
+}
+
 /// Whether `yt-dlp` is on this machine's `PATH`. Read once at start: the window asks on every
 /// frame whether to show the button.
 pub fn ytdlp_installed() -> bool {
