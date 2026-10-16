@@ -31,13 +31,13 @@ use bobine::provider::{
     TranscodeRequest,
 };
 
-use crate::chrome::{Account, AccountView, ButtonBounds, back_link, pill_bar};
+use crate::chrome::{Account, AccountView, ButtonBounds, back_link, bar_fade, pill_bar};
 use crate::config::Settings;
 use crate::fallback::Fallback;
 use crate::images::Images;
 use crate::menu::Menus;
 use crate::motion::{self, Fade, Presence};
-use crate::navigation::{Navigator, Screen};
+use crate::navigation::{NavEntry, Navigator, Screen};
 use crate::player::libmpv::Libmpv;
 use crate::player::mpv::MpvPlayer;
 use crate::player::segments::{Button, Label, offered};
@@ -180,6 +180,8 @@ pub struct Shell {
     pub my_list: MyListPage,
     /// The search palette, while it shows (it stays fading out after it closed).
     pub search: Option<SearchState>,
+    /// The highlight of each entry of the pill bar eases from one section to the next.
+    nav_pills: [Fade; NavEntry::ALL.len()],
     pub images: Images,
     /// The wake-up planned for an image to ask again, and when.
     image_wake: Option<(Instant, Task<()>)>,
@@ -300,6 +302,7 @@ impl Shell {
             collection_pages: Vec::new(),
             my_list: Default::default(),
             search: None,
+            nav_pills: [Fade::new(motion::quick()); NavEntry::ALL.len()],
             images: Images::default(),
             image_wake: None,
             page: (Screen::Login, 0),
@@ -759,6 +762,16 @@ impl Render for Shell {
         } else {
             None
         };
+        let section = self.navigator.section();
+        let now = Instant::now();
+        let highlight = std::array::from_fn(|at| {
+            let pill = &mut self.nav_pills[at];
+            pill.set(NavEntry::ALL[at].is_current(section), now);
+            if pill.moving(now) {
+                window.request_animation_frame();
+            }
+            pill.level(now)
+        });
         let playing = screen == Screen::Player && self.playback.is_some();
         // The next episode playing keeps the fullscreen; anything else gives it back.
         match kept_fullscreen(
@@ -879,8 +892,10 @@ impl Render for Shell {
             .when(screen == Screen::SeriesDetail, |root| {
                 root.children(screens::up_next_card(self, window, cx))
             })
+            // A light shade over the top of a backdrop, under the bar.
+            .when(screen.shows_back_link(), |root| root.child(bar_fade()))
             .when(screen.shows_pill_bar(), |root| {
-                root.child(pill_bar(screen, account, window, cx))
+                root.child(pill_bar(highlight, account, window, cx))
             })
             .when_some(
                 back_label.filter(|_| screen.shows_back_link()),

@@ -1547,6 +1547,7 @@ impl Shell {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::home_page::ListKind;
     use bobine::provider::Film;
 
     #[test]
@@ -2258,5 +2259,54 @@ mod tests {
                 assert_eq!(shell.navigator.current(), Screen::Home);
             })
             .unwrap();
+    }
+    /// The window as last drawn: where things are, and what the mouse reaches.
+    fn drawn(
+        window: &gpui_kit::WindowHandle<Shell>,
+        cx: &mut gpui_kit::TestAppContext,
+    ) -> gpui_kit::VisualTestContext {
+        let visual = gpui_kit::VisualTestContext::from_window((*window).into(), cx);
+        visual.run_until_parked();
+        visual
+    }
+
+    fn current(
+        window: &gpui_kit::WindowHandle<Shell>,
+        cx: &mut gpui_kit::TestAppContext,
+    ) -> Screen {
+        window
+            .update(cx, |shell, _, _| shell.navigator.current())
+            .unwrap()
+    }
+
+    #[gpui_kit::test]
+    fn the_pill_bar_and_ctrl_k_are_present_on_a_film_page_a_series_page_a_person_page_and_a_see_all_list(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        let (_server, window) = signed_in_window(cx);
+        let pages: [fn(&mut Shell, &mut Context<Shell>); 4] = [
+            |shell, cx| shell.open_film(ItemId(crate::fake::FILM.into()), cx),
+            |shell, cx| shell.open_series(ItemId(crate::fake::SERIES.into()), cx),
+            |shell, cx| shell.open_person(crate::fake::people()[0].clone(), cx),
+            |shell, cx| shell.open_list(ListKind::Resume, None, cx),
+        ];
+        for open in pages {
+            window
+                .update(cx, |shell, _, cx| {
+                    shell.select(NavEntry::Home, cx);
+                    open(shell, cx);
+                })
+                .unwrap();
+            let mut visual = drawn(&window, cx);
+            let screen = current(&window, cx);
+            assert!(visual.debug_bounds("pill-bar").is_some(), "{screen:?}");
+            visual.simulate_keystrokes("ctrl-k");
+            let opened = window
+                .update(cx, |shell, _, _| shell.search_is_open())
+                .unwrap();
+            assert!(opened, "Ctrl+K on {screen:?}");
+            visual.simulate_keystrokes("escape");
+            assert_eq!(current(&window, cx), screen);
+        }
     }
 }

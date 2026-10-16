@@ -1,5 +1,5 @@
-//! What frames the screens: the floating pill bar of the root screens and the back link of the
-//! detail pages.
+//! What frames the screens: the floating pill bar over every screen but the player, and the
+//! back link of the detail pages under it.
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -7,12 +7,13 @@ use std::rc::Rc;
 use gpui_kit::prelude::*;
 use gpui_kit::{
     Bounds, Context, Div, FontWeight, IntoElement, MouseDownEvent, Pixels, Point, Stateful, Window,
-    anchored, canvas, deferred, div, point, px, rgb, rgba,
+    anchored, canvas, deferred, div, linear_color_stop, linear_gradient, point, px, rgb, rgba,
 };
 
 use crate::icons::{IconName, icon};
 use crate::menu;
-use crate::navigation::{NavEntry, Screen};
+use crate::motion;
+use crate::navigation::NavEntry;
 use crate::shell::Shell;
 use crate::theme;
 
@@ -39,6 +40,8 @@ const MENU_WIDTH: f32 = 240.;
 pub const MENU_HEADER: f32 = 44.;
 /// The rule between the header and the choices, with its margins.
 pub const MENU_RULE: f32 = 13.;
+/// Under the pill bar, which ends 60 px down.
+pub const BACK_LINK_TOP: f32 = 76.;
 
 /// Where the account menu goes and how tall it is: under the button, its right edge on the
 /// button's (the button is at the bar's end), and above it when there is no room below.
@@ -48,29 +51,27 @@ pub fn account_menu_place(button: Bounds<Pixels>, window_height: f32) -> (Point<
     (point(button.right() - px(MENU_WIDTH), at.y), height)
 }
 
-/// Centred at the top, over the screen; the search field opens the palette, the account button
-/// the menu to sign out.
+/// Centred at the top, over the screen, in the same place on every screen; the search field opens
+/// the palette, the account button the menu to sign out. `highlight` is how much each entry
+/// shows as the section of the page, from 0 to 1: it eases from one to the next.
 pub fn pill_bar(
-    current: Screen,
+    highlight: [f32; NavEntry::ALL.len()],
     account: Option<AccountView>,
     window: &mut Window,
     cx: &mut Context<Shell>,
 ) -> impl IntoElement {
     let entries = NavEntry::ALL.into_iter().enumerate().map(|(index, entry)| {
-        let active = entry.is_current(current);
+        let level = highlight[index];
         let live = entry.target().is_some();
+        let rest = if live { theme::muted() } else { theme::dim() };
         let item = div()
             .id(("nav-entry", index))
             .px(px(12.))
             .py(px(8.))
             .rounded(px(theme::RADIUS))
             .text_size(px(13.))
-            .text_color(match (active, live) {
-                (true, _) => theme::text(),
-                (false, true) => theme::muted(),
-                (false, false) => theme::dim(),
-            })
-            .when(active, |item| item.bg(theme::line()))
+            .text_color(motion::mix(rest, theme::text(), level))
+            .bg(motion::mix(rgba(0x23232700), theme::line(), level))
             .child(entry.label());
         if live {
             item.cursor_pointer()
@@ -89,6 +90,7 @@ pub fn pill_bar(
         .justify_center()
         .child(
             div()
+                .debug_selector(|| "pill-bar".into())
                 .flex()
                 .items_center()
                 .gap(px(4.))
@@ -299,7 +301,25 @@ fn search_field(window: &mut Window, cx: &mut Context<Shell>) -> Stateful<Div> {
         )
 }
 
-/// Top left of a detail page, where the pill bar is not: an arrow and `Films`.
+/// Darkens the top of a backdrop a little, so that the bar over it stays readable.
+pub fn bar_fade() -> Div {
+    div()
+        .absolute()
+        .top_0()
+        .left_0()
+        .right_0()
+        .h(px(BAR_FADE))
+        .bg(linear_gradient(
+            180.,
+            linear_color_stop(rgba(0x09090a99), 0.),
+            linear_color_stop(rgba(0x09090a00), 1.),
+        ))
+}
+
+/// How far down the shade behind the bar goes.
+const BAR_FADE: f32 = 140.;
+
+/// Top left of a detail page, under the pill bar: an arrow and `Films`.
 pub fn back_link(
     label: &'static str,
     window: &mut Window,
@@ -316,7 +336,7 @@ pub fn back_link(
         .items_center()
         .gap(px(6.))
         .absolute()
-        .top(px(24.))
+        .top(px(BACK_LINK_TOP))
         .left(px(40.))
         .px(px(10.))
         .py(px(6.))

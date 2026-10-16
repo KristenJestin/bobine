@@ -75,7 +75,8 @@ pub fn render(shell: &mut Shell, _: &mut Window, cx: &mut Context<Shell>) -> imp
                 .flex()
                 .flex_col()
                 .gap(px(32.))
-                .pt(px(96.))
+                // Under the back link, itself under the pill bar.
+                .pt(px(120.))
                 .px(px(EDGE))
                 .pb(px(64.))
                 .child(
