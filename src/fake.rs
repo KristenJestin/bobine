@@ -10,8 +10,8 @@ use bobine::provider::{
     ExternalSubtitle, Favourite, Feature, FeatureKind, Film, FilmDetail, FilmQuery, FilmSort,
     FilterChoices, ImageKind, ImageRef, ItemId, Library, LibraryKind, MediaServer, MediaSource,
     MediaSourceId, Page, PersonHit, PersonTitles, PlaySessionId, Playback, PlaybackReport,
-    ProviderError, SearchResults, Season, Series, SeriesDetail, SeriesHit, ServerInfo, StreamUrl,
-    SubtitleTrack, Title, VideoRange, VideoTrack,
+    ProviderError, SearchResults, Season, Segment, Series, SeriesDetail, SeriesHit, ServerInfo,
+    StreamUrl, SubtitleTrack, Title, VideoRange, VideoTrack,
 };
 
 pub const USER: &str = "camille";
@@ -46,6 +46,8 @@ pub struct Record {
     pub favourite_calls: Vec<(ItemId, bool)>,
     /// How many times the list of favourites was asked.
     pub list_loads: u32,
+    /// The items whose media segments were asked, in order.
+    pub segment_asks: Vec<ItemId>,
 }
 
 /// What the fake server holds, shared by the connector and its sessions.
@@ -73,6 +75,8 @@ pub struct State {
     pub favourite_fails: bool,
     /// How long changing the list takes, so that a double click or the optimistic state shows.
     pub favourite_delay: std::time::Duration,
+    /// The media segments every item has (none: a server that does not know them).
+    pub segments: Vec<Segment>,
 }
 
 #[derive(Clone)]
@@ -455,6 +459,7 @@ impl FakeServer {
                     .to_vec(),
                 favourite_fails: false,
                 favourite_delay: std::time::Duration::ZERO,
+                segments: Vec::new(),
             })),
             info: ServerInfo {
                 id: "server-1".into(),
@@ -1077,6 +1082,12 @@ impl MediaServer for FakeServer {
             state.favourites.push(item.clone());
         }
         Ok(())
+    }
+
+    fn media_segments(&self, item: &ItemId) -> Result<Vec<Segment>, ProviderError> {
+        let mut state = self.state();
+        state.record.segment_asks.push(item.clone());
+        Ok(state.segments.clone())
     }
 }
 

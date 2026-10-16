@@ -104,6 +104,29 @@ pub trait MediaServer: Send + Sync {
     fn favourites(&self) -> Result<Vec<Favourite>, ProviderError>;
     /// Puts a film or a series in the user's list, or takes it out.
     fn set_favourite(&self, item: &ItemId, favourite: bool) -> Result<(), ProviderError>;
+
+    /// The stretches of a film or an episode the server marked (intro, credits…), by start. A
+    /// server that does not know them, or an item without any, answers none: never an error.
+    fn media_segments(&self, item: &ItemId) -> Result<Vec<Segment>, ProviderError>;
+}
+
+/// What a marked stretch of a film or an episode is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SegmentKind {
+    Intro,
+    /// The credits.
+    Outro,
+    /// What happened before, at the start of an episode.
+    Recap,
+    Preview,
+}
+
+/// A stretch of a film or an episode the server marked, from `start` to `end` in its time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Segment {
+    pub kind: SegmentKind,
+    pub start: Duration,
+    pub end: Duration,
 }
 
 /// A film, a series or an episode, as a row of the Home lists it.

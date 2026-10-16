@@ -3,7 +3,8 @@
 use crate::provider::{
     AudioTrack, CastMember, CollectionCard, Episode, Feature, FeatureKind, Film, ImageKind,
     ImageRef, ItemId, Library, LibraryKind, MediaSource, MediaSourceId, PersonHit, PersonTitles,
-    Season, Series, SeriesHit, ServerInfo, SubtitleTrack, Title, VideoRange, VideoTrack,
+    Season, Segment, SegmentKind, Series, SeriesHit, ServerInfo, SubtitleTrack, Title, VideoRange,
+    VideoTrack,
 };
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -57,6 +58,45 @@ pub struct QueryResult {
     pub items: Vec<Item>,
     #[serde(default)]
     pub total_record_count: Option<u32>,
+}
+
+/// What `/MediaSegments/{id}` lists.
+#[derive(Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct SegmentsResult {
+    pub items: Vec<SegmentDto>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct SegmentDto {
+    pub r#type: String,
+    pub start_ticks: i64,
+    pub end_ticks: i64,
+}
+
+impl SegmentsResult {
+    /// The segments Bobine skips, by start. Commercials and kinds it does not know are left out,
+    /// and so is a segment that ends where it starts or before.
+    pub fn segments(self) -> Vec<Segment> {
+        let mut segments: Vec<Segment> = self
+            .items
+            .into_iter()
+            .filter_map(|dto| {
+                let kind = match dto.r#type.as_str() {
+                    "Intro" => SegmentKind::Intro,
+                    "Outro" => SegmentKind::Outro,
+                    "Recap" => SegmentKind::Recap,
+                    "Preview" => SegmentKind::Preview,
+                    _ => return None,
+                };
+                let (start, end) = (duration(dto.start_ticks), duration(dto.end_ticks));
+                (end > start).then_some(Segment { kind, start, end })
+            })
+            .collect();
+        segments.sort_by_key(|segment| segment.start);
+        segments
+    }
 }
 
 /// What `/Items/Filters` lists of a library; only its years are read.

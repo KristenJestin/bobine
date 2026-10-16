@@ -13,8 +13,8 @@ use crate::provider::{
     Collection, CollectionCard, CollectionDetail, Connector, Episode, ExternalSubtitle, Favourite,
     Feature, Film, FilmDetail, FilmQuery, FilmSort, FilterChoices, ImageKind, ImageRef, ItemId,
     Library, MediaServer, MediaSourceId, Page, PersonTitles, PlaySessionId, Playback,
-    PlaybackReport, ProviderError, SearchResults, Season, Series, SeriesDetail, ServerInfo,
-    StreamUrl, Title, Token, TokenStore,
+    PlaybackReport, ProviderError, SearchResults, Season, Segment, Series, SeriesDetail,
+    ServerInfo, StreamUrl, Title, Token, TokenStore,
 };
 use account::{AccountFile, Login};
 use dto::{
@@ -811,6 +811,25 @@ impl MediaServer for Jellyfin {
         } else {
             self.http
                 .delete("take out of the list", &path, &[self.user()])
+        }
+    }
+
+    /// Servers before 10.10 have no such route: they answer 404, which is no segments.
+    fn media_segments(&self, item: &ItemId) -> Result<Vec<Segment>, ProviderError> {
+        let kinds = ["Intro", "Outro", "Recap", "Preview"];
+        let query: Vec<(&str, String)> = kinds
+            .into_iter()
+            .map(|kind| ("includeSegmentTypes", kind.to_string()))
+            .collect();
+        let found: Result<dto::SegmentsResult, ProviderError> = self.http.get(
+            "media segments",
+            &format!("/MediaSegments/{}", encode(&item.0)),
+            &query,
+        );
+        match found {
+            Ok(found) => Ok(found.segments()),
+            Err(ProviderError::NotFound) => Ok(Vec::new()),
+            Err(error) => Err(error),
         }
     }
 }
