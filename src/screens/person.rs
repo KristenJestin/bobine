@@ -8,6 +8,7 @@ use gpui_kit::{Context, Div, FontWeight, IntoElement, Stateful, Window, div, px}
 use super::{note, picture, poster, row_heading};
 use crate::film_page;
 use crate::images;
+use crate::lists::plural;
 use crate::shell::{Loadable, Shell};
 use crate::theme;
 
@@ -121,10 +122,6 @@ pub fn render(shell: &mut Shell, _: &mut Window, cx: &mut Context<Shell>) -> imp
                 .children(body),
         )
         .into_any_element()
-}
-
-fn plural(count: usize, one: &str, many: &str) -> String {
-    format!("{count} {}", if count > 1 { many } else { one })
 }
 
 /// A heading and its titles, wrapping onto as many lines as they need.

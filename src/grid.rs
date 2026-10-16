@@ -36,7 +36,7 @@ pub fn count(total: u32) -> String {
         }
         grouped.push(digit);
     }
-    let noun = if total > 1 { "titles" } else { "title" };
+    let noun = if total == 1 { "title" } else { "titles" };
     format!("{grouped} {noun}")
 }
 
@@ -355,7 +355,9 @@ mod tests {
     #[test]
     fn the_count_reads_in_english() {
         assert_eq!(count(1284), "1,284 titles");
+        assert_eq!(count(0), "0 titles");
         assert_eq!(count(1), "1 title");
+        assert_eq!(count(2), "2 titles");
         assert_eq!(count(1234567), "1,234,567 titles");
     }
 

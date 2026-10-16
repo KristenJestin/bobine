@@ -101,7 +101,7 @@ pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -
         let mut films = collection.others.clone();
         films.push(detail.film.clone());
         films.sort_by_key(|film| film.year);
-        let caption = format!("{} films", films.len());
+        let caption = crate::lists::films(films.len() as u32);
         rows.push(
             poster_row(
                 shell,

@@ -76,21 +76,19 @@ fn wear(cards: &mut [CollectionCard], collection: &ItemId, poster: ImageRef) {
     }
 }
 
-/// `1 film`, `3 films`.
-pub fn films(count: u32) -> String {
-    format!("{count} {}", if count > 1 { "films" } else { "film" })
+/// `0 films`, `1 film`, `3 films`: English keeps the singular for exactly one.
+pub fn plural(count: usize, one: &str, many: &str) -> String {
+    format!("{count} {}", if count == 1 { one } else { many })
 }
 
-/// `1 collection`, `12 collections`.
+/// `0 films`, `1 film`, `3 films`.
+pub fn films(count: u32) -> String {
+    plural(count as usize, "film", "films")
+}
+
+/// `0 collections`, `1 collection`, `12 collections`.
 pub fn collections(count: usize) -> String {
-    format!(
-        "{count} {}",
-        if count > 1 {
-            "collections"
-        } else {
-            "collection"
-        }
-    )
+    plural(count, "collection", "collections")
 }
 
 /// The line under a collection's poster: how many films it holds, when the server says.
@@ -146,8 +144,13 @@ mod tests {
     fn a_collection_counts_its_films_in_english() {
         assert_eq!(films(1), "1 film");
         assert_eq!(films(3), "3 films");
-        assert_eq!(films(0), "0 film");
+        assert_eq!(films(0), "0 films");
+        assert_eq!(films(2), "2 films");
+        assert_eq!(collections(0), "0 collections");
         assert_eq!(collections(1), "1 collection");
+        assert_eq!(collections(2), "2 collections");
+        assert_eq!(plural(0, "series", "series"), "0 series");
+        assert_eq!(plural(1, "series", "series"), "1 series");
         assert_eq!(collections(12), "12 collections");
     }
 
