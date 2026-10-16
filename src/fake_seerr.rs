@@ -50,6 +50,8 @@ pub struct State {
     pub requested: Vec<TmdbId>,
     /// How long each call takes, so that a page shows its waiting.
     pub delay: Duration,
+    /// A title cannot be read any more once something was asked for.
+    pub titles_fail_after_a_request: bool,
 }
 
 #[derive(Clone)]
@@ -67,6 +69,7 @@ impl Default for FakeSeerr {
                 movie_quota: None,
                 requested: Vec::new(),
                 delay: Duration::ZERO,
+                titles_fail_after_a_request: false,
             })),
         }
     }
@@ -220,6 +223,12 @@ impl RequestServer for FakeSeerr {
 
     fn title(&self, kind: MediaKind, id: TmdbId) -> Result<TitleDetail, RequestError> {
         self.reach()?;
+        {
+            let state = self.state();
+            if state.titles_fail_after_a_request && !state.requested.is_empty() {
+                return Err(RequestError::Server(500));
+            }
+        }
         let title = self.find(kind, id)?;
         let in_collection = [
             IN_LIBRARY_FILM,

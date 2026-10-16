@@ -64,6 +64,22 @@ impl RequestPage {
         }
     }
 
+    /// What was just asked for shows as asked: the title pending, a series' seasons taken.
+    fn asked(&mut self, ask: &Ask) {
+        let Loadable::Ready(detail) = &mut self.detail else {
+            return;
+        };
+        if detail.title.availability == Availability::Missing {
+            detail.title.availability = Availability::Pending;
+        }
+        if let Ask::Tv(_, seasons) = ask {
+            for season in &mut detail.seasons {
+                season.taken |= seasons.contains(&season.number);
+            }
+            self.picker = Some(SeasonPicker::new(&detail.seasons));
+        }
+    }
+
     /// Whether the page offers its request: a film nobody asked for, or a series with seasons
     /// left to ask for.
     pub fn can_request(&self, in_library: bool) -> bool {
@@ -205,6 +221,7 @@ impl Shell {
         page.error = None;
         page.menus.close();
         let (generation, kind, tmdb) = (page.generation, page.kind, page.tmdb);
+        let asked = ask.clone();
         self.ask_seerr(
             cx,
             move |seerr| seerr.request(&ask),
@@ -217,7 +234,12 @@ impl Shell {
                 };
                 page.busy = false;
                 match done {
-                    Ok(()) => shell.load_request(generation, cx),
+                    Ok(()) => {
+                        // Pending at once, whatever the read that follows says: a second press
+                        // has nothing left to ask for, even if that read fails.
+                        page.asked(&asked);
+                        shell.load_request(generation, cx);
+                    }
                     Err(error) => page.error = Some(discover::error_line(&error)),
                 }
             },
@@ -361,6 +383,39 @@ mod tests {
                 assert_eq!(film.availability, Availability::Pending);
             })
             .unwrap();
+    }
+
+    #[gpui_kit::test]
+    fn a_double_press_sends_one_request_even_when_the_title_cannot_be_read_again(
+        cx: &mut TestAppContext,
+    ) {
+        let seerr = FakeSeerr::default();
+        seerr.state.lock().unwrap().titles_fail_after_a_request = true;
+        let window = on_request(&seerr, MediaKind::Movie, NORTHERN_LIGHTS, cx);
+        let mut visual = drawn(&window, cx);
+        click(&mut visual, "request-button");
+        if visual.debug_bounds("request-button").is_some() {
+            click(&mut visual, "request-button");
+        }
+        assert_eq!(seerr.requests(), [Ask::Movie(NORTHERN_LIGHTS)]);
+        let mut visual = drawn(&window, cx);
+        assert!(visual.debug_bounds("status Pending").is_some());
+    }
+
+    #[gpui_kit::test]
+    fn a_series_request_takes_its_seasons_out_of_the_menu_at_once(cx: &mut TestAppContext) {
+        let seerr = FakeSeerr::default();
+        seerr.state.lock().unwrap().titles_fail_after_a_request = true;
+        let window = on_request(&seerr, MediaKind::Tv, COPPER_COAST, cx);
+        let mut visual = drawn(&window, cx);
+        click(&mut visual, "request-button");
+        click(&mut visual, "season 2");
+        click(&mut visual, "seasons-send");
+        let mut visual = drawn(&window, cx);
+        assert!(visual.debug_bounds("status Pending").is_some());
+        click(&mut visual, "request-button");
+        assert!(visual.debug_bounds("season 1").is_none());
+        assert!(visual.debug_bounds("season 2").is_some());
     }
 
     #[gpui_kit::test]
