@@ -1320,6 +1320,17 @@ fn series_of_a_library_are_paged_and_sorted_like_films() {
 }
 
 #[test]
+fn series_can_be_sorted_by_when_their_latest_episode_came_in() {
+    let s = Setup::new();
+    s.signed_in()
+        .series(&series_library(), &query(FilmSort::LastAdded, true, 0, 10))
+        .unwrap();
+    let asked = s.fake.last("GET", "/Items");
+    assert_eq!(asked.param("SortBy"), Some("DateLastContentAdded,SortName"));
+    assert_eq!(asked.param("SortOrder"), Some("Descending"));
+}
+
+#[test]
 fn a_series_in_a_list_has_its_years_rating_poster_and_unwatched_count() {
     let s = Setup::new();
     let page = s

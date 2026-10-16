@@ -3,7 +3,8 @@
 //! The playback itself, its reports and its end are the film page's and the series page's.
 
 use bobine::provider::{
-    Episode, ItemId, LibraryKind, MediaServer, Page, Playback, ProviderError, Title,
+    Episode, FilmQuery, FilmSort, ItemId, LibraryKind, MediaServer, Page, Playback, ProviderError,
+    Title,
 };
 
 use crate::film_page::{self, Choices, Plan};
@@ -161,19 +162,32 @@ pub fn fetch(
             Ok(whole(next.into_iter().map(Title::Episode).collect()))
         }
         ListKind::Latest(library, LibraryKind::Series) => {
-            let found = server.series(library, &grid::query(page))?;
+            let found = server.series(library, &latest_query(LibraryKind::Series, page))?;
             Ok(Page {
                 items: found.items.into_iter().map(Title::Series).collect(),
                 total: found.total,
             })
         }
-        ListKind::Latest(library, _) => {
-            let found = server.films(library, &grid::query(page))?;
+        ListKind::Latest(library, kind) => {
+            let found = server.films(library, &latest_query(*kind, page))?;
             Ok(Page {
                 items: found.items.into_iter().map(Title::Film).collect(),
                 total: found.total,
             })
         }
+    }
+}
+
+/// The order of the full list of what a library gained: the one of its row. The row follows
+/// when episodes came in, so a series that gained one now is first, not the one added long ago.
+pub fn latest_query(kind: LibraryKind, page: u32) -> FilmQuery {
+    let query = grid::query(page);
+    match kind {
+        LibraryKind::Series => FilmQuery {
+            sort: FilmSort::LastAdded,
+            ..query
+        },
+        _ => query,
     }
 }
 
@@ -271,6 +285,19 @@ mod tests {
     }
 
     // What is asked of the server, and when.
+
+    #[test]
+    fn the_full_list_of_new_series_follows_the_row_by_when_episodes_came_in() {
+        let (films, series) = (
+            latest_query(LibraryKind::Films, 1),
+            latest_query(LibraryKind::Series, 1),
+        );
+        assert_eq!(
+            (series.sort, series.descending, series.start),
+            (FilmSort::LastAdded, true, grid::PAGE)
+        );
+        assert_eq!((films.sort, films.descending), (FilmSort::DateAdded, true));
+    }
 
     #[test]
     fn a_row_asks_for_the_pictures_in_view_and_one_card_each_side() {

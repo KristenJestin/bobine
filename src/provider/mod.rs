@@ -258,6 +258,8 @@ pub struct Library {
 pub enum FilmSort {
     Title,
     DateAdded,
+    /// When the latest content came in: for a series, its newest episode.
+    LastAdded,
     ReleaseYear,
 }
 

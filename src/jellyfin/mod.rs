@@ -191,6 +191,7 @@ impl Jellyfin {
         let sort = match query.sort {
             FilmSort::Title => "SortName",
             FilmSort::DateAdded => "DateCreated,SortName",
+            FilmSort::LastAdded => "DateLastContentAdded,SortName",
             FilmSort::ReleaseYear => "ProductionYear,SortName",
         };
         let order = if query.descending {
