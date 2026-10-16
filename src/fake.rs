@@ -136,6 +136,9 @@ pub struct State {
     /// The first time each person's photo is asked, the server fails (as a busy server that
     /// times out while it fetches the photo from elsewhere).
     pub photos_fail_once: bool,
+    /// `collection_poster` fails with this, and each collection it was asked for is kept.
+    pub collection_poster_error: Option<ProviderError>,
+    pub collection_posters_asked: Vec<ItemId>,
     /// The server refuses to convert anything.
     pub transcode_fails: bool,
     pub people: Vec<PersonHit>,
@@ -569,6 +572,8 @@ impl FakeServer {
                 record: Record::default(),
                 image_delay: std::time::Duration::ZERO,
                 photos_fail_once: false,
+                collection_poster_error: None,
+                collection_posters_asked: Vec::new(),
                 transcode_fails: false,
                 people: people(),
                 search_delay: std::time::Duration::ZERO,
@@ -1219,6 +1224,13 @@ impl MediaServer for FakeServer {
     }
 
     fn collection_poster(&self, id: &ItemId) -> Result<Option<ImageRef>, ProviderError> {
+        {
+            let mut state = self.state();
+            state.collection_posters_asked.push(id.clone());
+            if let Some(error) = state.collection_poster_error.clone() {
+                return Err(error);
+            }
+        }
         Ok(self
             .collection(id)?
             .films

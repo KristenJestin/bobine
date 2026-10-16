@@ -3622,6 +3622,63 @@ mod tests {
             .unwrap();
     }
 
+    /// The collections whose poster was asked, with the server failing every poster with `error`.
+    fn collection_posters_asked_failing_with(
+        error: ProviderError,
+        cx: &mut gpui_kit::TestAppContext,
+    ) -> Vec<ItemId> {
+        let (server, window) = signed_in_window(cx);
+        server.state.lock().unwrap().collection_poster_error = Some(error);
+        window
+            .update(cx, |shell, _, cx| shell.select(NavEntry::Collections, cx))
+            .unwrap();
+        cx.run_until_parked();
+        server
+            .state
+            .lock()
+            .unwrap()
+            .collection_posters_asked
+            .clone()
+    }
+
+    fn asked_once_each(asked: &[ItemId]) -> bool {
+        !asked.is_empty()
+            && asked
+                .iter()
+                .all(|id| asked.iter().filter(|other| *other == id).count() == 1)
+    }
+
+    #[gpui_kit::test]
+    fn a_collection_poster_refused_for_an_expired_session_is_not_asked_again(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        let asked = collection_posters_asked_failing_with(ProviderError::SessionExpired, cx);
+        assert!(asked_once_each(&asked), "{asked:?}");
+    }
+
+    #[gpui_kit::test]
+    fn a_collection_poster_forbidden_to_the_user_is_not_asked_again(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        let asked = collection_posters_asked_failing_with(ProviderError::Forbidden, cx);
+        assert!(asked_once_each(&asked), "{asked:?}");
+    }
+
+    #[gpui_kit::test]
+    fn a_collection_poster_that_timed_out_is_asked_again_once(cx: &mut gpui_kit::TestAppContext) {
+        let asked = collection_posters_asked_failing_with(
+            ProviderError::Unreachable("timed out".into()),
+            cx,
+        );
+        assert!(
+            !asked.is_empty()
+                && asked
+                    .iter()
+                    .all(|id| asked.iter().filter(|other| *other == id).count() == 2),
+            "{asked:?}"
+        );
+    }
+
     #[gpui_kit::test]
     fn the_meta_line_bars_cover_the_digits_and_no_more(cx: &mut gpui_kit::TestAppContext) {
         let (_server, window) = signed_in_window(cx);

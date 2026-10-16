@@ -70,6 +70,8 @@ impl PosterQueue {
         match answer {
             Ok(Some(poster)) => wear(cards, collection, poster),
             Ok(None) => {}
+            // The server said no to this user: asking again gets the same answer.
+            Err(ProviderError::SessionExpired | ProviderError::Forbidden) => {}
             Err(_) if self.retried.insert(collection.clone()) => {
                 self.waiting.push_back(collection.clone());
             }
