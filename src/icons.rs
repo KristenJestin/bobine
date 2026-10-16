@@ -64,6 +64,10 @@ icons! {
     SkipForward => "skip-forward",
     UserCircle => "user-circle",
     SignOut => "sign-out",
+    Gear => "gear",
+    Monitor => "monitor",
+    Plug => "plug",
+    Info => "info",
 }
 
 /// The asset source of the window: the icons above and nothing else.

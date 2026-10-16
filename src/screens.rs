@@ -13,6 +13,7 @@ mod person;
 pub mod player;
 pub mod search;
 mod series_detail;
+mod settings;
 pub mod skip;
 
 pub use card::{Card, Cards, Offer, Open, Play, Quick};
@@ -59,6 +60,7 @@ pub fn render(
         Screen::Collections => lists::render_collections(shell, window, cx).into_any_element(),
         Screen::CollectionDetail => collection_detail::render(shell, window, cx).into_any_element(),
         Screen::MyList => lists::render_my_list(shell, window, cx).into_any_element(),
+        Screen::Settings => settings::render(shell, window, cx).into_any_element(),
     }
 }
 

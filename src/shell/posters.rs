@@ -169,8 +169,15 @@ mod tests {
             Some(ProviderError::Unreachable("refused".into()));
         change(&mut server.state.lock().unwrap());
         let connector: Arc<dyn Connector> = Arc::new(server.clone());
-        let window =
-            cx.add_window(|_, cx| Shell::new(None, Box::new(move || Ok(connector)), None, cx));
+        let window = cx.add_window(|_, cx| {
+            Shell::new(
+                None,
+                Box::new(move || Ok(connector)),
+                None,
+                Arc::new(crate::fake::MemoryKeyring::default()),
+                cx,
+            )
+        });
         cx.run_until_parked();
         let cx = VisualTestContext::from_window(*window, cx).into_mut();
         cx.simulate_resize(size(px(1600.), px(3000.)));

@@ -600,6 +600,7 @@ impl Shell {
     /// Forgets what the session before showed: the pages, the images, the menus.
     fn reset_session(&mut self, cx: &mut Context<Self>) {
         self.account_menu.close();
+        self.settings_page.menus.close();
         self.home = HomePage::default();
         self.library = LibraryPage::default();
         self.series = LibraryPage::default();
@@ -1294,7 +1295,7 @@ impl Shell {
         if self.cancel_up_next(cx) {
             return;
         }
-        if self.account_menu.escape() {
+        if self.account_menu.escape() || self.settings_page.menus.escape() {
             cx.notify();
             return;
         }
@@ -2143,8 +2144,15 @@ mod tests {
     ) -> (FakeServer, gpui_kit::WindowHandle<Shell>) {
         let server = FakeServer::new(6, true);
         let connector: Arc<dyn bobine::provider::Connector> = Arc::new(server.clone());
-        let window =
-            cx.add_window(|_, cx| Shell::new(None, Box::new(move || Ok(connector)), None, cx));
+        let window = cx.add_window(|_, cx| {
+            Shell::new(
+                None,
+                Box::new(move || Ok(connector)),
+                None,
+                Arc::new(crate::fake::MemoryKeyring::default()),
+                cx,
+            )
+        });
         cx.run_until_parked();
         window
             .update(cx, |shell, _, _| {

@@ -108,6 +108,12 @@ impl SecretField {
         self.error
     }
 
+    /// Text entered as the viewer would type it.
+    #[cfg(any(test, feature = "harness"))]
+    pub fn type_in(&mut self, text: &str, cx: &mut Context<Self>) {
+        self.input.update(cx, |input, cx| input.set_text(text, cx));
+    }
+
     /// Keeps what was typed in the keyring. The field is emptied first: from here the value
     /// lives only in the call.
     pub fn save(&mut self, cx: &mut Context<Self>) {
@@ -289,9 +295,7 @@ mod tests {
     }
 
     fn type_in(field: &Entity<SecretField>, text: &str, cx: &mut gpui_kit::TestAppContext) {
-        field.update(cx, |field, cx| {
-            field.input.update(cx, |input, cx| input.set_text(text, cx))
-        });
+        field.update(cx, |field, cx| field.type_in(text, cx));
     }
 
     fn save(field: &Entity<SecretField>, cx: &mut gpui_kit::TestAppContext) {
