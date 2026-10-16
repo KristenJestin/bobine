@@ -365,7 +365,7 @@ fn show_screen(
     let to_collections = wants(&["collections", "collection-page"]);
     let to_collection = wants(&["collection-page"]);
     let to_list = wants(&["my-list", "my-list-empty"]);
-    // The "Ma liste" button pressed on the page that shows.
+    // The "My list" button pressed on the page that shows.
     let press_list = wants(&["film-list", "series-list"]);
     let (series_rows, up_next) = (wants(&["series-rows"]), wants(&["up-next"]));
     let home_rows = wants(&["home-rows"]);

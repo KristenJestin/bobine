@@ -366,7 +366,7 @@ pub struct DetailPage {
     pub menu_fade: Presence<Chip>,
     /// Where each chip was last drawn, so its menu opens under it.
     pub chips: [Rc<Cell<Option<Bounds<Pixels>>>>; 3],
-    /// "Ma liste".
+    /// "My list".
     pub favourite: Toggle,
     pub scroll: ScrollHandle,
     /// The rows that scroll sideways: the cast, the collection, similar titles.

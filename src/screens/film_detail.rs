@@ -257,7 +257,7 @@ fn hero(
     )
 }
 
-/// "Ma liste": a plus while the item is out of the list, a check once it is in, the green of
+/// "My list": a plus while the item is out of the list, a check once it is in, the green of
 /// the other states of the page; the change eases from one to the other.
 pub(super) fn list_button(
     id: &'static str,

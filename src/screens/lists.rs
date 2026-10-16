@@ -1,4 +1,4 @@
-//! The Collections and Ma liste screens: a grid of posters like the libraries', over a list the
+//! The Collections and My list screens: a grid of posters like the libraries', over a list the
 //! program already holds whole. Only the rows in view are built, so only their images are asked.
 
 use std::ops::Range;

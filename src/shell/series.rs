@@ -39,7 +39,7 @@ pub struct SeriesPage {
     pub menus: Menus<Chip>,
     pub menu_fade: Presence<Chip>,
     pub chips: [Rc<Cell<Option<Bounds<Pixels>>>>; 3],
-    /// "Ma liste".
+    /// "My list".
     pub favourite: Toggle,
     pub scroll: ScrollHandle,
     /// The rows that scroll sideways: the cast, similar series.
