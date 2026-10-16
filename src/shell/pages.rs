@@ -1467,6 +1467,8 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        #[cfg(test)]
+        self.planned.push((plan.film.clone(), plan.start));
         let opened = match opened {
             Ok(opened) => opened,
             Err(error) => {
@@ -3037,6 +3039,17 @@ mod tests {
             "once, and the episode that was clicked"
         );
         assert_eq!(current(&window, cx), Screen::SeriesDetail);
+        let planned = window
+            .update(cx, |shell, _, _| shell.planned.clone())
+            .unwrap();
+        assert_eq!(
+            planned,
+            [(
+                ItemId("series-0-s2-e4".into()),
+                std::time::Duration::from_secs(30 * 60)
+            )],
+            "the player starts where the episode stopped"
+        );
     }
 
     #[gpui_kit::test]
