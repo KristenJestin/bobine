@@ -700,6 +700,7 @@ impl Shell {
                 self.tick(window, cx);
                 self.play_up_next_now(window, cx);
             }
+            Some(WindowRequest::Quality(_)) => {}
             None => {}
         }
     }

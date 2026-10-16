@@ -8,6 +8,7 @@ pub mod mpv;
 pub mod scrub;
 pub mod segments;
 pub mod session;
+pub mod settings;
 pub mod thumbnails;
 pub mod time;
 pub mod tracks;
