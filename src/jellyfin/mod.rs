@@ -1070,6 +1070,7 @@ impl MediaServer for Jellyfin {
                 ("Fields", "ProviderIds".into()),
                 ("EnableImages", "false".into()),
                 ("EnableUserData", "false".into()),
+                ("EnableTotalRecordCount", "false".into()),
             ],
         )?;
         let mut index = TmdbIndex::default();

@@ -3015,6 +3015,8 @@ fn the_library_is_indexed_by_tmdb_id_in_one_request() {
     assert_eq!(asked.param("IncludeItemTypes"), Some("Movie,Series"));
     assert_eq!(asked.param("Fields"), Some("ProviderIds"));
     assert_eq!(asked.param("userId"), Some(USER_ID));
+    // The whole library at once: counting it too would only cost the server.
+    assert_eq!(asked.param("EnableTotalRecordCount"), Some("false"));
 }
 
 fn with_local_trailer(s: &Setup) {
