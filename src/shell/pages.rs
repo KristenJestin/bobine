@@ -389,6 +389,33 @@ impl ListPage for DetailPage {
 }
 
 impl DetailPage {
+    pub(super) fn new(id: ItemId, generation: u64) -> Self {
+        DetailPage {
+            id,
+            generation,
+            detail: Loadable::Loading,
+            choices: None,
+            collection: None,
+            menus: Menus::default(),
+            menu_fade: Presence::new(motion::quick()),
+            chips: Default::default(),
+            favourite: Toggle::default(),
+            scroll: ScrollHandle::new(),
+            rows: Default::default(),
+            gesture: Default::default(),
+            error: None,
+            busy: false,
+        }
+    }
+
+    /// A read that failed: only a first load shows the failure. A page already shown stays,
+    /// whatever the network does to a read made behind it.
+    fn load_failed(&mut self, said: &'static str) {
+        if !matches!(self.detail, Loadable::Ready(_)) {
+            self.detail = Loadable::Failed(said);
+        }
+    }
+
     pub fn ready(&self) -> Option<(&FilmDetail, &Choices)> {
         match (&self.detail, &self.choices) {
             (Loadable::Ready(detail), Some(choices)) => Some((detail, choices)),
@@ -932,22 +959,7 @@ impl Shell {
 
     pub fn open_film(&mut self, id: ItemId, cx: &mut Context<Self>) {
         let generation = self.next_generation();
-        self.details.push(DetailPage {
-            id,
-            generation,
-            detail: Loadable::Loading,
-            choices: None,
-            collection: None,
-            menus: Menus::default(),
-            menu_fade: Presence::new(motion::quick()),
-            chips: Default::default(),
-            favourite: Toggle::default(),
-            scroll: ScrollHandle::new(),
-            rows: Default::default(),
-            gesture: Default::default(),
-            error: None,
-            busy: false,
-        });
+        self.details.push(DetailPage::new(id, generation));
         self.navigator.open(Screen::FilmDetail);
         self.load_detail(self.details.len() - 1, true, cx);
         cx.notify();
@@ -988,7 +1000,7 @@ impl Shell {
                     Err(error) => {
                         let said = shell.failed(error, cx);
                         if let Some(page) = shell.detail_numbered(depth, generation) {
-                            page.detail = Loadable::Failed(said);
+                            page.load_failed(said);
                         }
                         return;
                     }
@@ -1465,6 +1477,28 @@ mod tests {
 
     use crate::fake::{FILMS_LIBRARY, FakeServer};
     use bobine::provider::MediaServer;
+
+    fn shown_film() -> DetailPage {
+        let server = FakeServer::new(3, false);
+        let id = ItemId(crate::fake::FILM.into());
+        let mut page = DetailPage::new(id.clone(), 1);
+        page.detail = Loadable::Ready(server.film(&id).unwrap());
+        page
+    }
+
+    #[test]
+    fn a_read_that_fails_on_a_film_page_that_is_showing_keeps_the_page() {
+        let mut page = shown_film();
+        page.load_failed("Hors ligne");
+        assert!(matches!(page.detail, Loadable::Ready(_)));
+    }
+
+    #[test]
+    fn a_first_load_that_fails_shows_the_failure() {
+        let mut page = DetailPage::new(ItemId(crate::fake::FILM.into()), 1);
+        page.load_failed("Hors ligne");
+        assert!(matches!(page.detail, Loadable::Failed("Hors ligne")));
+    }
 
     /// A films page whose first page of a 1284-film library has arrived.
     fn films_page() -> LibraryPage<Film> {
