@@ -12,6 +12,7 @@ mod tests;
 
 use std::fmt;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use serde::de::DeserializeOwned;
@@ -22,7 +23,7 @@ use crate::jellyfin::http::{encode, normalize_address, transport};
 use crate::provider::{ProviderError, Token};
 use crate::requests::{
     ActingAs, Ask, CollectionParts, DiscoverRow, Discovered, MediaKind, MyRequest, RequestError,
-    RequestServer, ServerCheck, TitleDetail, TmdbId, TmdbImage,
+    RequestServer, RequestStatus, ServerCheck, TitleDetail, TmdbId, TmdbImage,
 };
 
 const TIMEOUT: Duration = Duration::from_secs(15);
@@ -33,6 +34,8 @@ const TMDB_IMAGES: &str = "https://image.tmdb.org";
 const USERS_PAGE: u32 = 100;
 /// The most of the viewer's requests shown, each read with its title.
 const MY_REQUESTS: u32 = 20;
+/// How many of their titles are read at once.
+const TITLE_READERS: usize = 4;
 
 /// Whom the requests go as, once found.
 #[derive(Clone)]
@@ -359,23 +362,44 @@ impl RequestServer for SeerrClient {
             ],
             acting.viewer.then_some(acting.id),
         )?;
-        // A request names its title by id only: each is read, as Seerr's own page does.
-        let mut mine = Vec::new();
-        for request in requests.results {
-            let Some(media) = request.media else {
-                continue;
-            };
-            let kind = match media.media_type.as_str() {
-                "tv" => MediaKind::Tv,
-                _ => MediaKind::Movie,
-            };
-            let detail = self.title(kind, media.tmdb_id)?;
-            mine.push(MyRequest {
-                title: detail.title,
-                status: dto::request_status(request.status),
-            });
-        }
-        Ok(mine)
+        // A request names its title by id only: each is read, as Seerr's own page does, a few
+        // at a time. One that cannot be read is left out, not the whole list.
+        let wanted: Vec<(MediaKind, TmdbId, RequestStatus)> = requests
+            .results
+            .into_iter()
+            .filter_map(|request| {
+                let media = request.media?;
+                let kind = match media.media_type.as_str() {
+                    "tv" => MediaKind::Tv,
+                    _ => MediaKind::Movie,
+                };
+                Some((kind, media.tmdb_id, dto::request_status(request.status)))
+            })
+            .collect();
+        let read: Vec<Mutex<Option<MyRequest>>> = wanted.iter().map(|_| Mutex::new(None)).collect();
+        let next = AtomicUsize::new(0);
+        std::thread::scope(|scope| {
+            for _ in 0..TITLE_READERS.min(wanted.len()) {
+                scope.spawn(|| {
+                    loop {
+                        let at = next.fetch_add(1, Ordering::Relaxed);
+                        let Some(&(kind, id, status)) = wanted.get(at) else {
+                            break;
+                        };
+                        if let Ok(detail) = self.title(kind, id) {
+                            *read[at].lock().unwrap() = Some(MyRequest {
+                                title: detail.title,
+                                status,
+                            });
+                        }
+                    }
+                });
+            }
+        });
+        Ok(read
+            .into_iter()
+            .filter_map(|slot| slot.into_inner().unwrap())
+            .collect())
     }
 
     fn quota_reached(&self, kind: MediaKind) -> Result<bool, RequestError> {

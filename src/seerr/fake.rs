@@ -60,6 +60,8 @@ pub struct State {
     pub seen: Vec<Seen>,
     /// Answers every route like a web server that is not Seerr.
     pub not_seerr: bool,
+    /// The title of this TMDb id cannot be read: its page answers 500.
+    pub failing_title: Option<u64>,
     /// Answers every route with a redirect there, as a proxy moved elsewhere would.
     pub redirect_to: Option<String>,
     /// No Seerr user has the viewer's Jellyfin id.
@@ -382,6 +384,9 @@ fn answer(state: &mut State, seen: &Seen) -> Answer {
                 .collect();
             Answer::Json(200, page(series))
         }
+        ("GET", ["movie" | "tv", _]) if number(1) == state.failing_title => {
+            Answer::Json(500, json!({ "message": "Something went wrong" }))
+        }
         ("GET", ["movie", _]) => found(number(1).and_then(|id| movie_details(state, id))),
         ("GET", ["tv", _]) => found(number(1).and_then(|id| tv_details(state, id))),
         ("GET", ["movie", _, "recommendations"]) => Answer::Json(
@@ -475,6 +480,7 @@ impl FakeSeerr {
             seen: Vec::new(),
             not_seerr: false,
             redirect_to: None,
+            failing_title: None,
             no_viewer: false,
             movie_quota: None,
             requested: Vec::new(),
