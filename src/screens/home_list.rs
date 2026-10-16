@@ -45,8 +45,8 @@ pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -
     let rows = list.grid.rows(columns);
     let status = match (list.error, total) {
         (Some(why), None) => Some(why),
-        (_, None) => Some("Chargement…"),
-        (_, Some(0)) => Some("Rien dans cette liste."),
+        (_, None) => Some("Loading…"),
+        (_, Some(0)) => Some("Nothing in this list."),
         _ => None,
     };
     let scroll = list.scroll.clone();

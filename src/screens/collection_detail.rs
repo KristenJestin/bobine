@@ -20,7 +20,7 @@ pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -
     let collection = match &page.detail {
         Loadable::Ready(collection) => collection.clone(),
         Loadable::Failed(why) => return centered().child(note(*why)).into_any_element(),
-        Loadable::Loading => return centered().child(note("Chargement…")).into_any_element(),
+        Loadable::Loading => return centered().child(note("Loading…")).into_any_element(),
     };
     let height = (f32::from(window.viewport_size().height) * 0.5).clamp(360., 520.);
     // A collection with no image of its own takes the first film's.

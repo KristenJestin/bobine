@@ -23,7 +23,7 @@ pub fn render(shell: &mut Shell, _: &mut Window, cx: &mut Context<Shell>) -> imp
     let titles = match &page.titles {
         Loadable::Ready(titles) => Ok(titles.clone()),
         Loadable::Failed(why) => Err(*why),
-        Loadable::Loading => Err("Chargement…"),
+        Loadable::Loading => Err("Loading…"),
     };
     let photo = shell.image(photo_ref.as_ref(), images::PHOTO, cx);
 
@@ -33,7 +33,7 @@ pub fn render(shell: &mut Shell, _: &mut Window, cx: &mut Context<Shell>) -> imp
             let counts = format!(
                 "{} · {}",
                 plural(titles.films.len(), "film", "films"),
-                plural(titles.series.len(), "série", "séries")
+                plural(titles.series.len(), "series", "series")
             );
             if !titles.films.is_empty() {
                 let cards: Vec<_> = titles
@@ -54,10 +54,10 @@ pub fn render(shell: &mut Shell, _: &mut Window, cx: &mut Context<Shell>) -> imp
                     .enumerate()
                     .map(|(index, series)| series_card(shell, series, index, cx).into_any_element())
                     .collect();
-                sections.push(section("Séries", cards));
+                sections.push(section("Series", cards));
             }
             if sections.is_empty() {
-                sections.push(div().child(note("Aucun titre pour cette personne.")));
+                sections.push(div().child(note("No title for this person.")));
             }
             (Some(counts), sections)
         }

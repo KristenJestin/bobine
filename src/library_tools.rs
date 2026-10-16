@@ -39,10 +39,10 @@ impl Sort {
 
     pub fn label(self) -> &'static str {
         match self {
-            Sort::Added => "Ajout récent",
-            Sort::Title => "Titre",
-            Sort::Year => "Année de sortie",
-            Sort::Rating => "Note",
+            Sort::Added => "Date added",
+            Sort::Title => "Title",
+            Sort::Year => "Release year",
+            Sort::Rating => "Rating",
         }
     }
 
@@ -100,9 +100,9 @@ impl Tools {
     }
 }
 
-/// `Années 2010`.
+/// `2010s`.
 pub fn decade_label(decade: i32) -> String {
-    format!("Années {decade}")
+    format!("{decade}s")
 }
 
 /// The letter a title is listed under: its first letter without accent (`É` is `E`), or `#`.
@@ -194,9 +194,9 @@ mod tests {
     }
 
     #[test]
-    fn the_sorts_are_named_in_french() {
+    fn the_sorts_are_named_in_english() {
         let names: Vec<_> = Sort::ALL.iter().map(|s| s.label()).collect();
-        assert_eq!(names, ["Ajout récent", "Titre", "Année de sortie", "Note"]);
+        assert_eq!(names, ["Date added", "Title", "Release year", "Rating"]);
     }
 
     #[test]
@@ -288,8 +288,8 @@ mod tests {
     }
 
     #[test]
-    fn a_decade_reads_in_french() {
-        assert_eq!(decade_label(2010), "Années 2010");
+    fn a_decade_reads_in_english() {
+        assert_eq!(decade_label(2010), "2010s");
     }
 
     #[test]

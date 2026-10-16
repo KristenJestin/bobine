@@ -1,14 +1,15 @@
-//! The words of the Collections and Ma liste pages, and what they keep of the server's answer.
+//! The words of the Collections and My list pages, and what they keep of the server's answer.
 
 use std::collections::VecDeque;
 
 use bobine::provider::{CollectionCard, CollectionDetail, Film, ImageRef, ItemId};
 
 /// What the page says when the list holds nothing: where the list comes from.
-pub const EMPTY_LIST: &str = "Votre liste est vide. Ouvrez un film ou une série et choisissez « Ma liste » pour l'ajouter ici.";
+pub const EMPTY_LIST: &str =
+    "Your list is empty. Open a film or a series and choose “My list” to add it here.";
 
 /// What the page says when the server has no collection.
-pub const NO_COLLECTION: &str = "Aucune collection sur ce serveur.";
+pub const NO_COLLECTION: &str = "No collection on this server.";
 
 /// How many poster requests of bare collections are in flight at once: few enough to leave the
 /// server and the connections to what the user is looking at, enough to not wait on each round
@@ -142,7 +143,7 @@ mod tests {
     }
 
     #[test]
-    fn a_collection_counts_its_films_in_french() {
+    fn a_collection_counts_its_films_in_english() {
         assert_eq!(films(1), "1 film");
         assert_eq!(films(3), "3 films");
         assert_eq!(films(0), "0 film");
@@ -338,8 +339,8 @@ mod tests {
 
     #[test]
     fn the_empty_list_says_how_to_add_a_title() {
-        assert!(EMPTY_LIST.contains("Ma liste"));
-        assert!(EMPTY_LIST.contains("film") && EMPTY_LIST.contains("série"));
+        assert!(EMPTY_LIST.contains("My list"));
+        assert!(EMPTY_LIST.contains("film") && EMPTY_LIST.contains("series"));
     }
 
     #[test]

@@ -1,4 +1,4 @@
-//! The Films and Séries libraries: a grid of identical posters, the newest first. Only the rows
+//! The Films and Series libraries: a grid of identical posters, the newest first. Only the rows
 //! in view are built, and only their pages are asked of the server: thousands of titles scroll
 //! as smoothly as a dozen.
 
@@ -29,7 +29,7 @@ pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -
         shell,
         Grid {
             title: "Films",
-            empty: "Aucun film dans cette bibliothèque.",
+            empty: "No film in this library.",
             page: |shell| &mut shell.library,
             ask: Shell::ask_films,
             cell: |shell, film, width, index, cx| {
@@ -49,8 +49,8 @@ pub fn render_series(
     grid_screen(
         shell,
         Grid {
-            title: "Séries",
-            empty: "Aucune série dans cette bibliothèque.",
+            title: "Series",
+            empty: "No series in this library.",
             page: |shell| &mut shell.series,
             ask: Shell::ask_series,
             cell: |shell, series, width, index, cx| {
@@ -121,7 +121,7 @@ fn grid_screen<T: Listed + 'static>(
         Some(Loadable::Failed(why)) => Some(*why),
         _ if shown.error.is_some() => shown.error,
         // Not while the old list is still seen leaving: it says enough.
-        _ if loading && (!leaving || opacity <= GONE) => Some("Chargement…"),
+        _ if loading && (!leaving || opacity <= GONE) => Some("Loading…"),
         _ if rows == 0 && shown.tools.narrowed() => Some(NO_MATCH),
         _ if rows == 0 => Some(empty),
         _ => None,
@@ -249,7 +249,7 @@ fn grid_screen<T: Listed + 'static>(
                     theme::ghost_button(
                         "library-retry",
                         Some(IconName::RotateCcw),
-                        "Réessayer",
+                        "Retry",
                         window,
                         cx,
                     )
@@ -269,7 +269,7 @@ fn grid_screen<T: Listed + 'static>(
 }
 
 /// What the grid says when the filters leave nothing.
-const NO_MATCH: &str = "Aucun titre ne correspond à ces filtres.";
+const NO_MATCH: &str = "No title matches these filters.";
 
 /// Genre, decade, unwatched only and the order, right of the title.
 fn tool_chips(
@@ -282,7 +282,7 @@ fn tool_chips(
     cx: &mut Context<Shell>,
 ) -> Div {
     let genres = tools.filters.genre.as_deref();
-    let genre_options = std::iter::once((None, "Tous les genres".to_string(), genres.is_none()))
+    let genre_options = std::iter::once((None, "All genres".to_string(), genres.is_none()))
         .chain(
             choices
                 .into_iter()
@@ -297,7 +297,7 @@ fn tool_chips(
         )
         .collect();
     let decade = tools.filters.decade;
-    let decade_options = std::iter::once((None, "Toutes les années".to_string(), decade.is_none()))
+    let decade_options = std::iter::once((None, "All years".to_string(), decade.is_none()))
         .chain(
             choices
                 .into_iter()
@@ -344,15 +344,15 @@ fn tool_chips(
             cx,
             Tool::Genre,
             "GENRE",
-            genres.unwrap_or("Tous").to_string(),
+            genres.unwrap_or("All").to_string(),
             genre_options,
         ))
         .child(tool(
             window,
             cx,
             Tool::Decade,
-            "ANNÉE",
-            decade.map_or("Toutes".to_string(), decade_label),
+            "YEAR",
+            decade.map_or("All".to_string(), decade_label),
             decade_options,
         ))
         .child(unwatched_chip(unwatched, window, cx))
@@ -360,7 +360,7 @@ fn tool_chips(
             window,
             cx,
             Tool::Sort,
-            "TRI",
+            "SORT",
             tools.sort.label().to_string(),
             sort_options,
         ))
@@ -401,7 +401,7 @@ fn unwatched_chip(on: f32, window: &mut Window, cx: &mut Context<Shell>) -> Stat
                 .text_size(px(10.))
                 .font_weight(FontWeight::BOLD)
                 .text_color(lit(theme::dim(), theme::text()))
-                .child("NON VUS"),
+                .child("UNWATCHED"),
         )
 }
 
