@@ -27,6 +27,59 @@ pub fn settings_path(xdg_config_home: Option<OsString>, home: Option<OsString>) 
 pub struct Settings {
     /// "Black out other screens": the other monitors turn black while a film plays fullscreen.
     pub black_out_other_monitors: bool,
+    /// What the player asks of the server for a film that is converted: the file as it is, or
+    /// a cap on the bitrate. The player's quality menu reads it; nothing does yet.
+    pub default_quality: Quality,
+}
+
+/// How much of the picture the viewer wants when the server converts a film.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(from = "String", into = "String")]
+pub enum Quality {
+    /// The file as it is, whatever its bitrate.
+    #[default]
+    Original,
+    /// At most this many megabits a second.
+    Cap(u32),
+}
+
+impl Quality {
+    /// What the settings offer, the original first, then the caps from the highest down.
+    pub const CHOICES: [Quality; 6] = [
+        Quality::Original,
+        Quality::Cap(40),
+        Quality::Cap(20),
+        Quality::Cap(10),
+        Quality::Cap(4),
+        Quality::Cap(2),
+    ];
+
+    pub fn label(self) -> String {
+        match self {
+            Quality::Original => "Original".to_string(),
+            Quality::Cap(mbps) => format!("{mbps} Mbps"),
+        }
+    }
+}
+
+impl From<Quality> for String {
+    fn from(quality: Quality) -> String {
+        match quality {
+            Quality::Original => "original".to_string(),
+            Quality::Cap(mbps) => format!("{mbps}mbps"),
+        }
+    }
+}
+
+/// A value the file holds that is not a quality is the original: the rest of the file still
+/// counts.
+impl From<String> for Quality {
+    fn from(text: String) -> Quality {
+        text.strip_suffix("mbps")
+            .and_then(|mbps| mbps.parse().ok())
+            .filter(|mbps| *mbps > 0)
+            .map_or(Quality::Original, Quality::Cap)
+    }
 }
 
 impl Settings {
@@ -74,6 +127,7 @@ mod tests {
         let path = dir.path().join("bobine/settings.toml");
         let on = Settings {
             black_out_other_monitors: true,
+            ..Settings::default()
         };
         on.save(&path).unwrap();
         assert_eq!(Settings::read(&path), on);
@@ -85,6 +139,56 @@ mod tests {
         let path = dir.path().join("settings.toml");
         std::fs::write(&path, "black_out_other_monitors = \"maybe\"").unwrap();
         assert_eq!(Settings::read(&path), Settings::default());
+    }
+
+    #[test]
+    fn the_default_quality_is_the_original_file() {
+        assert_eq!(Settings::default().default_quality, Quality::Original);
+        let dir = tempfile::tempdir().unwrap();
+        let settings = Settings::read(&dir.path().join("settings.toml"));
+        assert_eq!(settings.default_quality, Quality::Original);
+    }
+
+    #[test]
+    fn a_change_is_saved_and_read_back_at_the_next_start() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("bobine/settings.toml");
+        let changed = Settings {
+            black_out_other_monitors: true,
+            default_quality: Quality::Cap(8),
+        };
+        changed.save(&path).unwrap();
+        assert_eq!(Settings::read(&path), changed);
+        assert!(!path.with_extension("toml.tmp").exists());
+    }
+
+    #[test]
+    fn a_quality_the_file_does_not_know_falls_back_to_original_and_keeps_the_rest() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.toml");
+        std::fs::write(
+            &path,
+            "black_out_other_monitors = true\ndefault_quality = \"fast\"\n",
+        )
+        .unwrap();
+        let settings = Settings::read(&path);
+        assert_eq!(settings.default_quality, Quality::Original);
+        assert!(settings.black_out_other_monitors);
+    }
+
+    #[test]
+    fn a_cap_is_written_as_a_number_of_megabits_a_second() {
+        assert_eq!(String::from(Quality::Original), "original");
+        assert_eq!(String::from(Quality::Cap(20)), "20mbps");
+        assert_eq!(Quality::from("20mbps".to_string()), Quality::Cap(20));
+        // A cap of nothing caps nothing sensible: the original.
+        assert_eq!(Quality::from("0mbps".to_string()), Quality::Original);
+    }
+
+    #[test]
+    fn a_quality_is_said_in_words() {
+        assert_eq!(Quality::Original.label(), "Original");
+        assert_eq!(Quality::Cap(8).label(), "8 Mbps");
     }
 
     #[test]
