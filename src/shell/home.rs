@@ -784,6 +784,33 @@ mod tests {
         assert_eq!(shell_after - shell_before, 0, "the shell was built again");
     }
 
+    /// A card of a new season opens its series on that season, not on the one to play next.
+    #[gpui_kit::test]
+    fn a_card_of_a_new_season_opens_its_series_on_that_season(cx: &mut gpui_kit::TestAppContext) {
+        let server: Arc<dyn Connector> = Arc::new(FakeServer::new(6, true));
+        let window =
+            cx.add_window(|_, cx| Shell::new(None, Box::new(move || Ok(server)), None, cx));
+        cx.run_until_parked();
+        let shell = window.root(cx).unwrap();
+        // The first series is begun in its second season: that is where the page lands unasked.
+        let mut series = crate::fake::series().remove(0);
+        let seasons = FakeServer::new(0, true).seasons(&series.id).unwrap();
+        series.season = Some(seasons[2].clone());
+        cx.update(|cx| {
+            shell.update(cx, |shell, cx| {
+                shell.open_title(&Title::Series(series.clone()), cx)
+            })
+        });
+        cx.run_until_parked();
+        cx.read(|cx| {
+            let shell = shell.read(cx);
+            assert_eq!(shell.navigator.current(), Screen::SeriesDetail);
+            let page = shell.series_pages.last().expect("the series page");
+            assert_eq!(page.id, series.id);
+            assert_eq!(page.season, 2, "the page opens on the new season");
+        });
+    }
+
     #[test]
     fn two_loads_of_the_home_answered_out_of_order_show_the_newest() {
         let server = FakeServer::new(6, false);
