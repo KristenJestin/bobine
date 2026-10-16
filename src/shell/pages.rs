@@ -40,7 +40,8 @@ use crate::start::{self, Start};
 /// A page gone back from, for the mouse's forward button to open again.
 pub(super) enum Reopen {
     Film(ItemId),
-    Series(ItemId),
+    /// The series, and the season it was left on.
+    Series(ItemId, Option<ItemId>),
     Person(PersonHit),
     List(ListKind, Option<String>),
     Collection(ItemId),
@@ -791,7 +792,7 @@ impl Shell {
         };
         match page {
             Reopen::Film(id) => self.open_film(id, cx),
-            Reopen::Series(id) => self.open_series(id, cx),
+            Reopen::Series(id, season) => self.open_series_on(id, season, cx),
             Reopen::Person(person) => self.open_person(person, cx),
             Reopen::List(kind, library) => self.open_list(kind, library, cx),
             Reopen::Collection(id) => self.open_collection(id, cx),
@@ -2556,6 +2557,40 @@ mod tests {
         assert_eq!(current(&window, cx), Screen::FilmDetail);
         side_press(&window, Back, at, cx);
         assert_eq!(current(&window, cx), Screen::Home);
+    }
+
+    #[gpui_kit::test]
+    fn forward_reopens_a_series_on_the_season_it_was_left_on(cx: &mut gpui_kit::TestAppContext) {
+        use gpui_kit::NavigationDirection::{Back, Forward};
+
+        let (_server, window) = signed_in_window(cx);
+        window
+            .update(cx, |shell, _, cx| {
+                shell.open_series(ItemId(crate::fake::SERIES.into()), cx)
+            })
+            .unwrap();
+        cx.run_until_parked();
+        // The page opens on the season of the next episode: the first is another.
+        let season = |cx: &mut gpui_kit::TestAppContext| {
+            window
+                .update(cx, |shell, _, _| {
+                    shell.series_pages.last().map(|p| p.season)
+                })
+                .unwrap()
+        };
+        assert_ne!(season(cx), Some(0));
+        window
+            .update(cx, |shell, _, cx| shell.select_season(0, cx))
+            .unwrap();
+        let at = drawn(&window, cx)
+            .debug_bounds("pill-bar")
+            .unwrap()
+            .center();
+        side_press(&window, Back, at, cx);
+        side_press(&window, Forward, at, cx);
+        cx.run_until_parked();
+        assert_eq!(current(&window, cx), Screen::SeriesDetail);
+        assert_eq!(season(cx), Some(0));
     }
 
     /// Gone back from a film page once: the forward button has a page to open.
