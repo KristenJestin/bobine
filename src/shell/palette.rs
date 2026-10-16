@@ -224,12 +224,17 @@ impl Shell {
         self.navigator.open(Screen::Person);
         let depth = self.people.len() - 1;
         let asked = id.clone();
+        let stamp = self.marks.stamp();
         self.ask(
             cx,
             move |server| server.person_titles(&asked),
             move |shell, titles, cx| {
                 let titles = match titles {
-                    Ok(titles) => Loadable::Ready(titles),
+                    Ok(titles) => {
+                        shell.marks.listed(stamp, &titles.films);
+                        shell.marks.listed(stamp, &titles.series);
+                        Loadable::Ready(titles)
+                    }
                     Err(error) => Loadable::Failed(shell.failed(error, cx)),
                 };
                 if let Some(page) = shell.people.get_mut(depth).filter(|page| page.id == id) {

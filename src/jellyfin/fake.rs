@@ -566,7 +566,7 @@ fn answer(state: &State, seen: &Seen) -> Answer {
             Answer::Json(200, Value::Array(items))
         }
         ("POST" | "DELETE", path)
-            if [FILM, SEASON, EPISODE]
+            if [FILM, SERIES, SEASON, EPISODE]
                 .iter()
                 .any(|id| path == format!("/UserPlayedItems/{id}")) =>
         {

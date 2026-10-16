@@ -11,6 +11,7 @@ use super::pages::Loadable;
 use crate::favourite::{self, ListPage, Toggle};
 use crate::lists::PosterQueue;
 use crate::navigation::Screen;
+use crate::poster_actions::Action;
 use crate::series_page::Refreshes;
 
 /// The collections of the server.
@@ -137,6 +138,11 @@ impl Shell {
                             .map(|list| list as &mut dyn ListPage),
                     );
                 let current = shell.navigator.current();
+                if answer.is_ok() {
+                    shell
+                        .marks
+                        .follow(&pressed.item, Action::MyList, pressed.wanted);
+                }
                 if favourite::answered(pages, current, &pressed, &answer) {
                     shell.load_my_list(cx);
                 }
@@ -272,12 +278,16 @@ impl Shell {
     pub fn load_my_list(&mut self, cx: &mut Context<Self>) {
         Loadable::asking(&mut self.my_list.items);
         let number = self.my_list.ask(&mut self.refreshes_asked);
+        let stamp = self.marks.stamp();
         self.ask(
             cx,
             |server| server.favourites(),
             move |shell, items, cx| {
                 let items = match items {
-                    Ok(items) => Loadable::Ready(items),
+                    Ok(items) => {
+                        shell.marks.listed(stamp, &items);
+                        Loadable::Ready(items)
+                    }
                     Err(error) => Loadable::Failed(shell.failed(error, cx)),
                 };
                 shell.my_list.landed(number, items);
@@ -306,12 +316,16 @@ impl Shell {
     fn load_collection_page(&mut self, depth: usize, cx: &mut Context<Self>) {
         let id = self.collection_pages[depth].id.clone();
         let asked = id.clone();
+        let stamp = self.marks.stamp();
         self.ask(
             cx,
             move |server| server.collection(&asked),
             move |shell, detail: Result<CollectionDetail, ProviderError>, cx| {
                 let detail = match detail {
-                    Ok(detail) => Loadable::Ready(detail),
+                    Ok(detail) => {
+                        shell.marks.listed(stamp, &detail.films);
+                        Loadable::Ready(detail)
+                    }
                     // What was drawn stays when the refresh fails.
                     Err(error) => {
                         let said = shell.failed(error, cx);

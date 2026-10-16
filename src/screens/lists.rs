@@ -206,7 +206,7 @@ fn collection_poster(
     let opened = card.id.clone();
     let id: ElementId = ("collection", index).into();
     div()
-        .id(id)
+        .id(id.clone())
         .w(px(width))
         .flex_none()
         .flex()
@@ -216,6 +216,13 @@ fn collection_poster(
         .on_click(cx.listener(move |shell, _, _, cx| {
             shell.open_collection(opened.clone(), cx);
         }))
-        .child(poster_image(image, None, Corner::Nothing, width, false))
+        .child(poster_image(
+            &id,
+            image,
+            None,
+            Corner::Nothing,
+            width,
+            false,
+        ))
         .child(poster_caption(card.name.clone(), lists::card_caption(card)))
 }

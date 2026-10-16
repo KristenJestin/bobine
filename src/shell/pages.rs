@@ -31,6 +31,7 @@ use crate::menu::Menus;
 use crate::motion::{self, Fade, Glide, Presence};
 use crate::navigation::{NavEntry, Screen};
 use crate::player::libmpv::Libmpv;
+use crate::poster_actions::{Action, Said};
 use crate::reports::Reporting;
 use crate::scroll::{self, Move, Phase, Wheel};
 use crate::start::{self, Start};
@@ -853,13 +854,14 @@ impl Shell {
         );
     }
 
-    fn ask_pages<T: Listed + Send + 'static>(
+    fn ask_pages<T: Listed + Said + Send + 'static>(
         &mut self,
         items: std::ops::Range<usize>,
         page_of: fn(&mut Shell) -> &mut LibraryPage<T>,
         fetch: Fetch<T>,
         cx: &mut Context<Self>,
     ) {
+        let stamp = self.marks.stamp();
         let shown = page_of(self);
         let Some(Loadable::Ready(library)) = &shown.library else {
             return;
@@ -872,7 +874,10 @@ impl Shell {
                 cx,
                 move |server| fetch(server, &library, &tools.query(page)),
                 move |shell, items, cx| match items {
-                    Ok(items) => page_of(shell).loaded(epoch, page, items),
+                    Ok(items) => {
+                        shell.marks.listed(stamp, &items.items);
+                        page_of(shell).loaded(epoch, page, items);
+                    }
                     Err(error) => {
                         let shown = page_of(shell);
                         shown.grid.failed(epoch, page, Instant::now());
@@ -1082,6 +1087,7 @@ impl Shell {
         let asked = id.clone();
         let generation = self.details[depth].generation;
         let read_at = self.details[depth].favourite.changes();
+        let stamp = self.marks.stamp();
         self.ask(
             cx,
             move |server| server.film(&asked),
@@ -1097,6 +1103,14 @@ impl Shell {
                     }
                 };
                 shell.library.grid.update(&detail.film);
+                let film = &detail.film;
+                shell
+                    .marks
+                    .heard(stamp, &film.id, Action::MyList, detail.favourite);
+                shell
+                    .marks
+                    .heard(stamp, &film.id, Action::Watched, film.watched);
+                shell.marks.listed(stamp, &detail.similar);
                 let Some(page) = shell.detail_numbered(depth, generation) else {
                     return;
                 };
@@ -1242,6 +1256,7 @@ impl Shell {
                 let film = film.map_err(|error| shell.failed(error, cx));
                 if let Ok(film) = &film {
                     shell.library.grid.update(film);
+                    shell.marks.follow(&film.id, Action::Watched, film.watched);
                 }
                 let Some(page) = shell.detail_page(depth, &id) else {
                     return;
@@ -1311,7 +1326,14 @@ impl Shell {
     }
 
     /// The page a play button was pressed on: no longer busy, and why it did not play.
-    pub(super) fn tried(&mut self, origin: &Origin, error: Option<&'static str>) {
+    pub(super) fn tried(
+        &mut self,
+        origin: &Origin,
+        error: Option<&'static str>,
+        cx: &mut Context<Self>,
+    ) {
+        // The header and the posters play from any page: the window says what went wrong where
+        // it is, for a moment, in the pill of its other messages.
         let (busy, shown) = match origin {
             Origin::Film(depth, id) => match self.detail_page(*depth, id) {
                 Some(page) => (&mut page.busy, &mut page.error),
@@ -1321,7 +1343,13 @@ impl Shell {
                 Some(page) if &page.id == id => (&mut page.busy, &mut page.error),
                 _ => return,
             },
-            Origin::Home => (&mut self.home.busy, &mut self.home.error),
+            Origin::Home => {
+                self.home.busy = false;
+                if let Some(said) = error {
+                    self.show_notice(said, cx);
+                }
+                return;
+            }
         };
         *busy = false;
         if error.is_some() {
@@ -1349,11 +1377,11 @@ impl Shell {
             Ok(opened) => opened,
             Err(error) => {
                 let said = self.failed(error, cx);
-                self.tried(&origin, Some(said));
+                self.tried(&origin, Some(said), cx);
                 return;
             }
         };
-        self.tried(&origin, None);
+        self.tried(&origin, None, cx);
         let options = self.mpv_options.clone();
         let Some(server) = self.server.clone() else {
             return;
@@ -1362,7 +1390,7 @@ impl Shell {
             Ok(mpv) => Arc::new(mpv),
             Err(error) => {
                 eprintln!("bobine: the player cannot start: {error}");
-                self.tried(&origin, Some("The player cannot start."));
+                self.tried(&origin, Some("The player cannot start."), cx);
                 return;
             }
         };
@@ -1398,7 +1426,7 @@ impl Shell {
             Err(error) => {
                 // The words of the video surface or of mpv's error code: no address in them.
                 eprintln!("bobine: the film does not play: {error}");
-                self.tried(&origin, Some("Cannot play."));
+                self.tried(&origin, Some("Cannot play."), cx);
             }
         }
     }
