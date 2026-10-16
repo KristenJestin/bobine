@@ -177,6 +177,7 @@ fn hero(
             .child(facts_line(
                 series_page::meta(detail, shown.seasons.len()),
                 NavEntry::Series,
+                shell.font(),
                 window,
                 cx,
             ))

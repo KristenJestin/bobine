@@ -282,6 +282,7 @@ impl Render for HeroView {
                     .iter()
                     .map(|f| shell.peek_image(f.logo.as_ref(), images::LOGO))
                     .collect(),
+                font: shell.font(),
             };
             (features, frame)
         };
@@ -307,6 +308,7 @@ struct Frame {
     /// The pictures of each title, when they are here.
     backdrops: Vec<Option<Arc<RenderImage>>>,
     logos: Vec<Option<Arc<RenderImage>>>,
+    font: Option<SharedString>,
 }
 
 /// One draw of the header: it holds what it read of the shell, and writes nothing to it.
@@ -437,7 +439,11 @@ impl Draw<'_> {
             .gap(px(14.))
             .child(kind_chip(hero::kind_label(feature)))
             .child(div().py(px(6.)).child(headline))
-            .child(meta_line(hero::meta(feature)))
+            .child(meta_line(
+                hero::meta(feature),
+                self.frame.font.clone(),
+                window,
+            ))
             .children(feature.overview.clone().map(|overview| {
                 div()
                     .max_w(px(500.))

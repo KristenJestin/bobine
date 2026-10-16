@@ -217,7 +217,13 @@ fn hero(
 
     let chips = chips_row(&detail.versions, choices, menu, chips, window, cx);
 
-    let meta_line = facts_line(film_page::meta(detail), NavEntry::Films, window, cx);
+    let meta_line = facts_line(
+        film_page::meta(detail),
+        NavEntry::Films,
+        shell.font(),
+        window,
+        cx,
+    );
 
     let title = heading(shell, &film.title, detail.logo.as_ref(), window, cx);
     hero_frame(backdrop, height).child(
@@ -397,11 +403,13 @@ pub(super) fn heading(
 }
 
 /// `2025 | ★ 6.0 | 2 h 11`: the facts under a title, apart.
-pub(super) fn meta_line(parts: Vec<String>) -> Div {
+pub(super) fn meta_line(parts: Vec<String>, font: Option<SharedString>, window: &Window) -> Div {
     meta_row(
         parts
             .iter()
-            .map(|part| with_stars(part, 14.).into_any_element()),
+            .map(|part| with_stars(part, META_SIZE).into_any_element()),
+        font,
+        window,
     )
 }
 
@@ -410,13 +418,18 @@ pub(super) fn meta_line(parts: Vec<String>) -> Div {
 pub(super) fn facts_line(
     facts: Vec<Fact>,
     library: NavEntry,
+    font: Option<SharedString>,
     window: &mut Window,
     cx: &mut Context<Shell>,
 ) -> Div {
-    meta_row(facts.into_iter().map(|fact| match fact {
-        Fact::Text(text) => with_stars(&text, 14.).into_any_element(),
-        Fact::Genres(genres) => genre_links(genres, library, window, cx).into_any_element(),
-    }))
+    let parts: Vec<_> = facts
+        .into_iter()
+        .map(|fact| match fact {
+            Fact::Text(text) => with_stars(&text, META_SIZE).into_any_element(),
+            Fact::Genres(genres) => genre_links(genres, library, window, cx).into_any_element(),
+        })
+        .collect();
+    meta_row(parts, font, window)
 }
 
 /// The genres, a comma after each but the last, each answering the pointer.
@@ -462,12 +475,34 @@ fn genre_links(
         }))
 }
 
-/// The height of the bar between two facts: the height of the digits at the size of the line
-/// (a bar taller than them reads as sitting above the text), nudged half a pixel down to the
-/// middle of the digits, which have no descender.
-const SEPARATOR: f32 = 11.;
+/// The size and the height of the meta line's text.
+const META_SIZE: f32 = 14.;
+const META_LINE: f32 = 22.;
 
-fn meta_row(parts: impl IntoIterator<Item = AnyElement>) -> Div {
+/// The bar between two facts covers the digits' box, from the cap height to the baseline: taller,
+/// it reads as sitting above the text. Read from the font the line is drawn with (`font`, the
+/// shell's, else the window's), as GPUI places a line: half the leading above the ascent.
+fn meta_bar(font: Option<SharedString>, window: &Window) -> (Pixels, Pixels) {
+    let mut style = window.text_style();
+    if let Some(family) = font {
+        style.font_family = family;
+    }
+    let text = window.text_system();
+    let id = text.resolve_font(&style.font());
+    let size = px(META_SIZE);
+    let ascent = text.ascent(id, size);
+    let descent = text.descent(id, size).abs();
+    let cap = text.cap_height(id, size);
+    let baseline = (px(META_LINE) - ascent - descent) / 2. + ascent;
+    (baseline - cap, cap)
+}
+
+fn meta_row(
+    parts: impl IntoIterator<Item = AnyElement>,
+    font: Option<SharedString>,
+    window: &Window,
+) -> Div {
+    let (top, height) = meta_bar(font, window);
     let mut meta = parts.into_iter().enumerate();
     let part = |index: usize, part: AnyElement| {
         div()
@@ -480,7 +515,8 @@ fn meta_row(parts: impl IntoIterator<Item = AnyElement>) -> Div {
         .flex()
         .items_center()
         .gap(px(10.))
-        .text_size(px(14.))
+        .text_size(px(META_SIZE))
+        .line_height(px(META_LINE))
         .text_color(theme::muted())
         .children(meta.next().map(|(index, first)| part(index, first)))
         .children(meta.map(|(index, next)| {
@@ -489,12 +525,14 @@ fn meta_row(parts: impl IntoIterator<Item = AnyElement>) -> Div {
                 .items_center()
                 .gap(px(10.))
                 .child(
-                    div()
-                        .debug_selector(move || format!("meta-separator {index}"))
-                        .w(px(1.))
-                        .h(px(SEPARATOR))
-                        .mt(px(1.))
-                        .bg(theme::line()),
+                    div().h(px(META_LINE)).child(
+                        div()
+                            .debug_selector(move || format!("meta-separator {index}"))
+                            .w(px(1.))
+                            .mt(top)
+                            .h(height)
+                            .bg(theme::line()),
+                    ),
                 )
                 .child(part(index, next))
         }))
