@@ -5,7 +5,7 @@ mod config;
 mod discover;
 #[cfg(any(test, feature = "harness"))]
 mod fake;
-#[cfg(test)]
+#[cfg(any(test, feature = "harness"))]
 mod fake_seerr;
 mod fallback;
 mod favourite;

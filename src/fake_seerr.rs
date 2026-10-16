@@ -143,6 +143,7 @@ impl FakeSeerr {
             .collect()
     }
 
+    #[cfg(test)]
     pub fn requests(&self) -> Vec<Ask> {
         self.state().record.requests.clone()
     }
