@@ -387,9 +387,12 @@ impl Shell {
         // The covers first: mpv shutting down can take a moment.
         blackout::stop_with(self.screens.as_mut(), || {
             let Playback {
-                session, reporting, ..
+                session,
+                reporting,
+                stopping,
+                ..
             } = self.playback.take()?;
-            let reports = reporting.map(|reporting| reporting.finish(&session));
+            let reports = reports::last_reports(reporting, stopping, &session);
             drop(session);
             reports
         })
