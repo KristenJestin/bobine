@@ -158,6 +158,10 @@ fn subtitle_format(codec: Option<&str>) -> String {
     }
 }
 
+/// Titles of a person asked at once, and the most of them ever asked.
+const PERSON_TITLES_PAGE: usize = 100;
+const PERSON_TITLES_CAP: usize = 1000;
+
 impl Jellyfin {
     fn user(&self) -> (&'static str, String) {
         ("userId", self.login.user_id.clone())
@@ -475,27 +479,35 @@ impl MediaServer for Jellyfin {
         })
     }
 
+    /// Asked page by page, in a stable order so that no title is skipped or read twice between
+    /// two pages, up to `PERSON_TITLES_CAP` items: a person in thousands of episodes still gets
+    /// a page, with their first thousand titles.
     fn person_titles(&self, person: &ItemId) -> Result<PersonTitles, ProviderError> {
-        let found = self.items(
-            "person titles",
-            &[
-                ("personIds", person.0.clone()),
-                ("includeItemTypes", "Movie,Series".into()),
-                ("recursive", "true".into()),
-                ("sortBy", "ProductionYear,SortName".into()),
-                ("sortOrder", "Descending".into()),
-                ("imageTypeLimit", "1".into()),
-                ("enableImageTypes", "Primary,Backdrop".into()),
-            ],
-        )?;
-        let (series, films): (Vec<&Item>, Vec<&Item>) = found
-            .items
-            .iter()
-            .partition(|item| item.kind.as_deref() == Some("Series"));
-        Ok(PersonTitles {
-            films: films.into_iter().map(Item::film).collect(),
-            series: series.into_iter().map(Item::series_hit).collect(),
-        })
+        let mut found: Vec<Item> = Vec::new();
+        while found.len() < PERSON_TITLES_CAP {
+            let page = self.items(
+                "person titles",
+                &[
+                    ("personIds", person.0.clone()),
+                    ("includeItemTypes", "Movie,Series,Episode".into()),
+                    ("recursive", "true".into()),
+                    ("sortBy", "SortName".into()),
+                    ("sortOrder", "Ascending".into()),
+                    ("startIndex", found.len().to_string()),
+                    ("limit", PERSON_TITLES_PAGE.to_string()),
+                    ("imageTypeLimit", "1".into()),
+                    ("enableImageTypes", "Primary,Backdrop".into()),
+                ],
+            )?;
+            let asked = found.len();
+            let total = page.total_record_count.map_or(usize::MAX, |t| t as usize);
+            let short = page.items.len() < PERSON_TITLES_PAGE;
+            found.extend(page.items);
+            if short || found.len() >= total || found.len() == asked {
+                break;
+            }
+        }
+        Ok(dto::person_titles(&found))
     }
 
     fn logout(&self) -> Result<(), ProviderError> {

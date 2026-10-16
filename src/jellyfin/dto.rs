@@ -2,7 +2,8 @@
 
 use crate::provider::{
     AudioTrack, CastMember, Film, ImageKind, ImageRef, ItemId, Library, LibraryKind, MediaSource,
-    MediaSourceId, PersonHit, SeriesHit, ServerInfo, SubtitleTrack, VideoRange, VideoTrack,
+    MediaSourceId, PersonHit, PersonTitles, SeriesHit, ServerInfo, SubtitleTrack, VideoRange,
+    VideoTrack,
 };
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -86,6 +87,10 @@ pub struct Item {
     #[serde(default)]
     pub genres: Vec<String>,
     pub official_rating: Option<String>,
+    /// An episode's series.
+    pub series_id: Option<String>,
+    pub series_name: Option<String>,
+    pub series_primary_image_tag: Option<String>,
     #[serde(default)]
     pub people: Vec<Person>,
     #[serde(default)]
@@ -203,6 +208,21 @@ impl Item {
         }
     }
 
+    /// The series an episode belongs to, with the series' poster.
+    fn series_of_episode(&self) -> Option<SeriesHit> {
+        let id = self.series_id.as_ref()?;
+        Some(SeriesHit {
+            id: ItemId(id.clone()),
+            title: self.series_name.clone()?,
+            year: None,
+            poster: self.series_primary_image_tag.as_ref().map(|tag| ImageRef {
+                item: ItemId(id.clone()),
+                kind: ImageKind::Primary,
+                tag: tag.clone(),
+            }),
+        })
+    }
+
     pub fn person_hit(&self) -> PersonHit {
         PersonHit {
             id: ItemId(self.id.clone()),
@@ -235,6 +255,44 @@ impl Item {
             })
             .collect()
     }
+}
+
+/// What a person took part in, from the items they are credited on: films, series, and
+/// episodes counted as their series (once each; the series' own entry wins, it knows its year).
+/// Newest year first, then A to Z whatever the case, titles with no year last.
+pub fn person_titles(items: &[Item]) -> PersonTitles {
+    let mut films: Vec<Film> = Vec::new();
+    let mut series: Vec<SeriesHit> = Vec::new();
+    for item in items {
+        match item.kind.as_deref() {
+            Some("Series") => {
+                match series.iter_mut().find(|s| s.id.0 == item.id) {
+                    Some(seen) => *seen = item.series_hit(),
+                    None => series.push(item.series_hit()),
+                };
+            }
+            Some("Episode") => {
+                if let Some(hit) = item.series_of_episode()
+                    && !series.iter().any(|s| s.id == hit.id)
+                {
+                    series.push(hit);
+                }
+            }
+            _ => films.push(item.film()),
+        }
+    }
+    films.sort_by_cached_key(|f| title_order(f.year, &f.title));
+    series.sort_by_cached_key(|s| title_order(s.year, &s.title));
+    PersonTitles { films, series }
+}
+
+fn title_order(year: Option<i32>, title: &str) -> (bool, std::cmp::Reverse<i32>, String) {
+    let undated = year.is_none();
+    (
+        undated,
+        std::cmp::Reverse(year.unwrap_or_default()),
+        title.to_lowercase(),
+    )
 }
 
 fn range(kind: Option<&str>) -> VideoRange {

@@ -33,6 +33,7 @@ fn fixture(name: &str) -> Value {
         "series" => include_str!("fixtures/series.json"),
         "persons" => include_str!("fixtures/persons.json"),
         "person_titles" => include_str!("fixtures/person_titles.json"),
+        "person_episodes" => include_str!("fixtures/person_episodes.json"),
         "playback_info" => include_str!("fixtures/playback_info.json"),
         _ => panic!("no fixture {name}"),
     };
@@ -77,6 +78,13 @@ pub struct State {
     /// How long an image takes to be answered (a server converting a person's photo).
     pub image_delay: std::time::Duration,
 }
+
+/// A person with more titles than one page holds.
+pub const PERSON_WITH_MANY_TITLES: &str = "9e000000000000000000000000000004";
+/// A person with more titles than the program ever asks for.
+pub const PERSON_WITH_ENDLESS_TITLES: &str = "9e000000000000000000000000000005";
+/// A person seen only in episodes.
+pub const PERSON_IN_EPISODES: &str = "9e000000000000000000000000000002";
 
 pub struct FakeServer {
     pub url: String,
@@ -170,6 +178,38 @@ fn matching(fixture_name: &str, seen: &Seen) -> Value {
     json!({ "Items": found, "TotalRecordCount": found.len() })
 }
 
+/// What a person took part in, as the server pages it: only the types asked, `Limit` of them
+/// from `StartIndex`, and the total of them all.
+fn person_titles(seen: &Seen) -> Value {
+    let person = seen.param("PersonIds").unwrap();
+    let mut items: Vec<Value> = match person {
+        PERSON_WITH_MANY_TITLES => generated_films(250),
+        PERSON_WITH_ENDLESS_TITLES => generated_films(2500),
+        PERSON_IN_EPISODES => fixture("person_episodes").as_array().unwrap().clone(),
+        _ => fixture("person_titles").as_array().unwrap().clone(),
+    };
+    let types = seen.param("IncludeItemTypes").unwrap_or_default();
+    items.retain(|item| types.split(',').any(|t| item["Type"] == t));
+    let total = items.len();
+    let start: usize = seen.param("StartIndex").map_or(0, |s| s.parse().unwrap());
+    let limit: usize = seen.param("Limit").map_or(total, |s| s.parse().unwrap());
+    let page: Vec<Value> = items.into_iter().skip(start).take(limit).collect();
+    json!({ "Items": page, "TotalRecordCount": total, "StartIndex": start })
+}
+
+fn generated_films(count: usize) -> Vec<Value> {
+    (0..count)
+        .map(|i| {
+            json!({
+                "Name": format!("Reel {i:04}"),
+                "Id": format!("f1{i:030}"),
+                "Type": "Movie",
+                "ProductionYear": 1950 + i % 70,
+            })
+        })
+        .collect()
+}
+
 fn answer(state: &State, seen: &Seen) -> Answer {
     if state.not_jellyfin {
         return Answer::Json(404, json!({ "error": "not here" }));
@@ -214,9 +254,7 @@ fn answer(state: &State, seen: &Seen) -> Answer {
             (_, Some("Series")) if seen.param("SearchTerm").is_some() => {
                 Answer::Json(200, matching("series", seen))
             }
-            (_, Some("Movie,Series")) if seen.param("PersonIds").is_some() => {
-                Answer::Json(200, fixture("person_titles"))
-            }
+            _ if seen.param("PersonIds").is_some() => Answer::Json(200, person_titles(seen)),
             (Some(FILMS_LIBRARY), _) => Answer::Json(200, films(seen)),
             (None, Some("BoxSet")) => Answer::Json(200, fixture("boxsets")),
             (Some("b0000000000000000000000000000001"), _) => {

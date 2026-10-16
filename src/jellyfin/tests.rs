@@ -892,11 +892,11 @@ fn a_search_with_a_revoked_token_asks_to_sign_in_again() {
 fn what_a_person_took_part_in_is_split_into_films_and_series() {
     let s = Setup::new();
     let person = ItemId("9e000000000000000000000000000001".into());
-    let titles = s.signed_in().person_titles(&person).unwrap();
-    let films: Vec<_> = titles.films.iter().map(|f| f.title.as_str()).collect();
-    let series: Vec<_> = titles.series.iter().map(|f| f.title.as_str()).collect();
-    assert_eq!(films, ["The Quiet Harbour", "Copper Sky"]);
-    assert_eq!(series, ["Harbour Lights"]);
+    let found = s.signed_in().person_titles(&person).unwrap();
+    let films: Vec<_> = found.films.iter().map(|f| f.title.as_str()).collect();
+    let series: Vec<_> = found.series.iter().map(|f| f.title.as_str()).collect();
+    assert_eq!(films.len(), 4);
+    assert_eq!(series.len(), 2);
     let asked = s
         .fake
         .seen()
@@ -904,8 +904,120 @@ fn what_a_person_took_part_in_is_split_into_films_and_series() {
         .find(|r| r.param("PersonIds").is_some())
         .unwrap();
     assert_eq!(asked.param("PersonIds"), Some(person.0.as_str()));
-    assert_eq!(asked.param("IncludeItemTypes"), Some("Movie,Series"));
     assert_eq!(asked.param("Recursive"), Some("true"));
+}
+
+#[test]
+fn titles_of_the_same_year_read_a_to_z() {
+    let s = Setup::new();
+    let person = ItemId("9e000000000000000000000000000001".into());
+    let found = s.signed_in().person_titles(&person).unwrap();
+    let films: Vec<_> = found.films.iter().map(|f| f.title.as_str()).collect();
+    let series: Vec<_> = found.series.iter().map(|f| f.title.as_str()).collect();
+    // Newest year first; within a year A to Z whatever the case; no year last.
+    assert_eq!(
+        films,
+        [
+            "amber Coast",
+            "The Quiet Harbour",
+            "Copper Sky",
+            "Undated Reel"
+        ]
+    );
+    assert_eq!(series, ["Dockside", "Harbour Lights"]);
+}
+
+#[test]
+fn a_person_with_many_titles_is_asked_by_pages() {
+    let s = Setup::new();
+    let person = ItemId(PERSON_WITH_MANY_TITLES.into());
+    let found = s.signed_in().person_titles(&person).unwrap();
+    assert_eq!(found.films.len(), 250, "every title of the person comes");
+    let asked: Vec<_> = s
+        .fake
+        .seen()
+        .into_iter()
+        .filter(|r| r.param("PersonIds").is_some())
+        .collect();
+    assert!(asked.len() >= 3, "{} requests", asked.len());
+    let starts: Vec<_> = asked.iter().map(|r| r.param("StartIndex")).collect();
+    assert_eq!(starts[..3], [Some("0"), Some("100"), Some("200")]);
+    for r in &asked {
+        let limit: u32 = r
+            .param("Limit")
+            .expect("a limit on every page")
+            .parse()
+            .unwrap();
+        assert!(limit <= 100, "page of {limit}");
+    }
+}
+
+#[test]
+fn a_person_with_endless_titles_stops_at_the_cap() {
+    let s = Setup::new();
+    let person = ItemId(PERSON_WITH_ENDLESS_TITLES.into());
+    let found = s.signed_in().person_titles(&person).unwrap();
+    assert_eq!(found.films.len(), 1000);
+    let asked = s
+        .fake
+        .seen()
+        .into_iter()
+        .filter(|r| r.param("PersonIds").is_some())
+        .count();
+    assert_eq!(asked, 10);
+}
+
+#[test]
+fn a_person_seen_only_in_episodes_has_their_series() {
+    let s = Setup::new();
+    let person = ItemId(PERSON_IN_EPISODES.into());
+    let found = s.signed_in().person_titles(&person).unwrap();
+    assert!(found.films.is_empty());
+    // One entry per series, however many of its episodes the person is in; the poster is the
+    // series', not the episode's.
+    let series: Vec<_> = found
+        .series
+        .iter()
+        .map(|x| (x.id.0.as_str(), x.title.as_str()))
+        .collect();
+    assert_eq!(
+        series,
+        [
+            ("5e000000000000000000000000000001", "Harbour Lights"),
+            ("5e000000000000000000000000000003", "Northern Tide"),
+        ]
+    );
+    let poster = found.series[0].poster.as_ref().unwrap();
+    assert_eq!(poster.item.0, "5e000000000000000000000000000001");
+    assert_eq!(poster.tag, "poster-hl");
+    assert!(found.series[1].poster.is_none());
+    let asked = s
+        .fake
+        .seen()
+        .into_iter()
+        .find(|r| r.param("PersonIds").is_some())
+        .unwrap();
+    assert!(
+        asked
+            .param("IncludeItemTypes")
+            .unwrap()
+            .split(',')
+            .any(|t| t == "Episode")
+    );
+}
+
+#[test]
+fn a_series_seen_both_whole_and_in_episodes_counts_once() {
+    let s = Setup::new();
+    let person = ItemId("9e000000000000000000000000000001".into());
+    let found = s.signed_in().person_titles(&person).unwrap();
+    let lights: Vec<_> = found
+        .series
+        .iter()
+        .filter(|x| x.title == "Harbour Lights")
+        .collect();
+    assert_eq!(lights.len(), 1);
+    assert_eq!(lights[0].year, Some(2016), "the series' own entry is kept");
 }
 
 #[test]
