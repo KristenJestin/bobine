@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use gpui_kit::{
     App, ClickEvent, Context, Div, FontWeight, IntoElement, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, ObjectFit, RenderImage, Stateful, Window, div, img,
+    MouseMoveEvent, MouseUpEvent, ObjectFit, RenderImage, Rgba, Stateful, Window, div, img,
     linear_color_stop, linear_gradient, px, rgb, rgba,
 };
 
@@ -535,7 +535,8 @@ fn blackout_switch(
     window: &mut Window,
     cx: &mut Context<Shell>,
 ) -> Stateful<Div> {
-    let track = motion::mix(rgba(0xffffff33), theme::accent(), on);
+    let track = switch_track(on, theme::accent());
+    let knob = switch_knob(on, theme::accent());
     theme::eased("player-blackout", theme::Shades::line(), window, cx)
         .mt(px(18.))
         .px(px(12.))
@@ -566,9 +567,43 @@ fn blackout_switch(
                         .left(px(SWITCH_GAP + on * (SWITCH_WIDTH - SWITCH_HEIGHT)))
                         .size(px(SWITCH_HEIGHT - 2. * SWITCH_GAP))
                         .rounded_full()
-                        .bg(rgb(0xffffff)),
+                        .bg(knob),
                 ),
         )
+}
+
+/// The panel's colour behind the off track, which is translucent white.
+const PANEL: u32 = 0x0e0e10;
+
+/// The switch's track: faint when off, the accent when on.
+fn switch_track(on: f32, accent: Rgba) -> Rgba {
+    motion::mix(rgba(0xffffff33), accent, on)
+}
+
+/// The knob follows the track: light on the dark off track, and, once on, whichever of dark or
+/// light reads on the accent, so the switch shows whatever the accent is.
+fn switch_knob(on: f32, accent: Rgba) -> Rgba {
+    let light = rgb(0xffffff);
+    let dark = rgb(PANEL);
+    // Past this luminance dark reads better than white.
+    let on_accent = if luminance(accent) > 0.18 {
+        dark
+    } else {
+        light
+    };
+    motion::mix(light, on_accent, on)
+}
+
+/// The WCAG relative luminance of an opaque colour.
+fn luminance(color: Rgba) -> f32 {
+    let channel = |c: f32| {
+        if c <= 0.03928 {
+            c / 12.92
+        } else {
+            ((c + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    0.2126 * channel(color.r) + 0.7152 * channel(color.g) + 0.0722 * channel(color.b)
 }
 
 fn section_title(label: &'static str) -> Div {
@@ -623,4 +658,48 @@ fn choices(
         .gap(px(4.))
         .text_size(px(14.))
         .children(lines)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn contrast(a: Rgba, b: Rgba) -> f32 {
+        let (a, b) = (luminance(a), luminance(b));
+        (a.max(b) + 0.05) / (a.min(b) + 0.05)
+    }
+
+    /// A translucent colour over the panel.
+    fn over_panel(color: Rgba) -> Rgba {
+        motion::mix(rgb(PANEL), Rgba { a: 1., ..color }, color.a)
+    }
+
+    const ACCENTS: [u32; 4] = [0xf4f4f5, 0xffffff, 0x4ade80, 0x1d4ed8];
+
+    #[test]
+    fn the_knob_reads_on_the_track_whatever_the_accent_is() {
+        for accent in ACCENTS {
+            let accent = rgb(accent);
+            for on in [0., 1.] {
+                let track = over_panel(switch_track(on, accent));
+                let knob = switch_knob(on, accent);
+                assert!(
+                    contrast(knob, track) >= 3.,
+                    "accent {accent:?}, on {on}: contrast {}",
+                    contrast(knob, track)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_knob_eases_with_the_track() {
+        let accent = rgb(0xf4f4f5);
+        let (off, half, on) = (
+            switch_knob(0., accent),
+            switch_knob(0.5, accent),
+            switch_knob(1., accent),
+        );
+        assert!(luminance(off) > luminance(half) && luminance(half) > luminance(on));
+    }
 }
