@@ -213,15 +213,15 @@ impl Fallback {
                 plan
             }
         };
-        let quality = chosen.map_or(session.quality(), |(quality, _)| quality);
-        session.playing_as(quality, self.method == PlayMethod::Transcode);
-        session.subtitle = said(session.subtitle.take(), self.method);
         if let Err(error) = restart(session, &self.plan, &opened) {
             // mpv's error code in words: no address in it.
             eprintln!("bobine: the conversion does not play: {error}");
             session.fail(error);
             return None;
         }
+        let quality = chosen.map_or(session.quality(), |(quality, _)| quality);
+        session.playing_as(quality, self.method == PlayMethod::Transcode);
+        session.subtitle = said(session.subtitle.take(), self.method);
         Some(PlaybackReport {
             session: opened.session,
             film: opened.film,
@@ -330,6 +330,7 @@ mod tests {
                     calls: player.calls.clone(),
                     queued: player.queued.clone(),
                     info: player.info.clone(),
+                    ..Default::default()
                 }),
                 Box::new(FakeDisplay::default()),
                 "Le Dernier Hiver".into(),
@@ -721,6 +722,7 @@ mod tests {
                 calls: player.calls.clone(),
                 queued: player.queued.clone(),
                 info: player.info.clone(),
+                load_fails: player.load_fails.clone(),
             }),
             Box::new(FakeDisplay::default()),
             "Le Dernier Hiver".into(),
@@ -932,6 +934,23 @@ mod tests {
         server.state.lock().unwrap().transcode_fails = false;
         fallback.choose(Quality::Cap(2_000_000), &mut session);
         assert!(!fallback.refusal_shown(now), "another try");
+    }
+
+    #[test]
+    fn a_quality_that_does_not_load_is_not_marked_chosen() {
+        let server = Arc::new(FakeServer::new(3, false));
+        let (mut fallback, mut session, player, now) = playing_at(&server, 4500.);
+        player.load_fails.set(true);
+        let reopen = fallback
+            .choose(Quality::Cap(4_000_000), &mut session)
+            .unwrap();
+        let id = fallback.id();
+        assert_eq!(
+            fallback.answered(id, &mut session, reopen.open(&*server), now),
+            None
+        );
+        assert!(session.error().is_some());
+        assert_eq!(session.quality(), Quality::Original);
     }
 
     #[test]

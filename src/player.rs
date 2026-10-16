@@ -266,6 +266,8 @@ pub mod fake {
         pub queued: std::rc::Rc<std::cell::RefCell<Vec<PlayerEvent>>>,
         /// What `info` answers.
         pub info: std::rc::Rc<std::cell::RefCell<PlaybackInfo>>,
+        /// `load` fails.
+        pub load_fails: std::rc::Rc<std::cell::Cell<bool>>,
     }
 
     impl FakePlayer {
@@ -287,6 +289,9 @@ pub mod fake {
                     .map(|s| (s.title.to_string(), s.language.map(str::to_string)))
                     .collect(),
             });
+            if self.load_fails.get() {
+                return Err(PlayerError("loading failed".into()));
+            }
             Ok(())
         }
         fn set_paused(&mut self, paused: bool) {
