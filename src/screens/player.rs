@@ -12,6 +12,7 @@ use gpui_kit::{
 use super::empty_screen;
 use crate::icons::{IconName, icon};
 use crate::player::controls::SKIP_SECONDS;
+use crate::player::segments::Button;
 use crate::player::session::{Choice, Session};
 use crate::player::time;
 use crate::shell::Shell;
@@ -29,6 +30,8 @@ pub fn empty(_cx: &mut Context<Shell>) -> impl IntoElement {
 pub struct Shown {
     pub controls: f32,
     pub panel: f32,
+    /// The skip button and how much of it shows.
+    pub skip: Option<(Button, f32)>,
 }
 
 pub fn render(
@@ -58,6 +61,11 @@ pub fn render(
             shell.player_mouse_moved(cx);
         }))
         .children(controls)
+        .children(
+            shown.skip.map(|(button, level)| {
+                super::skip::button(button, level, shown.controls, window, cx)
+            }),
+        )
         .children(outside)
         .children(panel)
         .when_some(session.error(), |root, error| {

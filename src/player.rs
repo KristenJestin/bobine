@@ -5,6 +5,7 @@
 pub mod controls;
 pub mod libmpv;
 pub mod mpv;
+pub mod segments;
 pub mod session;
 pub mod time;
 pub mod tracks;

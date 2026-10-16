@@ -12,6 +12,7 @@ mod person;
 pub mod player;
 pub mod search;
 mod series_detail;
+pub mod skip;
 
 pub use home::HeroView;
 pub use series_detail::up_next_card;

@@ -1285,11 +1285,7 @@ impl Shell {
         let externals = plan.externals(&opened);
         let media = plan.media(&opened, &externals);
         match self.play(mpv, media, playing, Some(reporting), window, cx) {
-            Ok(()) => {
-                if let Some(playback) = &mut self.playback {
-                    playback.next = next;
-                }
-            }
+            Ok(()) => self.playback_started(&opened.film, next, cx),
             Err(error) => {
                 // The words of the video surface or of mpv's error code: no address in them.
                 eprintln!("bobine: the film does not play: {error}");

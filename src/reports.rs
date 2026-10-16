@@ -387,4 +387,38 @@ mod tests {
         let done = std::thread::spawn(|| {});
         assert!(wait(done, Duration::from_secs(2)));
     }
+
+    #[test]
+    fn skipping_the_credits_ends_the_film_at_its_end_and_marks_it_watched() {
+        use bobine::provider::{Segment, SegmentKind};
+        let mut f = Fixture::new();
+        f.session.set_segments(vec![Segment {
+            kind: SegmentKind::Outro,
+            start: Duration::from_secs(7140),
+            end: Duration::from_secs(7860),
+        }]);
+        f.after(
+            0,
+            vec![
+                PlayerEvent::Loaded,
+                PlayerEvent::Duration(7860.),
+                PlayerEvent::Position(7200.),
+            ],
+        );
+        assert!(f.session.press_skip().is_some());
+        f.after(1, vec![PlayerEvent::Position(7201.)]);
+        assert!(crate::series_page::reached_the_end(
+            f.session.position,
+            f.session.duration
+        ));
+        let server = f.server.clone();
+        assert_eq!(
+            summary(&f.finish()),
+            [("started", 7200, false), ("stopped", 7860, false)]
+        );
+        let state = server.state.lock().unwrap();
+        let film = state.films.iter().find(|f| f.id.0 == FILM).unwrap();
+        assert!(film.watched);
+        assert_eq!(film.resume, None);
+    }
 }
