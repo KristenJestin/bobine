@@ -106,6 +106,7 @@ pub fn error_line(error: &RequestError) -> &'static str {
     match error {
         RequestError::InvalidAddress => "The address must start with http:// or https://.",
         RequestError::NotARequestServer => "No Seerr server answers at this address.",
+        RequestError::Redirected => "Seerr answered with a redirect: check the address.",
         RequestError::KeyRefused => "Seerr refused the API key.",
         RequestError::Quota => "Your request quota is reached.",
         RequestError::Forbidden => "Seerr refused the request.",

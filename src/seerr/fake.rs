@@ -60,6 +60,8 @@ pub struct State {
     pub seen: Vec<Seen>,
     /// Answers every route like a web server that is not Seerr.
     pub not_seerr: bool,
+    /// Answers every route with a redirect there, as a proxy moved elsewhere would.
+    pub redirect_to: Option<String>,
     /// No Seerr user has the viewer's Jellyfin id.
     pub no_viewer: bool,
     /// How many more films the viewer may request; `None`: no quota.
@@ -294,6 +296,7 @@ fn requests(seen: &Seen) -> Value {
 enum Answer {
     Json(u16, Value),
     Bytes(Vec<u8>),
+    Redirect(String),
 }
 
 fn refused() -> Answer {
@@ -306,6 +309,9 @@ fn refused() -> Answer {
 fn answer(state: &mut State, seen: &Seen) -> Answer {
     if state.not_seerr {
         return Answer::Json(404, json!({ "error": "not here" }));
+    }
+    if let Some(elsewhere) = &state.redirect_to {
+        return Answer::Redirect(format!("{elsewhere}{}", seen.path));
     }
     if let Some(path) = seen.path.strip_prefix("/t/p/") {
         // TMDb: no key, ever.
@@ -446,6 +452,10 @@ fn respond(request: tiny_http::Request, answer: Answer) {
             )
         }
         Answer::Bytes(bytes) => request.respond(Response::from_data(bytes)),
+        Answer::Redirect(to) => {
+            let location = Header::from_bytes("Location", to).unwrap();
+            request.respond(Response::empty(302).with_header(location))
+        }
     };
 }
 
@@ -464,6 +474,7 @@ impl FakeSeerr {
         let state = Arc::new(Mutex::new(State {
             seen: Vec::new(),
             not_seerr: false,
+            redirect_to: None,
             no_viewer: false,
             movie_quota: None,
             requested: Vec::new(),

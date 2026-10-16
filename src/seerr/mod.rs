@@ -82,6 +82,7 @@ fn refusal(code: u16, posted: bool, mut response: Response<ureq::Body>) -> Reque
                 RequestError::Forbidden
             }
         }
+        300..=399 => RequestError::Redirected,
         404 => RequestError::NotFound,
         409 => RequestError::AlreadyRequested,
         _ => RequestError::Server(code),
@@ -123,6 +124,8 @@ impl SeerrClient {
         let agent = ureq::Agent::config_builder()
             .timeout_global(Some(TIMEOUT))
             .http_status_as_error(false)
+            // ureq would send the key on to wherever a redirect points.
+            .max_redirects(0)
             .user_agent(format!("Bobine/{}", env!("CARGO_PKG_VERSION")))
             .build()
             .into();
@@ -273,7 +276,7 @@ impl RequestServer for SeerrClient {
         let status: dto::Status = Self::checked("status", false, sent)
             .and_then(|response| Self::json("status", response))
             .map_err(|e| match e {
-                RequestError::Unreachable(_) => e,
+                RequestError::Unreachable(_) | RequestError::Redirected => e,
                 _ => RequestError::NotARequestServer,
             })?;
         let _: dto::User = self.get("the key's owner", "/auth/me", &[], None)?;
@@ -410,6 +413,8 @@ impl RequestServer for SeerrClient {
             .get(&url)
             .config()
             .timeout_global(Some(IMAGE_TIMEOUT))
+            // No key goes to TMDb: its redirects may be followed.
+            .max_redirects(10)
             .build()
             .call();
         // TMDb, not Seerr: its 403 is no key refused.

@@ -44,6 +44,24 @@ fn an_address_where_no_seerr_answers_says_so() {
 }
 
 #[test]
+fn a_redirect_is_not_followed_and_the_key_never_reaches_another_server() {
+    let fake = FakeSeerr::start();
+    let elsewhere = FakeSeerr::start();
+    fake.state.lock().unwrap().redirect_to = Some(elsewhere.url.clone());
+    let seerr = client(&fake);
+    assert_eq!(seerr.check(), Err(RequestError::Redirected));
+    assert_eq!(
+        seerr.discover(DiscoverRow::Trending),
+        Err(RequestError::Redirected)
+    );
+    assert_eq!(
+        seerr.request(&Ask::Movie(HARBOUR_NIGHTS)),
+        Err(RequestError::Redirected)
+    );
+    assert!(elsewhere.seen().is_empty(), "nothing reached the other server");
+}
+
+#[test]
 fn the_viewer_is_found_among_the_users_and_requests_go_as_them() {
     let fake = FakeSeerr::start();
     let seerr = client(&fake);

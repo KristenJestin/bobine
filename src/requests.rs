@@ -232,6 +232,8 @@ pub enum RequestError {
     InvalidAddress,
     /// Something answers at the address, but not a request server.
     NotARequestServer,
+    /// The server sent the call elsewhere: it is not followed, the key would go with it.
+    Redirected,
     /// The server does not accept the API key.
     KeyRefused,
     /// The viewer has asked for as many titles as their quota allows for now.
@@ -254,6 +256,7 @@ impl fmt::Display for RequestError {
                 f.write_str("the address must start with http:// or https:// and name a host")
             }
             Self::NotARequestServer => f.write_str("no Seerr server answers at this address"),
+            Self::Redirected => f.write_str("the server answered with a redirect"),
             Self::KeyRefused => f.write_str("the server refused the API key"),
             Self::Quota => f.write_str("the request quota is reached"),
             Self::Forbidden => f.write_str("the server refused the request"),
