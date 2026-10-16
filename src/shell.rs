@@ -359,7 +359,7 @@ impl Shell {
         if window.is_fullscreen() && !self.fullscreen_kept {
             window.toggle_fullscreen();
         }
-        self.release_tiles(cx);
+        self.release_tiles(window, cx);
         let reports = self.stop_playback();
         self.navigator.back();
         if let Some(reports) = reports {

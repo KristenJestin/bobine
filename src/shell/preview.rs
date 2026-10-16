@@ -289,15 +289,16 @@ impl Shell {
         self.fetch_tiles(cx);
     }
 
-    /// The film is left: its tiles give their pictures back.
-    pub(super) fn release_tiles(&mut self, cx: &mut Context<Self>) {
+    /// The film is left: its tiles give their pictures back. This runs inside window code, where
+    /// GPUI has taken the window out of its list: it is named, or its card would keep them.
+    pub(super) fn release_tiles(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(tiles) = self
             .playback
             .as_mut()
             .and_then(|playback| playback.seek.thumbnails.tiles_mut())
         {
             for image in tiles.drain() {
-                cx.drop_image(image, None);
+                cx.drop_image(image, Some(window));
             }
         }
     }
