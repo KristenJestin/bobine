@@ -1049,9 +1049,14 @@ impl Shell {
     }
 
     /// A genre of a page's facts: the library of `entry`, filtered on that genre, the same state
-    /// as choosing it in the genre menu.
+    /// as choosing it in the genre menu. It opens over the page, which Back returns to.
     pub fn open_genre(&mut self, entry: NavEntry, genre: String, cx: &mut Context<Self>) {
-        self.select(entry, cx);
+        let Some(screen) = entry.target() else {
+            return;
+        };
+        self.forward.clear();
+        self.navigator.open(screen);
+        self.arrived(cx);
         self.change_tools(|tools| tools.filters.genre = Some(genre), cx);
     }
 
@@ -2867,6 +2872,32 @@ mod tests {
             })
             .unwrap();
         assert_eq!((films.as_deref(), series), (Some("Aventure"), None));
+    }
+
+    /// Escape and the mouse's back button return to the page the genre was clicked on, not to
+    /// the Home; the library's pill stays the lit one while it shows.
+    #[gpui_kit::test]
+    fn back_from_a_genre_returns_to_the_film_page_it_came_from(cx: &mut gpui_kit::TestAppContext) {
+        let (_server, window) = signed_in_window(cx);
+        assert_eq!(current(&window, cx), Screen::Home);
+        let mut visual = drawn_page(&window, cx, |shell, cx| {
+            shell.open_film(ItemId(crate::fake::FILM.into()), cx)
+        });
+        click_on(&mut visual, "genre Aventure");
+        assert_eq!(current(&window, cx), Screen::Library);
+        let section = window
+            .update(cx, |shell, _, _| shell.navigator.section())
+            .unwrap();
+        assert_eq!(section, Screen::Library, "the pill of the library is lit");
+
+        window.update(cx, |shell, _, cx| shell.escape(cx)).unwrap();
+        assert_eq!(current(&window, cx), Screen::FilmDetail);
+        let film = window
+            .update(cx, |shell, _, _| {
+                shell.details.last().map(|page| page.id.clone())
+            })
+            .unwrap();
+        assert_eq!(film, Some(ItemId(crate::fake::FILM.into())));
     }
 
     #[gpui_kit::test]
