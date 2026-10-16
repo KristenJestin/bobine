@@ -17,6 +17,7 @@ pub const FILM: &str = "f0000000000000000000000000000001";
 pub const SOURCE: &str = "5a000000000000000000000000000001";
 pub const PLAY_SESSION: &str = "9c0ffee09c0ffee09c0ffee09c0ffee0";
 pub const IMAGE: &[u8] = b"\x89PNG fake image";
+pub const LETTERS_LIBRARY: &str = "33333333333333333333333333333333";
 pub const SERIES_LIBRARY: &str = "22222222222222222222222222222222";
 pub const SERIES: &str = "50000000000000000000000000000001";
 pub const SEASON: &str = "5e000000000000000000000000000002";
@@ -28,6 +29,7 @@ fn fixture(name: &str) -> Value {
         "authenticate_by_name" => include_str!("fixtures/authenticate_by_name.json"),
         "user_views" => include_str!("fixtures/user_views.json"),
         "films" => include_str!("fixtures/films.json"),
+        "letters" => include_str!("fixtures/letters.json"),
         "film_detail" => include_str!("fixtures/film_detail.json"),
         "boxsets" => include_str!("fixtures/boxsets.json"),
         "boxset_sea_stories" => include_str!("fixtures/boxset_sea_stories.json"),
@@ -83,6 +85,8 @@ pub struct State {
     /// The user may not see what is asked (parental control, access schedule): every
     /// authenticated route answers 403.
     pub forbidden: bool,
+    /// Routes that answer a status of their own, whatever the request: (path, status).
+    pub broken: Vec<(String, u16)>,
     /// The account is disabled: the login answers 403.
     pub account_disabled: bool,
     /// How long an image takes to be answered (a server converting a person's photo).
@@ -161,20 +165,122 @@ enum Answer {
     Empty(u16),
 }
 
-/// The films (or series) of the library in the order asked, one page of them.
+/// What an item is ordered by for one `SortBy` field: nothing sorts before everything.
+fn sort_key(item: &Value, field: &str) -> (bool, f64, String) {
+    match &item[field] {
+        Value::Null => (false, 0., String::new()),
+        Value::Number(n) => (true, n.as_f64().unwrap(), String::new()),
+        Value::String(text) => (true, 0., text.clone()),
+        other => (true, 0., other.to_string()),
+    }
+}
+
+/// Whether the item passes the filters of the request, as Jellyfin reads them.
+fn passes(item: &Value, seen: &Seen) -> bool {
+    let genres = seen
+        .param("Genres")
+        .map(|g| g.split('|').collect::<Vec<_>>());
+    if let Some(wanted) = genres
+        && !item["Genres"]
+            .as_array()
+            .is_some_and(|have| have.iter().any(|g| wanted.iter().any(|w| g == w)))
+    {
+        return false;
+    }
+    if let Some(years) = seen.param("Years")
+        && !years
+            .split(',')
+            .any(|y| item["ProductionYear"].as_i64() == y.parse().ok())
+    {
+        return false;
+    }
+    if seen.param("IsPlayed") == Some("false") && item["UserData"]["Played"] == true {
+        return false;
+    }
+    if let Some(before) = seen.param("NameLessThan")
+        // The raw strings: SortName is stored lowercase and accents stay, so "éclipse" sorts
+        // after "z", and a letter sent in uppercase sorts before every title.
+        && item["SortName"].as_str().unwrap() >= before
+    {
+        return false;
+    }
+    true
+}
+
+/// The films (or series) of the library that pass the filters, in the order asked, one page.
+/// `Limit=0` means no limit, as on Jellyfin.
 fn films(seen: &Seen, fixture_name: &str) -> Value {
     let mut films = fixture(fixture_name).as_array().unwrap().clone();
+    films.retain(|item| passes(item, seen));
     let by = seen.param("SortBy").unwrap_or("SortName");
-    let first = by.split(',').next().unwrap();
-    films.sort_by_key(|f| f[first].to_string());
-    if seen.param("SortOrder") == Some("Descending") {
-        films.reverse();
-    }
+    let fields: Vec<&str> = by.split(',').collect();
+    // One order per field, the way Jellyfin reads them; a field without one goes up.
+    let orders: Vec<&str> = seen.param("SortOrder").unwrap_or("").split(',').collect();
+    films.sort_by(|a, b| {
+        fields
+            .iter()
+            .enumerate()
+            .fold(std::cmp::Ordering::Equal, |order, (index, field)| {
+                order.then_with(|| {
+                    let (ka, kb) = (sort_key(a, field), sort_key(b, field));
+                    let by = ka.partial_cmp(&kb).unwrap();
+                    if orders.get(index) == Some(&"Descending") {
+                        by.reverse()
+                    } else {
+                        by
+                    }
+                })
+            })
+    });
     let total = films.len();
     let start: usize = seen.param("StartIndex").map_or(0, |s| s.parse().unwrap());
-    let limit: usize = seen.param("Limit").map_or(total, |s| s.parse().unwrap());
+    let limit = seen
+        .param("Limit")
+        .map(|s| s.parse::<usize>().unwrap())
+        .filter(|limit| *limit > 0)
+        .unwrap_or(total);
     let page: Vec<Value> = films.into_iter().skip(start).take(limit).collect();
     json!({ "Items": page, "TotalRecordCount": total, "StartIndex": start })
+}
+
+/// The genres of a library's titles, as `/Genres` lists them.
+fn genres(fixture_name: &str) -> Value {
+    let mut names: Vec<String> = fixture(fixture_name)
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|item| item["Genres"].as_array().unwrap().clone())
+        .map(|g| g.as_str().unwrap().to_string())
+        .collect();
+    names.sort();
+    names.dedup();
+    let items: Vec<Value> = names
+        .iter()
+        .map(|n| json!({ "Name": n, "Id": n }))
+        .collect();
+    json!({ "Items": items, "TotalRecordCount": items.len() })
+}
+
+/// The years of a library's titles, as `/Items/Filters` lists them.
+fn years(fixture_name: &str) -> Value {
+    let mut years: Vec<i64> = fixture(fixture_name)
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|item| item["ProductionYear"].as_i64())
+        .collect();
+    years.sort();
+    years.dedup();
+    json!({ "Genres": [], "Tags": [], "OfficialRatings": [], "Years": years })
+}
+
+/// The fixture a library holds.
+fn library_fixture(seen: &Seen) -> &'static str {
+    match seen.param("ParentId") {
+        Some(SERIES_LIBRARY) => "series",
+        Some(LETTERS_LIBRARY) => "letters",
+        _ => "films",
+    }
 }
 
 /// The items of a fixture whose name holds the search term, at most `Limit` of them.
@@ -263,11 +369,16 @@ fn answer(state: &State, seen: &Seen) -> Answer {
     if state.forbidden {
         return Answer::Empty(403);
     }
+    if let Some((_, status)) = state.broken.iter().find(|(path, _)| *path == seen.path) {
+        return Answer::Empty(*status);
+    }
     let images = format!("/Items/{FILM}/Images/");
     match route {
         ("POST", "/Sessions/Logout") => Answer::Empty(204),
         ("GET", "/UserViews") => Answer::Json(200, fixture("user_views")),
         ("GET", "/UserItems/Resume") => Answer::Json(200, fixture("resume")),
+        ("GET", "/Genres") => Answer::Json(200, genres(library_fixture(seen))),
+        ("GET", "/Items/Filters") => Answer::Json(200, years(library_fixture(seen))),
         ("GET", "/Persons") => Answer::Json(200, matching("persons", seen)),
         ("GET", "/Items") => match (seen.param("ParentId"), seen.param("IncludeItemTypes")) {
             (_, Some("Movie")) if seen.param("SearchTerm").is_some() => {
@@ -278,6 +389,7 @@ fn answer(state: &State, seen: &Seen) -> Answer {
             }
             _ if seen.param("PersonIds").is_some() => Answer::Json(200, person_titles(seen)),
             (Some(FILMS_LIBRARY), _) => Answer::Json(200, films(seen, "films")),
+            (Some(LETTERS_LIBRARY), _) => Answer::Json(200, films(seen, "letters")),
             (Some(SERIES_LIBRARY), Some("Series")) => Answer::Json(200, films(seen, "series")),
             (None, Some("BoxSet")) => Answer::Json(200, fixture("boxsets")),
             (Some("b0000000000000000000000000000001"), _) => {
