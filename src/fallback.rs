@@ -277,11 +277,11 @@ impl Fallback {
     }
 }
 
-/// Whether "Conversion par le serveur" shows: while the server is asked, then until a moment
-/// after the converted picture comes, unless the film cannot play.
+/// Whether "Conversion par le serveur" shows: while the server is asked for a conversion, then
+/// until a moment after the converted picture comes, unless the film cannot play.
 fn notice_shown(method: PlayMethod, asking: bool, session: &Session, now: Instant) -> bool {
     if asking {
-        return true;
+        return method == PlayMethod::Transcode;
     }
     method == PlayMethod::Transcode
         && session.error().is_none()
@@ -525,7 +525,8 @@ mod tests {
     fn the_notice_shows_while_the_server_converts_and_a_moment_after_the_picture() {
         let mut f = Fixture::new();
         f.after(1, vec![failed()]);
-        assert!(notice_shown(f.method, true, &f.session, f.now));
+        // The window's fallback asks for the conversion.
+        assert!(notice_shown(PlayMethod::Transcode, true, &f.session, f.now));
         f.convert(Duration::from_secs(60));
         f.after(1, vec![PlayerEvent::Loaded]);
         assert!(notice_shown(f.method, false, &f.session, f.now));
@@ -890,6 +891,28 @@ mod tests {
             None,
             "never converted twice"
         );
+    }
+
+    #[test]
+    fn original_shows_no_conversion_notice_while_it_waits() {
+        let server = Arc::new(FakeServer::new(3, false));
+        let (mut fallback, mut session, player, mut now) = playing_at(&server, 4500.);
+        let reopen = fallback
+            .choose(Quality::Cap(4_000_000), &mut session)
+            .unwrap();
+        assert!(
+            fallback.notice_shown(&session, now),
+            "a conversion is asked"
+        );
+        let id = fallback.id();
+        fallback.answered(id, &mut session, reopen.open(&*server), now);
+        let events = vec![PlayerEvent::Loaded, PlayerEvent::FirstFrame];
+        tick(&mut fallback, &mut session, &player, &mut now, 1, events);
+        tick(&mut fallback, &mut session, &player, &mut now, 10, vec![]);
+        assert!(!fallback.notice_shown(&session, now));
+
+        fallback.choose(Quality::Original, &mut session).unwrap();
+        assert!(!fallback.notice_shown(&session, now), "the file as it is");
     }
 
     #[test]
