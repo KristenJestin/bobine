@@ -70,10 +70,10 @@ fn restart(session: &mut Session, plan: &Plan, opened: &Playback) -> Result<(), 
     session.restart(plan.media(opened, &externals))
 }
 
-/// The line under the title once the server converts: "lecture directe" becomes "conversion
-/// par le serveur".
+/// The line under the title once the server converts: "direct play" becomes "converted
+/// by the server".
 fn said(subtitle: Option<String>) -> Option<String> {
-    subtitle.map(|line| line.replace("lecture directe", "conversion par le serveur"))
+    subtitle.map(|line| line.replace("direct play", "converted by the server"))
 }
 
 /// A film of the server, which the server may convert when it does not play as it is: once.
@@ -118,7 +118,7 @@ impl Fallback {
                 Some(self.plan.transcode_request(from))
             }
             Step::CannotPlay => {
-                session.fail(PlayerError("aucune image".into()));
+                session.fail(PlayerError("no picture".into()));
                 None
             }
             Step::Nothing => None,
@@ -142,7 +142,7 @@ impl Fallback {
             Ok(opened) => opened,
             Err(error) => {
                 eprintln!("bobine: the server does not convert the film: {error}");
-                session.fail(PlayerError("le serveur ne peut pas le convertir".into()));
+                session.fail(PlayerError("the server cannot convert it".into()));
                 return None;
             }
         };
@@ -360,10 +360,10 @@ mod tests {
 
     #[test]
     fn the_line_under_the_title_says_the_server_converts() {
-        let line = Some("2025 · 4K HDR10 · lecture directe".to_string());
+        let line = Some("2025 · 4K HDR10 · direct play".to_string());
         assert_eq!(
             said(line).as_deref(),
-            Some("2025 · 4K HDR10 · conversion par le serveur")
+            Some("2025 · 4K HDR10 · converted by the server")
         );
     }
 
@@ -402,7 +402,7 @@ mod tests {
             }),
             Box::new(FakeDisplay::default()),
             "Le Dernier Hiver".into(),
-            Some("2025 · 4K HDR10 · lecture directe".into()),
+            Some("2025 · 4K HDR10 · direct play".into()),
         );
         let fallback = Fallback::new(server.clone(), f.plan);
         (fallback, session, player)
@@ -454,7 +454,7 @@ mod tests {
         assert_eq!(fallback.answered(id, &mut session, answer), None);
         assert_eq!(
             session.error(),
-            Some(&PlayerError("le serveur ne peut pas le convertir".into()))
+            Some(&PlayerError("the server cannot convert it".into()))
         );
         assert!(!fallback.notice_shown(&session, now));
         for _ in 0..100 {
@@ -537,7 +537,7 @@ mod tests {
         assert_eq!(loads, [(converted, resume.as_secs_f64())]);
         assert_eq!(
             session.subtitle.as_deref(),
-            Some("2025 · 4K HDR10 · conversion par le serveur")
+            Some("2025 · 4K HDR10 · converted by the server")
         );
         assert_eq!(session.error(), None, "the first error is not shown");
         tick(

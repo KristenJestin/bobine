@@ -36,7 +36,7 @@ const SWITCH_GAP: f32 = 2.;
 
 /// The player screen with no film to play.
 pub fn empty(_cx: &mut Context<Shell>) -> impl IntoElement {
-    empty_screen("Lecteur")
+    empty_screen("Player")
 }
 
 /// How much of the controls and of the panel shows, from 0 to 1: they fade in and out.
@@ -138,7 +138,7 @@ pub fn render(
                             .py(px(14.))
                             .rounded(px(theme::RADIUS_LARGE))
                             .bg(theme::panel())
-                            .child(format!("Lecture impossible : {error}")),
+                            .child(format!("Cannot play: {error}")),
                     ),
             )
         })
@@ -162,7 +162,7 @@ fn conversion_notice(shown: f32) -> Div {
                 .rounded(px(theme::RADIUS_LARGE))
                 .bg(theme::panel())
                 .text_size(px(13.))
-                .child("Conversion par le serveur"),
+                .child("Converted by the server"),
         )
 }
 
@@ -191,7 +191,7 @@ fn title_bar(session: &Session, window: &mut Window, cx: &mut Context<Shell>) ->
         .on_click(cx.listener(|shell, _, window, cx| {
             shell.player_back(window, cx);
         }));
-    let tracks = text_button("player-tracks", "Audio et sous-titres", window, cx)
+    let tracks = text_button("player-tracks", "Audio and subtitles", window, cx)
         .when(session.panel_open(), |button| button.bg(theme::line()))
         .on_click(cx.listener(|shell, _, _, cx| {
             if let Some(playback) = &mut shell.playback {
@@ -521,7 +521,7 @@ fn panel(
         .when(open, |panel| panel.occlude())
         .child(section_title("AUDIO"))
         .child(audio.mb(px(26.)))
-        .child(section_title("SOUS-TITRES"))
+        .child(section_title("SUBTITLES"))
         .child(subtitles)
         .when_some(blackout, |panel, on| {
             panel.child(blackout_switch(on, open, window, cx))

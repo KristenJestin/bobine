@@ -26,7 +26,7 @@ pub enum WindowRequest {
 /// One line of the audio and subtitles panel.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Choice {
-    /// `None`: the "Aucun" line of the subtitles.
+    /// `None`: the "None" line of the subtitles.
     pub id: Option<i64>,
     pub label: String,
     pub current: bool,
@@ -260,12 +260,12 @@ impl Session {
         self.tracks_of(TrackKind::Audio).collect()
     }
 
-    /// "Aucun" first, then the subtitle tracks.
+    /// "None" first, then the subtitle tracks.
     pub fn subtitle_choices(&self) -> Vec<Choice> {
         let tracks: Vec<Choice> = self.tracks_of(TrackKind::Subtitle).collect();
         let none = Choice {
             id: None,
-            label: "Aucun".into(),
+            label: "None".into(),
             current: !tracks.iter().any(|choice| choice.current),
         };
         std::iter::once(none).chain(tracks).collect()
@@ -630,12 +630,12 @@ mod tests {
             [
                 Choice {
                     id: Some(1),
-                    label: "Français · E-AC-3".into(),
+                    label: "French · E-AC-3".into(),
                     current: true
                 },
                 Choice {
                     id: Some(2),
-                    label: "Anglais · AAC".into(),
+                    label: "English · AAC".into(),
                     current: false
                 },
             ]
@@ -659,9 +659,9 @@ mod tests {
         assert_eq!(
             lines,
             [
-                (None, "Aucun", true),
-                (Some(1), "Français · ASS", false),
-                (Some(2), "Anglais · SRT", false),
+                (None, "None", true),
+                (Some(1), "French · ASS", false),
+                (Some(2), "English · SRT", false),
             ]
         );
     }

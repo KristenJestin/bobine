@@ -1,5 +1,5 @@
 //! The times under the seek bar: the elapsed time and what is left as clock times (`0:01:05`,
-//! `−1:40:12`), then the clock time the film ends (`fin à 23 h 41`).
+//! `−1:40:12`), then the clock time the film ends (`ends at 11:41 PM`).
 
 /// A length of time as a clock reads it, `h:mm:ss`, the hours always shown: the elapsed time
 /// and the time left keep one shape from the first second to the last.
@@ -23,7 +23,13 @@ pub fn remaining(seconds: f64) -> String {
 pub fn end_clock(now: (u32, u32), remaining_seconds: f64) -> String {
     let minutes = now.0 * 60 + now.1 + (remaining_seconds.max(0.) / 60.) as u32;
     let minutes = minutes % (24 * 60);
-    format!("fin à {} h {:02}", minutes / 60, minutes % 60)
+    let (hour, am_pm) = match minutes / 60 {
+        0 => (12, "AM"),
+        hour @ 1..=11 => (hour, "AM"),
+        12 => (12, "PM"),
+        hour => (hour - 12, "PM"),
+    };
+    format!("ends at {hour}:{:02} {am_pm}", minutes % 60)
 }
 
 /// The local wall clock, hours and minutes.
@@ -69,11 +75,11 @@ mod tests {
 
     #[test]
     fn the_end_clock_adds_what_is_left_to_now() {
-        assert_eq!(end_clock((22, 42), 3540.), "fin à 23 h 41");
+        assert_eq!(end_clock((22, 42), 3540.), "ends at 11:41 PM");
     }
 
     #[test]
     fn the_end_clock_goes_past_midnight() {
-        assert_eq!(end_clock((23, 30), 3600.), "fin à 0 h 30");
+        assert_eq!(end_clock((23, 30), 3600.), "ends at 12:30 AM");
     }
 }
