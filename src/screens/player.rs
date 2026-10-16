@@ -313,6 +313,7 @@ fn preview(preview: Preview) -> Div {
         thumb,
     } = preview;
     let width = frame.map_or(TIME_BOX_WIDTH, |(width, _)| width);
+    let framed = frame.is_some();
     let frame = frame.map(|(width, height)| {
         div()
             .relative()
@@ -349,7 +350,9 @@ fn preview(preview: Preview) -> Div {
             div()
                 .px(px(10.))
                 .py(px(4.))
-                .rounded_full()
+                // Under the square frame the label is square too: GPUI clips to a rectangle,
+                // and the picture is a part of a bigger one, so the frame cannot be rounded.
+                .map(|label| if framed { label } else { label.rounded_full() })
                 .bg(rgba(0x0e0e10e0))
                 .text_size(px(13.))
                 .font_weight(FontWeight::SEMIBOLD)
