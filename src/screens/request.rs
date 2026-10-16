@@ -38,7 +38,8 @@ pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -
     };
     let (kind, tmdb) = (page.kind, page.tmdb);
     let in_library = shell.library_page_of(kind, tmdb).is_some();
-    let offered = page.can_request(in_library);
+    // Until the library is indexed, a title may be in it: nothing is offered yet.
+    let offered = shell.seerr.index.is_some() && page.can_request(in_library);
     let now = Instant::now();
     let page = shell
         .seerr

@@ -117,6 +117,8 @@ pub struct Record {
     pub logouts: Vec<usize>,
     /// The titles whose trailer file was asked for, in order.
     pub trailer_asks: Vec<ItemId>,
+    /// How many times the library was indexed by TMDb id.
+    pub tmdb_indexes: u32,
 }
 
 /// What the fake server holds, shared by the connector and its sessions.
@@ -184,6 +186,8 @@ pub struct State {
     pub tmdb: Vec<(ItemId, u64)>,
     /// The TMDb collection of the films that have a TMDb id.
     pub tmdb_collection: Option<u64>,
+    /// `tmdb_index` fails with this while it is set.
+    pub tmdb_index_error: Option<ProviderError>,
 }
 
 /// The TMDb id `tmdb` gives `id`.
@@ -617,6 +621,7 @@ impl FakeServer {
                     (ItemId(SERIES.into()), IN_LIBRARY_SERIES),
                 ],
                 tmdb_collection: None,
+                tmdb_index_error: None,
                 trailers: Trailers::default(),
                 trailer_stream: "file:///nowhere-trailer.mp4".into(),
                 trailer_error: None,
@@ -1384,7 +1389,11 @@ impl MediaServer for FakeServer {
     }
 
     fn tmdb_index(&self) -> Result<TmdbIndex, ProviderError> {
-        let state = self.state();
+        let mut state = self.state();
+        state.record.tmdb_indexes += 1;
+        if let Some(error) = state.tmdb_index_error.clone() {
+            return Err(error);
+        }
         let mut index = TmdbIndex::default();
         for (item, tmdb) in &state.tmdb {
             if state.series.iter().any(|series| &series.id == item) {

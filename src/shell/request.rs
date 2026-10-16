@@ -112,6 +112,7 @@ impl Shell {
             .requests
             .push(RequestPage::new(kind, tmdb, generation));
         self.navigator.open(Screen::Request);
+        self.want_tmdb_index(cx);
         self.load_request(generation, cx);
         cx.notify();
     }
@@ -316,14 +317,16 @@ mod tests {
     use bobine::requests::{Ask, MediaKind, RequestError};
     use gpui_kit::{Modifiers, TestAppContext, WindowHandle};
 
-    use super::super::discover::tests::{click, configured, drawn};
+    use super::super::discover::tests::{
+        KEY, address_only, click, configured, configured_on, drawn,
+    };
     use super::*;
-    use crate::fake::{FILM, SERIES};
+    use crate::fake::{FILM, FakeServer, SERIES};
     use crate::fake_seerr::{
         ASHEN_SHORE, COPPER_COAST, FakeSeerr, HARBOUR_WATCH, NORTHERN_LIGHTS, PAPER_MOONS,
     };
     use crate::navigation::NavEntry;
-    use bobine::provider::ItemId;
+    use bobine::provider::{ItemId, ProviderError};
 
     /// A shell on Discover, then on the request page of a title.
     fn on_request(
@@ -583,6 +586,90 @@ mod tests {
         assert!(visual.debug_bounds("similar-not-in-library").is_some());
         assert!(visual.debug_bounds("discover-card Copper Coast").is_some());
         assert!(visual.debug_bounds("discover-card Signal Lost").is_none());
+    }
+
+    /// A media server whose index by TMDb id fails until it is told otherwise.
+    fn without_index() -> FakeServer {
+        let server = FakeServer::new(6, true);
+        server.state.lock().unwrap().tmdb_index_error =
+            Some(ProviderError::Unreachable("down".into()));
+        server
+    }
+
+    fn index_back(server: &FakeServer) {
+        server.state.lock().unwrap().tmdb_index_error = None;
+    }
+
+    #[gpui_kit::test]
+    fn the_similar_row_waits_for_the_tmdb_index_and_a_failed_one_is_asked_again(
+        cx: &mut TestAppContext,
+    ) {
+        let seerr = FakeSeerr::default();
+        let server = without_index();
+        let window = configured_on(server.clone(), &seerr, cx);
+        let film = |cx: &mut TestAppContext| {
+            window
+                .update(cx, |shell, _, cx| shell.open_film(ItemId(FILM.into()), cx))
+                .unwrap();
+            cx.run_until_parked();
+        };
+        film(cx);
+        let mut visual = drawn(&window, cx);
+        assert!(visual.debug_bounds("similar-not-in-library").is_none());
+        index_back(&server);
+        window
+            .update(cx, |shell, _, cx| assert!(shell.go_back(cx)))
+            .unwrap();
+        film(cx);
+        let mut visual = drawn(&window, cx);
+        assert!(visual.debug_bounds("similar-not-in-library").is_some());
+        assert!(visual.debug_bounds("discover-card The Tides").is_none());
+    }
+
+    #[gpui_kit::test]
+    fn the_request_button_waits_for_the_tmdb_index(cx: &mut TestAppContext) {
+        let seerr = FakeSeerr::default();
+        let server = without_index();
+        let window = configured_on(server.clone(), &seerr, cx);
+        let request = |cx: &mut TestAppContext| {
+            window
+                .update(cx, |shell, _, cx| {
+                    shell.open_request(MediaKind::Movie, NORTHERN_LIGHTS, cx)
+                })
+                .unwrap();
+            cx.run_until_parked();
+        };
+        request(cx);
+        let mut visual = drawn(&window, cx);
+        assert!(visual.debug_bounds("request-page").is_some());
+        assert!(visual.debug_bounds("request-button").is_none());
+        index_back(&server);
+        window
+            .update(cx, |shell, _, cx| assert!(shell.go_back(cx)))
+            .unwrap();
+        request(cx);
+        let mut visual = drawn(&window, cx);
+        assert!(visual.debug_bounds("request-button").is_some());
+    }
+
+    #[gpui_kit::test]
+    fn similar_is_asked_when_seerr_becomes_ready_for_a_page_already_open(cx: &mut TestAppContext) {
+        let seerr = FakeSeerr::default();
+        let window = address_only(&seerr, cx);
+        window
+            .update(cx, |shell, _, cx| shell.open_film(ItemId(FILM.into()), cx))
+            .unwrap();
+        cx.run_until_parked();
+        let key = window
+            .update(cx, |shell, _, _| shell.seerr.key.clone().unwrap())
+            .unwrap();
+        key.update(cx, |field, cx| {
+            field.type_in(KEY, cx);
+            field.save(cx);
+        });
+        cx.run_until_parked();
+        let mut visual = drawn(&window, cx);
+        assert!(visual.debug_bounds("similar-not-in-library").is_some());
     }
 
     #[gpui_kit::test]

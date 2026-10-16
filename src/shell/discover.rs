@@ -60,8 +60,11 @@ pub struct Seerr {
     /// The number of the client being made: an older making that ends late is dropped.
     making: u64,
     _key_changed: Option<Subscription>,
-    /// The library by TMDb id: what of the request server's titles is in it.
+    /// The library by TMDb id: what of the request server's titles is in it. Kept for the
+    /// session, read again with the Home; while there is none, nothing is said not in it.
     pub index: Option<TmdbIndex>,
+    /// The index is being read.
+    indexing: bool,
     pub discover: DiscoverPage,
     /// The request pages open, the last one shown.
     pub requests: Vec<super::RequestPage>,
@@ -203,11 +206,34 @@ impl Shell {
         .detach();
     }
 
-    /// The client is there: the library is indexed by TMDb id, and a Discover showing reads.
+    /// The client is there: the library is indexed by TMDb id, a Discover showing reads, and
+    /// the film and series pages open ask for their similar titles.
     fn seerr_connected(&mut self, cx: &mut Context<Self>) {
         self.load_tmdb_index(cx);
         if self.navigator.current() == Screen::Discover {
             self.load_discover(cx);
+        }
+        let films: Vec<Option<TmdbId>> = self
+            .details
+            .iter()
+            .filter_map(|page| match &page.detail {
+                Loadable::Ready(detail) => Some(detail.tmdb),
+                _ => None,
+            })
+            .collect();
+        let series: Vec<Option<TmdbId>> = self
+            .series_pages
+            .iter()
+            .filter_map(|page| match &page.detail {
+                Loadable::Ready(detail) => Some(detail.tmdb),
+                _ => None,
+            })
+            .collect();
+        for tmdb in films {
+            self.load_similar(MediaKind::Movie, tmdb, cx);
+        }
+        for tmdb in series {
+            self.load_similar(MediaKind::Tv, tmdb, cx);
         }
     }
 
@@ -215,6 +241,7 @@ impl Shell {
     fn seerr_gone(&mut self, cx: &mut Context<Self>) {
         self.seerr.client = None;
         self.seerr.index = None;
+        self.seerr.indexing = false;
         self.seerr.discover = DiscoverPage::default();
         self.seerr.requests.clear();
         self.seerr.similar.clear();
@@ -223,17 +250,32 @@ impl Shell {
         cx.notify();
     }
 
-    fn load_tmdb_index(&mut self, cx: &mut Context<Self>) {
+    /// Indexes the library by TMDb id again, the index before kept until the new one comes.
+    pub(super) fn load_tmdb_index(&mut self, cx: &mut Context<Self>) {
+        if self.seerr.client.is_none() || self.seerr.indexing {
+            return;
+        }
+        self.seerr.indexing = true;
         self.ask(
             cx,
             |server| server.tmdb_index(),
             |shell, index, _| {
-                // Without it, every title is said not in the library: nothing worse.
-                if let Ok(index) = index {
+                shell.seerr.indexing = false;
+                // A failed one is asked again by the next page that needs it.
+                if let Ok(index) = index
+                    && shell.seerr.client.is_some()
+                {
                     shell.seerr.index = Some(index);
                 }
             },
         );
+    }
+
+    /// The index, if there is none yet: a page that needs it shows.
+    pub(super) fn want_tmdb_index(&mut self, cx: &mut Context<Self>) {
+        if self.seerr.index.is_none() {
+            self.load_tmdb_index(cx);
+        }
     }
 
     /// Runs `work` against the request server off the window's thread, then `then` with its
@@ -309,7 +351,7 @@ impl Shell {
                 }
             },
         );
-        self.load_tmdb_index(cx);
+        self.want_tmdb_index(cx);
     }
 
     /// The search field changed: the search goes out once the viewer stops typing.
@@ -386,6 +428,7 @@ impl Shell {
         let Some(tmdb) = tmdb else {
             return;
         };
+        self.want_tmdb_index(cx);
         if self.seerr.similar.contains_key(&(kind, tmdb)) {
             return;
         }
@@ -403,10 +446,13 @@ impl Shell {
 
     /// "Similar, not in your library", after a title of the library.
     pub fn similar_not_in_library(&self, kind: MediaKind, tmdb: Option<TmdbId>) -> Vec<Discovered> {
-        let Some(similar) = tmdb.and_then(|tmdb| self.seerr.similar.get(&(kind, tmdb))) else {
+        let (Some(similar), Some(index)) = (
+            tmdb.and_then(|tmdb| self.seerr.similar.get(&(kind, tmdb))),
+            &self.seerr.index,
+        ) else {
             return Vec::new();
         };
-        discover::not_in_library(similar.clone(), self.seerr.index.as_ref())
+        discover::not_in_library(similar.clone(), Some(index))
     }
 
     /// The palette's "Search on Discover": Discover opens on what was typed.
@@ -515,7 +561,17 @@ pub(super) mod tests {
         seerr: &FakeSeerr,
         cx: &mut TestAppContext,
     ) -> (WindowHandle<Shell>, FakeServer) {
-        let server = FakeServer::new(6, true);
+        start_on(FakeServer::new(6, true), path, keyring, seerr, cx)
+    }
+
+    /// The same, on that media server.
+    pub fn start_on(
+        server: FakeServer,
+        path: Option<PathBuf>,
+        keyring: &Arc<MemoryKeyring>,
+        seerr: &FakeSeerr,
+        cx: &mut TestAppContext,
+    ) -> (WindowHandle<Shell>, FakeServer) {
         let connector: Arc<dyn Connector> = Arc::new(server.clone());
         let secrets: Arc<dyn TokenStore> = keyring.clone();
         let window = cx.add_window(|_, cx| {
@@ -539,6 +595,15 @@ pub(super) mod tests {
     /// A shell where the request server is configured: its address in the settings, its key in
     /// the keyring.
     pub fn configured(seerr: &FakeSeerr, cx: &mut TestAppContext) -> WindowHandle<Shell> {
+        configured_on(FakeServer::new(6, true), seerr, cx)
+    }
+
+    /// The same, on that media server.
+    pub fn configured_on(
+        server: FakeServer,
+        seerr: &FakeSeerr,
+        cx: &mut TestAppContext,
+    ) -> WindowHandle<Shell> {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.keep().join("settings.toml");
         Settings {
@@ -549,7 +614,7 @@ pub(super) mod tests {
         .unwrap();
         let keyring = Arc::new(MemoryKeyring::default());
         keyring.save(ACCOUNT, &Token::new(KEY.into())).unwrap();
-        start(Some(path), &keyring, seerr, cx).0
+        start_on(server, Some(path), &keyring, seerr, cx).0
     }
 
     pub fn drawn(window: &WindowHandle<Shell>, cx: &mut TestAppContext) -> VisualTestContext {
@@ -632,7 +697,7 @@ pub(super) mod tests {
     }
 
     /// A shell whose settings hold the address, its keyring nothing.
-    fn address_only(seerr: &FakeSeerr, cx: &mut TestAppContext) -> WindowHandle<Shell> {
+    pub fn address_only(seerr: &FakeSeerr, cx: &mut TestAppContext) -> WindowHandle<Shell> {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.keep().join("settings.toml");
         Settings {
@@ -892,6 +957,30 @@ pub(super) mod tests {
         click(&mut visual, "nav Discover");
         assert_eq!(screen(&window, cx), Screen::Discover);
         assert!(visual.debug_bounds("discover-page").is_some());
+    }
+
+    #[gpui_kit::test]
+    fn the_tmdb_index_is_read_once_until_the_library_refreshes(cx: &mut TestAppContext) {
+        let seerr = FakeSeerr::default();
+        let server = FakeServer::new(6, true);
+        let window = configured_on(server.clone(), &seerr, cx);
+        let indexes = || server.state.lock().unwrap().record.tmdb_indexes;
+        assert_eq!(indexes(), 1, "read once the client is there");
+        window
+            .update(cx, |shell, _, cx| {
+                shell.select(NavEntry::Discover, cx);
+                shell.open_film(ItemId(FILM.into()), cx);
+                shell.select(NavEntry::Discover, cx);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        assert_eq!(indexes(), 1, "kept for the session");
+        // Home is the library read again: the index with it.
+        window
+            .update(cx, |shell, _, cx| shell.select(NavEntry::Home, cx))
+            .unwrap();
+        cx.run_until_parked();
+        assert_eq!(indexes(), 2);
     }
 
     #[gpui_kit::test]
