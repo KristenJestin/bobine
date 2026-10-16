@@ -26,6 +26,7 @@ mod reports;
 mod screens;
 mod scroll;
 mod search;
+mod secret_field;
 mod series_page;
 mod shell;
 mod start;

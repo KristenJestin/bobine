@@ -2,6 +2,8 @@
 //! headless harness shows the screens with it. It records what it is asked (logins, reports,
 //! watched marks) and never touches a network, a keyring or a file.
 
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -11,7 +13,8 @@ use bobine::provider::{
     FilterChoices, ImageKind, ImageRef, ItemId, Library, LibraryKind, MediaServer, MediaSource,
     MediaSourceId, Page, PersonHit, PersonTitles, PlaySessionId, Playback, PlaybackReport,
     ProviderError, SearchResults, Season, Segment, Series, SeriesDetail, SeriesHit, ServerInfo,
-    StreamUrl, SubtitleTrack, Title, TranscodeRequest, Trickplay, VideoRange, VideoTrack,
+    StreamUrl, SubtitleTrack, Title, Token, TokenStore, TranscodeRequest, Trickplay, VideoRange,
+    VideoTrack,
 };
 
 pub const USER: &str = "camille";
@@ -25,6 +28,53 @@ pub const TRANSCODE_SESSION: &str = "session-converted";
 /// The series every series page of the tests opens: three seasons, the first watched, the second
 /// stopped in its fourth episode.
 pub const SERIES: &str = "series-0";
+
+/// The system keyring in memory: the tests and the harness never reach the real one.
+#[derive(Default)]
+pub struct MemoryKeyring {
+    pub secrets: Mutex<HashMap<String, Token>>,
+    /// The keyring cannot be reached: every call fails.
+    pub unreachable: AtomicBool,
+}
+
+impl MemoryKeyring {
+    fn reach(&self) -> Result<(), ProviderError> {
+        if self.unreachable.load(Ordering::SeqCst) {
+            return Err(ProviderError::Keyring("locked".into()));
+        }
+        Ok(())
+    }
+
+    /// What the keyring holds under `account`, as text, for a test to compare.
+    pub fn secret(&self, account: &str) -> Option<String> {
+        let secrets = self.secrets.lock().unwrap();
+        secrets
+            .get(account)
+            .map(|token| token.expose_secret().to_string())
+    }
+}
+
+impl TokenStore for MemoryKeyring {
+    fn save(&self, account: &str, token: &Token) -> Result<(), ProviderError> {
+        self.reach()?;
+        self.secrets
+            .lock()
+            .unwrap()
+            .insert(account.to_string(), token.clone());
+        Ok(())
+    }
+
+    fn load(&self, account: &str) -> Result<Option<Token>, ProviderError> {
+        self.reach()?;
+        Ok(self.secrets.lock().unwrap().get(account).cloned())
+    }
+
+    fn delete(&self, account: &str) -> Result<(), ProviderError> {
+        self.reach()?;
+        self.secrets.lock().unwrap().remove(account);
+        Ok(())
+    }
+}
 
 /// A report as the server got it.
 #[derive(Clone, Debug, PartialEq, Eq)]
