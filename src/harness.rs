@@ -12,17 +12,18 @@
 //! `bobine --screen login|home|home-rows|home-list-resume|home-list-next|home-list-latest|library|detail|
 //! detail-rows|detail-cast|playing|series|series-page|series-rows|up-next|collections|collection-page|
 //! my-list|my-list-empty|film-list|series-list [--films N]
-//! [--media FILE] [--image-delay-ms N] [--photos-fail-once] [--scenario menu|scroll|select|panel|search|search-slow|search-keys|tools|tools-keys|home-rotate|home-hover|home-jump|home-scroll|home-lists|home-play]
+//! [--media FILE] [--segments SECONDS] [--image-delay-ms N] [--photos-fail-once] [--scenario menu|scroll|select|panel|search|search-slow|search-keys|tools|tools-keys|home-rotate|home-hover|home-jump|home-scroll|home-lists|home-play|skip]
 //! [--search-delay-ms N] [--favourite-delay-ms N] [--favourite-fails] [--slower N] --quit-at S`
 //!
 //! A scenario sends clicks, keys and scroll events to the window as the compositor would, at set
 //! times, and prints what they did (`MENU`, `SCROLL`, `SELECT`, `PANEL` lines) and the frame times
-//! that followed each (`FRAMES`). `--slower N` makes every move N times slower, to photograph it.
+//! that followed each (`FRAMES`). `--segments N` gives the fake server's films the segments of a
+//! media N seconds long: a recap 0 to 4 s, an intro 5 to 15 s, the credits for the last 15 s. `--slower N` makes every move N times slower, to photograph it.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use bobine::provider::{Connector, ItemId};
+use bobine::provider::{Connector, ItemId, Segment, SegmentKind};
 use gpui_kit::{
     App, Bounds, Context, Entity, KeyDownEvent, Keystroke, Modifiers, MouseButton, MouseDownEvent,
     MouseMoveEvent, MouseUpEvent, Pixels, PlatformInput, Point, ScrollDelta, ScrollWheelEvent,
@@ -66,6 +67,8 @@ struct Args {
     films: usize,
     /// What the fake server's films play.
     media: Option<String>,
+    /// How long that media is: the fake server then marks its recap, intro and credits.
+    segments: Option<f64>,
     /// How long each image of the fake server takes, in milliseconds.
     image_delay: u64,
     /// The fake server fails the first time it is asked each person's photo.
@@ -132,6 +135,7 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Option<Args>, String>
                     .ok_or("--films needs a number")?;
             }
             "--media" => parsed.media = Some(args.next().ok_or("--media needs a file")?),
+            "--segments" => parsed.segments = Some(seconds(args.next())?),
             "--photos-fail-once" => parsed.photos_fail_once = true,
             "--search-delay-ms" => {
                 parsed.search_delay = args
@@ -209,6 +213,9 @@ impl Harness {
             if let Some(media) = &args.media {
                 state.stream = media.clone();
             }
+            if let Some(length) = args.segments {
+                state.segments = segments_of(length);
+            }
             state.image_delay = Duration::from_millis(args.image_delay);
             state.photos_fail_once = args.photos_fail_once;
             state.search_delay = Duration::from_millis(args.search_delay);
@@ -253,6 +260,20 @@ impl Harness {
             None => play(args, shell, window, cx),
         }
     }
+}
+
+/// The segments of a media `length` seconds long: a recap, an intro, then the credits.
+fn segments_of(length: f64) -> Vec<Segment> {
+    let segment = |kind, start: f64, end: f64| Segment {
+        kind,
+        start: Duration::from_secs_f64(start),
+        end: Duration::from_secs_f64(end),
+    };
+    vec![
+        segment(SegmentKind::Recap, 0., 4.),
+        segment(SegmentKind::Intro, 5., 15.),
+        segment(SegmentKind::Outro, length - 15., length),
+    ]
 }
 
 /// Reaches `screen` as a user would, by the shell's own steps, then waits to be photographed.
@@ -321,6 +342,8 @@ fn show_screen(
         1
     };
     let mut ready_at: Option<f64> = None;
+    // The pointer stays still in this scenario, so that the button fades by itself.
+    let still = scenario.as_deref() == Some("skip");
     let mut acts = scenario.map(|name| Acts::new(&name));
     cx.spawn(async move |cx| {
         loop {
@@ -418,7 +441,7 @@ fn show_screen(
                                 }
                                 true
                             }
-                            3.. if play && elapsed >= 4. => {
+                            3.. if play && !still && elapsed >= 4. => {
                                 shell.player_mouse_moved(cx);
                                 false
                             }
@@ -815,6 +838,12 @@ impl Acts {
                 ),
                 (18.0, "unwatched off", Click(Unwatched)),
             ],
+            // Times count from the start of the playback, on a media of 40 s with `--segments 40`.
+            "skip" => vec![
+                (7., "enter skips the intro", Key("enter")),
+                (11., "enter between the segments", Key("enter")),
+                (19., "enter skips the credits", Key("enter")),
+            ],
             other => {
                 eprintln!("bobine harness: unknown scenario {other}");
                 std::process::exit(2);
@@ -1100,8 +1129,13 @@ fn state(label: &str, shell: &Shell, cx: &App) -> String {
     }
     if let Some(playback) = &shell.playback {
         return format!(
-            "PANEL {label}: panel_open={} screen={screen:?}",
-            playback.session.panel_open()
+            "PANEL {label}: panel_open={} screen={screen:?} position={:.0} skip={:?}",
+            playback.session.panel_open(),
+            playback.session.position,
+            playback
+                .session
+                .skip_button()
+                .map(|button| button.label.text()),
         );
     }
     if screen == Screen::Home {
