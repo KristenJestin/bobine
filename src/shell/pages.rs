@@ -3511,7 +3511,8 @@ mod tests {
     fn buttons_in_a_row_share_one_height(cx: &mut gpui_kit::TestAppContext) {
         let (_server, window) = signed_in_window(cx);
         // The Home header, a movie page and a series page: a filled button beside outlined ones.
-        let rows: [(&[&str], fn(&mut Shell, &mut Context<Shell>)); 3] = [
+        type Open = fn(&mut Shell, &mut Context<Shell>);
+        let rows: [(&[&str], Open); 3] = [
             (&["play-1", "more-1"], |shell, cx| {
                 shell.select(NavEntry::Home, cx)
             }),
