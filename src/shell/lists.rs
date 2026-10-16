@@ -1,12 +1,15 @@
 //! The user's list ("Ma liste") and the collections: what the pages show of them, and how it
 //! comes from the server. Every call runs off the window's thread, like the others.
 
-use bobine::provider::{CollectionCard, CollectionDetail, Favourite, ItemId, ProviderError};
+use bobine::provider::{
+    CollectionCard, CollectionDetail, Favourite, ImageRef, ItemId, ProviderError,
+};
 use gpui_kit::{Context, ScrollHandle, UniformListScrollHandle};
 
 use super::Shell;
 use super::pages::Loadable;
 use crate::favourite::{self, ListPage};
+use crate::lists::PosterQueue;
 use crate::navigation::Screen;
 use crate::series_page::Refreshes;
 
@@ -15,6 +18,8 @@ use crate::series_page::Refreshes;
 pub struct CollectionsPage {
     pub cards: Option<Loadable<Vec<CollectionCard>>>,
     pub scroll: UniformListScrollHandle,
+    /// The bare cards whose poster is still to ask, once the grid shows.
+    posters: PosterQueue,
 }
 
 /// One collection and its films.
@@ -142,11 +147,50 @@ impl Shell {
         self.ask(
             cx,
             |server| server.collections(),
-            |shell, cards, cx| {
-                shell.collections.cards = Some(match cards {
-                    Ok(cards) => Loadable::Ready(cards),
-                    Err(error) => Loadable::Failed(shell.failed(error, cx)),
-                });
+            |shell, cards, cx| match cards {
+                Ok(cards) => {
+                    let generation = shell.next_generation();
+                    shell.collections.posters = PosterQueue::of(&cards, generation);
+                    shell.collections.cards = Some(Loadable::Ready(cards));
+                    for collection in shell.collections.posters.start() {
+                        shell.load_collection_poster(collection, generation, cx);
+                    }
+                }
+                Err(error) => {
+                    shell.collections.cards = Some(Loadable::Failed(shell.failed(error, cx)));
+                }
+            },
+        );
+    }
+
+    /// The poster of a bare card, asked after the grid shows. Each answer, a poster or not,
+    /// sends the next request, so a slow server never has more than a few in flight. The chain
+    /// belongs to the load numbered `generation`: it goes on after the page is left, and an
+    /// answer of an earlier load (signed in again) neither wears a card nor sends a request.
+    fn load_collection_poster(
+        &mut self,
+        collection: ItemId,
+        generation: u64,
+        cx: &mut Context<Self>,
+    ) {
+        let asked = collection.clone();
+        // Without a server (the login is shown) `ask` calls nothing back and the chain stops
+        // there: the only way out of the login is `signed_in`, which resets the queue.
+        self.ask(
+            cx,
+            move |server| server.collection_poster(&asked),
+            move |shell, poster: Option<ImageRef>, cx| {
+                let Some(Loadable::Ready(cards)) = &mut shell.collections.cards else {
+                    return;
+                };
+                let next =
+                    shell
+                        .collections
+                        .posters
+                        .answered(cards, generation, &collection, poster);
+                if let Some(next) = next {
+                    shell.load_collection_poster(next, generation, cx);
+                }
             },
         );
     }

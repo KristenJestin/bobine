@@ -3,7 +3,8 @@
 ## Phosphor icons
 
 Bobine draws its icons from the "fill" weight of [Phosphor Icons](https://phosphoricons.com)
-(and the "bold" weight for the list icon, which has no fill), embedded as SVG files under `assets/icons/`. Phosphor is under the MIT licence, reproduced below
+(and the "bold" weight for the list icon, which has no fill, and for the magnifying glass,
+whose fill weight has a solid lens), embedded as SVG files under `assets/icons/`. Phosphor is under the MIT licence, reproduced below
 as it requires.
 
 ```

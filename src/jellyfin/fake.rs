@@ -38,6 +38,7 @@ fn fixture(name: &str) -> Value {
         "boxsets" => include_str!("fixtures/boxsets.json"),
         "favourites" => include_str!("fixtures/favourites.json"),
         "boxset_sea_stories" => include_str!("fixtures/boxset_sea_stories.json"),
+        "boxset_lone_wolves" => include_str!("fixtures/boxset_lone_wolves.json"),
         "boxset_harbour_trilogy" => include_str!("fixtures/boxset_harbour_trilogy.json"),
         "similar" => include_str!("fixtures/similar.json"),
         "resume" => include_str!("fixtures/resume.json"),
@@ -96,6 +97,8 @@ pub struct State {
     pub forbidden: bool,
     /// Routes that answer a status of their own, whatever the request: (path, status).
     pub broken: Vec<(String, u16)>,
+    /// The films of this collection cannot be listed: asking for them answers 500.
+    pub broken_parent: Option<String>,
     /// The account is disabled: the login answers 403.
     pub account_disabled: bool,
     /// How long an image takes to be answered (a server converting a person's photo).
@@ -334,6 +337,16 @@ fn of_types(mut list: Value, seen: &Seen) -> Value {
     list
 }
 
+/// The items that have an image of each type in `ImageTypes`, as the server filters them.
+fn with_images(mut list: Value, seen: &Seen) -> Value {
+    if let Some(types) = seen.param("ImageTypes") {
+        let items = list["Items"].as_array_mut().unwrap();
+        items.retain(|item| types.split(',').all(|t| item["ImageTags"].get(t).is_some()));
+        list["TotalRecordCount"] = json!(items.len());
+    }
+    list
+}
+
 /// What a person took part in, as the server pages it: only the types asked, `Limit` of them
 /// from `StartIndex`, and the total of them all.
 fn person_titles(seen: &Seen) -> Value {
@@ -417,6 +430,12 @@ fn answer(state: &State, seen: &Seen) -> Answer {
     if let Some((_, status)) = state.broken.iter().find(|(path, _)| *path == seen.path) {
         return Answer::Empty(*status);
     }
+    if seen.path == "/Items"
+        && state.broken_parent.is_some()
+        && seen.param("ParentId") == state.broken_parent.as_deref()
+    {
+        return Answer::Empty(500);
+    }
     let images = format!("/Items/{FILM}/Images/");
     match route {
         ("POST", "/Sessions/Logout") => Answer::Empty(204),
@@ -447,6 +466,13 @@ fn answer(state: &State, seen: &Seen) -> Answer {
             (Some("b0000000000000000000000000000002"), _) => {
                 Answer::Json(200, of_types(fixture("boxset_harbour_trilogy"), seen))
             }
+            (Some("b0000000000000000000000000000003"), _) => Answer::Json(
+                200,
+                limited(
+                    with_images(of_types(fixture("boxset_lone_wolves"), seen), seen),
+                    seen,
+                ),
+            ),
             _ => Answer::Json(200, json!({ "Items": [], "TotalRecordCount": 0 })),
         },
         ("GET", path) if path == format!("/Items/{FILM}") => {

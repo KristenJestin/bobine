@@ -18,14 +18,60 @@ pub const PER_GROUP: u32 = 5;
 /// A group's heading and a result's row have a fixed height: the view lays them out by hand, so
 /// the selected row can be found, scrolled to and highlighted without measuring anything.
 pub const HEADING_HEIGHT: f32 = 34.;
-pub const ROW_HEIGHT: f32 = 62.;
+pub const ROW_HEIGHT: f32 = 120.;
+/// The space kept between two rows, under each one.
+pub const ROW_GAP: f32 = 4.;
+/// A film's or series' poster in a row (2:3), and a person's round photo.
+pub const POSTER_HEIGHT: f32 = 100.;
+pub const POSTER_WIDTH: f32 = 67.;
+pub const PERSON_PHOTO: f32 = 84.;
+/// The "Entrée" key, drawn at the right end of the highlight.
+pub const HINT_HEIGHT: f32 = 18.;
+pub const ENTER_KEY: &str = "Entrée";
+/// A key cap's own sizes: its drawing and the room a row keeps for it both read these.
+pub const KEY_TEXT: f32 = 10.;
+pub const KEY_PAD_X: f32 = 5.;
+pub const KEY_PAD_Y: f32 = 1.;
+/// The cap's outline, `border_1`.
+pub const KEY_BORDER: f32 = 1.;
+/// The space around the list of rows, which the highlight and the rows stay inside.
+pub const LIST_PAD: f32 = 10.;
+/// How far inside the highlight's right edge the "Entrée" key ends.
+pub const HINT_INSET: f32 = 10.;
+/// What a row keeps free between its text and the key.
+const HINT_GAP: f32 = 8.;
+/// What a glyph of the interface font is at most wide, in em: the text is only measured when
+/// drawn, and a row has to reserve its room before.
+const GLYPH_EM: f32 = 0.6;
+
+/// How wide a key cap is for `label`.
+pub fn key_cap_width(label: &str) -> f32 {
+    label.chars().count() as f32 * KEY_TEXT * GLYPH_EM + 2. * (KEY_PAD_X + KEY_BORDER)
+}
+
+/// What a row keeps free at its right for the highlight's "Entrée" key, counted from the row's
+/// edge, which is the highlight's.
+pub fn hint_room() -> f32 {
+    HINT_INSET + key_cap_width(ENTER_KEY) + HINT_GAP
+}
+
+/// The height of the highlight, which is a row without the space under it.
+pub fn highlight_height() -> f32 {
+    ROW_HEIGHT - ROW_GAP
+}
+
+/// Where the "Entrée" key starts when the highlight starts at `highlight_top`: always centred
+/// in it, so it travels with the highlight, whatever the highlight's glide gives.
+pub fn hint_top(highlight_top: f32) -> f32 {
+    highlight_top + (highlight_height() - HINT_HEIGHT) / 2.
+}
 
 /// Where the palette starts, from the top of the window.
 pub const PANEL_TOP: f32 = 110.;
 /// The field and the footer, which come with any list, and room below the palette.
 pub const CHROME: f32 = 60. + 44. + 32.;
 /// The list of results, at the most, before it scrolls.
-pub const LIST_MAX: f32 = 440.;
+pub const LIST_MAX: f32 = 500.;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Group {
@@ -398,6 +444,7 @@ pub fn opens_from(screen: Screen) -> bool {
 mod tests {
     use super::*;
     use crate::fake::{FakeServer, PASSWORD, USER};
+    use crate::motion::Glide;
     use bobine::provider::{Connector, MediaServer};
     use std::sync::Arc;
 
@@ -719,6 +766,55 @@ mod tests {
         assert_eq!(palette.selected(), 2);
         palette.select(9);
         assert_eq!(palette.selected(), 2);
+    }
+
+    #[test]
+    fn a_poster_in_a_row_is_about_twice_the_size_it_was() {
+        // It was 36 by 54 in a 62 px row.
+        let (height, width, photo) =
+            std::hint::black_box((POSTER_HEIGHT, POSTER_WIDTH, PERSON_PHOTO));
+        assert!((100. ..=112.).contains(&height), "{height}");
+        assert!((width / height - 2. / 3.).abs() < 0.02);
+        assert!(photo >= 80.);
+    }
+
+    #[test]
+    fn a_row_holds_its_poster_and_the_space_under_it() {
+        for image in std::hint::black_box([POSTER_HEIGHT, PERSON_PHOTO]) {
+            assert!(highlight_height() >= image + 12., "{image} in a row");
+        }
+        assert_eq!(highlight_height() + ROW_GAP, ROW_HEIGHT);
+    }
+
+    #[test]
+    fn a_longer_label_makes_a_wider_key() {
+        assert!(key_cap_width("Échap") < key_cap_width("Entrée"));
+        assert_eq!(key_cap_width(""), 2. * (KEY_PAD_X + KEY_BORDER));
+    }
+
+    #[test]
+    fn the_enter_hint_follows_the_highlight_through_its_glide() {
+        let t = Instant::now();
+        let mut glide = Glide::new(0., crate::motion::quick());
+        glide.set(ROW_HEIGHT * 3., t);
+        let mut last = None;
+        for n in [0, 30, 60, 90, 120, 200] {
+            let top = glide.value(t + Duration::from_millis(n));
+            // Centred in the highlight at each step, not waiting for it to land.
+            let hint = hint_top(top);
+            assert_eq!(
+                hint - top,
+                (highlight_height() - HINT_HEIGHT) / 2.,
+                "at {n} ms"
+            );
+            if let Some((last_top, last_hint)) = last {
+                assert_eq!(hint - last_hint, top - last_top, "at {n} ms");
+            }
+            last = Some((top, hint));
+        }
+        let (top, hint) = last.unwrap();
+        assert_eq!(top, ROW_HEIGHT * 3.);
+        assert!(hint > ROW_HEIGHT * 3. && hint + HINT_HEIGHT < top + highlight_height());
     }
 
     #[test]
