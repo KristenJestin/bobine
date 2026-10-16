@@ -97,6 +97,8 @@ pub struct State {
     pub forbidden: bool,
     /// Routes that answer a status of their own, whatever the request: (path, status).
     pub broken: Vec<(String, u16)>,
+    /// The films of this collection cannot be listed: asking for them answers 500.
+    pub broken_parent: Option<String>,
     /// The account is disabled: the login answers 403.
     pub account_disabled: bool,
     /// How long an image takes to be answered (a server converting a person's photo).
@@ -417,6 +419,12 @@ fn answer(state: &State, seen: &Seen) -> Answer {
     }
     if let Some((_, status)) = state.broken.iter().find(|(path, _)| *path == seen.path) {
         return Answer::Empty(*status);
+    }
+    if seen.path == "/Items"
+        && state.broken_parent.is_some()
+        && seen.param("ParentId") == state.broken_parent.as_deref()
+    {
+        return Answer::Empty(500);
     }
     let images = format!("/Items/{FILM}/Images/");
     match route {

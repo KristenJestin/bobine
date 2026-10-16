@@ -221,25 +221,6 @@ impl Jellyfin {
         self.http.get(what, "/Items", &query)
     }
 
-    /// The poster of the earliest film of a collection, for one that has no picture of its own.
-    /// A failure leaves the card bare: the grid still shows.
-    fn first_poster(&self, collection: &ItemId) -> Option<ImageRef> {
-        let films = self
-            .items(
-                "collection poster",
-                &[
-                    ("parentId", collection.0.clone()),
-                    ("includeItemTypes", "Movie".into()),
-                    ("sortBy", "ProductionYear,PremiereDate,SortName".into()),
-                    ("limit", "1".into()),
-                    ("imageTypeLimit", "1".into()),
-                    ("enableImageTypes", "Primary".into()),
-                ],
-            )
-            .ok()?;
-        films.items.first()?.film().poster
-    }
-
     /// One page of the items of a kind (`Movie`, `Series`) in a library, in the order asked.
     fn page(
         &self,
@@ -866,12 +847,26 @@ impl MediaServer for Jellyfin {
                 ("enableImageTypes", "Primary".into()),
             ],
         )?;
-        let mut cards: Vec<CollectionCard> =
-            found.items.iter().map(Item::collection_card).collect();
-        for card in cards.iter_mut().filter(|card| card.poster.is_none()) {
-            card.poster = self.first_poster(&card.id);
-        }
-        Ok(cards)
+        // A card with no picture is bare here: the grid must not wait for one request per
+        // collection, so its poster comes by `collection_poster`, after the grid shows.
+        Ok(found.items.iter().map(Item::collection_card).collect())
+    }
+
+    fn collection_poster(&self, collection: &ItemId) -> Option<ImageRef> {
+        let films = self
+            .items(
+                "collection poster",
+                &[
+                    ("parentId", collection.0.clone()),
+                    ("includeItemTypes", "Movie".into()),
+                    ("sortBy", "ProductionYear,PremiereDate,SortName".into()),
+                    ("limit", "1".into()),
+                    ("imageTypeLimit", "1".into()),
+                    ("enableImageTypes", "Primary".into()),
+                ],
+            )
+            .ok()?;
+        films.items.first()?.film().poster
     }
 
     fn collection(&self, collection: &ItemId) -> Result<CollectionDetail, ProviderError> {

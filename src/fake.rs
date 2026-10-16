@@ -1058,14 +1058,11 @@ impl MediaServer for FakeServer {
                 let collection = collection(&state, n);
                 CollectionCard {
                     films: Some(collection.films.len() as u32),
-                    // As the Jellyfin provider does for a collection with no picture of its own.
-                    poster: match collection.backdrop {
-                        Some(_) => image(&collection.id.0, ImageKind::Primary),
-                        None => collection
-                            .films
-                            .first()
-                            .and_then(|film| film.poster.clone()),
-                    },
+                    // Bare when it has no primary image, like Jellyfin's: `collection_poster`
+                    // gives the first film's.
+                    poster: has_own_picture(n)
+                        .then(|| image(&collection.id.0, ImageKind::Primary))
+                        .flatten(),
                     id: collection.id,
                     name: collection.name,
                 }
@@ -1073,6 +1070,10 @@ impl MediaServer for FakeServer {
             .collect();
         cards.sort_by(|a, b| a.name.cmp(&b.name));
         Ok(cards)
+    }
+
+    fn collection_poster(&self, id: &ItemId) -> Option<ImageRef> {
+        self.collection(id).ok()?.films.first()?.poster.clone()
     }
 
     fn collection(&self, id: &ItemId) -> Result<CollectionDetail, ProviderError> {
@@ -1189,6 +1190,12 @@ const COLLECTION_NAMES: [&str; 10] = [
     "Série Noire",
 ];
 
+/// Every fourth collection has no picture of its own, to show the first film's poster in its
+/// place.
+fn has_own_picture(n: usize) -> bool {
+    n % 4 != 3
+}
+
 /// The collection number `n`. The first, "Saga Hiver", holds the film of the tests with the
 /// film before it; the others take films by their place in the list.
 fn collection(state: &State, n: usize) -> CollectionDetail {
@@ -1217,8 +1224,7 @@ fn collection(state: &State, n: usize) -> CollectionDetail {
              sont sortis."
                 .into(),
         ),
-        // Every fourth has no picture, to show the first film's poster in its place.
-        backdrop: (n % 4 != 3)
+        backdrop: has_own_picture(n)
             .then(|| image(&id, ImageKind::Backdrop))
             .flatten(),
         films,

@@ -2185,25 +2185,33 @@ fn the_collections_of_the_server_with_their_posters() {
     assert_eq!(cards[2].films, None);
 }
 
+const LONE_WOLVES: &str = "b0000000000000000000000000000003";
+const PAPER_MOONS: &str = "b0000000000000000000000000000004";
+
+#[test]
+fn the_collections_are_read_without_asking_for_any_film() {
+    let s = Setup::new();
+    let cards = s.signed_in().collections().unwrap();
+    // The grid shows from this one request: the posters of the bare cards come after.
+    assert_eq!(boxset_lookups(&s).len(), 1, "{:?}", boxset_lookups(&s));
+    assert_eq!(cards[2].name, "Lone Wolves");
+    assert_eq!(cards[2].poster, None);
+}
+
 #[test]
 fn a_collection_with_no_picture_shows_the_poster_of_its_first_film() {
     let s = Setup::new();
-    let cards = s.signed_in().collections().unwrap();
-    let lone_wolves = &cards[2];
-    // The earliest release, not the first the server lists.
+    let poster = s.signed_in().collection_poster(&ItemId(LONE_WOLVES.into()));
     assert_eq!(
-        lone_wolves.poster,
+        poster,
         Some(ImageRef {
             item: ItemId("f00000000000000000000000000000a1".into()),
             kind: ImageKind::Primary,
             tag: "poster-hd".into()
         })
     );
-    let asked = &boxset_lookups(&s)[1];
-    assert_eq!(
-        asked.param("parentId"),
-        Some("b0000000000000000000000000000003")
-    );
+    let asked = &boxset_lookups(&s)[0];
+    assert_eq!(asked.param("parentId"), Some(LONE_WOLVES));
     assert_eq!(
         asked.param("sortBy"),
         Some("ProductionYear,PremiereDate,SortName")
@@ -2214,33 +2222,22 @@ fn a_collection_with_no_picture_shows_the_poster_of_its_first_film() {
 }
 
 #[test]
-fn a_collection_with_a_picture_of_its_own_asks_for_no_other() {
+fn a_collection_whose_films_have_no_poster_either_stays_without() {
     let s = Setup::new();
-    let cards = s.signed_in().collections().unwrap();
-    assert_eq!(
-        cards[0].poster.as_ref().map(|p| p.tag.as_str()),
-        Some("poster-ss")
-    );
-    let parents: Vec<_> = boxset_lookups(&s)
-        .iter()
-        .filter_map(|r| r.param("parentId").map(str::to_string))
-        .collect();
-    // Only the two without a picture are looked into; Paper Moons holds no film.
-    assert_eq!(
-        parents,
-        [
-            "b0000000000000000000000000000003",
-            "b0000000000000000000000000000004"
-        ]
-    );
+    let poster = s.signed_in().collection_poster(&ItemId(PAPER_MOONS.into()));
+    assert_eq!(poster, None);
 }
 
 #[test]
-fn a_collection_whose_films_have_no_poster_either_stays_without() {
+fn a_failing_poster_request_leaves_the_card_bare_and_the_grid_shown() {
     let s = Setup::new();
-    let cards = s.signed_in().collections().unwrap();
-    assert_eq!(cards[3].name, "Paper Moons");
-    assert_eq!(cards[3].poster, None);
+    s.fake.state.lock().unwrap().broken_parent = Some(LONE_WOLVES.into());
+    let server = s.signed_in();
+    let cards = server.collections().unwrap();
+    assert_eq!(cards.len(), 4);
+    assert_eq!(server.collection_poster(&cards[2].id), None);
+    s.fake.state.lock().unwrap().broken_parent = None;
+    assert!(server.collection_poster(&cards[2].id).is_some());
 }
 
 #[test]

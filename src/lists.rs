@@ -1,12 +1,55 @@
 //! The words of the Collections and Ma liste pages, and what they keep of the server's answer.
 
-use bobine::provider::{CollectionCard, CollectionDetail, Film};
+use std::collections::VecDeque;
+
+use bobine::provider::{CollectionCard, CollectionDetail, Film, ImageRef, ItemId};
 
 /// What the page says when the list holds nothing: where the list comes from.
 pub const EMPTY_LIST: &str = "Votre liste est vide. Ouvrez un film ou une série et choisissez « Ma liste » pour l'ajouter ici.";
 
 /// What the page says when the server has no collection.
 pub const NO_COLLECTION: &str = "Aucune collection sur ce serveur.";
+
+/// How many poster requests of bare collections are in flight at once: few enough to leave the
+/// server and the connections to what the user is looking at, enough to not wait on each round
+/// trip.
+pub const POSTERS_IN_FLIGHT: usize = 4;
+
+/// The collections that have no picture of their own, whose poster is asked after the grid shows.
+#[derive(Default)]
+pub struct PosterQueue {
+    waiting: VecDeque<ItemId>,
+}
+
+impl PosterQueue {
+    /// The bare cards, in the order of the grid.
+    pub fn of(cards: &[CollectionCard]) -> Self {
+        Self {
+            waiting: cards
+                .iter()
+                .filter(|card| card.poster.is_none())
+                .map(|card| card.id.clone())
+                .collect(),
+        }
+    }
+
+    /// The first requests to send, at most `POSTERS_IN_FLIGHT`.
+    pub fn start(&mut self) -> Vec<ItemId> {
+        (0..POSTERS_IN_FLIGHT).map_while(|_| self.next()).collect()
+    }
+
+    /// The next to ask, when one request was answered.
+    pub fn next(&mut self) -> Option<ItemId> {
+        self.waiting.pop_front()
+    }
+}
+
+/// A collection's poster landed: its card wears it.
+pub fn wear(cards: &mut [CollectionCard], collection: &ItemId, poster: ImageRef) {
+    if let Some(card) = cards.iter_mut().find(|card| &card.id == collection) {
+        card.poster = Some(poster);
+    }
+}
 
 /// `1 film`, `3 films`.
 pub fn films(count: u32) -> String {
@@ -60,7 +103,7 @@ mod tests {
     use super::*;
     use crate::fake::FakeServer;
     use crate::favourite;
-    use bobine::provider::{Favourite, ItemId, MediaServer};
+    use bobine::provider::{Favourite, ImageKind, MediaServer};
 
     /// The title of an item of the list.
     fn title(favourite: &Favourite) -> &str {
@@ -115,24 +158,80 @@ mod tests {
         }
     }
 
-    #[test]
-    fn a_collection_with_no_picture_of_its_own_wears_its_first_films_poster() {
-        let server = FakeServer::new(12, false);
-        let bare: Vec<CollectionCard> = server
-            .collections()
-            .unwrap()
+    fn bare(cards: Vec<CollectionCard>) -> Vec<CollectionCard> {
+        cards
             .into_iter()
-            .filter(|card| server.collection(&card.id).unwrap().backdrop.is_none())
-            .collect();
+            .filter(|card| card.poster.is_none())
+            .collect()
+    }
+
+    #[test]
+    fn a_collection_with_no_picture_of_its_own_comes_bare_then_wears_its_first_films_poster() {
+        let server = FakeServer::new(12, false);
+        let bare = bare(server.collections().unwrap());
         assert!(
             !bare.is_empty(),
             "the fake holds collections with no picture"
         );
         for card in bare {
             let first = server.collection(&card.id).unwrap().films.remove(0);
-            assert_eq!(card.poster, first.poster, "{}", card.name);
-            assert!(card.poster.is_some(), "{}", card.name);
+            assert!(first.poster.is_some(), "{}", card.name);
+            assert_eq!(server.collection_poster(&card.id), first.poster);
         }
+    }
+
+    fn cards_with_posters(posters: &[bool]) -> Vec<CollectionCard> {
+        posters
+            .iter()
+            .enumerate()
+            .map(|(n, has)| CollectionCard {
+                id: ItemId(format!("c{n}")),
+                name: format!("Collection {n}"),
+                films: Some(2),
+                poster: has.then(|| ImageRef {
+                    item: ItemId(format!("c{n}")),
+                    kind: ImageKind::Primary,
+                    tag: "t".into(),
+                }),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn only_the_bare_collections_wait_for_a_poster() {
+        let cards = cards_with_posters(&[true, false, true, false]);
+        let mut queue = PosterQueue::of(&cards);
+        assert_eq!(queue.next(), Some(ItemId("c1".into())));
+        assert_eq!(queue.next(), Some(ItemId("c3".into())));
+        assert_eq!(queue.next(), None);
+    }
+
+    #[test]
+    fn no_more_posters_than_the_bound_are_asked_at_once() {
+        let cards = cards_with_posters(&[false; 3 * POSTERS_IN_FLIGHT]);
+        let mut queue = PosterQueue::of(&cards);
+        let started = queue.start();
+        assert_eq!(started.len(), POSTERS_IN_FLIGHT);
+        // Each answer lets one more go, in the order of the grid.
+        assert_eq!(queue.next(), Some(ItemId(format!("c{POSTERS_IN_FLIGHT}"))));
+        let few = cards_with_posters(&[false, false]);
+        assert_eq!(PosterQueue::of(&few).start().len(), 2);
+        assert!(PosterQueue::default().start().is_empty());
+    }
+
+    #[test]
+    fn a_poster_that_lands_is_worn_by_its_card_alone() {
+        let mut cards = cards_with_posters(&[false, false]);
+        let poster = ImageRef {
+            item: ItemId("film".into()),
+            kind: ImageKind::Primary,
+            tag: "p".into(),
+        };
+        wear(&mut cards, &ItemId("c1".into()), poster.clone());
+        assert_eq!(cards[0].poster, None);
+        assert_eq!(cards[1].poster, Some(poster.clone()));
+        // A card that left (the server changed) is no error.
+        wear(&mut cards, &ItemId("gone".into()), poster);
     }
 
     #[test]
