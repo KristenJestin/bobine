@@ -224,9 +224,11 @@ pub struct Refreshes {
 }
 
 impl Refreshes {
-    /// A new refresh: its number.
-    pub fn ask(&mut self) -> u64 {
-        self.asked += 1;
+    /// A new refresh: its number, taken from `counter`, which counts over every page, so that
+    /// no two pages ever share one.
+    pub fn ask(&mut self, counter: &mut u64) -> u64 {
+        *counter += 1;
+        self.asked = *counter;
         self.asked
     }
 
@@ -759,9 +761,9 @@ mod tests {
 
     #[test]
     fn an_older_answer_does_not_overwrite_a_newer_one() {
-        let mut refreshes = Refreshes::default();
-        let first = refreshes.ask();
-        let second = refreshes.ask();
+        let (mut refreshes, mut counter) = (Refreshes::default(), 0);
+        let first = refreshes.ask(&mut counter);
+        let second = refreshes.ask(&mut counter);
         assert_ne!(first, second);
         assert_eq!(refreshes.newest(), second);
         // The second lands first; the first, late, is dropped.
@@ -772,13 +774,28 @@ mod tests {
     }
 
     #[test]
+    fn an_answer_for_a_closed_page_never_reaches_a_reopened_one() {
+        let mut counter = 0;
+        // The page is asked, closed, and the same series opened again at the same depth.
+        let mut closed = Refreshes::default();
+        let old = closed.ask(&mut counter);
+        let mut reopened = Refreshes::default();
+        let new = reopened.ask(&mut counter);
+        assert_ne!(old, new);
+        // The old answer lands late on the reopened page: it is not its answer.
+        assert!(!reopened.is_newest(old));
+        assert!(!reopened.landed(old));
+        assert!(reopened.landed(new));
+    }
+
+    #[test]
     fn a_mark_holds_the_page_until_the_refresh_after_it_lands() {
-        let mut refreshes = Refreshes::default();
-        let before = refreshes.ask();
+        let (mut refreshes, mut counter) = (Refreshes::default(), 0);
+        let before = refreshes.ask(&mut counter);
         assert!(!refreshes.holding());
         refreshes.hold();
         assert!(refreshes.holding());
-        let after = refreshes.ask();
+        let after = refreshes.ask(&mut counter);
         // A refresh asked before the mark is older: it does not release.
         assert!(!refreshes.landed(before));
         assert!(refreshes.holding());

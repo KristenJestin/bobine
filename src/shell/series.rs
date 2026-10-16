@@ -109,7 +109,7 @@ impl Shell {
         cx: &mut Context<Self>,
     ) {
         let page = &mut self.series_pages[depth];
-        let refresh = page.refreshes.ask();
+        let refresh = page.refreshes.ask(&mut self.refreshes_asked);
         let id = page.id.clone();
         let asked = id.clone();
         self.ask(
