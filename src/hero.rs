@@ -152,6 +152,10 @@ pub fn text_levels(level: f32) -> (f32, f32) {
     ((1. - 2. * level).max(0.), (2. * level - 1.).max(0.))
 }
 
+/// A bar under the header, one for each title: its width and its thickness. Short and thin, so
+/// that the bars stay quiet beside the title.
+pub const MARK: (f32, f32) = (28., 2.);
+
 /// The most a logo takes of the header.
 pub const LOGO: (f32, f32) = (440., 130.);
 

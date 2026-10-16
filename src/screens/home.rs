@@ -488,26 +488,27 @@ impl Draw<'_> {
         }
     }
 
-    /// A bar for each title under the header: the one shown fills as its time runs, a click on
-    /// one shows its title.
+    /// A bar for each title under the header, in line with its text: the one shown fills as its
+    /// time runs, a click on one shows its title.
     fn marks(&self, count: usize, window: &mut Window, cx: &mut Context<HeroView>) -> Div {
         let (current, progress) = (self.frame.current, self.frame.progress);
+        let (width, thickness) = hero::MARK;
         let shades = theme::Shades {
-            rest: rgba(0xffffff33),
-            hover: rgba(0xffffff66),
-            press: rgba(0xffffff80),
+            rest: rgba(0xffffff26),
+            hover: rgba(0xffffff4d),
+            press: rgba(0xffffff66),
         };
         div()
             .absolute()
-            .left(px(EDGE))
-            .right(px(EDGE))
-            .bottom(px(18.))
+            .left(px(HERO_INSET))
+            .bottom(px(36.))
             .flex()
             .gap(px(8.))
             .children((0..count).map(|index| {
                 let track = theme::eased(("hero-track", index), shades, window, cx)
-                    .w_full()
-                    .h(px(4.))
+                    .debug_selector(move || format!("hero-mark {index}"))
+                    .w(px(width))
+                    .h(px(thickness))
                     .rounded_full()
                     .overflow_hidden()
                     .children((index == current).then(|| {
@@ -515,17 +516,17 @@ impl Draw<'_> {
                             .h_full()
                             .w(relative(progress))
                             .rounded_full()
-                            .bg(theme::text())
+                            .bg(rgba(0xffffffb3))
                     }));
                 let target = self.target.clone();
                 // The bar is thin, its click is not.
                 div()
                     .id(("hero-mark", index))
-                    .flex_1()
+                    .flex_none()
+                    .w(px(width))
                     .h(px(22.))
                     .flex()
                     .items_end()
-                    .pb(px(0.))
                     .cursor_pointer()
                     .on_click(move |_, _, cx| {
                         target
