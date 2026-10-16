@@ -752,7 +752,7 @@ mod tests {
 
     #[test]
     fn the_fullscreen_button_toggles_fullscreen() {
-        let mut f = fixture();
+        let f = fixture();
         assert_eq!(
             f.session.press_fullscreen(),
             Some(WindowRequest::ToggleFullscreen)
