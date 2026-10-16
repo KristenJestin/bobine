@@ -217,6 +217,7 @@ impl<C: MpvClient> Player for MpvPlayer<C> {
         let (seconds, mode) = match seek {
             Seek::By(seconds) => (seconds, "relative"),
             Seek::To(seconds) => (seconds, "absolute"),
+            Seek::Rough(seconds) => (seconds, "absolute+keyframes"),
         };
         let _ = self.client.command(&["seek", &seconds.to_string(), mode]);
     }
@@ -691,6 +692,16 @@ mod tests {
                 line(&["seek", "-10", "relative"]),
                 line(&["seek", "3600", "absolute"])
             ]
+        );
+    }
+
+    #[test]
+    fn a_rough_seek_lands_on_a_keyframe() {
+        let mut player = MpvPlayer::new(FakeMpv::default());
+        player.seek(Seek::Rough(3600.));
+        assert_eq!(
+            log(&player),
+            [line(&["seek", "3600", "absolute+keyframes"])]
         );
     }
 

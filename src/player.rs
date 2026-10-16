@@ -76,6 +76,8 @@ pub enum Seek {
     By(f64),
     /// Seconds from the start.
     To(f64),
+    /// Seconds from the start, to the nearest keyframe: quick, for the film to follow a drag.
+    Rough(f64),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

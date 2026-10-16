@@ -59,8 +59,10 @@ impl Scrub {
         self.dragging = true;
     }
 
-    pub fn release(&mut self) {
-        self.dragging = false;
+    /// The button is let go. Where the film must settle when a drag ended, `fraction` of the
+    /// way along the bar.
+    pub fn release(&mut self) -> Option<f32> {
+        std::mem::take(&mut self.dragging).then_some(self.fraction)
     }
 
     pub fn dragging(&self) -> bool {
@@ -199,5 +201,21 @@ mod tests {
         assert!(scrub.active() && scrub.dragging());
         scrub.release();
         assert!(!scrub.active() && !scrub.dragging());
+    }
+
+    #[test]
+    fn letting_go_after_a_drag_says_where_to_settle() {
+        let (mut scrub, t) = (Scrub::new(), Instant::now());
+        scrub.moved(0.3, 200., t);
+        scrub.press();
+        scrub.moved(0.7, 500., t);
+        assert_eq!(scrub.release(), Some(0.7));
+    }
+
+    #[test]
+    fn letting_go_without_a_press_on_the_bar_settles_nothing() {
+        let (mut scrub, t) = (Scrub::new(), Instant::now());
+        scrub.moved(0.3, 200., t);
+        assert_eq!(scrub.release(), None);
     }
 }

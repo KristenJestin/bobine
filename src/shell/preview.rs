@@ -173,7 +173,7 @@ impl Shell {
         playback.seek.scrub.press();
         playback
             .session
-            .seek_to_fraction(fraction_at(x, f32::from(window.viewport_size().width)));
+            .scrub_to_fraction(fraction_at(x, f32::from(window.viewport_size().width)));
         self.seek_pointer(x, window, cx);
     }
 
@@ -193,19 +193,21 @@ impl Shell {
         }
         // The button was let go where no one heard it.
         if !button_down {
-            playback.seek.scrub.release();
-            cx.notify();
+            self.seek_release(cx);
             return;
         }
         playback
             .session
-            .seek_to_fraction(fraction_at(x, f32::from(window.viewport_size().width)));
+            .scrub_to_fraction(fraction_at(x, f32::from(window.viewport_size().width)));
         self.seek_pointer(x, window, cx);
     }
 
+    /// The button is let go: the one exact seek of the drag, the one the server is told of.
     pub fn seek_release(&mut self, cx: &mut Context<Self>) {
         if let Some(playback) = &mut self.playback {
-            playback.seek.scrub.release();
+            if let Some(fraction) = playback.seek.scrub.release() {
+                playback.session.seek_to_fraction(fraction);
+            }
             cx.notify();
         }
     }
