@@ -197,6 +197,12 @@ impl<T: Listed> LibraryPage<T> {
         self.jump.take()
     }
 
+    /// Whether the cells of the list on screen are drawn: not once the old list has faded out,
+    /// it would still take clicks, opacity does not stop them.
+    pub fn cells_visible(&self, now: Instant) -> bool {
+        !self.grid.has_stale() || self.appear.value(now) > GONE
+    }
+
     /// A page of the list asked under `epoch` came back.
     pub fn loaded(&mut self, epoch: u64, page: u32, items: Page<T>) {
         self.grid.loaded(epoch, page, items);
@@ -1640,5 +1646,24 @@ mod tests {
         page.follow_list(at(t, 400));
         assert!(!page.grid.has_stale());
         assert_eq!(page.take_jump(), Some(412));
+    }
+
+    #[test]
+    fn the_old_list_has_no_cells_to_click_once_it_has_faded_out() {
+        let (mut page, t) = fading(Instant::now());
+        assert!(page.cells_visible(t));
+        assert!(page.cells_visible(at(t, 60)));
+        page.follow_list(at(t, 400));
+        assert!(page.grid.has_stale());
+        assert!(!page.cells_visible(at(t, 400)));
+    }
+
+    #[test]
+    fn a_list_coming_in_has_its_cells() {
+        let t = Instant::now();
+        let mut page = films_page();
+        page.follow_list(t);
+        assert_eq!(opacity(&page, t), 0.);
+        assert!(page.cells_visible(t));
     }
 }

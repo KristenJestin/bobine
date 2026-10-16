@@ -102,6 +102,7 @@ fn grid_screen<T: Listed + 'static>(
         shown.appear.set(1., now);
     }
     let opacity = shown.appear.value(now);
+    let cells = shown.cells_visible(now);
     // Nothing to jump in when the filters leave nothing.
     shown
         .letters
@@ -165,9 +166,13 @@ fn grid_screen<T: Listed + 'static>(
             range
                 .map(|row| {
                     let items = (row * columns..(row + 1) * columns).map(|index| {
-                        match page(shell).grid.shown_film(index).cloned() {
+                        let item = cells
+                            .then(|| page(shell).grid.shown_film(index).cloned())
+                            .flatten();
+                        match item {
                             Some(item) => cell(shell, &item, poster_width, index, cx),
-                            // Not here yet, or past the last one: the same room, empty.
+                            // Not here yet, past the last one, or the old list gone and
+                            // invisible: the same room, empty, with nothing to click.
                             None => div().w(px(poster_width)).flex_none().into_any_element(),
                         }
                     });
