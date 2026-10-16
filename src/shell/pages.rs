@@ -1538,6 +1538,7 @@ impl Shell {
                 playback.playing = Some(opened.film.clone());
             }
             self.playback_started(&opened.film, next, cx);
+            self.publish(desktop, cx);
             return;
         }
         let options = self.mpv_options.clone();
