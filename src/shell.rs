@@ -7,6 +7,7 @@ mod pages;
 mod palette;
 mod posters;
 mod preview;
+mod request;
 mod series;
 mod settings;
 mod skip;
@@ -16,6 +17,7 @@ pub use home::{HomePage, ListPage};
 pub use lists::{CollectionPage, CollectionsPage, MyListPage, PlayerList};
 pub use pages::{Chip, DetailPage, GONE, LibraryPage, Loadable, LoginForm, OpenConnector, Tool};
 pub use palette::{PersonPage, SearchState};
+pub use request::RequestPage;
 pub use series::SeriesPage;
 pub use settings::{QualityMenu, SettingsPage};
 

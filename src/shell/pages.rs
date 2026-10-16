@@ -13,6 +13,7 @@ use bobine::provider::{
     MediaServer, MediaSource, Page, PersonHit, PlayMethod, Playback as Opened, PlaybackReport,
     ProviderError,
 };
+use bobine::requests::{MediaKind, TmdbId};
 use gpui_kit::prelude::*;
 use gpui_kit::{
     Bounds, Context, Entity, Image, NavigationDirection, Pixels, Point, RenderImage, ScrollHandle,
@@ -46,6 +47,8 @@ pub(super) enum Reopen {
     Person(PersonHit),
     List(ListKind, Option<String>),
     Collection(ItemId),
+    /// A title of the request server, by its kind and TMDb id.
+    Request(MediaKind, TmdbId),
 }
 
 /// How long the address must stay unchanged before the server is asked who it is.
@@ -756,6 +759,7 @@ impl Shell {
         self.people.clear();
         self.list = None;
         self.collection_pages.clear();
+        self.seerr.requests.clear();
         self.arrived(cx);
         cx.notify();
     }
@@ -786,6 +790,11 @@ impl Shell {
                 .collection_pages
                 .pop()
                 .map(|page| Reopen::Collection(page.id)),
+            Screen::Request => self
+                .seerr
+                .requests
+                .pop()
+                .map(|page| Reopen::Request(page.kind, page.tmdb)),
             _ => None,
         };
         self.up_next.cancel();
@@ -811,6 +820,7 @@ impl Shell {
             Reopen::Person(person) => self.open_person(person, cx),
             Reopen::List(kind, library) => self.open_list(kind, library, cx),
             Reopen::Collection(id) => self.open_collection(id, cx),
+            Reopen::Request(kind, tmdb) => self.open_request(kind, tmdb, cx),
         }
         self.forward = forward;
         true
@@ -1337,6 +1347,12 @@ impl Shell {
             return;
         }
         if let Some((menus, _)) = self.tool_menus()
+            && menus.escape()
+        {
+            cx.notify();
+            return;
+        }
+        if let Some((menus, _)) = self.seasons_menu()
             && menus.escape()
         {
             cx.notify();

@@ -61,6 +61,8 @@ pub struct Seerr {
     /// The library by TMDb id: what of the request server's titles is in it.
     pub index: Option<TmdbIndex>,
     pub discover: DiscoverPage,
+    /// The request pages open, the last one shown.
+    pub requests: Vec<super::RequestPage>,
 }
 
 /// The Discover screen: its search, its rows, and the viewer's requests.
@@ -199,7 +201,9 @@ impl Shell {
         self.seerr.client = None;
         self.seerr.index = None;
         self.seerr.discover = DiscoverPage::default();
-        self.navigator.forget(|screen| screen == Screen::Discover);
+        self.seerr.requests.clear();
+        self.navigator
+            .forget(|screen| matches!(screen, Screen::Discover | Screen::Request));
         cx.notify();
     }
 
@@ -354,9 +358,6 @@ impl Shell {
             (_, None) => self.open_request(kind, tmdb, cx),
         }
     }
-
-    /// The page of a title the library does not hold, to request it.
-    pub fn open_request(&mut self, _kind: MediaKind, _tmdb: u64, _cx: &mut Context<Self>) {}
 
     /// The wheel over Discover: the page up and down, the row under the pointer sideways.
     pub fn scroll_discover(

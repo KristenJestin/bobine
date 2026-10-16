@@ -12,6 +12,7 @@ mod lists;
 mod login;
 mod person;
 pub mod player;
+mod request;
 pub mod search;
 mod series_detail;
 mod settings;
@@ -63,6 +64,7 @@ pub fn render(
         Screen::MyList => lists::render_my_list(shell, window, cx).into_any_element(),
         Screen::Settings => settings::render(shell, window, cx).into_any_element(),
         Screen::Discover => discover::render(shell, window, cx).into_any_element(),
+        Screen::Request => request::render(shell, window, cx).into_any_element(),
     }
 }
 

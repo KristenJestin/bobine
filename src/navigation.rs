@@ -21,6 +21,8 @@ pub enum Screen {
     Settings,
     /// What the request server offers beyond the library: shown only when one is configured.
     Discover,
+    /// A title the library does not hold, reached from Discover: what it is, and its request.
+    Request,
 }
 
 impl Screen {
@@ -40,6 +42,7 @@ impl Screen {
                 | Screen::Person
                 | Screen::CollectionDetail
                 | Screen::Settings
+                | Screen::Request
         )
     }
 
@@ -47,7 +50,7 @@ impl Screen {
     pub fn has_backdrop(self) -> bool {
         matches!(
             self,
-            Screen::FilmDetail | Screen::SeriesDetail | Screen::CollectionDetail
+            Screen::FilmDetail | Screen::SeriesDetail | Screen::CollectionDetail | Screen::Request
         )
     }
 
@@ -57,7 +60,7 @@ impl Screen {
             Screen::Login => "Sign in",
             Screen::Home => "Home",
             Screen::Library => "Movies",
-            Screen::FilmDetail | Screen::SeriesDetail => "Details",
+            Screen::FilmDetail | Screen::SeriesDetail | Screen::Request => "Details",
             Screen::Person => "Person",
             Screen::Player => "Player",
             Screen::Series => "Series",
