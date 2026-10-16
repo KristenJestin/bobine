@@ -25,6 +25,7 @@ use crate::motion::{self, Fade};
 use crate::navigation::NavEntry;
 use crate::shell::{Chip, Loadable, Shell};
 use crate::theme;
+use crate::trailer;
 
 /// The menu open, and the one drawn with how much of it shows (it may be fading out).
 #[derive(Clone, Copy)]
@@ -197,6 +198,8 @@ fn hero(
         )
         .on_click(cx.listener(|shell, _, window, cx| shell.play_film(From::Beginning, window, cx)))
     });
+    let trailer = trailer::choose(&detail.trailers, shell.ytdlp)
+        .map(|_| trailer_button("film-trailer", busy, window, cx));
     let watched = theme::ghost_button("film-watched", Some(IconName::Check), "Watched", window, cx)
         .when(film.watched, |button| {
             button
@@ -211,6 +214,7 @@ fn hero(
         .when(busy, |row| row.opacity(0.6))
         .child(play)
         .children(from_start)
+        .children(trailer)
         .child(watched)
         .child(in_list);
 
@@ -297,6 +301,30 @@ pub(super) fn list_button(
         .text_color(motion::mix(theme::text(), theme::accent(), level))
         .border_color(motion::mix(rgb(0x3a3a40), theme::accent(), level))
         .on_click(cx.listener(|shell, _, _, cx| shell.toggle_favourite(cx)))
+}
+
+/// "Trailer": it fades in the first time the page draws it, like what the page shows by
+/// itself, and dims while the page waits for the server.
+pub(super) fn trailer_button(
+    id: &'static str,
+    busy: bool,
+    window: &mut Window,
+    cx: &mut Context<Shell>,
+) -> Stateful<Div> {
+    let fade = window.use_keyed_state(SharedString::from(format!("{id}-fade")), cx, |_, _| {
+        Fade::new(motion::quick())
+    });
+    let now = Instant::now();
+    fade.update(cx, |fade, _| fade.set(true, now));
+    let fade = *fade.read(cx);
+    if fade.moving(now) {
+        window.request_animation_frame();
+    }
+    let dim = if busy { 0.6 } else { 1. };
+    theme::ghost_button(id, Some(IconName::PlayCircle), "Trailer", window, cx)
+        .debug_selector(|| id.into())
+        .opacity(fade.level(now) * dim)
+        .on_click(cx.listener(|shell, _, window, cx| shell.play_trailer(window, cx)))
 }
 
 /// The backdrop over the whole width, darkened towards the text and the page below.

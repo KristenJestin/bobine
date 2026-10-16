@@ -16,7 +16,7 @@ use gpui_kit::{
 use super::card::{Offer, Open, Play};
 use super::film_detail::{
     EDGE, MenuState, ROW_POSTER, TEXT_WIDTH, cast_row, chips_row, facts_line, hero_frame,
-    hero_text, list_button, row,
+    hero_text, list_button, row, trailer_button,
 };
 use super::{card, centered, note, picture, progress_bar, row_heading, series_poster};
 use crate::film_page::{self, Choices};
@@ -27,6 +27,7 @@ use crate::navigation::NavEntry;
 use crate::series_page;
 use crate::shell::{Loadable, SeriesPage, Shell};
 use crate::theme;
+use crate::trailer;
 
 const STILL_WIDTH: f32 = 190.;
 const STILL_HEIGHT: f32 = 107.;
@@ -193,6 +194,10 @@ fn hero(
                     .flex()
                     .gap(px(10.))
                     .children(play)
+                    .children(
+                        trailer::choose(&detail.trailers, shell.ytdlp)
+                            .map(|_| trailer_button("series-trailer", shown.busy, window, cx)),
+                    )
                     .child(list_button("series-list", shown.favourite, window, cx)),
             )
             .children(started)

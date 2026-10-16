@@ -9,6 +9,7 @@ mod preview;
 mod series;
 mod settings;
 mod skip;
+mod trailer;
 
 pub use home::{HomePage, ListPage};
 pub use lists::{CollectionPage, CollectionsPage, MyListPage, PlayerList};
@@ -206,6 +207,12 @@ pub struct Shell {
     notice: Option<&'static str>,
     notice_fade: Presence<&'static str>,
     notice_timer: Option<Task<()>>,
+    /// `yt-dlp` is installed, read once at start: a trailer hosted elsewhere plays through it.
+    pub ytdlp: bool,
+    /// Each trailer the player was given, with whether it needed the `yt-dlp` hook: no player
+    /// starts in a test.
+    #[cfg(test)]
+    trailers_opened: Vec<(String, bool)>,
     /// The wake-up planned for an image to ask again, and when.
     image_wake: Option<(Instant, Task<()>)>,
     /// The page shown at the last draw, and how many times it changed: each change slides the
@@ -351,6 +358,9 @@ impl Shell {
             notice: None,
             notice_fade: Presence::new(motion::quick()),
             notice_timer: None,
+            ytdlp: crate::trailer::ytdlp_installed(),
+            #[cfg(test)]
+            trailers_opened: Vec::new(),
             image_wake: None,
             page: (Screen::Login, 0),
             page_turns: 0,
