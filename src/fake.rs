@@ -1100,7 +1100,12 @@ impl MediaServer for FakeServer {
     }
 
     fn transcode(&self, request: &TranscodeRequest) -> Result<Playback, ProviderError> {
-        let external_subtitles = self.external_subtitles(&request.film, &request.source)?;
+        let mut external_subtitles = self.external_subtitles(&request.film, &request.source)?;
+        // The fake's embedded subtitles are all text: the server extracts the one chosen.
+        external_subtitles.extend(request.subtitle_track.map(|index| ExternalSubtitle {
+            index,
+            url: StreamUrl::new(format!("file:///nowhere-converted-{index}.srt")),
+        }));
         let mut state = self.state();
         state.record.transcodes.push(request.clone());
         if state.transcode_fails {

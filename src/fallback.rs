@@ -146,7 +146,7 @@ impl Fallback {
                 return None;
             }
         };
-        self.plan = self.plan.converted(from);
+        self.plan = self.plan.converted(from, &opened);
         session.subtitle = said(session.subtitle.take());
         if let Err(error) = restart(session, &self.plan, &opened) {
             // mpv's error code in words: no address in it.
@@ -254,7 +254,7 @@ mod tests {
                 .transcode(&self.plan.transcode_request(from))
                 .unwrap();
             self.method = PlayMethod::Transcode;
-            self.plan = self.plan.converted(from);
+            self.plan = self.plan.converted(from, &opened);
             restart(&mut self.session, &self.plan, &opened).unwrap();
         }
 

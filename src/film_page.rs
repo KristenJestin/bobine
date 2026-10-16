@@ -86,7 +86,8 @@ pub struct Plan {
     pub subtitle_index: Option<i32>,
     audio: Option<i64>,
     subtitle: FirstShown,
-    /// The external subtitles of the version: index, title, language.
+    /// The subtitles of the version that may come as files: index, title, language. An embedded
+    /// one does in a conversion.
     externals: Vec<(i32, String, Option<String>)>,
 }
 
@@ -126,7 +127,6 @@ pub fn plan(film: &Film, versions: &[MediaSource], choices: &Choices, from: From
         externals: source
             .subtitles
             .iter()
-            .filter(|t| t.external)
             .map(|t| (t.index, subtitle_label(Some(t)), t.language.clone()))
             .collect(),
     })
@@ -164,12 +164,18 @@ impl Plan {
         }
     }
 
-    /// The plan of the converted stream, from `from`: it holds only the audio track asked and
-    /// the embedded subtitle drawn into the picture, so the player keeps their defaults.
-    pub fn converted(&self, from: Duration) -> Plan {
-        let subtitle = match self.subtitle {
-            FirstShown::Embedded(_) => FirstShown::Off,
-            other => other,
+    /// The plan of the converted stream `opened`, from `from`: it holds only the audio track
+    /// asked, so the player keeps its default. An embedded subtitle chosen is the file the
+    /// server extracted, or else drawn into the picture.
+    pub fn converted(&self, from: Duration, opened: &Playback) -> Plan {
+        let subtitle = match (self.subtitle, self.subtitle_index) {
+            (FirstShown::Embedded(_), Some(index))
+                if opened.external_subtitles.iter().any(|e| e.index == index) =>
+            {
+                FirstShown::External(index)
+            }
+            (FirstShown::Embedded(_), _) => FirstShown::Off,
+            (other, _) => other,
         };
         Plan {
             start: from,
@@ -470,7 +476,8 @@ mod tests {
     #[test]
     fn the_conversion_keeps_the_tracks_chosen_for_the_server_and_the_external_file_for_the_player()
     {
-        let detail = detail();
+        let server = FakeServer::new(3, false);
+        let detail = server.film(&ItemId(FILM.into())).unwrap();
         let mut choices = Choices::new(&detail.versions);
         choices.audio = Some(2);
         choices.subtitle = Some(4);
@@ -487,16 +494,39 @@ mod tests {
                 subtitle_track: Some(4),
             }
         );
-        let converted = embedded.converted(from);
+        let opened = server.transcode(&request).unwrap();
+        let converted = embedded.converted(from, &opened);
         assert_eq!(converted.start, from);
         assert_eq!(converted.audio, None);
-        assert_eq!(converted.subtitle, FirstShown::Off);
         assert_eq!(converted.audio_index, Some(2), "still reported");
+        // The server extracted the chosen subtitle into a file: the player adds it and shows it.
+        assert_eq!(converted.subtitle, FirstShown::External(4));
+        let externals = converted.externals(&opened);
+        let media = converted.media(&opened, &externals);
+        let shown = opened
+            .external_subtitles
+            .iter()
+            .position(|e| e.index == 4)
+            .unwrap();
+        assert_eq!(media.subtitle, FirstSubtitle::External(shown));
+        assert_eq!(externals[shown].language, Some("fre"));
+
+        // Drawn into the picture by the server: nothing for the player to show.
+        let drawn = Playback {
+            external_subtitles: Vec::new(),
+            ..opened
+        };
+        assert_eq!(embedded.converted(from, &drawn).subtitle, FirstShown::Off);
 
         choices.subtitle = Some(5);
         let external = plan(&detail.film, &detail.versions, &choices, From::Resume).unwrap();
-        assert_eq!(external.transcode_request(from).subtitle_track, None);
-        assert_eq!(external.converted(from).subtitle, FirstShown::External(5));
+        let request = external.transcode_request(from);
+        assert_eq!(request.subtitle_track, None);
+        let opened = server.transcode(&request).unwrap();
+        assert_eq!(
+            external.converted(from, &opened).subtitle,
+            FirstShown::External(5)
+        );
     }
 
     #[test]
