@@ -57,6 +57,7 @@ fn fixture(name: &str) -> Value {
         "next_up_across" => include_str!("fixtures/next_up_across.json"),
         "featured" => include_str!("fixtures/featured.json"),
         "media_segments" => include_str!("fixtures/media_segments.json"),
+        "tmdb_index" => include_str!("fixtures/tmdb_index.json"),
         _ => panic!("no fixture {name}"),
     };
     serde_json::from_str(text).unwrap()
@@ -446,6 +447,9 @@ fn answer(state: &State, seen: &Seen) -> Answer {
         ("GET", "/Genres") => Answer::Json(200, genres(library_fixture(seen))),
         ("GET", "/Items/Filters") => Answer::Json(200, years(library_fixture(seen))),
         ("GET", "/Persons") => Answer::Json(200, matching("persons", seen)),
+        ("GET", "/Items") if seen.param("HasTmdbId") == Some("true") => {
+            Answer::Json(200, of_types(fixture("tmdb_index"), seen))
+        }
         ("GET", "/Items") if seen.param("Filters") == Some("IsFavorite") => {
             Answer::Json(200, fixture("favourites"))
         }

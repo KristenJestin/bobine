@@ -13,8 +13,8 @@ use bobine::provider::{
     FilterChoices, ImageKind, ImageRef, ItemId, Library, LibraryKind, MediaServer, MediaSource,
     MediaSourceId, Page, PersonHit, PersonTitles, PlaySessionId, Playback, PlaybackReport,
     ProviderError, SearchResults, Season, Segment, Series, SeriesDetail, SeriesHit, ServerInfo,
-    StreamUrl, SubtitleTrack, Title, Token, TokenStore, TranscodeRequest, Trickplay, VideoRange,
-    VideoTrack,
+    StreamUrl, SubtitleTrack, Title, TmdbIndex, Token, TokenStore, TranscodeRequest, Trickplay,
+    VideoRange, VideoTrack,
 };
 
 pub const USER: &str = "camille";
@@ -30,6 +30,10 @@ pub const TRANSCODE_SESSION: &str = "session-converted";
 /// The series every series page of the tests opens: three seasons, the first watched, the second
 /// stopped in its fourth episode.
 pub const SERIES: &str = "series-0";
+/// The TMDb ids of the film of the tests, of the next film, and of the series of the tests.
+pub const IN_LIBRARY_FILM: u64 = 9001;
+pub const OTHER_LIBRARY_FILM: u64 = 9002;
+pub const IN_LIBRARY_SERIES: u64 = 7001;
 
 /// The system keyring in memory: the tests and the harness never reach the real one. Beside the
 /// library's `MemoryStore`, which is `cfg(test)` of the library and so out of reach of this
@@ -165,6 +169,17 @@ pub struct State {
     pub logout_error: Option<ProviderError>,
     /// The id of the user the next login or restore gives a session to.
     pub user_id: String,
+    /// The TMDb ids of the films and series that have one.
+    pub tmdb: Vec<(ItemId, u64)>,
+    /// The TMDb collection of the films that have a TMDb id.
+    pub tmdb_collection: Option<u64>,
+}
+
+/// The TMDb id `tmdb` gives `id`.
+fn state_tmdb(tmdb: &[(ItemId, u64)], id: &ItemId) -> Option<u64> {
+    tmdb.iter()
+        .find(|(item, _)| item == id)
+        .map(|(_, tmdb)| *tmdb)
 }
 
 /// Where the fake server pretends to be.
@@ -583,6 +598,12 @@ impl FakeServer {
                 logout_delay: std::time::Duration::ZERO,
                 logout_error: None,
                 user_id: USER_ID.into(),
+                tmdb: vec![
+                    (ItemId(FILM.into()), IN_LIBRARY_FILM),
+                    (ItemId("film-1".into()), OTHER_LIBRARY_FILM),
+                    (ItemId(SERIES.into()), IN_LIBRARY_SERIES),
+                ],
+                tmdb_collection: None,
             })),
             info: ServerInfo {
                 id: "server-1".into(),
@@ -774,7 +795,10 @@ impl MediaServer for FakeServer {
         let found = self.find(film)?;
         self.state().record.film_pages.push(film.clone());
         let others = self.state().films.clone();
+        let tmdb = state_tmdb(&self.state().tmdb, &found.id);
         Ok(FilmDetail {
+            tmdb,
+            tmdb_collection: tmdb.and_then(|_| self.state().tmdb_collection),
             overview: Some(FILM_OVERVIEW.into()),
             genres: vec!["Drame".into(), "Aventure".into()],
             official_rating: Some("12+".into()),
@@ -959,6 +983,7 @@ impl MediaServer for FakeServer {
             .find(|s| &s.id == series)
             .ok_or(ProviderError::NotFound)?;
         Ok(SeriesDetail {
+            tmdb: state_tmdb(&state.tmdb, series),
             series: Self::counted(&state, found),
             favourite: state.favourites.contains(series),
             overview: Some(SERIES_OVERVIEW.into()),
@@ -1322,6 +1347,19 @@ impl MediaServer for FakeServer {
         let mut state = self.state();
         state.record.segment_asks.push(item.clone());
         Ok(state.segments.clone())
+    }
+
+    fn tmdb_index(&self) -> Result<TmdbIndex, ProviderError> {
+        let state = self.state();
+        let mut index = TmdbIndex::default();
+        for (item, tmdb) in &state.tmdb {
+            if state.series.iter().any(|series| &series.id == item) {
+                index.series.insert(*tmdb, item.clone());
+            } else {
+                index.films.insert(*tmdb, item.clone());
+            }
+        }
+        Ok(index)
     }
 }
 

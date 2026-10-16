@@ -156,6 +156,9 @@ pub struct Item {
     /// The trickplay images, when asked for (`fields=Trickplay`): by version, then by width.
     #[serde(default)]
     pub trickplay: HashMap<String, HashMap<String, TrickplayInfo>>,
+    /// Its ids elsewhere, `Tmdb`, `TmdbCollection`, `Imdb`…
+    #[serde(default)]
+    pub provider_ids: HashMap<String, String>,
 }
 
 /// How one version's trickplay images are cut at one width. The interval is in milliseconds.
@@ -171,6 +174,14 @@ pub struct TrickplayInfo {
 }
 
 impl Item {
+    /// One of its ids elsewhere, as a number: `Tmdb`, `TmdbCollection`.
+    pub fn provider_id(&self, provider: &str) -> Option<u64> {
+        self.provider_ids
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case(provider))
+            .and_then(|(_, id)| id.trim().parse().ok())
+    }
+
     /// The trickplay to show for one version, if the server made any for it.
     pub fn trickplay_of(&self, source: &str) -> Option<Trickplay> {
         let sizes = self.trickplay.get(source)?;

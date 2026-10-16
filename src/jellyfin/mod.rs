@@ -14,7 +14,7 @@ use crate::provider::{
     Feature, Film, FilmDetail, FilmQuery, FilmSort, FilterChoices, ImageKind, ImageRef, ItemId,
     Library, MediaServer, MediaSourceId, Page, PersonTitles, PlayMethod, PlaySessionId, Playback,
     PlaybackReport, ProviderError, SearchResults, Season, Segment, Series, SeriesDetail,
-    ServerInfo, StreamUrl, Title, Token, TokenStore, TranscodeRequest, Trickplay,
+    ServerInfo, StreamUrl, Title, TmdbIndex, Token, TokenStore, TranscodeRequest, Trickplay,
 };
 use account::{AccountFile, Login};
 use dto::{
@@ -490,6 +490,8 @@ impl MediaServer for Jellyfin {
             &[self.user(), ("limit", SIMILAR.to_string())],
         )?;
         Ok(FilmDetail {
+            tmdb: item.provider_id("Tmdb"),
+            tmdb_collection: item.provider_id("TmdbCollection"),
             film: item.film(),
             directors: item.directors(),
             cast: item.cast(),
@@ -754,6 +756,7 @@ impl MediaServer for Jellyfin {
             &[self.user(), ("limit", SIMILAR.to_string())],
         )?;
         Ok(SeriesDetail {
+            tmdb: item.provider_id("Tmdb"),
             series: item.series(),
             favourite: item.user_data.as_ref().is_some_and(|u| u.is_favorite),
             cast: item.cast(),
@@ -1051,5 +1054,34 @@ impl MediaServer for Jellyfin {
             Err(ProviderError::NotFound) => Ok(Vec::new()),
             Err(error) => Err(error),
         }
+    }
+
+    fn tmdb_index(&self) -> Result<TmdbIndex, ProviderError> {
+        let found: QueryResult = self.http.get(
+            "the library's TMDb ids",
+            "/Items",
+            &[
+                self.user(),
+                ("Recursive", "true".into()),
+                ("IncludeItemTypes", "Movie,Series".into()),
+                ("HasTmdbId", "true".into()),
+                ("Fields", "ProviderIds".into()),
+                ("EnableImages", "false".into()),
+                ("EnableUserData", "false".into()),
+            ],
+        )?;
+        let mut index = TmdbIndex::default();
+        for item in &found.items {
+            let Some(tmdb) = item.provider_id("Tmdb") else {
+                continue;
+            };
+            let id = ItemId(item.id.clone());
+            match item.kind.as_deref() {
+                Some("Movie") => index.films.insert(tmdb, id),
+                Some("Series") => index.series.insert(tmdb, id),
+                _ => None,
+            };
+        }
+        Ok(index)
     }
 }
