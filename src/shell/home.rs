@@ -2,6 +2,7 @@
 //! start, and the full list behind "Tout voir". Like every page, each call to the server runs
 //! off the window's thread, and an answer that comes after a newer ask is dropped.
 
+use std::collections::HashMap;
 use std::ops::Range;
 use std::rc::Rc;
 use std::thread::JoinHandle;
@@ -17,6 +18,7 @@ use super::{Film as Playing, Shell};
 use crate::grid::{Grid, Listed};
 use crate::hero::{self, Carousel};
 use crate::home_page::{self, Asks, ListKind, PlayTarget, StartError};
+use crate::motion;
 use crate::navigation::Screen;
 use crate::scroll;
 
@@ -51,6 +53,8 @@ pub struct HomePage {
     pub next_row: Rc<[Title]>,
     /// One row for each library of films or of series, in the server's order.
     pub latest: Option<Loadable<Vec<LatestRow>>>,
+    /// When each logo was first drawn: it fades in then, once.
+    logos: HashMap<ItemId, Instant>,
     pub scroll: ScrollHandle,
     /// The rows that scroll sideways, in the order they are drawn.
     pub rows: Vec<ScrollHandle>,
@@ -72,6 +76,7 @@ impl Default for HomePage {
             next_up: None,
             next_row: Rc::from([]),
             latest: None,
+            logos: HashMap::new(),
             scroll: ScrollHandle::new(),
             rows: Vec::new(),
             gesture: scroll::Gesture::default(),
@@ -89,6 +94,14 @@ impl HomePage {
             Some(Loadable::Ready(features)) => features,
             _ => &[],
         }
+    }
+
+    /// How much of the way in the logo of `title` is, from 0 to 1.
+    pub fn logo_level(&mut self, title: &ItemId, now: Instant) -> f32 {
+        let since = *self.logos.entry(title.clone()).or_insert(now);
+        motion::ease_out(
+            now.saturating_duration_since(since).as_secs_f32() / motion::page().as_secs_f32(),
+        )
     }
 
     /// The same titles, shared: the header draws them while it also asks the shell for pictures.
@@ -559,6 +572,35 @@ impl Shell {
                     list.grid.loaded(0, found);
                 }
             },
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_logo_fades_in_the_first_time_it_is_drawn_and_not_again() {
+        let mut home = HomePage::default();
+        let id = ItemId("title-1".into());
+        let t0 = Instant::now();
+        assert_eq!(home.logo_level(&id, t0), 0.);
+        let midway = home.logo_level(&id, t0 + motion::page() / 2);
+        assert!(midway > 0. && midway < 1., "{midway}");
+        assert_eq!(home.logo_level(&id, t0 + motion::page()), 1.);
+        // Shown again later, as its title comes back: it is there at once.
+        assert_eq!(home.logo_level(&id, t0 + motion::page() * 40), 1.);
+    }
+
+    #[test]
+    fn each_logo_has_its_own_fade() {
+        let mut home = HomePage::default();
+        let t0 = Instant::now();
+        home.logo_level(&ItemId("title-1".into()), t0);
+        assert_eq!(
+            home.logo_level(&ItemId("title-2".into()), t0 + motion::page()),
+            0.
         );
     }
 }

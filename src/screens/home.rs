@@ -46,6 +46,8 @@ enum Body {
 }
 
 struct RowSpec {
+    /// Which row it is: the same one keeps its number as the rows around it come and go.
+    slot: usize,
     list: ListKind,
     caption: Option<String>,
     body: Body,
@@ -69,11 +71,13 @@ fn rows(shell: &Shell) -> Vec<RowSpec> {
     let mut rows = Vec::new();
     match &shell.home.resume {
         Some(Loadable::Ready(titles)) if !titles.is_empty() => rows.push(RowSpec {
+            slot: 0,
             list: ListKind::Resume,
             caption: None,
             body: Body::Wide(Rc::clone(titles)),
         }),
         Some(Loadable::Failed(why)) => rows.push(RowSpec {
+            slot: 0,
             list: ListKind::Resume,
             caption: None,
             body: Body::Failed(why),
@@ -82,22 +86,26 @@ fn rows(shell: &Shell) -> Vec<RowSpec> {
     }
     if !shell.home.next_row.is_empty() {
         rows.push(RowSpec {
+            slot: 1,
             list: ListKind::NextUp,
             caption: None,
             body: Body::Wide(Rc::clone(&shell.home.next_row)),
         });
     }
     if let Some(Loadable::Ready(latest)) = &shell.home.latest {
-        for row in latest {
+        for (at, row) in latest.iter().enumerate() {
+            let slot = 2 + at;
             let list = ListKind::Latest(row.library.id.clone(), row.library.kind);
             let caption = Some(row.library.name.clone());
             match &row.titles {
                 Loadable::Ready(titles) if !titles.is_empty() => rows.push(RowSpec {
+                    slot,
                     list,
                     caption,
                     body: Body::Posters(Rc::clone(titles)),
                 }),
                 Loadable::Failed(why) => rows.push(RowSpec {
+                    slot,
                     list,
                     caption,
                     body: Body::Failed(why),
@@ -132,8 +140,15 @@ pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -
     let mut shown: Vec<AnyElement> = Vec::new();
     for (index, (spec, scroll)) in specs.iter().zip(&scrolls).enumerate() {
         let near = home_page::row_in_view(y, spec.height(), scrolled, window_height);
+        // A row comes in with a fade when its titles are here, instead of appearing at once.
         shown.push(
-            titles_row(shell, spec, index, scroll, near, width, window, cx).into_any_element(),
+            titles_row(shell, spec, index, scroll, near, width, window, cx)
+                .with_animation(
+                    ("home-row-in", spec.slot),
+                    Animation::new(motion::page()).with_easing(motion::ease_out),
+                    |row, t| row.opacity(t),
+                )
+                .into_any_element(),
         );
         y += spec.height() + BETWEEN_ROWS;
     }
@@ -292,6 +307,12 @@ fn hero(
         )
         .children(layers)
         .children((features.len() > 1).then(|| marks(shell, features.len(), now, window, cx)))
+        // The header comes in with a fade the first time it is drawn.
+        .with_animation(
+            "hero-in",
+            Animation::new(motion::page()).with_easing(motion::ease_out),
+            |header, t| header.opacity(t),
+        )
 }
 
 /// The text of the `at`th title, `level` of the way in. Only the title on show answers a click.
@@ -306,7 +327,7 @@ fn slide_text(
 ) -> Div {
     let feature = &features[at];
     let headline = match hero::headline(feature) {
-        Headline::Logo(logo) => logo_or_title(shell, &logo, &feature.title, cx),
+        Headline::Logo(logo) => logo_or_title(shell, &logo, &feature.title, window, cx),
         Headline::Text(title) => title_text(title).into_any_element(),
     };
     // One id for each button of each title and of each of its two states.
@@ -372,6 +393,7 @@ fn logo_or_title(
     shell: &mut Shell,
     logo: &ImageRef,
     title: &str,
+    window: &mut Window,
     cx: &mut Context<Shell>,
 ) -> AnyElement {
     let drawn = shell.image(Some(logo), images::LOGO, cx).and_then(|image| {
@@ -380,11 +402,17 @@ fn logo_or_title(
         Some((image, fit))
     });
     match drawn {
-        Some((image, (w, h))) => img(image)
-            .w(px(w))
-            .h(px(h))
-            .object_fit(ObjectFit::Contain)
-            .into_any_element(),
+        // It fades in when it comes, once: not again each time its title comes back.
+        Some((image, (w, h))) => {
+            let level = shell.home.logo_level(&logo.item, Instant::now());
+            if level < 1. {
+                window.request_animation_frame();
+            }
+            div()
+                .opacity(level)
+                .child(img(image).w(px(w)).h(px(h)).object_fit(ObjectFit::Contain))
+                .into_any_element()
+        }
         None => title_text(title.to_string()).into_any_element(),
     }
 }
