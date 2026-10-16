@@ -13,8 +13,8 @@ use gpui_kit::{
 };
 
 use super::film_detail::{
-    EDGE, MenuState, ROW_POSTER, TEXT_WIDTH, cast_row, chips_row, hero_frame, hero_text, meta_line,
-    row,
+    EDGE, MenuState, ROW_POSTER, TEXT_WIDTH, cast_row, chips_row, hero_frame, hero_text,
+    list_button, meta_line, row,
 };
 use super::{centered, note, picture, progress_bar, row_heading, series_poster};
 use crate::film_page::{self, Choices};
@@ -103,6 +103,7 @@ struct Shown {
     chips: [super::film_detail::ChipBounds; 3],
     error: Option<&'static str>,
     busy: bool,
+    favourite: bool,
 }
 
 impl Shown {
@@ -120,6 +121,7 @@ impl Shown {
             chips: page.chips.clone(),
             error: page.error,
             busy: page.waiting(),
+            favourite: page.favourite.on(),
         }
     }
 }
@@ -177,7 +179,14 @@ fn hero(
                     .text_color(rgba(0xf4f4f5d9))
                     .child(overview)
             }))
-            .children(play.map(|play| div().pt(px(6.)).flex().child(play)))
+            .child(
+                div()
+                    .pt(px(6.))
+                    .flex()
+                    .gap(px(10.))
+                    .children(play)
+                    .child(list_button("series-list", shown.favourite, window, cx)),
+            )
             .children(started)
             .children(shown.error.map(|why| {
                 div()

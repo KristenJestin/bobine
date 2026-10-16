@@ -68,6 +68,15 @@ impl Fade {
         }
     }
 
+    /// Already shown (or hidden), with nothing to ease: a button drawn for the first time in
+    /// its state.
+    pub const fn starting_at(duration: Duration, shown: bool) -> Self {
+        Self {
+            shown,
+            ..Self::new(duration)
+        }
+    }
+
     pub fn set(&mut self, shown: bool, now: Instant) {
         if shown != self.shown {
             self.from = self.level(now);

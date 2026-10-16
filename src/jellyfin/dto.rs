@@ -1,9 +1,9 @@
 //! Jellyfin's JSON, as much of it as Bobine reads, and its translation into the port's types.
 
 use crate::provider::{
-    AudioTrack, CastMember, Episode, Film, ImageKind, ImageRef, ItemId, Library, LibraryKind,
-    MediaSource, MediaSourceId, PersonHit, PersonTitles, Season, Series, SeriesHit, ServerInfo,
-    SubtitleTrack, VideoRange, VideoTrack,
+    AudioTrack, CastMember, CollectionCard, Episode, Film, ImageKind, ImageRef, ItemId, Library,
+    LibraryKind, MediaSource, MediaSourceId, PersonHit, PersonTitles, Season, Series, SeriesHit,
+    ServerInfo, SubtitleTrack, VideoRange, VideoTrack,
 };
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -72,6 +72,7 @@ pub struct UserData {
     pub played: bool,
     pub playback_position_ticks: i64,
     pub unplayed_item_count: Option<u32>,
+    pub is_favorite: bool,
 }
 
 #[derive(Deserialize)]
@@ -110,6 +111,8 @@ pub struct Item {
     /// An episode's season number.
     pub parent_index_number: Option<u32>,
     pub season_id: Option<String>,
+    /// A collection's films, when asked for.
+    pub child_count: Option<u32>,
 }
 
 #[derive(Deserialize)]
@@ -224,6 +227,15 @@ impl Item {
                 .unwrap_or(0),
             poster: film.poster,
             backdrop: film.backdrop,
+        }
+    }
+
+    pub fn collection_card(&self) -> CollectionCard {
+        CollectionCard {
+            id: ItemId(self.id.clone()),
+            name: self.name.clone(),
+            films: self.child_count,
+            poster: self.primary(),
         }
     }
 

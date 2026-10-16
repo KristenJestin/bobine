@@ -10,10 +10,11 @@
 //! [--measure-from S] --quit-at S`
 //!
 //! `bobine --screen login|home|library|detail|detail-rows|detail-cast|playing|series|series-page|
-//! series-rows|up-next [--films N]
+//! series-rows|up-next|collections|collection-page|my-list|my-list-empty|film-list|series-list
+//! [--films N]
 //! [--media FILE] [--image-delay-ms N] [--photos-fail-once]
 //! [--scenario menu|scroll|select|panel|search|search-slow|search-keys|tools|tools-keys]
-//! [--search-delay-ms N] [--slower N] --quit-at S`
+//! [--search-delay-ms N] [--favourite-delay-ms N] [--favourite-fails] [--slower N] --quit-at S`
 //!
 //! A scenario sends clicks, keys and scroll events to the window as the compositor would, at set
 //! times, and prints what they did (`MENU`, `SCROLL`, `SELECT`, `PANEL` lines) and the frame times
@@ -73,6 +74,10 @@ struct Args {
     search_delay: u64,
     /// Input sent to the window as a user would give it, once the screen shows.
     scenario: Option<String>,
+    /// How long the fake server takes to change the user's list, in milliseconds.
+    favourite_delay: u64,
+    /// The fake server fails when the user's list is changed.
+    favourite_fails: bool,
 }
 
 fn parse(mut args: impl Iterator<Item = String>) -> Result<Option<Args>, String> {
@@ -135,6 +140,13 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Option<Args>, String>
                     .ok_or("--search-delay-ms needs a number")?;
             }
             "--scenario" => parsed.scenario = args.next(),
+            "--favourite-fails" => parsed.favourite_fails = true,
+            "--favourite-delay-ms" => {
+                parsed.favourite_delay = args
+                    .next()
+                    .and_then(|n| n.parse().ok())
+                    .ok_or("--favourite-delay-ms needs a number")?;
+            }
             "--slower" => {
                 let times: u32 = args
                     .next()
@@ -200,6 +212,11 @@ impl Harness {
             state.image_delay = Duration::from_millis(args.image_delay);
             state.photos_fail_once = args.photos_fail_once;
             state.search_delay = Duration::from_millis(args.search_delay);
+            state.favourite_delay = Duration::from_millis(args.favourite_delay);
+            state.favourite_fails = args.favourite_fails;
+            if args.screen.as_deref() == Some("my-list-empty") {
+                state.favourites.clear();
+            }
             drop(state);
             fake
         });
@@ -244,16 +261,44 @@ fn show_screen(
     let handle = window.window_handle();
     let begun = Instant::now();
     let wants = |names: &[&str]| names.contains(&screen.as_str());
-    let to_library = wants(&["library", "detail", "detail-rows", "detail-cast", "playing"]);
-    let to_film = wants(&["detail", "detail-rows", "detail-cast", "playing"]);
+    let to_library = wants(&[
+        "library",
+        "detail",
+        "detail-rows",
+        "detail-cast",
+        "playing",
+        "film-list",
+    ]);
+    let to_film = wants(&[
+        "detail",
+        "detail-rows",
+        "detail-cast",
+        "playing",
+        "film-list",
+    ]);
     let (scroll, play) = (wants(&["detail-rows"]), wants(&["playing"]));
     let to_cast = wants(&["detail-cast"]);
-    let to_series = wants(&["series", "series-page", "series-rows", "up-next"]);
-    let to_series_page = wants(&["series-page", "series-rows", "up-next"]);
+    let to_series = wants(&[
+        "series",
+        "series-page",
+        "series-rows",
+        "up-next",
+        "series-list",
+    ]);
+    let to_series_page = wants(&["series-page", "series-rows", "up-next", "series-list"]);
+    let to_collections = wants(&["collections", "collection-page"]);
+    let to_collection = wants(&["collection-page"]);
+    let to_list = wants(&["my-list", "my-list-empty"]);
+    // The "Ma liste" button pressed on the page that shows.
+    let press_list = wants(&["film-list", "series-list"]);
     let (series_rows, up_next) = (wants(&["series-rows"]), wants(&["up-next"]));
     let mut done_steps = 0;
     // A scenario starts once the screen is reached: the login at once, a film page after it opened.
-    let ready_after = if to_film || to_series_page { 3 } else { 1 };
+    let ready_after = if to_film || to_series_page || to_collection {
+        3
+    } else {
+        1
+    };
     let mut ready_at: Option<f64> = None;
     let mut acts = scenario.map(|name| Acts::new(&name));
     cx.spawn(async move |cx| {
@@ -291,6 +336,12 @@ fn show_screen(
                                 if to_series {
                                     shell.select(NavEntry::Series, cx);
                                 }
+                                if to_collections {
+                                    shell.select(NavEntry::Collections, cx);
+                                }
+                                if to_list {
+                                    shell.select(NavEntry::MyList, cx);
+                                }
                                 true
                             }
                             1 if elapsed >= 1.5 => {
@@ -299,6 +350,10 @@ fn show_screen(
                                 }
                                 if to_series_page {
                                     shell.open_series(ItemId(SERIES.into()), cx);
+                                }
+                                if to_collection {
+                                    // Three films, one watched and one started.
+                                    shell.open_collection(ItemId("collection-1".into()), cx);
                                 }
                                 true
                             }
@@ -309,6 +364,9 @@ fn show_screen(
                                 }
                                 if to_cast && let Some(page) = shell.details.last() {
                                     page.scroll.set_offset(point(px(0.), px(-420.)));
+                                }
+                                if press_list {
+                                    shell.toggle_favourite(cx);
                                 }
                                 if play {
                                     // The local file is shorter than the fake film's resume point.

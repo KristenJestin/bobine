@@ -8,7 +8,7 @@ use std::cell::Cell;
 use std::rc::Rc;
 use std::time::Instant;
 
-use bobine::provider::{CastMember, Film, FilmDetail, MediaSource};
+use bobine::provider::{CastMember, Film, FilmDetail, ItemId, MediaSource};
 use gpui_kit::prelude::*;
 use gpui_kit::{
     AnyElement, Bounds, Context, Div, FontWeight, IntoElement, MouseDownEvent, Pixels, Point,
@@ -21,6 +21,7 @@ use crate::film_page::{self, Choices, From};
 use crate::icons::{IconName, icon};
 use crate::images;
 use crate::menu;
+use crate::motion::{self, Fade};
 use crate::shell::{Chip, Loadable, Shell};
 use crate::theme;
 
@@ -82,7 +83,7 @@ pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -
     if page.menu_fade.moving(now) {
         window.request_animation_frame();
     }
-    let (error, busy) = (page.error, page.busy);
+    let (error, busy, favourite) = (page.error, page.busy, page.favourite.on());
     let chips = page.chips.clone();
     let collection = page.collection.clone();
     let scroll = page.scroll.clone();
@@ -90,7 +91,7 @@ pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -
     let height = f32::from(window.viewport_size().height);
 
     let hero = hero(
-        shell, &detail, &choices, menu, &chips, error, busy, height, window, cx,
+        shell, &detail, &choices, menu, &chips, error, busy, favourite, height, window, cx,
     );
     let mut rows: Vec<AnyElement> = Vec::new();
     if !detail.cast.is_empty() {
@@ -106,9 +107,11 @@ pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -
                 shell,
                 &collection.name,
                 Some(caption),
+                Some((collection.id.clone(), "collection-link")),
                 &films,
                 Some(&detail.film),
                 &collection_scroll,
+                window,
                 cx,
             )
             .into_any_element(),
@@ -120,9 +123,11 @@ pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -
                 shell,
                 "Titres proches",
                 None,
+                None,
                 &detail.similar,
                 None,
                 &similar_scroll,
+                window,
                 cx,
             )
             .into_any_element(),
@@ -164,6 +169,7 @@ fn hero(
     chips: &[ChipBounds; 3],
     error: Option<&'static str>,
     busy: bool,
+    favourite: bool,
     window_height: f32,
     window: &mut Window,
     cx: &mut Context<Shell>,
@@ -197,13 +203,15 @@ fn hero(
                 .border_color(theme::accent())
         })
         .on_click(cx.listener(|shell, _, _, cx| shell.toggle_watched(cx)));
+    let in_list = list_button("film-list", favourite, window, cx);
     let buttons = div()
         .flex()
         .gap(px(10.))
         .when(busy, |row| row.opacity(0.6))
         .child(play)
         .children(from_start)
-        .child(watched);
+        .child(watched)
+        .child(in_list);
 
     let chips = chips_row(&detail.versions, choices, menu, chips, window, cx);
 
@@ -247,6 +255,47 @@ fn hero(
             }))
             .child(chips),
     )
+}
+
+/// "Ma liste": a plus while the item is out of the list, a check once it is in, the green of
+/// the other states of the page; the change eases from one to the other.
+pub(super) fn list_button(
+    id: &'static str,
+    in_list: bool,
+    window: &mut Window,
+    cx: &mut Context<Shell>,
+) -> Stateful<Div> {
+    let fade = window.use_keyed_state(SharedString::from(format!("{id}-fade")), cx, |_, _| {
+        Fade::starting_at(motion::quick(), in_list)
+    });
+    let now = Instant::now();
+    fade.update(cx, |fade, _| fade.set(in_list, now));
+    let fade = *fade.read(cx);
+    let level = fade.level(now);
+    if fade.moving(now) {
+        window.request_animation_frame();
+    }
+    let size = theme::BUTTON_ICON;
+    let icons = div()
+        .relative()
+        .flex_none()
+        .size(px(size))
+        .child(
+            icon(IconName::Plus, size)
+                .absolute()
+                .inset_0()
+                .opacity(1. - level),
+        )
+        .child(
+            icon(IconName::CheckCircle, size)
+                .absolute()
+                .inset_0()
+                .opacity(level),
+        );
+    theme::ghost_button_with(id, Some(icons.into_any_element()), "Ma liste", window, cx)
+        .text_color(motion::mix(theme::text(), theme::accent(), level))
+        .border_color(motion::mix(rgb(0x3a3a40), theme::accent(), level))
+        .on_click(cx.listener(|shell, _, _, cx| shell.toggle_favourite(cx)))
 }
 
 /// The backdrop over the whole width, darkened towards the text and the page below.
@@ -632,14 +681,21 @@ pub(super) fn cast_row(
         )
 }
 
-/// A heading and posters; `current` is outlined and not clickable.
+/// A heading and posters; `current` is outlined and not clickable. `link`: where the heading
+/// leads, as a pill after its caption (the collection's page).
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one row's parts, put together once"
+)]
 fn poster_row(
     shell: &mut Shell,
     title: &str,
     caption: Option<String>,
+    link: Option<(ItemId, &'static str)>,
     films: &[Film],
     current: Option<&Film>,
     scroll: &ScrollHandle,
+    window: &mut Window,
     cx: &mut Context<Shell>,
 ) -> Div {
     let posters: Vec<Stateful<Div>> = films
@@ -651,13 +707,41 @@ fn poster_row(
             poster(shell, film, ROW_POSTER, id, outlined, cx)
         })
         .collect();
-    row(title, caption, posters, scroll)
+    let link = link.map(|(target, id)| {
+        theme::eased(id, theme::Shades::veil(), window, cx)
+            .flex()
+            .items_center()
+            .gap(px(4.))
+            .px(px(8.))
+            .py(px(3.))
+            .rounded(px(6.))
+            .text_size(px(13.))
+            .text_color(theme::muted())
+            .cursor_pointer()
+            .child("Voir la collection")
+            .child(icon(IconName::ChevronRight, 13.))
+            .on_click(cx.listener(move |shell, _, _, cx| {
+                shell.open_collection(target.clone(), cx);
+            }))
+    });
+    row_with(title, caption, link, posters, scroll)
 }
 
 /// A heading, and cards in a row that scrolls sideways under the window's edges.
 pub(super) fn row(
     title: &str,
     caption: Option<String>,
+    cards: Vec<Stateful<Div>>,
+    scroll: &ScrollHandle,
+) -> Div {
+    row_with(title, caption, None, cards, scroll)
+}
+
+/// A row whose heading also holds a link, after its caption.
+fn row_with(
+    title: &str,
+    caption: Option<String>,
+    link: Option<Stateful<Div>>,
     cards: Vec<Stateful<Div>>,
     scroll: &ScrollHandle,
 ) -> Div {
@@ -677,7 +761,8 @@ pub(super) fn row(
                         .text_size(px(13.))
                         .text_color(theme::dim())
                         .child(caption)
-                })),
+                }))
+                .children(link),
         )
         .child(
             div()

@@ -32,6 +32,7 @@ fn fixture(name: &str) -> Value {
         "letters" => include_str!("fixtures/letters.json"),
         "film_detail" => include_str!("fixtures/film_detail.json"),
         "boxsets" => include_str!("fixtures/boxsets.json"),
+        "favourites" => include_str!("fixtures/favourites.json"),
         "boxset_sea_stories" => include_str!("fixtures/boxset_sea_stories.json"),
         "boxset_harbour_trilogy" => include_str!("fixtures/boxset_harbour_trilogy.json"),
         "similar" => include_str!("fixtures/similar.json"),
@@ -93,6 +94,9 @@ pub struct State {
     pub image_delay: std::time::Duration,
     /// Every episode of every series is watched: Next Up has nothing.
     pub all_watched: bool,
+    /// The films and series the user put in their list: the film and the series of the pages
+    /// start out of it.
+    pub favourites: Vec<String>,
     /// How many search requests are held until they have all arrived (0: none held), to tell
     /// requests sent at the same time from requests sent one after another.
     pub search_gate: usize,
@@ -306,6 +310,16 @@ fn matching(fixture_name: &str, seen: &Seen) -> Value {
     json!({ "Items": found, "TotalRecordCount": found.len() })
 }
 
+/// The items of `list` of the types asked, as the server keeps only those; all when none asked.
+fn of_types(mut list: Value, seen: &Seen) -> Value {
+    if let Some(types) = seen.param("IncludeItemTypes") {
+        let items = list["Items"].as_array_mut().unwrap();
+        items.retain(|item| types.split(',').any(|t| item["Type"] == t));
+        list["TotalRecordCount"] = json!(items.len());
+    }
+    list
+}
+
 /// What a person took part in, as the server pages it: only the types asked, `Limit` of them
 /// from `StartIndex`, and the total of them all.
 fn person_titles(seen: &Seen) -> Value {
@@ -336,6 +350,12 @@ fn generated_films(count: usize) -> Vec<Value> {
             })
         })
         .collect()
+}
+
+/// An item as the server shows it to a user whose list holds `state.favourites`.
+fn favourite_of(state: &State, id: &str, mut item: Value) -> Value {
+    item["UserData"]["IsFavorite"] = json!(state.favourites.iter().any(|f| f == id));
+    item
 }
 
 fn answer(state: &State, seen: &Seen) -> Answer {
@@ -380,6 +400,9 @@ fn answer(state: &State, seen: &Seen) -> Answer {
         ("GET", "/Genres") => Answer::Json(200, genres(library_fixture(seen))),
         ("GET", "/Items/Filters") => Answer::Json(200, years(library_fixture(seen))),
         ("GET", "/Persons") => Answer::Json(200, matching("persons", seen)),
+        ("GET", "/Items") if seen.param("Filters") == Some("IsFavorite") => {
+            Answer::Json(200, fixture("favourites"))
+        }
         ("GET", "/Items") => match (seen.param("ParentId"), seen.param("IncludeItemTypes")) {
             (_, Some("Movie")) if seen.param("SearchTerm").is_some() => {
                 Answer::Json(200, matching("films", seen))
@@ -393,16 +416,28 @@ fn answer(state: &State, seen: &Seen) -> Answer {
             (Some(SERIES_LIBRARY), Some("Series")) => Answer::Json(200, films(seen, "series")),
             (None, Some("BoxSet")) => Answer::Json(200, fixture("boxsets")),
             (Some("b0000000000000000000000000000001"), _) => {
-                Answer::Json(200, fixture("boxset_sea_stories"))
+                Answer::Json(200, of_types(fixture("boxset_sea_stories"), seen))
             }
             (Some("b0000000000000000000000000000002"), _) => {
-                Answer::Json(200, fixture("boxset_harbour_trilogy"))
+                Answer::Json(200, of_types(fixture("boxset_harbour_trilogy"), seen))
             }
             _ => Answer::Json(200, json!({ "Items": [], "TotalRecordCount": 0 })),
         },
         ("GET", path) if path == format!("/Items/{FILM}") => {
-            Answer::Json(200, fixture("film_detail"))
+            Answer::Json(200, favourite_of(state, FILM, fixture("film_detail")))
         }
+        ("GET", path) if path.starts_with("/Items/b000") => fixture("boxsets")["Items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|boxset| path == format!("/Items/{}", boxset["Id"].as_str().unwrap()))
+            .map_or(Answer::Empty(404), |boxset| {
+                Answer::Json(200, boxset.clone())
+            }),
+        ("POST" | "DELETE", path) if path.starts_with("/UserFavoriteItems/") => Answer::Json(
+            200,
+            json!({ "IsFavorite": seen.method == "POST", "PlaybackPositionTicks": 0 }),
+        ),
         ("GET", path) if path == format!("/Items/{FILM}/Similar") => {
             Answer::Json(200, fixture("similar"))
         }
@@ -421,7 +456,7 @@ fn answer(state: &State, seen: &Seen) -> Answer {
             "/Sessions/Playing" | "/Sessions/Playing/Progress" | "/Sessions/Playing/Stopped",
         ) => Answer::Empty(204),
         ("GET", path) if path == format!("/Items/{SERIES}") => {
-            Answer::Json(200, fixture("series_detail"))
+            Answer::Json(200, favourite_of(state, SERIES, fixture("series_detail")))
         }
         ("GET", path) if path == format!("/Items/{SERIES}/Similar") => {
             Answer::Json(200, fixture("series_similar"))
@@ -515,6 +550,12 @@ impl FakeServer {
                     let (answer, delay, gated) = {
                         let mut state = state.lock().unwrap();
                         state.seen.push(seen.clone());
+                        if let Some(id) = seen.path.strip_prefix("/UserFavoriteItems/") {
+                            state.favourites.retain(|f| f != id);
+                            if seen.method == "POST" {
+                                state.favourites.push(id.to_string());
+                            }
+                        }
                         let gated = state.search_gate > 0
                             && (seen.path == "/Persons" || seen.param("SearchTerm").is_some());
                         if gated {

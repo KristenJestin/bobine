@@ -19,6 +19,7 @@ use gpui_kit::{
 };
 
 use super::{Film as Playing, Shell};
+use crate::favourite::{ListPage, Toggle};
 use crate::film_page::{self, Choices, From, Plan};
 use crate::grid::{Grid, Listed, RETRY_AFTER};
 use crate::images::{self, Key};
@@ -224,6 +225,11 @@ impl<T: Listed> LibraryPage<T> {
 #[derive(Debug, PartialEq, Eq)]
 pub enum Arrival {
     Home,
+    /// The user's list is asked again each time it shows: a title put in it elsewhere shows.
+    MyList,
+    Collections,
+    /// Back on a collection page from a film: its films' marks are asked again.
+    Collection,
     Library(LibraryKind),
     /// A library already known is not asked again: its tools and its list stay as they were.
     Nothing,
@@ -232,6 +238,9 @@ pub enum Arrival {
 pub fn arrival(screen: Screen, films_known: bool, series_known: bool) -> Arrival {
     match screen {
         Screen::Home => Arrival::Home,
+        Screen::MyList => Arrival::MyList,
+        Screen::Collections => Arrival::Collections,
+        Screen::CollectionDetail => Arrival::Collection,
         Screen::Library if !films_known => Arrival::Library(LibraryKind::Films),
         Screen::Series if !series_known => Arrival::Library(LibraryKind::Series),
         _ => Arrival::Nothing,
@@ -323,6 +332,8 @@ impl Chip {
 
 pub struct DetailPage {
     pub id: ItemId,
+    /// Told apart from every other page ever opened, the closed ones included.
+    generation: u64,
     pub detail: Loadable<FilmDetail>,
     pub choices: Option<Choices>,
     /// Hidden while unknown, when the film is in none, or when the lookup failed.
@@ -332,6 +343,8 @@ pub struct DetailPage {
     pub menu_fade: Presence<Chip>,
     /// Where each chip was last drawn, so its menu opens under it.
     pub chips: [Rc<Cell<Option<Bounds<Pixels>>>>; 3],
+    /// "Ma liste".
+    pub favourite: Toggle,
     pub scroll: ScrollHandle,
     /// The rows that scroll sideways: the cast, the collection, similar titles.
     pub rows: [ScrollHandle; 3],
@@ -339,6 +352,20 @@ pub struct DetailPage {
     /// What went wrong with the last button.
     pub error: Option<&'static str>,
     pub busy: bool,
+}
+
+impl ListPage for DetailPage {
+    fn item(&self) -> &ItemId {
+        &self.id
+    }
+
+    fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    fn button(&mut self) -> (&mut Toggle, &mut Option<&'static str>) {
+        (&mut self.favourite, &mut self.error)
+    }
 }
 
 impl DetailPage {
@@ -411,6 +438,7 @@ impl Shell {
         self.series_pages.clear();
         self.up_next.cancel();
         self.people.clear();
+        self.collection_pages.clear();
         self.search = None;
         self.navigator.switch_root(Screen::Login);
         cx.notify();
@@ -498,9 +526,12 @@ impl Shell {
         self.home = HomePage::default();
         self.library = LibraryPage::default();
         self.series = LibraryPage::default();
+        self.collections = Default::default();
+        self.my_list = Default::default();
         self.details.clear();
         self.series_pages.clear();
         self.people.clear();
+        self.collection_pages.clear();
         self.search = None;
         // The atlas holds the old images until they are dropped from it.
         for gone in self.images.cache.drain() {
@@ -553,6 +584,7 @@ impl Shell {
         self.series_pages.clear();
         self.up_next.cancel();
         self.people.clear();
+        self.collection_pages.clear();
         self.arrived(cx);
         cx.notify();
     }
@@ -563,6 +595,7 @@ impl Shell {
             Screen::FilmDetail => drop(self.details.pop()),
             Screen::SeriesDetail => drop(self.series_pages.pop()),
             Screen::Person => drop(self.people.pop()),
+            Screen::CollectionDetail => drop(self.collection_pages.pop()),
             _ => {}
         }
         self.up_next.cancel();
@@ -583,6 +616,9 @@ impl Shell {
         );
         match arrival {
             Arrival::Home => self.load_home(cx),
+            Arrival::MyList => self.load_my_list(cx),
+            Arrival::Collections => self.load_collections(cx),
+            Arrival::Collection => self.reload_collection(cx),
             Arrival::Library(kind) => self.load_library(kind, cx),
             Arrival::Nothing => {}
         }
@@ -870,14 +906,17 @@ impl Shell {
     }
 
     pub fn open_film(&mut self, id: ItemId, cx: &mut Context<Self>) {
+        let generation = self.next_generation();
         self.details.push(DetailPage {
             id,
+            generation,
             detail: Loadable::Loading,
             choices: None,
             collection: None,
             menus: Menus::default(),
             menu_fade: Presence::new(motion::quick()),
             chips: Default::default(),
+            favourite: Toggle::default(),
             scroll: ScrollHandle::new(),
             rows: Default::default(),
             gesture: Default::default(),
@@ -890,7 +929,7 @@ impl Shell {
     }
 
     /// The page at `depth` of the detail pages, if it still shows `id`.
-    fn detail_page(&mut self, depth: usize, id: &ItemId) -> Option<&mut DetailPage> {
+    pub(super) fn detail_page(&mut self, depth: usize, id: &ItemId) -> Option<&mut DetailPage> {
         self.details.get_mut(depth).filter(|page| &page.id == id)
     }
 
@@ -898,6 +937,7 @@ impl Shell {
     fn load_detail(&mut self, depth: usize, with_collection: bool, cx: &mut Context<Self>) {
         let id = self.details[depth].id.clone();
         let asked = id.clone();
+        let read_at = self.details[depth].favourite.changes();
         self.ask(
             cx,
             move |server| server.film(&asked),
@@ -924,6 +964,7 @@ impl Shell {
                 {
                     page.choices = Some(Choices::new(&detail.versions));
                 }
+                page.favourite.sync(detail.favourite, read_at);
                 page.detail = Loadable::Ready(detail);
                 if with_collection {
                     shell.load_collection(depth, id, cx);
@@ -1220,6 +1261,7 @@ impl Shell {
         };
         let id = self.details[depth].id.clone();
         let asked = id.clone();
+        let read_at = self.details[depth].favourite.changes();
         self.ask(
             cx,
             move |server| {
@@ -1236,6 +1278,7 @@ impl Shell {
                 if let Some(page) = shell.detail_page(depth, &id)
                     && let Loadable::Ready(shown) = &mut page.detail
                 {
+                    page.favourite.sync(detail.favourite, read_at);
                     *shown = detail;
                 }
             },
@@ -1529,6 +1572,21 @@ mod tests {
         assert_eq!(films.scroll.0.borrow().base_handle.offset().y, px(-900.));
         // The other library's tools are its own.
         assert!(!series.tools.narrowed());
+    }
+
+    #[test]
+    fn ma_liste_is_asked_again_each_time_it_shows() {
+        assert_eq!(arrival(Screen::MyList, true, true), Arrival::MyList);
+        assert_eq!(arrival(Screen::Home, true, true), Arrival::Home);
+        assert_eq!(
+            arrival(Screen::Collections, true, true),
+            Arrival::Collections
+        );
+        assert_eq!(
+            arrival(Screen::CollectionDetail, true, true),
+            Arrival::Collection
+        );
+        assert_eq!(arrival(Screen::Library, true, true), Arrival::Nothing);
     }
 
     #[test]

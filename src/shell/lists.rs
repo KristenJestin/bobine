@@ -1,0 +1,233 @@
+//! The user's list ("Ma liste") and the collections: what the pages show of them, and how it
+//! comes from the server. Every call runs off the window's thread, like the others.
+
+use bobine::provider::{CollectionCard, CollectionDetail, Favourite, ItemId, ProviderError};
+use gpui_kit::{Context, ScrollHandle, UniformListScrollHandle};
+
+use super::Shell;
+use super::pages::Loadable;
+use crate::favourite::{self, ListPage};
+use crate::navigation::Screen;
+use crate::series_page::Refreshes;
+
+/// The collections of the server.
+#[derive(Default)]
+pub struct CollectionsPage {
+    pub cards: Option<Loadable<Vec<CollectionCard>>>,
+    pub scroll: UniformListScrollHandle,
+}
+
+/// One collection and its films.
+pub struct CollectionPage {
+    pub id: ItemId,
+    pub detail: Loadable<CollectionDetail>,
+    pub scroll: ScrollHandle,
+}
+
+/// The user's list: films and series together.
+#[derive(Default)]
+pub struct MyListPage {
+    pub items: Option<Loadable<Vec<Favourite>>>,
+    pub scroll: UniformListScrollHandle,
+    /// Each time the list is asked it is numbered: a read sent before a change was answered may
+    /// land after the read that follows it, and must not overwrite it.
+    asked: Refreshes,
+}
+
+impl MyListPage {
+    /// The list is asked: its number, taken from `counter` like the series pages' refreshes.
+    fn ask(&mut self, counter: &mut u64) -> u64 {
+        self.asked.ask(counter)
+    }
+
+    /// The answer to the ask `number` came: it shows, unless a newer ask was made since.
+    fn landed(&mut self, number: u64, items: Loadable<Vec<Favourite>>) -> bool {
+        let newest = self.asked.is_newest(number);
+        if newest {
+            self.items = Some(items);
+        }
+        newest
+    }
+}
+
+impl<T> Loadable<T> {
+    /// What shows while the server is asked again: what was drawn stays, a first or a failed
+    /// load shows the wait.
+    fn asking(slot: &mut Option<Loadable<T>>) {
+        if !matches!(slot, Some(Loadable::Ready(_))) {
+            *slot = Some(Loadable::Loading);
+        }
+    }
+}
+
+impl Shell {
+    /// The "Ma liste" button of the film or series page shown: the button changes at once, the
+    /// server is asked, and a failure puts the button back and says so on the page.
+    pub fn toggle_favourite(&mut self, cx: &mut Context<Self>) {
+        let page: &mut dyn ListPage = match self.navigator.current() {
+            Screen::FilmDetail => match self.details.last_mut() {
+                Some(page) => page,
+                None => return,
+            },
+            Screen::SeriesDetail => match self.series_pages.last_mut() {
+                Some(page) => page,
+                None => return,
+            },
+            _ => return,
+        };
+        let Some(pressed) = favourite::press(page) else {
+            return;
+        };
+        cx.notify();
+        let asked = pressed.item.clone();
+        let wanted = pressed.wanted;
+        self.ask(
+            cx,
+            move |server| favourite::ask(server, &asked, wanted),
+            move |shell, answer, cx| {
+                if let Err(error) = &answer {
+                    // An expired session brings the login back; the page says what failed.
+                    shell.failed(error.clone(), cx);
+                }
+                let pages = shell
+                    .details
+                    .iter_mut()
+                    .map(|page| page as &mut dyn ListPage)
+                    .chain(
+                        shell
+                            .series_pages
+                            .iter_mut()
+                            .map(|page| page as &mut dyn ListPage),
+                    );
+                let current = shell.navigator.current();
+                if favourite::answered(pages, current, &pressed, &answer) {
+                    shell.load_my_list(cx);
+                }
+                cx.notify();
+            },
+        );
+    }
+
+    /// The collections, once; asked again when the first try failed.
+    pub fn load_collections(&mut self, cx: &mut Context<Self>) {
+        if matches!(
+            self.collections.cards,
+            Some(Loadable::Ready(_) | Loadable::Loading)
+        ) {
+            return;
+        }
+        self.collections.cards = Some(Loadable::Loading);
+        self.ask(
+            cx,
+            |server| server.collections(),
+            |shell, cards, cx| {
+                shell.collections.cards = Some(match cards {
+                    Ok(cards) => Loadable::Ready(cards),
+                    Err(error) => Loadable::Failed(shell.failed(error, cx)),
+                });
+            },
+        );
+    }
+
+    /// The user's list, each time it shows: a title put in it from a page shows at once.
+    pub fn load_my_list(&mut self, cx: &mut Context<Self>) {
+        Loadable::asking(&mut self.my_list.items);
+        let number = self.my_list.ask(&mut self.refreshes_asked);
+        self.ask(
+            cx,
+            |server| server.favourites(),
+            move |shell, items, cx| {
+                let items = match items {
+                    Ok(items) => Loadable::Ready(items),
+                    Err(error) => Loadable::Failed(shell.failed(error, cx)),
+                };
+                shell.my_list.landed(number, items);
+            },
+        );
+    }
+
+    pub fn open_collection(&mut self, id: ItemId, cx: &mut Context<Self>) {
+        self.collection_pages.push(CollectionPage {
+            id,
+            detail: Loadable::Loading,
+            scroll: ScrollHandle::new(),
+        });
+        self.navigator.open(Screen::CollectionDetail);
+        self.load_collection_page(self.collection_pages.len() - 1, cx);
+        cx.notify();
+    }
+
+    /// Back on a collection page from a film: its films' marks are asked again.
+    pub(super) fn reload_collection(&mut self, cx: &mut Context<Self>) {
+        if let Some(depth) = self.collection_pages.len().checked_sub(1) {
+            self.load_collection_page(depth, cx);
+        }
+    }
+
+    fn load_collection_page(&mut self, depth: usize, cx: &mut Context<Self>) {
+        let id = self.collection_pages[depth].id.clone();
+        let asked = id.clone();
+        self.ask(
+            cx,
+            move |server| server.collection(&asked),
+            move |shell, detail: Result<CollectionDetail, ProviderError>, cx| {
+                let detail = match detail {
+                    Ok(detail) => Loadable::Ready(detail),
+                    // What was drawn stays when the refresh fails.
+                    Err(error) => {
+                        let said = shell.failed(error, cx);
+                        match shell.collection_pages.get(depth) {
+                            Some(page) if matches!(page.detail, Loadable::Ready(_)) => return,
+                            _ => Loadable::Failed(said),
+                        }
+                    }
+                };
+                if let Some(page) = shell
+                    .collection_pages
+                    .get_mut(depth)
+                    .filter(|page| page.id == id)
+                {
+                    page.detail = detail;
+                }
+            },
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn shown(page: &MyListPage) -> Option<usize> {
+        match &page.items {
+            Some(Loadable::Ready(items)) => Some(items.len()),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn ma_liste_shows_the_change_made_just_before() {
+        let mut counter = 0;
+        let mut page = MyListPage::default();
+        // Ma liste → film → remove → Escape: the list is asked while the server takes the
+        // change, and asked again when the change is answered.
+        let during = page.ask(&mut counter);
+        let after = page.ask(&mut counter);
+        // The read after the change comes first, the one sent during it lands late.
+        assert!(page.landed(after, Loadable::Ready(Vec::new())));
+        assert!(!page.landed(during, Loadable::Failed("old")));
+        assert_eq!(shown(&page), Some(0), "the late old read is dropped");
+    }
+
+    #[test]
+    fn the_lists_asked_in_order_show_the_last() {
+        let mut counter = 0;
+        let mut page = MyListPage::default();
+        let first = page.ask(&mut counter);
+        assert!(page.landed(first, Loadable::Ready(Vec::new())));
+        assert_eq!(shown(&page), Some(0));
+        let second = page.ask(&mut counter);
+        assert!(page.landed(second, Loadable::Failed("later")));
+        assert!(matches!(page.items, Some(Loadable::Failed("later"))));
+    }
+}

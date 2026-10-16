@@ -1,0 +1,9 @@
+{
+  "Items": [
+    { "Name": "Harbour Lights", "Id": "f0000000000000000000000000000007", "Type": "Movie", "ProductionYear": 2006, "UserData": { "Played": false, "IsFavorite": true }, "ImageTags": {} },
+    { "Name": "Return to the Harbour", "Id": "f0000000000000000000000000000006", "Type": "Movie", "ProductionYear": 2002, "UserData": { "Played": true, "IsFavorite": true }, "ImageTags": { "Primary": "poster-rh" } },
+    { "Name": "Tidewater", "Id": "50000000000000000000000000000001", "Type": "Series", "ProductionYear": 2021, "EndDate": "2024-05-12T00:00:00.0000000Z", "UserData": { "UnplayedItemCount": 7, "IsFavorite": true }, "ImageTags": { "Primary": "poster-tw" } }
+  ],
+  "TotalRecordCount": 3,
+  "StartIndex": 0
+}

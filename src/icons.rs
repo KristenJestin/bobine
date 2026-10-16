@@ -44,6 +44,7 @@ icons! {
     Pause => "pause",
     RotateCcw => "rotate-ccw",
     Check => "check",
+    CheckCircle => "check-circle",
     ArrowLeft => "arrow-left",
     ArrowRight => "arrow-right",
     ChevronDown => "chevron-down",

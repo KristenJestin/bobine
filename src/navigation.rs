@@ -12,11 +12,17 @@ pub enum Screen {
     Player,
     Series,
     SeriesDetail,
+    Collections,
+    CollectionDetail,
+    MyList,
 }
 
 impl Screen {
     pub fn shows_pill_bar(self) -> bool {
-        matches!(self, Screen::Home | Screen::Library | Screen::Series)
+        matches!(
+            self,
+            Screen::Home | Screen::Library | Screen::Series | Screen::Collections | Screen::MyList
+        )
     }
 
     /// Detail pages have no pill bar: they say where Escape leads instead. The player draws its
@@ -24,7 +30,7 @@ impl Screen {
     pub fn shows_back_link(self) -> bool {
         matches!(
             self,
-            Screen::FilmDetail | Screen::SeriesDetail | Screen::Person
+            Screen::FilmDetail | Screen::SeriesDetail | Screen::Person | Screen::CollectionDetail
         )
     }
 
@@ -38,11 +44,14 @@ impl Screen {
             Screen::Person => "Personne",
             Screen::Player => "Lecteur",
             Screen::Series => "Séries",
+            Screen::Collections => "Collections",
+            Screen::CollectionDetail => "Collection",
+            Screen::MyList => "Ma liste",
         }
     }
 }
 
-/// The entries of the pill bar. Those whose screen does not exist yet are visible but inert.
+/// The entries of the pill bar.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NavEntry {
     Home,
@@ -76,7 +85,8 @@ impl NavEntry {
             NavEntry::Home => Some(Screen::Home),
             NavEntry::Films => Some(Screen::Library),
             NavEntry::Series => Some(Screen::Series),
-            NavEntry::Collections | NavEntry::MyList => None,
+            NavEntry::Collections => Some(Screen::Collections),
+            NavEntry::MyList => Some(Screen::MyList),
         }
     }
 
@@ -277,13 +287,68 @@ mod tests {
     }
 
     #[test]
-    fn the_entries_not_built_yet_are_inert() {
+    fn every_entry_of_the_pill_bar_opens_a_screen() {
         let mut nav = on_library();
-        for entry in [NavEntry::Collections, NavEntry::MyList] {
-            assert_eq!(entry.target(), None);
-            assert!(!nav.select(entry));
-            assert_eq!(nav.current(), Screen::Library);
+        for entry in NavEntry::ALL {
+            assert!(entry.target().is_some(), "{entry:?}");
+            assert!(nav.select(entry));
+            assert!(entry.is_current(nav.current()));
+            assert!(!nav.back(), "{entry:?} is a root");
         }
+    }
+
+    #[test]
+    fn the_collections_and_ma_liste_entries_open_their_screens_under_the_pill_bar() {
+        let mut nav = on_library();
+        assert!(nav.select(NavEntry::Collections));
+        assert_eq!(nav.current(), Screen::Collections);
+        assert!(nav.select(NavEntry::MyList));
+        assert_eq!(nav.current(), Screen::MyList);
+        assert!(Screen::Collections.shows_pill_bar() && Screen::MyList.shows_pill_bar());
+    }
+
+    #[test]
+    fn a_collection_page_has_a_back_link_to_the_collections_and_no_pill_bar() {
+        let mut nav = on_library();
+        assert!(nav.select(NavEntry::Collections));
+        nav.open(Screen::CollectionDetail);
+        assert!(Screen::CollectionDetail.shows_back_link());
+        assert!(!Screen::CollectionDetail.shows_pill_bar());
+        assert_eq!(nav.back_label(), Some("Collections"));
+        assert!(nav.back());
+        assert_eq!(nav.current(), Screen::Collections);
+    }
+
+    #[test]
+    fn a_film_opened_from_a_collection_goes_back_to_the_collection() {
+        let mut nav = on_library();
+        assert!(nav.select(NavEntry::Collections));
+        nav.open(Screen::CollectionDetail);
+        nav.open(Screen::FilmDetail);
+        assert_eq!(nav.back_label(), Some("Collection"));
+        assert!(nav.back());
+        assert_eq!(nav.current(), Screen::CollectionDetail);
+    }
+
+    #[test]
+    fn a_collection_opened_from_a_film_page_goes_back_to_that_page() {
+        let mut nav = on_library();
+        nav.open(Screen::FilmDetail);
+        nav.open(Screen::CollectionDetail);
+        assert_eq!(nav.back_label(), Some("Fiche"));
+        assert!(nav.back());
+        assert_eq!(nav.current(), Screen::FilmDetail);
+    }
+
+    #[test]
+    fn a_film_or_a_series_opened_from_ma_liste_goes_back_to_it() {
+        let mut nav = on_library();
+        assert!(nav.select(NavEntry::MyList));
+        nav.open(Screen::FilmDetail);
+        assert_eq!(nav.back_label(), Some("Ma liste"));
+        assert!(nav.back());
+        nav.open(Screen::SeriesDetail);
+        assert_eq!(nav.back_label(), Some("Ma liste"));
     }
 
     #[test]
