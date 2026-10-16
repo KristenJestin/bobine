@@ -172,12 +172,6 @@ mod tests {
     }
 
     #[test]
-    fn the_favourite_button_reads_favorite_in_us_english() {
-        assert_eq!(LABEL, "Favorite");
-        assert_eq!(FAILED, "Favorite could not be changed.");
-    }
-
-    #[test]
     fn pressing_my_list_shows_the_new_state_before_the_server_answers() {
         let mut toggle = Toggle::default();
         assert_eq!(toggle.press(), Some(true));

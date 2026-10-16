@@ -970,7 +970,7 @@ impl MediaServer for Jellyfin {
 
     fn favourites(&self) -> Result<Vec<Favourite>, ProviderError> {
         let found = self.items(
-            "favourites",
+            "favorites",
             &[
                 ("filters", "IsFavorite".into()),
                 ("includeItemTypes", "Movie,Series".into()),
