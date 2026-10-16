@@ -50,8 +50,9 @@ pub struct Seerr {
     /// The Settings' field of the address, and the key's.
     pub address: Option<Entity<TextInput>>,
     pub key: Option<Entity<SecretField>>,
-    /// What the key field said at the last look: a change makes the client again.
-    key_saved: bool,
+    /// What the key field said at the last look, once it looked in the keyring: a change makes
+    /// the client again.
+    key_saved: Option<bool>,
     /// What the last test of the connection said: the version, or why it failed.
     pub check: Option<Loadable<String>>,
     /// Said under the fields when the requests go as the key's owner, not the viewer.
@@ -107,7 +108,11 @@ impl Shell {
             return;
         };
         let changed = cx.observe(&key, |shell, key, cx| {
-            let saved = key.read(cx).is_saved();
+            let key = key.read(cx);
+            if !key.is_settled() {
+                return;
+            }
+            let saved = Some(key.is_saved());
             if saved != shell.seerr.key_saved {
                 shell.seerr.key_saved = saved;
                 shell.connect_seerr(cx);
@@ -123,15 +128,13 @@ impl Shell {
 
     /// The address typed is kept (an empty one forgets it) and the client made again.
     pub fn save_seerr_address(&mut self, cx: &mut Context<Self>) {
-        let Some(input) = &self.seerr.address else {
+        let Some(input) = self.seerr.address.clone() else {
             return;
         };
-        let typed = input
-            .read(cx)
-            .text()
-            .trim()
-            .trim_end_matches('/')
-            .to_string();
+        let typed = bobine::seerr::with_scheme(input.read(cx).text());
+        if typed != input.read(cx).text() {
+            input.update(cx, |field, cx| field.set_text(&typed, cx));
+        }
         let address = (!typed.is_empty()).then_some(typed);
         if address == self.settings.seerr_address {
             return;
@@ -143,20 +146,24 @@ impl Shell {
     }
 
     /// Makes the client from the address and the key, or drops it when one of them is missing:
-    /// Discover goes with it. The key is read from the keyring off the window's thread, and goes
-    /// from there to the client only.
+    /// Discover goes with it, and the Settings say which is missing, or why the client could not
+    /// be made. The key is read from the keyring off the window's thread, and goes from there to
+    /// the client only.
     fn connect_seerr(&mut self, cx: &mut Context<Self>) {
         self.seerr.making += 1;
         let making = self.seerr.making;
         self.seerr.check = None;
         self.seerr.owner_line = None;
-        let configured = self
-            .settings
-            .seerr_address
-            .clone()
-            .filter(|_| self.seerr.key_saved);
-        let (Some(address), Some(server)) = (configured, self.server.clone()) else {
+        let key_saved = self.seerr.key_saved == Some(true);
+        let address = self.settings.seerr_address.clone();
+        let missing = match (&address, key_saved) {
+            (Some(_), false) => Some("Enter the API key."),
+            (None, true) => Some("Enter the address."),
+            _ => None,
+        };
+        let (Some(address), true, Some(server)) = (address, key_saved, self.server.clone()) else {
             self.seerr_gone(cx);
+            self.seerr.check = missing.map(Loadable::Failed);
             return;
         };
         let account = secret_field::account(&server.server().id, server.user_id(), SEERR_KEY);
@@ -164,11 +171,13 @@ impl Shell {
             (self.secrets.clone(), self.open_seerr.clone());
         let viewer = server.user_id().to_string();
         let task = cx.background_executor().spawn(async move {
-            let key = store.load(&account).ok().flatten()?;
-            let client = open(&address, key, &viewer).ok()?;
+            let Ok(Some(key)) = store.load(&account) else {
+                return Err("Enter the API key.");
+            };
+            let client = open(&address, key, &viewer).map_err(|e| discover::error_line(&e))?;
             // Whom the requests go as, said in the Settings when it is not the viewer.
             let check = client.check();
-            Some((client, check))
+            Ok((client, check))
         });
         cx.spawn(async move |this, cx| {
             let made = task.await;
@@ -177,12 +186,15 @@ impl Shell {
                     return;
                 }
                 match made {
-                    Some((client, check)) => {
+                    Ok((client, check)) => {
                         shell.seerr.client = Some(client);
                         shell.seerr_checked(check);
                         shell.seerr_connected(cx);
                     }
-                    None => shell.seerr_gone(cx),
+                    Err(why) => {
+                        shell.seerr_gone(cx);
+                        shell.seerr.check = Some(Loadable::Failed(why));
+                    }
                 }
                 cx.notify();
             })
@@ -446,7 +458,11 @@ impl Shell {
     /// The Settings' "Test": the version, or why the connection failed.
     pub fn test_seerr(&mut self, cx: &mut Context<Self>) {
         let Some(client) = self.seerr.client.clone() else {
-            self.seerr.check = Some(Loadable::Failed("Enter the address and the API key first."));
+            // Why there is no client was said already; without a word, both are missing.
+            if !matches!(self.seerr.check, Some(Loadable::Failed(_))) {
+                self.seerr.check =
+                    Some(Loadable::Failed("Enter the address and the API key first."));
+            }
             cx.notify();
             return;
         };
@@ -613,6 +629,126 @@ pub(super) mod tests {
         key.update(cx, |field, cx| field.clear(cx));
         cx.run_until_parked();
         assert!(!connected(&window, cx));
+    }
+
+    /// A shell whose settings hold the address, its keyring nothing.
+    fn address_only(seerr: &FakeSeerr, cx: &mut TestAppContext) -> WindowHandle<Shell> {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.keep().join("settings.toml");
+        Settings {
+            seerr_address: Some(ADDRESS.into()),
+            ..Settings::default()
+        }
+        .save(&path)
+        .unwrap();
+        start(Some(path), &Arc::new(MemoryKeyring::default()), seerr, cx).0
+    }
+
+    #[gpui_kit::test]
+    fn an_address_saved_without_a_key_shows_no_pill_and_asks_for_the_key(cx: &mut TestAppContext) {
+        let seerr = FakeSeerr::default();
+        let window = address_only(&seerr, cx);
+        assert!(!connected(&window, cx));
+        let mut visual = drawn(&window, cx);
+        assert!(visual.debug_bounds("nav Discover").is_none());
+        window
+            .update(cx, |shell, _, cx| shell.open_settings(cx))
+            .unwrap();
+        let mut visual = drawn(&window, cx);
+        window
+            .update(cx, |shell, _, _| {
+                assert!(matches!(
+                    shell.seerr.check,
+                    Some(Loadable::Failed("Enter the API key."))
+                ));
+                assert_eq!(shell.seerr.owner_line, None);
+            })
+            .unwrap();
+        assert!(visual.debug_bounds("seerr-check").is_some());
+        assert!(visual.debug_bounds("seerr-owner").is_none());
+        assert_eq!(seerr.state.lock().unwrap().record.checks, 0);
+    }
+
+    #[gpui_kit::test]
+    fn an_address_typed_without_a_scheme_is_kept_with_https(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.toml");
+        let keyring = Arc::new(MemoryKeyring::default());
+        keyring.save(ACCOUNT, &Token::new(KEY.into())).unwrap();
+        let seerr = FakeSeerr::default();
+        let (window, _) = start(Some(path.clone()), &keyring, &seerr, cx);
+        window
+            .update(cx, |shell, _, cx| {
+                let address = shell.seerr.address.clone().unwrap();
+                address.update(cx, |field, cx| field.set_text("seerr.example.org", cx));
+                shell.save_seerr_address(cx);
+                assert_eq!(address.read(cx).text(), ADDRESS);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        assert!(connected(&window, cx));
+        assert_eq!(
+            Settings::read(&path).seerr_address.as_deref(),
+            Some(ADDRESS)
+        );
+    }
+
+    #[gpui_kit::test]
+    fn the_test_says_why_the_client_could_not_be_made(cx: &mut TestAppContext) {
+        let seerr = FakeSeerr::default();
+        let window = configured(&seerr, cx);
+        window
+            .update(cx, |shell, _, cx| {
+                shell.open_seerr = Arc::new(|_, _, _| Err(RequestError::InvalidAddress));
+                shell
+                    .seerr
+                    .address
+                    .clone()
+                    .unwrap()
+                    .update(cx, |field, cx| {
+                        field.set_text("https://seerr.example.org/other", cx)
+                    });
+                shell.save_seerr_address(cx);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        assert!(!connected(&window, cx));
+        window
+            .update(cx, |shell, _, cx| shell.test_seerr(cx))
+            .unwrap();
+        cx.run_until_parked();
+        window
+            .update(cx, |shell, _, _| {
+                assert!(matches!(
+                    shell.seerr.check,
+                    Some(Loadable::Failed(
+                        "The address must start with http:// or https://."
+                    ))
+                ));
+            })
+            .unwrap();
+    }
+
+    #[gpui_kit::test]
+    fn emptying_the_address_takes_discover_away_and_back_lands_on_home(cx: &mut TestAppContext) {
+        let seerr = FakeSeerr::default();
+        let window = on_discover(&seerr, cx);
+        window
+            .update(cx, |shell, _, cx| {
+                shell.open_settings(cx);
+                let address = shell.seerr.address.clone().unwrap();
+                address.update(cx, |field, cx| field.set_text("", cx));
+                shell.save_seerr_address(cx);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        assert!(!connected(&window, cx));
+        let mut visual = drawn(&window, cx);
+        assert!(visual.debug_bounds("nav Discover").is_none());
+        window
+            .update(cx, |shell, _, cx| assert!(shell.go_back(cx)))
+            .unwrap();
+        assert_eq!(screen(&window, cx), Screen::Home);
     }
 
     #[gpui_kit::test]
