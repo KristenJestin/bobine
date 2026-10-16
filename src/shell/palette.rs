@@ -64,12 +64,7 @@ impl Shell {
     /// Ctrl+K or the pill bar's field: opens the palette over the page, or closes it. Not on
     /// the login (no server yet) nor in the player. Says whether it did anything.
     pub fn open_search(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        if self.server.is_none()
-            || !matches!(
-                self.navigator.current(),
-                Screen::Home | Screen::Library | Screen::FilmDetail | Screen::Person
-            )
-        {
+        if self.server.is_none() || !search::opens_from(self.navigator.current()) {
             return false;
         }
         if self.search_is_open() {
@@ -79,6 +74,11 @@ impl Shell {
         for page in &mut self.details {
             page.menus.close();
         }
+        for page in &mut self.series_pages {
+            page.menus.close();
+        }
+        // An episode never starts under the palette.
+        self.cancel_up_next(cx);
         let input =
             cx.new(|cx| TextInput::new("Rechercher un film, une série, une personne", false, cx));
         let typed = cx.observe(&input, |shell, _, cx| shell.search_typed(cx));
