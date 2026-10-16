@@ -50,9 +50,23 @@ fn an_address_where_no_seerr_answers_says_so() {
     fake.state.lock().unwrap().not_seerr = true;
     assert_eq!(client(&fake).check(), Err(RequestError::NotARequestServer));
     assert_eq!(
-        SeerrClient::new("seerr.example.invalid", Token::new(KEY.into()), "x").err(),
+        SeerrClient::new("ftp://seerr.example.invalid", Token::new(KEY.into()), "x").err(),
         Some(RequestError::InvalidAddress)
     );
+}
+
+#[test]
+fn an_address_without_a_scheme_is_reached_over_https() {
+    assert_eq!(
+        super::with_scheme(" seerr.example.org/ "),
+        "https://seerr.example.org"
+    );
+    assert_eq!(
+        super::with_scheme("http://seerr.example.org:5055"),
+        "http://seerr.example.org:5055"
+    );
+    assert_eq!(super::with_scheme(""), "");
+    assert!(SeerrClient::new("seerr.example.invalid", Token::new(KEY.into()), "x").is_ok());
 }
 
 #[test]
@@ -384,7 +398,7 @@ fn the_api_key_never_appears_in_a_log_an_error_or_debug_output() {
     fake.state.lock().unwrap().not_seerr = true;
     errors.push(refused.check().unwrap_err());
     errors.push(
-        SeerrClient::new("nowhere", Token::new(planted.into()), "x")
+        SeerrClient::new("ftp://nowhere", Token::new(planted.into()), "x")
             .err()
             .unwrap(),
     );

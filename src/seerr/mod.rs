@@ -113,6 +113,17 @@ fn tmdb_path(image: &TmdbImage) -> Option<&str> {
     (!path.is_empty() && path.chars().all(safe)).then_some(&image.0)
 }
 
+/// The address as typed, made one a client can reach: without a scheme, over HTTPS, the way
+/// Seerr's own documentation writes its addresses.
+pub fn with_scheme(typed: &str) -> String {
+    let address = typed.trim().trim_end_matches('/');
+    if address.is_empty() || address.contains("://") {
+        address.to_string()
+    } else {
+        format!("https://{address}")
+    }
+}
+
 impl SeerrClient {
     /// A client of the Seerr server at `address`, for the Jellyfin user `viewer`.
     pub fn new(address: &str, key: Token, viewer: &str) -> Result<Self, RequestError> {
@@ -126,7 +137,8 @@ impl SeerrClient {
         viewer: &str,
         images: String,
     ) -> Result<Self, RequestError> {
-        let address = normalize_address(address).map_err(|_| RequestError::InvalidAddress)?;
+        let address =
+            normalize_address(&with_scheme(address)).map_err(|_| RequestError::InvalidAddress)?;
         let agent = ureq::Agent::config_builder()
             .timeout_global(Some(TIMEOUT))
             .http_status_as_error(false)
