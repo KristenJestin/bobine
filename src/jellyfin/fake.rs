@@ -55,6 +55,7 @@ fn fixture(name: &str) -> Value {
         "next_up" => include_str!("fixtures/next_up.json"),
         "next_up_across" => include_str!("fixtures/next_up_across.json"),
         "featured" => include_str!("fixtures/featured.json"),
+        "media_segments" => include_str!("fixtures/media_segments.json"),
         _ => panic!("no fixture {name}"),
     };
     serde_json::from_str(text).unwrap()
@@ -511,6 +512,13 @@ fn answer(state: &State, seen: &Seen) -> Answer {
             _ => Answer::Json(200, json!({ "Items": [], "TotalRecordCount": 0 })),
         },
         // Not an item list: the newest of a library, as a bare array, `Limit` of them.
+        ("GET", path) if path.starts_with("/MediaSegments/") => {
+            if path == format!("/MediaSegments/{FILM}") {
+                Answer::Json(200, fixture("media_segments"))
+            } else {
+                Answer::Json(200, json!({ "Items": [], "TotalRecordCount": 0 }))
+            }
+        }
         ("GET", "/Items/Latest") => {
             let name = match seen.param("ParentId") {
                 Some(FILMS_LIBRARY) => "films",

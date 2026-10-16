@@ -1290,10 +1290,10 @@ impl Shell {
         match self.play(mpv, media, playing, Some(reporting), window, cx) {
             Ok(()) => {
                 if let Some(playback) = &mut self.playback {
-                    playback.next = next;
                     playback.fallback = Some(fallback);
                 }
                 self.load_trickplay(opened.film.clone(), opened.source.clone(), cx);
+                self.playback_started(&opened.film, next, cx);
             }
             Err(error) => {
                 // The words of the video surface or of mpv's error code: no address in them.

@@ -16,6 +16,7 @@ use super::empty_screen;
 use crate::icons::{IconName, icon};
 use crate::motion;
 use crate::player::controls::{BOTTOM_CONTROLS_HEIGHT, SKIP_SECONDS};
+use crate::player::segments::Button;
 use crate::player::session::{Choice, Session};
 use crate::player::thumbnails::Crop;
 use crate::player::time;
@@ -42,6 +43,8 @@ pub fn empty(_cx: &mut Context<Shell>) -> impl IntoElement {
 pub struct Shown {
     pub controls: f32,
     pub panel: f32,
+    /// The skip button and how much of it shows.
+    pub skip: Option<(Button, f32)>,
     /// "Conversion par le serveur".
     pub notice: f32,
     /// Where the "Black out other screens" switch is, from off (0) to on (1); `None` when the
@@ -114,6 +117,11 @@ pub fn render(
         )
         .children(controls)
         .children(notice)
+        .children(
+            shown.skip.map(|(button, level)| {
+                super::skip::button(button, level, shown.controls, window, cx)
+            }),
+        )
         .children(outside)
         .children(panel)
         .when_some(session.error(), |root, error| {

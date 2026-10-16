@@ -4,7 +4,10 @@
 
 use std::time::Instant;
 
+use bobine::provider::Segment;
+
 use super::controls::{Controls, KeyAction, key_action, subtitle_position};
+use super::segments::{Button, Label, Press, Prompt, button_at};
 use super::{Media, Player, PlayerError, PlayerEvent, Seek, Track, TrackKind, tracks};
 use crate::video::{Rect, VideoDisplay, placement};
 
@@ -14,6 +17,10 @@ pub enum WindowRequest {
     ToggleFullscreen,
     ExitFullscreen,
     Leave,
+    /// The credits were skipped: the playback ends as if it reached its end.
+    EndPlayback,
+    /// Likewise, and the next episode plays at once.
+    NextEpisode,
 }
 
 /// One line of the audio and subtitles panel.
@@ -53,6 +60,17 @@ pub struct Session {
     first_frame_at: Option<Instant>,
     /// How many seeks the viewer asked for, so a seek can be told to the server.
     seeks: u64,
+    /// What the server marked as skippable, by start, and whether an episode follows this one.
+    segments: Vec<Segment>,
+    has_next: bool,
+    prompt: Prompt,
+    /// The skip button as it shows now, if it does.
+    skip: Option<Button>,
+    /// The button just pressed, hidden until its segment is over: mpv takes a moment to say
+    /// where the seek went.
+    pressed: Option<Label>,
+    /// The viewer skipped to the end: the position is the end, whatever mpv says meanwhile.
+    skipped_to_end: bool,
 }
 
 impl Session {
@@ -83,6 +101,12 @@ impl Session {
             loaded_at: None,
             first_frame_at: None,
             seeks: 0,
+            segments: Vec::new(),
+            has_next: false,
+            prompt: Prompt::default(),
+            skip: None,
+            pressed: None,
+            skipped_to_end: false,
         }
     }
 
@@ -116,6 +140,50 @@ impl Session {
         self.first_frame_at
     }
 
+    /// What the server marked in this film or episode, by start.
+    pub fn set_segments(&mut self, segments: Vec<Segment>) {
+        self.segments = segments;
+    }
+
+    /// Whether an episode follows this one: its credits offer it.
+    pub fn set_next_episode(&mut self, has_next: bool) {
+        self.has_next = has_next;
+    }
+
+    /// The skip button, while it shows (an intro, a recap, the credits).
+    pub fn skip_button(&self) -> Option<Button> {
+        self.skip
+    }
+
+    /// The viewer pressed the skip button, with the mouse or Enter.
+    pub fn press_skip(&mut self) -> Option<WindowRequest> {
+        let button = self.skip.take()?;
+        self.pressed = Some(button.label);
+        match button.press {
+            Press::SeekTo(seconds) => {
+                self.seeks += 1;
+                self.player.seek(Seek::To(seconds));
+                None
+            }
+            Press::EndPlayback => {
+                self.skip_to_end();
+                Some(WindowRequest::EndPlayback)
+            }
+            Press::NextEpisode => {
+                self.skip_to_end();
+                Some(WindowRequest::NextEpisode)
+            }
+        }
+    }
+
+    /// The same end as the file's own (`ended`), at the end position: the server marks it
+    /// watched by the rule of a real end.
+    fn skip_to_end(&mut self) {
+        self.skipped_to_end = true;
+        self.ended = true;
+        self.position = self.duration;
+    }
+
     /// A key pressed in the player; what the window must do, if anything.
     pub fn key(
         &mut self,
@@ -135,6 +203,7 @@ impl Session {
             KeyAction::ToggleFullscreen => return Some(WindowRequest::ToggleFullscreen),
             KeyAction::ExitFullscreen => return Some(WindowRequest::ExitFullscreen),
             KeyAction::Leave => return Some(WindowRequest::Leave),
+            KeyAction::PressSkip => return self.press_skip(),
         }
         None
     }
@@ -166,6 +235,7 @@ impl Session {
 
     pub fn mouse_moved(&mut self, now: Instant) {
         self.controls.mouse_moved(now);
+        self.prompt.mouse_moved(now);
     }
 
     /// The controls stay while the panel is open: it is reached through them.
@@ -241,10 +311,11 @@ impl Session {
     pub fn update(&mut self, now: Instant) -> bool {
         for event in self.player.events() {
             match event {
-                PlayerEvent::Position(seconds) => {
+                PlayerEvent::Position(seconds) if !self.skipped_to_end => {
                     self.position = seconds;
                     self.position_known = true;
                 }
+                PlayerEvent::Position(_) => {}
                 PlayerEvent::Duration(seconds) => self.duration = seconds,
                 PlayerEvent::Paused(paused) => self.paused = paused,
                 PlayerEvent::Tracks(tracks) => self.tracks = tracks,
@@ -261,12 +332,27 @@ impl Session {
                 PlayerEvent::SubtitleFailed(_) => {}
             }
         }
+        self.follow_segments(now);
         let shown = self.controls_visible(now);
         // Told every time: the display can only act once the pointer is over the window.
         self.display.set_cursor_visible(shown);
         self.controls_shown = shown;
         self.place_subtitles();
         self.ended
+    }
+
+    /// The skip button of the segment the film is in, shown by the prompt's rules.
+    fn follow_segments(&mut self, now: Instant) {
+        let button = self
+            .position_known
+            .then(|| button_at(&self.segments, self.position, self.duration, self.has_next))
+            .flatten();
+        if button.map(|button| button.label) != self.pressed {
+            self.pressed = None;
+        }
+        let button = button.filter(|button| Some(button.label) != self.pressed);
+        self.prompt.follow(button, now);
+        self.skip = button.filter(|_| self.prompt.visible(now));
     }
 
     /// Puts the video where the view laid it out: called on every layout, so the subsurface
@@ -677,5 +763,191 @@ mod tests {
             f.session.error().map(|e| e.0.as_str()),
             Some("loading failed")
         );
+    }
+
+    /// An episode of 47 minutes: a recap, an intro, then the credits.
+    fn with_segments(f: &mut Fixture, has_next: bool) {
+        use bobine::provider::SegmentKind::{Intro, Outro, Recap};
+        let segment = |kind, start: u64, end: u64| Segment {
+            kind,
+            start: Duration::from_secs(start),
+            end: Duration::from_secs(end),
+        };
+        f.session.set_segments(vec![
+            segment(Recap, 0, 40),
+            segment(Intro, 40, 130),
+            segment(Outro, 2700, 2820),
+        ]);
+        f.session.set_next_episode(has_next);
+        f.queue(vec![PlayerEvent::Duration(2820.)]);
+    }
+
+    fn at(f: &mut Fixture, now: Instant, position: f64) {
+        f.queue(vec![PlayerEvent::Position(position)]);
+        f.session.update(now);
+    }
+
+    fn seeks(f: &Fixture) -> Vec<Call> {
+        f.calls()
+            .into_iter()
+            .filter(|call| matches!(call, Call::Seek(_)))
+            .collect()
+    }
+
+    #[test]
+    fn the_button_of_an_intro_shows_at_its_start_and_a_press_seeks_to_its_end() {
+        let mut f = fixture();
+        with_segments(&mut f, true);
+        let start = Instant::now();
+        at(&mut f, start, 20.);
+        assert_eq!(f.session.skip_button().unwrap().label.text(), "Skip recap");
+        at(&mut f, start, 60.);
+        assert_eq!(f.session.skip_button().unwrap().label.text(), "Skip intro");
+        assert_eq!(f.session.press_skip(), None);
+        assert_eq!(seeks(&f), [Call::Seek(Seek::To(130.))]);
+        assert_eq!(f.session.seeks(), 1);
+        // Gone at once, before mpv says where it is now.
+        assert_eq!(f.session.skip_button(), None);
+        assert_eq!(f.session.press_skip(), None);
+        assert_eq!(seeks(&f).len(), 1);
+    }
+
+    #[test]
+    fn enter_presses_the_button_while_it_shows() {
+        let mut f = fixture();
+        with_segments(&mut f, true);
+        at(&mut f, Instant::now(), 60.);
+        assert_eq!(f.session.key("enter", false, false), None);
+        assert_eq!(seeks(&f), [Call::Seek(Seek::To(130.))]);
+    }
+
+    #[test]
+    fn enter_does_nothing_without_a_button() {
+        let mut f = fixture();
+        with_segments(&mut f, true);
+        at(&mut f, Instant::now(), 1200.);
+        assert_eq!(f.session.key("enter", false, false), None);
+        assert_eq!(seeks(&f), []);
+    }
+
+    #[test]
+    fn enter_does_nothing_once_the_button_has_faded() {
+        let mut f = fixture();
+        with_segments(&mut f, true);
+        let start = Instant::now();
+        at(&mut f, start, 60.);
+        at(&mut f, start + Duration::from_secs(6), 66.);
+        assert_eq!(f.session.skip_button(), None);
+        assert_eq!(f.session.key("enter", false, false), None);
+        assert_eq!(seeks(&f), []);
+    }
+
+    #[test]
+    fn a_pointer_move_brings_the_faded_button_back() {
+        let mut f = fixture();
+        with_segments(&mut f, true);
+        let start = Instant::now();
+        at(&mut f, start, 60.);
+        let later = start + Duration::from_secs(8);
+        at(&mut f, later, 68.);
+        assert_eq!(f.session.skip_button(), None);
+        f.session.mouse_moved(later);
+        f.session.update(later);
+        assert!(f.session.skip_button().is_some());
+    }
+
+    #[test]
+    fn no_button_shows_before_mpv_says_where_the_film_is() {
+        // A resume far in: the position is the 0 it starts at, inside the recap.
+        let mut f = fixture();
+        with_segments(&mut f, true);
+        f.session.update(Instant::now());
+        assert_eq!(f.session.skip_button(), None);
+    }
+
+    #[test]
+    fn a_film_without_segments_never_shows_a_button() {
+        let mut f = fixture();
+        f.queue(vec![PlayerEvent::Duration(2820.)]);
+        let start = Instant::now();
+        for position in [0., 60., 2750.] {
+            at(&mut f, start, position);
+            assert_eq!(f.session.skip_button(), None);
+        }
+        assert_eq!(f.session.key("enter", false, false), None);
+    }
+
+    #[test]
+    fn skipping_the_credits_of_a_last_episode_ends_the_playback_at_its_end() {
+        let mut f = fixture();
+        with_segments(&mut f, false);
+        let start = Instant::now();
+        at(&mut f, start, 2750.);
+        assert_eq!(
+            f.session.skip_button().unwrap().label.text(),
+            "Skip credits"
+        );
+        assert_eq!(f.session.press_skip(), Some(WindowRequest::EndPlayback));
+        // What mpv says before the end comes does not move the position back.
+        f.queue(vec![PlayerEvent::Position(2751.)]);
+        assert!(f.session.update(start + Duration::from_millis(100)));
+        assert_eq!(f.session.position, 2820.);
+        assert_eq!(seeks(&f), []);
+    }
+
+    #[test]
+    fn skipping_the_credits_of_an_episode_with_a_next_one_ends_it_and_asks_the_next() {
+        let mut f = fixture();
+        with_segments(&mut f, true);
+        let start = Instant::now();
+        at(&mut f, start, 2750.);
+        assert_eq!(
+            f.session.skip_button().unwrap().label.text(),
+            "Next episode"
+        );
+        assert_eq!(
+            f.session.key("enter", false, false),
+            Some(WindowRequest::NextEpisode)
+        );
+        assert!(f.session.update(start + Duration::from_millis(100)));
+        assert_eq!(f.session.position, 2820.);
+    }
+
+    #[test]
+    fn skipping_credits_followed_by_a_scene_seeks_and_does_not_end_the_film() {
+        use bobine::provider::SegmentKind::Outro;
+        let mut f = fixture();
+        f.session.set_segments(vec![Segment {
+            kind: Outro,
+            start: Duration::from_secs(2700),
+            end: Duration::from_secs(2760),
+        }]);
+        f.session.set_next_episode(true);
+        f.queue(vec![PlayerEvent::Duration(2820.)]);
+        let start = Instant::now();
+        at(&mut f, start, 2710.);
+        assert_eq!(
+            f.session.skip_button().unwrap().label.text(),
+            "Skip credits"
+        );
+        assert_eq!(f.session.press_skip(), None);
+        assert_eq!(seeks(&f), [Call::Seek(Seek::To(2760.))]);
+        assert!(!f.session.update(start + Duration::from_millis(100)));
+    }
+
+    #[test]
+    fn a_stale_position_does_not_bring_the_pressed_button_back() {
+        let mut f = fixture();
+        with_segments(&mut f, true);
+        let start = Instant::now();
+        at(&mut f, start, 60.);
+        f.session.press_skip();
+        // mpv still says where the film was before the seek.
+        at(&mut f, start + Duration::from_millis(100), 61.);
+        assert_eq!(f.session.skip_button(), None);
+        // Past the intro, then in the credits: the next button shows as usual.
+        at(&mut f, start + Duration::from_millis(200), 131.);
+        at(&mut f, start + Duration::from_secs(1), 2701.);
+        assert!(f.session.skip_button().is_some());
     }
 }
