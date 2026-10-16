@@ -186,6 +186,30 @@ fn results_grid(
         .child(content)
 }
 
+/// "Similar, not in your library", under a film or series of the library: what the request
+/// server recommends after it that the library does not hold. Nothing without any.
+pub(super) fn similar_row(
+    shell: &mut Shell,
+    titles: &[Discovered],
+    scroll: &gpui_kit::ScrollHandle,
+    cx: &mut Context<Shell>,
+) -> Option<AnyElement> {
+    if titles.is_empty() {
+        return None;
+    }
+    let cards = titles
+        .iter()
+        .enumerate()
+        .map(|(at, title)| card(shell, title, ("not-in-library", at), None, cx))
+        .collect();
+    Some(
+        div()
+            .debug_selector(|| "similar-not-in-library".into())
+            .child(row("Similar, not in your library", None, cards, scroll))
+            .into_any_element(),
+    )
+}
+
 /// A small pill over a poster or beside a title: what the request server or the library says.
 pub(super) fn status_pill(label: &'static str) -> Div {
     let had = matches!(label, "In library" | "Available");

@@ -293,8 +293,10 @@ mod tests {
 
     use super::super::discover::tests::{click, configured, drawn};
     use super::*;
+    use crate::fake::{FILM, SERIES};
     use crate::fake_seerr::{COPPER_COAST, FakeSeerr, HARBOUR_WATCH, NORTHERN_LIGHTS, PAPER_MOONS};
     use crate::navigation::NavEntry;
+    use bobine::provider::ItemId;
 
     /// A shell on Discover, then on the request page of a title.
     fn on_request(
@@ -464,6 +466,54 @@ mod tests {
                 assert!(matches!(page.detail, Loadable::Ready(_)));
             })
             .unwrap();
+    }
+
+    #[gpui_kit::test]
+    fn a_library_film_shows_similar_titles_not_in_the_library(cx: &mut TestAppContext) {
+        let seerr = FakeSeerr::default();
+        let window = configured(&seerr, cx);
+        window
+            .update(cx, |shell, _, cx| shell.open_film(ItemId(FILM.into()), cx))
+            .unwrap();
+        cx.run_until_parked();
+        let mut visual = drawn(&window, cx);
+        assert!(visual.debug_bounds("similar-not-in-library").is_some());
+        assert!(
+            visual
+                .debug_bounds("discover-card Northern Lights")
+                .is_some()
+        );
+        // The Tides is in the library: it is not offered.
+        assert!(visual.debug_bounds("discover-card The Tides").is_none());
+        // The row is under the hero: the page scrolls down to it first.
+        window
+            .update(cx, |shell, _, cx| {
+                let page = shell.details.last().unwrap();
+                let bottom = page.scroll.max_offset().y;
+                page.scroll
+                    .set_offset(gpui_kit::point(gpui_kit::px(0.), -bottom));
+                cx.notify();
+            })
+            .unwrap();
+        let mut visual = drawn(&window, cx);
+        click(&mut visual, "discover-card Northern Lights");
+        assert_eq!(screen(&window, cx), Screen::Request);
+    }
+
+    #[gpui_kit::test]
+    fn a_library_series_shows_similar_series_not_in_the_library(cx: &mut TestAppContext) {
+        let seerr = FakeSeerr::default();
+        let window = configured(&seerr, cx);
+        window
+            .update(cx, |shell, _, cx| {
+                shell.open_series(ItemId(SERIES.into()), cx)
+            })
+            .unwrap();
+        cx.run_until_parked();
+        let mut visual = drawn(&window, cx);
+        assert!(visual.debug_bounds("similar-not-in-library").is_some());
+        assert!(visual.debug_bounds("discover-card Copper Coast").is_some());
+        assert!(visual.debug_bounds("discover-card Signal Lost").is_none());
     }
 
     #[gpui_kit::test]

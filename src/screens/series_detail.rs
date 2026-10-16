@@ -7,6 +7,7 @@ use std::rc::Rc;
 use std::time::Instant;
 
 use bobine::provider::{Episode, Season, SeriesDetail};
+use bobine::requests::MediaKind;
 use gpui_kit::prelude::*;
 use gpui_kit::{
     Animation, AnimationExt, AnyElement, Context, Div, FontWeight, IntoElement, Stateful, Window,
@@ -52,7 +53,7 @@ pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -
     }
     let shown = Shown::of(page);
     let scroll = page.scroll.clone();
-    let [cast_scroll, similar_scroll] = page.rows.clone();
+    let [cast_scroll, similar_scroll, missing_scroll] = page.rows.clone();
     let height = f32::from(window.viewport_size().height);
 
     let hero = hero(shell, &detail, &shown, menu, height, window, cx);
@@ -72,6 +73,13 @@ pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -
             .collect();
         rows.push(row("Similar series", None, cards, &similar_scroll).into_any_element());
     }
+    let missing = shell.similar_not_in_library(MediaKind::Tv, detail.tmdb);
+    rows.extend(super::discover::similar_row(
+        shell,
+        &missing,
+        &missing_scroll,
+        cx,
+    ));
 
     // Scrolled by hand, like the film page: the page up and down, a row sideways.
     div()

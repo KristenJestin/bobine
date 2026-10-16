@@ -392,8 +392,9 @@ pub struct DetailPage {
     /// "My list".
     pub favourite: Toggle,
     pub scroll: ScrollHandle,
-    /// The rows that scroll sideways: the cast, the collection, similar titles.
-    pub rows: [ScrollHandle; 3],
+    /// The rows that scroll sideways: the cast, the collection, similar titles, and those of
+    /// the request server not in the library.
+    pub rows: [ScrollHandle; 4],
     gesture: scroll::Gesture,
     /// What went wrong with the last button.
     pub error: Option<&'static str>,
@@ -1238,10 +1239,12 @@ impl Shell {
                     page.choices = Some(Choices::new(&detail.versions));
                 }
                 page.favourite.sync(detail.favourite, read_at);
+                let tmdb = detail.tmdb;
                 page.detail = Loadable::Ready(detail);
                 if with_collection {
                     shell.load_collection(depth, id, cx);
                 }
+                shell.load_similar(MediaKind::Movie, tmdb, cx);
             },
         );
     }

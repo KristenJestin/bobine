@@ -2,12 +2,13 @@
 //! settings file, the key in the keyring), and what the window keeps of it. Nothing of it shows
 //! while it is not configured but the Integrations section of the Settings.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
 use bobine::provider::{TmdbIndex, Token, TokenStore};
 use bobine::requests::{
-    DiscoverRow, Discovered, MediaKind, MyRequest, RequestError, RequestServer, ServerCheck,
+    DiscoverRow, Discovered, MediaKind, MyRequest, RequestError, RequestServer, ServerCheck, TmdbId,
 };
 use gpui_kit::prelude::*;
 use gpui_kit::{Context, Entity, ScrollHandle, ScrollWheelEvent, Subscription, Task, Window};
@@ -63,6 +64,8 @@ pub struct Seerr {
     pub discover: DiscoverPage,
     /// The request pages open, the last one shown.
     pub requests: Vec<super::RequestPage>,
+    /// What the server recommends after a title of the library, read once per title.
+    similar: HashMap<(MediaKind, TmdbId), Vec<Discovered>>,
 }
 
 /// The Discover screen: its search, its rows, and the viewer's requests.
@@ -202,6 +205,7 @@ impl Shell {
         self.seerr.index = None;
         self.seerr.discover = DiscoverPage::default();
         self.seerr.requests.clear();
+        self.seerr.similar.clear();
         self.navigator
             .forget(|screen| matches!(screen, Screen::Discover | Screen::Request));
         cx.notify();
@@ -357,6 +361,40 @@ impl Shell {
             (MediaKind::Tv, Some(series)) => self.open_series(series, cx),
             (_, None) => self.open_request(kind, tmdb, cx),
         }
+    }
+
+    /// Reads, once, what the server recommends after a title of the library: a film or series
+    /// page shows those the library does not hold.
+    pub(super) fn load_similar(
+        &mut self,
+        kind: MediaKind,
+        tmdb: Option<TmdbId>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(tmdb) = tmdb else {
+            return;
+        };
+        if self.seerr.similar.contains_key(&(kind, tmdb)) {
+            return;
+        }
+        self.ask_seerr(
+            cx,
+            move |seerr| seerr.recommendations(kind, tmdb),
+            move |shell, similar, _| {
+                // Without them the page is whole: the row hides.
+                if let Ok(similar) = similar {
+                    shell.seerr.similar.insert((kind, tmdb), similar);
+                }
+            },
+        );
+    }
+
+    /// "Similar, not in your library", after a title of the library.
+    pub fn similar_not_in_library(&self, kind: MediaKind, tmdb: Option<TmdbId>) -> Vec<Discovered> {
+        let Some(similar) = tmdb.and_then(|tmdb| self.seerr.similar.get(&(kind, tmdb))) else {
+            return Vec::new();
+        };
+        discover::not_in_library(similar.clone(), self.seerr.index.as_ref())
     }
 
     /// The wheel over Discover: the page up and down, the row under the pointer sideways.
