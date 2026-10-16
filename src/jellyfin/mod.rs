@@ -487,6 +487,7 @@ impl MediaServer for Jellyfin {
         )?;
         Ok(FilmDetail {
             film: item.film(),
+            logo: item.logo(),
             directors: item.directors(),
             cast: item.cast(),
             similar: similar.items.iter().map(Item::film).collect(),
@@ -754,6 +755,7 @@ impl MediaServer for Jellyfin {
             favourite: item.user_data.as_ref().is_some_and(|u| u.is_favorite),
             cast: item.cast(),
             similar: similar.items.iter().map(Item::series).collect(),
+            logo: item.logo(),
             overview: item.overview,
             genres: item.genres,
             official_rating: item.official_rating,

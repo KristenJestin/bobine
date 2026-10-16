@@ -235,6 +235,8 @@ pub struct SeriesDetail {
     pub official_rating: Option<String>,
     pub cast: Vec<CastMember>,
     pub similar: Vec<Series>,
+    /// The title drawn as an image, when the server has one.
+    pub logo: Option<ImageRef>,
     /// In the user's list.
     pub favourite: bool,
 }
@@ -433,6 +435,8 @@ pub struct FilmDetail {
     pub cast: Vec<CastMember>,
     pub similar: Vec<Film>,
     pub versions: Vec<MediaSource>,
+    /// The title drawn as an image, when the server has one.
+    pub logo: Option<ImageRef>,
     /// In the user's list.
     pub favourite: bool,
 }

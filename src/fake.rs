@@ -727,6 +727,10 @@ impl MediaServer for FakeServer {
                 versions().split_off(1)
             },
             favourite: self.state().favourites.contains(&found.id),
+            // The first film of the tests is a logo, the others are written, as on the Home.
+            logo: (found.id.0 == FILM)
+                .then(|| image(&found.id.0, ImageKind::Logo))
+                .flatten(),
             film: found,
         })
     }
@@ -884,6 +888,10 @@ impl MediaServer for FakeServer {
         Ok(SeriesDetail {
             series: Self::counted(&state, found),
             favourite: state.favourites.contains(series),
+            // As on the Home, the first series is a logo and the others are written.
+            logo: (state.series.first().map(|s| &s.id) == Some(series))
+                .then(|| image(&series.0, ImageKind::Logo))
+                .flatten(),
             overview: Some(SERIES_OVERVIEW.into()),
             genres: vec!["Science-fiction".into(), "Drame".into()],
             official_rating: Some("12+".into()),

@@ -1201,6 +1201,44 @@ fn a_featured_title_has_its_logo_when_the_server_has_one() {
 }
 
 #[test]
+fn a_film_page_has_the_logo_of_its_title_when_the_server_has_one() {
+    let s = Setup::new();
+    let detail = s.signed_in().film(&film()).unwrap();
+    assert_eq!(
+        detail.logo,
+        Some(ImageRef {
+            item: film(),
+            kind: ImageKind::Logo,
+            tag: "logo-qh".into(),
+        })
+    );
+}
+
+#[test]
+fn a_series_page_has_the_logo_of_its_title_when_the_server_has_one() {
+    let s = Setup::new();
+    let detail = s.signed_in().series_detail(&series()).unwrap();
+    assert_eq!(
+        detail.logo,
+        Some(ImageRef {
+            item: series(),
+            kind: ImageKind::Logo,
+            tag: "logo-tw".into(),
+        })
+    );
+}
+
+#[test]
+fn a_title_the_server_has_no_logo_for_has_none() {
+    let item: super::dto::Item = serde_json::from_value(serde_json::json!({
+        "Name": "Plain", "Id": "f0000000000000000000000000000009", "Type": "Movie",
+        "ImageTags": { "Primary": "poster-p" },
+    }))
+    .unwrap();
+    assert_eq!(item.logo(), None);
+}
+
+#[test]
 fn a_logo_is_asked_of_the_server_as_a_logo() {
     let s = Setup::new();
     let logo = ImageRef {
