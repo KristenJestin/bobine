@@ -2854,6 +2854,26 @@ mod tests {
         }
     }
 
+    /// The comma between two genres is drawn beside the link, not in it: the highlight and the
+    /// click stop at the word.
+    #[gpui_kit::test]
+    fn the_comma_after_a_genre_is_outside_its_link(cx: &mut gpui_kit::TestAppContext) {
+        let (_server, window) = signed_in_window(cx);
+        let mut visual = drawn_page(&window, cx, |shell, cx| {
+            shell.open_film(ItemId(crate::fake::FILM.into()), cx)
+        });
+        // The film's genres are "Drame, Aventure".
+        let link = visual.debug_bounds("genre Drame").expect("the first genre");
+        let comma = visual
+            .debug_bounds("genre-separator Drame")
+            .expect("the comma after the first genre");
+        assert!(comma.left() >= link.right(), "{comma:?} inside {link:?}");
+        assert!(
+            visual.debug_bounds("genre-separator Aventure").is_none(),
+            "a comma after the last genre"
+        );
+    }
+
     #[gpui_kit::test]
     fn a_click_on_a_genre_of_a_film_opens_the_films_library_filtered_on_it(
         cx: &mut gpui_kit::TestAppContext,

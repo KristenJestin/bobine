@@ -377,23 +377,34 @@ fn genre_links(
         .flex()
         .items_center()
         .children(genres.into_iter().enumerate().map(|(index, genre)| {
-            let label = if index < last {
-                format!("{genre},")
-            } else {
-                genre.clone()
-            };
             let selector = genre.clone();
-            theme::eased(("genre", index), theme::Shades::veil(), window, cx)
-                .debug_selector(move || format!("genre {selector}"))
-                .px(px(4.))
-                .rounded(px(4.))
-                .cursor_pointer()
-                .on_click(
-                    cx.listener(move |shell, _, _, cx| {
-                        shell.open_genre(library, genre.clone(), cx)
-                    }),
+            let separator = (index < last).then(|| {
+                // Beside the link, so that neither its highlight nor its click take the comma.
+                div()
+                    .debug_selector({
+                        let genre = genre.clone();
+                        move || format!("genre-separator {genre}")
+                    })
+                    .mr(px(3.))
+                    .child(",")
+            });
+            div()
+                .flex()
+                .items_center()
+                .child(
+                    theme::eased(("genre", index), theme::Shades::veil(), window, cx)
+                        .debug_selector(move || format!("genre {selector}"))
+                        .pl(px(4.))
+                        .pr(px(1.))
+                        .rounded(px(4.))
+                        .cursor_pointer()
+                        .on_click(cx.listener({
+                            let genre = genre.clone();
+                            move |shell, _, _, cx| shell.open_genre(library, genre.clone(), cx)
+                        }))
+                        .child(genre),
                 )
-                .child(label)
+                .children(separator)
         }))
 }
 
