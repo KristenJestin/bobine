@@ -12,9 +12,9 @@ use gpui_kit::prelude::*;
 use gpui_kit::{
     App, Bounds, ClipboardItem, Context, CursorStyle, ElementId, ElementInputHandler, Entity,
     EntityInputHandler, FocusHandle, Focusable, GlobalElementId, KeyBinding, LayoutId, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point, ShapedLine,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point, Rgba, ShapedLine,
     SharedString, Style, TextRun, UTF16Selection, UnderlineStyle, Window, actions, div, fill,
-    point, px, relative, rgba, size,
+    point, px, relative, size,
 };
 
 use crate::theme;
@@ -462,7 +462,10 @@ impl Element for TextLine {
                     point(bounds.left() + start, bounds.top()),
                     point(bounds.left() + end, bounds.bottom()),
                 ),
-                rgba(0x4ade8059),
+                Rgba {
+                    a: 0.35,
+                    ..theme::accent()
+                },
             )
         });
         let cursor = fill(

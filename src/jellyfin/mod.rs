@@ -860,7 +860,29 @@ impl MediaServer for Jellyfin {
                 ("enableImageTypes", "Primary".into()),
             ],
         )?;
+        // A card with no picture is bare here: the grid must not wait for one request per
+        // collection, so its poster comes by `collection_poster`, after the grid shows.
         Ok(found.items.iter().map(Item::collection_card).collect())
+    }
+
+    fn collection_poster(&self, collection: &ItemId) -> Option<ImageRef> {
+        // `imageTypes` keeps the films with a poster: the first film listed may have none while
+        // the next has one.
+        let films = self
+            .items(
+                "collection poster",
+                &[
+                    ("parentId", collection.0.clone()),
+                    ("includeItemTypes", "Movie".into()),
+                    ("sortBy", "ProductionYear,PremiereDate,SortName".into()),
+                    ("imageTypes", "Primary".into()),
+                    ("limit", "1".into()),
+                    ("imageTypeLimit", "1".into()),
+                    ("enableImageTypes", "Primary".into()),
+                ],
+            )
+            .ok()?;
+        films.items.first()?.film().poster
     }
 
     fn collection(&self, collection: &ItemId) -> Result<CollectionDetail, ProviderError> {

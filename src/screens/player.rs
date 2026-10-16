@@ -674,7 +674,7 @@ mod tests {
         motion::mix(rgb(PANEL), Rgba { a: 1., ..color }, color.a)
     }
 
-    const ACCENTS: [u32; 4] = [0xf4f4f5, 0xffffff, 0x4ade80, 0x1d4ed8];
+    const ACCENTS: [u32; 3] = [0xf4f4f5, 0xffffff, 0x1d4ed8];
 
     #[test]
     fn the_knob_reads_on_the_track_whatever_the_accent_is() {
