@@ -47,7 +47,7 @@ pub enum KeyAction {
     ToggleFullscreen,
     ExitFullscreen,
     Leave,
-    /// Entrée: the skip button, while it shows.
+    /// Enter: the skip button, while it shows.
     PressSkip,
 }
 

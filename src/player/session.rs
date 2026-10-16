@@ -155,7 +155,7 @@ impl Session {
         self.skip
     }
 
-    /// The viewer pressed the skip button, with the mouse or Entrée.
+    /// The viewer pressed the skip button, with the mouse or Enter.
     pub fn press_skip(&mut self) -> Option<WindowRequest> {
         let button = self.skip.take()?;
         self.pressed = Some(button.label);
