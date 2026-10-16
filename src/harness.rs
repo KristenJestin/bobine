@@ -11,8 +11,8 @@
 //!
 //! `bobine --screen login|home|library|detail|detail-rows|detail-cast|playing|series|series-page|
 //! series-rows|up-next [--films N]
-//! [--media FILE] [--image-delay-ms N] [--photos-fail-once] [--scenario menu|scroll|select|panel]
-//! [--slower N] --quit-at S`
+//! [--media FILE] [--image-delay-ms N] [--photos-fail-once] [--scenario menu|scroll|select|panel|search|search-slow|search-keys]
+//! [--search-delay-ms N] [--slower N] --quit-at S`
 //!
 //! A scenario sends clicks, keys and scroll events to the window as the compositor would, at set
 //! times, and prints what they did (`MENU`, `SCROLL`, `SELECT`, `PANEL` lines) and the frame times
@@ -66,6 +66,8 @@ struct Args {
     image_delay: u64,
     /// The fake server fails the first time it is asked each person's photo.
     photos_fail_once: bool,
+    /// How long the fake server takes to answer a search, in milliseconds.
+    search_delay: u64,
     /// Input sent to the window as a user would give it, once the screen shows.
     scenario: Option<String>,
 }
@@ -123,6 +125,12 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Option<Args>, String>
             }
             "--media" => parsed.media = Some(args.next().ok_or("--media needs a file")?),
             "--photos-fail-once" => parsed.photos_fail_once = true,
+            "--search-delay-ms" => {
+                parsed.search_delay = args
+                    .next()
+                    .and_then(|n| n.parse().ok())
+                    .ok_or("--search-delay-ms needs a number")?;
+            }
             "--scenario" => parsed.scenario = args.next(),
             "--slower" => {
                 let times: u32 = args
@@ -188,6 +196,7 @@ impl Harness {
             }
             state.image_delay = Duration::from_millis(args.image_delay);
             state.photos_fail_once = args.photos_fail_once;
+            state.search_delay = Duration::from_millis(args.search_delay);
             drop(state);
             fake
         });
@@ -345,6 +354,8 @@ fn show_screen(
                     .filter(|(image, _)| image.item.0.starts_with("person-"))
                     .count();
                 println!("IMAGES asked={} persons={persons}", images.len());
+                let searches = fake.state.lock().unwrap().record.searches.clone();
+                println!("SEARCHES asked={searches:?}");
                 cx.quit();
                 true
             });
@@ -386,6 +397,8 @@ enum Act {
         lines: f32,
         shift: bool,
     },
+    /// Text typed into the search palette's field.
+    Type(&'static str),
     /// A touchpad gesture: its moves in pixels, from start to end.
     Swipe {
         over: Target,
@@ -475,6 +488,41 @@ impl Acts {
                 (5.5, "click the tracks button", Click(TracksButton)),
                 (6.5, "escape", Key("escape")),
             ],
+            // Ctrl+K, typing, the arrows, Enter on a person, Escape from the person's page.
+            "search" => vec![
+                (0.5, "ctrl-k", Key("ctrl-k")),
+                (2.0, "type hiv", Type("hiv")),
+                (4.0, "down", Key("down")),
+                (4.5, "down", Key("down")),
+                (5.5, "type a word nobody has", Type("zzzz")),
+                (7.0, "type a name", Type("mercier")),
+                (8.5, "enter opens the person", Key("enter")),
+                (11.0, "escape goes back", Key("escape")),
+                (12.0, "ctrl-k again", Key("ctrl-k")),
+                (13.0, "escape closes the palette", Key("escape")),
+            ],
+            // A slow server: the first answer comes back after the query has changed.
+            "search-slow" => vec![
+                (0.5, "ctrl-k", Key("ctrl-k")),
+                (1.5, "type hiv", Type("hiv")),
+                (1.9, "type mer", Type("mer")),
+                (5.0, "waiting is over", Key("left")),
+            ],
+            // Many results: the arrows scroll the list; Ctrl+K closes it.
+            "search-keys" => vec![
+                (0.5, "ctrl-k", Key("ctrl-k")),
+                (1.5, "type e", Type("e")),
+                (3.0, "down", Key("down")),
+                (3.4, "down", Key("down")),
+                (3.8, "down", Key("down")),
+                (4.2, "down", Key("down")),
+                (4.6, "down", Key("down")),
+                (5.0, "down", Key("down")),
+                (5.4, "down", Key("down")),
+                (5.8, "down", Key("down")),
+                (6.2, "up", Key("up")),
+                (7.0, "ctrl-k closes", Key("ctrl-k")),
+            ],
             other => {
                 eprintln!("bobine harness: unknown scenario {other}");
                 std::process::exit(2);
@@ -559,6 +607,16 @@ fn position(target: Target, shell: &Shell, window: &Window) -> Point<Pixels> {
 fn send(act: &Act, shell: &Entity<Shell>, window: &mut Window, cx: &mut App) {
     let at = |target, cx: &App, window: &Window| position(target, shell.read(cx), window);
     let events = match act {
+        Act::Type(text) => {
+            shell.update(cx, |shell, cx| {
+                if let Some(search) = &shell.search {
+                    search
+                        .input
+                        .update(cx, |field, cx| field.set_text(text, cx));
+                }
+            });
+            Vec::new()
+        }
         Act::Click(target) => {
             let position = at(*target, cx, window);
             vec![
@@ -654,6 +712,15 @@ fn state(label: &str, shell: &Shell, cx: &App) -> String {
         && screen == Screen::Login
     {
         return format!("SELECT {label}: {:?}", form.address.read(cx).selected());
+    }
+    if let Some(search) = &shell.search {
+        return format!(
+            "SEARCH {label}: open={} query={:?} hits={} selected={} screen={screen:?}",
+            search.open,
+            search.input.read(cx).text(),
+            search.palette.hits().len(),
+            search.palette.selected(),
+        );
     }
     if let Some(playback) = &shell.playback {
         return format!(

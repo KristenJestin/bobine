@@ -9,9 +9,9 @@ use crate::navigation::{NavEntry, Screen};
 use crate::shell::Shell;
 use crate::theme;
 
-/// Centred at the top, over the screen. Collections, Ma liste and the search are
-/// visible but inert until their screens exist.
-pub fn pill_bar(current: Screen, cx: &mut Context<Shell>) -> impl IntoElement {
+/// Centred at the top, over the screen. Collections and Ma liste are visible but inert until
+/// their screens exist; the search field opens the palette.
+pub fn pill_bar(current: Screen, window: &mut Window, cx: &mut Context<Shell>) -> impl IntoElement {
     let entries = NavEntry::ALL.into_iter().enumerate().map(|(index, entry)| {
         let active = entry.is_current(current);
         let live = entry.target().is_some();
@@ -58,7 +58,7 @@ pub fn pill_bar(current: Screen, cx: &mut Context<Shell>) -> impl IntoElement {
                 .bg(rgba(0x141416ec))
                 .child(logo(32., 15., 9.).mr(px(6.)))
                 .children(entries)
-                .child(search_field()),
+                .child(search_field(window, cx)),
         )
 }
 
@@ -79,9 +79,9 @@ pub fn logo(side: f32, font: f32, radius: f32) -> Div {
         .child("b")
 }
 
-/// Inert: the search palette comes later.
-fn search_field() -> Div {
-    div()
+/// Opens the search palette, like Ctrl+K.
+fn search_field(window: &mut Window, cx: &mut Context<Shell>) -> Stateful<Div> {
+    theme::eased("nav-search", theme::Shades::line(), window, cx)
         .ml(px(6.))
         .flex()
         .items_center()
@@ -93,7 +93,12 @@ fn search_field() -> Div {
         .border_1()
         .border_color(theme::line())
         .text_size(px(13.))
-        .text_color(theme::dim())
+        .text_color(theme::muted())
+        .cursor_pointer()
+        .on_click(cx.listener(|app, _, window, cx| {
+            app.open_search(window, cx);
+        }))
+        .child(icon(IconName::Search, 14.))
         .child("Rechercher")
         .child(
             div()

@@ -133,6 +133,70 @@ impl<T: Clone> Presence<T> {
     }
 }
 
+/// A number that eases to wherever it is sent (a highlight going to another row, a panel
+/// growing to its content), from where it is, not from where it was sent last.
+#[derive(Clone, Copy, Debug)]
+pub struct Glide {
+    from: f32,
+    to: f32,
+    duration: Duration,
+    since: Option<Instant>,
+}
+
+impl Glide {
+    pub const fn new(value: f32, duration: Duration) -> Self {
+        Self {
+            from: value,
+            to: value,
+            duration,
+            since: None,
+        }
+    }
+
+    /// Sends it to `target`; sending it where it already goes changes nothing.
+    pub fn set(&mut self, target: f32, now: Instant) {
+        if target != self.to {
+            self.from = self.value(now);
+            self.to = target;
+            self.since = Some(now);
+        }
+    }
+
+    /// Puts it at `value` at once, no move.
+    pub fn jump(&mut self, value: f32) {
+        *self = Self::new(value, self.duration);
+    }
+
+    pub fn value(&self, now: Instant) -> f32 {
+        match self.since {
+            Some(since) => {
+                let t = now.duration_since(since).as_secs_f32() / self.duration.as_secs_f32();
+                self.from + (self.to - self.from) * ease_out(t)
+            }
+            None => self.to,
+        }
+    }
+
+    /// Still on its way: the window needs another frame.
+    pub fn moving(&self, now: Instant) -> bool {
+        self.since
+            .is_some_and(|since| now.duration_since(since) < self.duration)
+    }
+
+    /// For a value that something else carries out (a scroll offset): where it is while it
+    /// moves, and the target once more as it arrives, then nothing, so that the carrier is free
+    /// again (the wheel can scroll it).
+    pub fn advance(&mut self, now: Instant) -> Option<f32> {
+        let since = self.since?;
+        if now.duration_since(since) >= self.duration {
+            self.since = None;
+            self.from = self.to;
+            return Some(self.to);
+        }
+        Some(self.value(now))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -209,5 +273,55 @@ mod tests {
         };
         let half = mix(black, white, 0.5);
         assert_eq!((half.r, half.a), (0.5, 0.5));
+    }
+
+    #[test]
+    fn a_glide_eases_from_where_it_was_to_where_it_goes() {
+        let t = Instant::now();
+        let mut glide = Glide::new(10., QUICK);
+        assert_eq!(glide.value(t), 10.);
+        glide.set(110., t);
+        let values: Vec<f32> = [0, 40, 80, 160].map(|n| glide.value(ms(t, n))).into();
+        assert_eq!(values[0], 10.);
+        assert!(values.windows(2).all(|w| w[0] < w[1]), "{values:?}");
+        assert!(values[2] > 90., "{values:?}");
+        assert_eq!(values[3], 110.);
+        assert!(glide.moving(ms(t, 159)) && !glide.moving(ms(t, 160)));
+    }
+
+    #[test]
+    fn a_glide_sent_elsewhere_midway_leaves_from_where_it_is() {
+        let t = Instant::now();
+        let mut glide = Glide::new(0., QUICK);
+        glide.set(100., t);
+        let midway = glide.value(ms(t, 40));
+        glide.set(0., ms(t, 40));
+        assert_eq!(glide.value(ms(t, 40)), midway);
+        assert!(glide.value(ms(t, 80)) < midway);
+    }
+
+    #[test]
+    fn a_glide_sent_where_it_goes_does_not_move() {
+        let t = Instant::now();
+        let mut glide = Glide::new(5., QUICK);
+        glide.set(5., t);
+        assert!(!glide.moving(t));
+        glide.set(9., t);
+        let on_its_way = glide.value(ms(t, 100));
+        // Asking again for the same place does not start it over.
+        glide.set(9., ms(t, 100));
+        assert_eq!(glide.value(ms(t, 100)), on_its_way);
+        assert!(on_its_way > 5.);
+    }
+
+    #[test]
+    fn a_glide_carried_by_something_else_lands_once_then_lets_go() {
+        let t = Instant::now();
+        let mut glide = Glide::new(0., QUICK);
+        assert_eq!(glide.advance(t), None);
+        glide.set(50., t);
+        assert!(glide.advance(ms(t, 40)).is_some_and(|v| 0. < v && v < 50.));
+        assert_eq!(glide.advance(ms(t, 200)), Some(50.));
+        assert_eq!(glide.advance(ms(t, 300)), None);
     }
 }

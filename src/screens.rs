@@ -5,7 +5,9 @@ mod film_detail;
 mod home;
 mod library;
 mod login;
+mod person;
 pub mod player;
+pub mod search;
 mod series_detail;
 
 pub use series_detail::up_next_card;
@@ -36,6 +38,7 @@ pub fn render(
         Screen::Home => home::render(shell, cx).into_any_element(),
         Screen::Library => library::render(shell, window, cx).into_any_element(),
         Screen::FilmDetail => film_detail::render(shell, window, cx).into_any_element(),
+        Screen::Person => person::render(shell, window, cx).into_any_element(),
         Screen::Player => player::empty(cx).into_any_element(),
         Screen::Series => library::render_series(shell, window, cx).into_any_element(),
         Screen::SeriesDetail => series_detail::render(shell, window, cx).into_any_element(),

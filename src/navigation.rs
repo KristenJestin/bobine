@@ -7,6 +7,8 @@ pub enum Screen {
     Home,
     Library,
     FilmDetail,
+    /// What a person took part in, reached from a search.
+    Person,
     Player,
     Series,
     SeriesDetail,
@@ -20,7 +22,10 @@ impl Screen {
     /// Detail pages have no pill bar: they say where Escape leads instead. The player draws its
     /// own controls.
     pub fn shows_back_link(self) -> bool {
-        matches!(self, Screen::FilmDetail | Screen::SeriesDetail)
+        matches!(
+            self,
+            Screen::FilmDetail | Screen::SeriesDetail | Screen::Person
+        )
     }
 
     /// The word the back link of a detail page uses for the screen it goes back to.
@@ -30,6 +35,7 @@ impl Screen {
             Screen::Home => "Accueil",
             Screen::Library => "Films",
             Screen::FilmDetail | Screen::SeriesDetail => "Fiche",
+            Screen::Person => "Personne",
             Screen::Player => "Lecteur",
             Screen::Series => "Séries",
         }
@@ -187,6 +193,20 @@ mod tests {
         nav.switch_root(Screen::Home);
         nav.open(Screen::FilmDetail);
         assert_eq!(nav.back_label(), Some("Accueil"));
+    }
+
+    #[test]
+    fn a_person_page_has_a_back_link_to_where_it_was_opened_from() {
+        let mut nav = Navigator::new();
+        nav.switch_root(Screen::Home);
+        nav.open(Screen::Person);
+        assert!(Screen::Person.shows_back_link() && !Screen::Person.shows_pill_bar());
+        assert_eq!(nav.back_label(), Some("Accueil"));
+        // A film opened from the person goes back to the person.
+        nav.open(Screen::FilmDetail);
+        assert_eq!(nav.back_label(), Some("Personne"));
+        assert!(nav.back() && nav.back());
+        assert_eq!(nav.current(), Screen::Home);
     }
 
     #[test]

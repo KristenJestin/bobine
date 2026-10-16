@@ -246,6 +246,8 @@ impl Shell {
         self.details.clear();
         self.series_pages.clear();
         self.up_next.cancel();
+        self.people.clear();
+        self.search = None;
         self.navigator.switch_root(Screen::Login);
         cx.notify();
     }
@@ -334,6 +336,8 @@ impl Shell {
         self.series = LibraryPage::default();
         self.details.clear();
         self.series_pages.clear();
+        self.people.clear();
+        self.search = None;
         // The atlas holds the old images until they are dropped from it.
         for gone in self.images.cache.drain() {
             cx.drop_image(gone, None);
@@ -384,6 +388,7 @@ impl Shell {
         self.details.clear();
         self.series_pages.clear();
         self.up_next.cancel();
+        self.people.clear();
         self.arrived(cx);
         cx.notify();
     }
@@ -393,6 +398,7 @@ impl Shell {
         match self.navigator.current() {
             Screen::FilmDetail => drop(self.details.pop()),
             Screen::SeriesDetail => drop(self.series_pages.pop()),
+            Screen::Person => drop(self.people.pop()),
             _ => {}
         }
         self.up_next.cancel();
