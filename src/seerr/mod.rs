@@ -12,7 +12,7 @@ mod tests;
 
 use std::fmt;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use serde::de::DeserializeOwned;
@@ -55,6 +55,8 @@ pub struct SeerrClient {
     viewer: String,
     /// Found at the first call that needs it, then kept.
     acting: Mutex<Option<Acting>>,
+    /// A call with the key went through: a 403 from then on is no wrong key.
+    key_worked: AtomicBool,
 }
 
 /// Neither the key nor the address: what the client is, not what it holds.
@@ -71,12 +73,13 @@ fn unreachable(what: &str, e: ureq::Error) -> RequestError {
     }
 }
 
-/// An error answer. Seerr answers 403 to a key it does not know; to a request, a 403 is the
-/// quota when its message says so ("Movie Quota exceeded."), else a right the viewer lacks.
-fn refusal(code: u16, posted: bool, mut response: Response<ureq::Body>) -> RequestError {
+/// An error answer. Seerr answers 403 to a key it does not know, and to a key it knows for what
+/// the viewer may not do: `key_worked` tells them apart. A 403 is the quota when its message
+/// says so ("Movie Quota exceeded."), else a right the viewer lacks.
+fn refusal(code: u16, key_worked: bool, mut response: Response<ureq::Body>) -> RequestError {
     match code {
         401 => RequestError::KeyRefused,
-        403 if !posted => RequestError::KeyRefused,
+        403 if !key_worked => RequestError::KeyRefused,
         403 => {
             let said: dto::Message = response.body_mut().read_json().unwrap_or_default();
             if said.message.to_lowercase().contains("quota") {
@@ -139,6 +142,7 @@ impl SeerrClient {
             key,
             viewer: viewer.to_string(),
             acting: Mutex::new(None),
+            key_worked: AtomicBool::new(false),
         })
     }
 
@@ -153,10 +157,10 @@ impl SeerrClient {
         url
     }
 
-    /// `posted`: the call asks for something, rather than reads.
+    /// `key_worked`: a 403 is not the key refused.
     fn checked(
         what: &str,
-        posted: bool,
+        key_worked: bool,
         sent: Result<Response<ureq::Body>, ureq::Error>,
     ) -> Result<Response<ureq::Body>, RequestError> {
         let response = sent.map_err(|e| unreachable(what, e))?;
@@ -164,7 +168,7 @@ impl SeerrClient {
         if (200..300).contains(&code) {
             Ok(response)
         } else {
-            Err(refusal(code, posted, response))
+            Err(refusal(code, key_worked, response))
         }
     }
 
@@ -193,7 +197,10 @@ impl SeerrClient {
         if let Some(user) = as_user {
             request = request.header("X-Api-User", &user.to_string());
         }
-        Self::json(what, Self::checked(what, false, request.call())?)
+        let worked = self.key_worked.load(Ordering::Relaxed);
+        let response = Self::checked(what, worked, request.call())?;
+        self.key_worked.store(true, Ordering::Relaxed);
+        Self::json(what, response)
     }
 
     /// Who the requests go as: the Seerr user with the viewer's Jellyfin id, else the key's owner.
@@ -426,6 +433,7 @@ impl RequestServer for SeerrClient {
         if let Some(user) = self.as_viewer()? {
             request = request.header("X-Api-User", &user.to_string());
         }
+        // Asking for something, the key went through already (whom the request goes as).
         Self::checked("request", true, request.send_json(&body)).map(drop)
     }
 

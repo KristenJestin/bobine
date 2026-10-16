@@ -33,6 +33,18 @@ fn a_wrong_key_says_so() {
 }
 
 #[test]
+fn a_read_refused_once_the_key_worked_is_a_right_the_viewer_lacks() {
+    let fake = FakeSeerr::start();
+    fake.state.lock().unwrap().discover_forbidden = true;
+    let seerr = client(&fake);
+    assert!(seerr.check().is_ok());
+    assert_eq!(
+        seerr.discover(DiscoverRow::Trending),
+        Err(RequestError::Forbidden)
+    );
+}
+
+#[test]
 fn an_address_where_no_seerr_answers_says_so() {
     let fake = FakeSeerr::start();
     fake.state.lock().unwrap().not_seerr = true;

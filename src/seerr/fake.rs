@@ -60,6 +60,8 @@ pub struct State {
     pub seen: Vec<Seen>,
     /// Answers every route like a web server that is not Seerr.
     pub not_seerr: bool,
+    /// Discover refuses the viewer, the key working elsewhere.
+    pub discover_forbidden: bool,
     /// The title of this TMDb id cannot be read: its page answers 500.
     pub failing_title: Option<u64>,
     /// Answers every route with a redirect there, as a proxy moved elsewhere would.
@@ -366,6 +368,7 @@ fn answer(state: &mut State, seen: &Seen) -> Answer {
             hits.push(json!({ "id": 31, "mediaType": "person", "name": "Ines Varga" }));
             Answer::Json(200, page(hits))
         }
+        ("GET", ["discover", ..]) if state.discover_forbidden => refused(),
         ("GET", ["discover", "trending"]) => Answer::Json(200, page(catalogue(state))),
         ("GET", ["discover", "movies"]) => {
             let movies = catalogue(state)
@@ -481,6 +484,7 @@ impl FakeSeerr {
             not_seerr: false,
             redirect_to: None,
             failing_title: None,
+            discover_forbidden: false,
             no_viewer: false,
             movie_quota: None,
             requested: Vec::new(),

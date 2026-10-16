@@ -113,7 +113,7 @@ pub fn error_line(error: &RequestError) -> &'static str {
         RequestError::Redirected => "Seerr answered with a redirect: check the address.",
         RequestError::KeyRefused => "Seerr refused the API key.",
         RequestError::Quota => "Your request quota is reached.",
-        RequestError::Forbidden => "Seerr refused the request.",
+        RequestError::Forbidden => "Seerr refused this action for your account.",
         RequestError::AlreadyRequested => "It was requested already.",
         RequestError::NotFound => "Seerr does not know this title.",
         RequestError::Unreachable(_) => "Seerr cannot be reached.",
@@ -260,6 +260,14 @@ mod tests {
         assert_eq!(
             check_lines(&owner).1.as_deref(),
             Some("No Seerr user has your Jellyfin account: requests go as Owner.")
+        );
+    }
+
+    #[test]
+    fn a_refusal_once_the_key_worked_says_it_is_the_account() {
+        assert_eq!(
+            error_line(&RequestError::Forbidden),
+            "Seerr refused this action for your account."
         );
     }
 
