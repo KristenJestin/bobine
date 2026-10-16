@@ -12,6 +12,17 @@ pub const LETTERS: [char; 27] = [
     'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z',
 ];
 
+/// Where a letter stands on the bar, from the top.
+pub fn letter_index(letter: char) -> Option<usize> {
+    LETTERS.iter().position(|&l| l == letter)
+}
+
+/// How much the letter at `index` is the current one while the highlight is at `position` of
+/// the bar: all of it on the spot, none a letter away, so that it moves from one to the other.
+pub fn letter_weight(position: f32, index: usize) -> f32 {
+    (1. - (position - index as f32).abs()).clamp(0., 1.)
+}
+
 /// How a grid is ordered. Each way has the direction that suits it: the newest, the best rated
 /// first, the titles from A to Z.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -131,6 +142,29 @@ fn plain(letter: char) -> Option<char> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_letter_stands_where_the_bar_draws_it() {
+        assert_eq!(letter_index('#'), Some(0));
+        assert_eq!(letter_index('A'), Some(1));
+        assert_eq!(letter_index('Z'), Some(26));
+        assert_eq!(letter_index('é'), None);
+    }
+
+    #[test]
+    fn the_highlight_is_wholly_on_a_letter_it_rests_on() {
+        assert_eq!(letter_weight(6., 6), 1.);
+        assert_eq!(letter_weight(6., 5), 0.);
+        assert_eq!(letter_weight(6., 7), 0.);
+        assert_eq!(letter_weight(6., 20), 0.);
+    }
+
+    #[test]
+    fn the_highlight_between_two_letters_is_shared_by_them() {
+        assert_eq!(letter_weight(6.25, 6), 0.75);
+        assert_eq!(letter_weight(6.25, 7), 0.25);
+        assert_eq!(letter_weight(6.25, 5), 0.);
+    }
 
     #[test]
     fn a_new_grid_is_the_whole_library_newest_first() {
