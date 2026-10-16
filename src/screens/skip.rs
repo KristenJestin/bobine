@@ -31,7 +31,7 @@ pub fn button(
         press: rgb(0xd4d4d8),
     };
     let rise = (BOTTOM_CONTROLS_HEIGHT + ABOVE_CONTROLS - EDGE) * controls;
-    theme::eased("player-skip", shades, window, cx)
+    super::player::keeps_clicks(theme::eased("player-skip", shades, window, cx))
         .absolute()
         .right(px(EDGE - 16. * (1. - shown)))
         .bottom(px(EDGE + rise))
@@ -46,6 +46,7 @@ pub fn button(
         .text_size(px(15.))
         .font_weight(FontWeight::SEMIBOLD)
         .cursor_pointer()
+        .debug_selector(|| "player-skip".into())
         .on_click(cx.listener(|shell, _, window, cx| shell.press_skip(window, cx)))
         .child(div().child(button.label.text()))
         .child(icon(IconName::SkipForward, 18.))

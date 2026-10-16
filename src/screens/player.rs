@@ -149,7 +149,8 @@ pub fn render(
         .on_mouse_down(
             MouseButton::Left,
             cx.listener(|shell, event: &MouseDownEvent, window, cx| {
-                if event.click_count == 2 {
+                // A button or a box over the picture keeps its clicks.
+                if event.click_count == 2 && !window.default_prevented() {
                     shell.player_double_click(f32::from(event.position.y), window, cx);
                 }
             }),
@@ -173,16 +174,22 @@ pub fn render(
                     .flex()
                     .items_center()
                     .justify_center()
-                    .child(
+                    .child(keeps_clicks(
                         div()
+                            .id("player-error")
                             .px(px(20.))
                             .py(px(14.))
                             .rounded(px(theme::RADIUS_LARGE))
                             .bg(theme::panel())
                             .child(format!("Cannot play: {error}")),
-                    ),
+                    )),
             )
         })
+}
+
+/// A double click on `element` is not one on the picture: fullscreen stays as it is.
+pub fn keeps_clicks<E: InteractiveElement>(element: E) -> E {
+    element.on_mouse_down(MouseButton::Left, |_, window, _| window.prevent_default())
 }
 
 /// One line at the top, over the picture whether the controls show or not: the server
@@ -552,7 +559,7 @@ fn round_button(id: &'static str, side: f32, window: &mut Window, cx: &mut App) 
 }
 
 fn round(button: Stateful<Div>, side: f32) -> Stateful<Div> {
-    button
+    keeps_clicks(button)
         .size(px(side))
         .flex()
         .items_center()
@@ -567,7 +574,7 @@ fn text_button(
     window: &mut Window,
     cx: &mut App,
 ) -> Stateful<Div> {
-    theme::eased(id, theme::Shades::veil(), window, cx)
+    keeps_clicks(theme::eased(id, theme::Shades::veil(), window, cx))
         .px(px(12.))
         .py(px(8.))
         .rounded(px(theme::RADIUS))

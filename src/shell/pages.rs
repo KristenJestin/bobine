@@ -2482,6 +2482,79 @@ mod tests {
         );
     }
 
+    /// A double click on the skip button is two presses of the button, never a double click on
+    /// the picture.
+    #[gpui_kit::test]
+    fn a_double_click_on_skip_skips_once_and_keeps_the_window_as_it_is(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        use crate::player::fake::{Call, FakePlayer};
+        use crate::player::session::Session;
+        use crate::player::{PlayerEvent, Seek};
+        use crate::video::fake::FakeDisplay;
+        use bobine::provider::{Segment, SegmentKind};
+        use gpui_kit::{Modifiers, MouseButton, MouseDownEvent, MouseUpEvent};
+
+        let (_server, window) = signed_in_window(cx);
+        let player = FakePlayer::default();
+        let calls = player.calls.clone();
+        player.queued.borrow_mut().extend([
+            PlayerEvent::Loaded,
+            PlayerEvent::FirstFrame,
+            PlayerEvent::Duration(6000.),
+            PlayerEvent::Position(10.),
+        ]);
+        window
+            .update(cx, |shell, window, cx| {
+                let mut session = Session::new(
+                    Box::new(player),
+                    Box::new(FakeDisplay::default()),
+                    "Le Dernier Hiver".into(),
+                    None,
+                );
+                session.set_segments(vec![Segment {
+                    kind: SegmentKind::Intro,
+                    start: Duration::ZERO,
+                    end: Duration::from_secs(90),
+                }]);
+                session.update(Instant::now());
+                assert!(session.skip_button().is_some());
+                shell.begin_playback(session, None, window, cx);
+            })
+            .unwrap();
+        let mut visual = drawn(&window, cx);
+        let at = visual
+            .debug_bounds("player-skip")
+            .expect("the skip button")
+            .center();
+        for click_count in [1, 2] {
+            let (button, modifiers) = (MouseButton::Left, Modifiers::none());
+            visual.simulate_event(MouseDownEvent {
+                position: at,
+                modifiers,
+                button,
+                click_count,
+                first_mouse: false,
+            });
+            visual.simulate_event(MouseUpEvent {
+                position: at,
+                modifiers,
+                button,
+                click_count,
+            });
+        }
+        let seeks = calls
+            .borrow()
+            .iter()
+            .filter(|call| matches!(call, Call::Seek(Seek::To(_))))
+            .count();
+        assert_eq!(seeks, 1);
+        let fullscreen = window
+            .update(cx, |_, window, _| window.is_fullscreen())
+            .unwrap();
+        assert!(!fullscreen);
+    }
+
     /// The server answered "play" just before the sign out: the film must not start behind the
     /// login.
     #[gpui_kit::test]
