@@ -1,0 +1,8 @@
+{
+  "Items": [
+    { "Name": "Howl at Dusk", "Id": "f00000000000000000000000000000a1", "Type": "Movie", "ProductionYear": 2011, "UserData": { "Played": false }, "ImageTags": { "Primary": "poster-hd" } },
+    { "Name": "Howl at Dawn", "Id": "f00000000000000000000000000000a2", "Type": "Movie", "ProductionYear": 2015, "UserData": { "Played": false }, "ImageTags": { "Primary": "poster-hw" } }
+  ],
+  "TotalRecordCount": 2,
+  "StartIndex": 0
+}

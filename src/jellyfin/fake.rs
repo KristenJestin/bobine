@@ -38,6 +38,7 @@ fn fixture(name: &str) -> Value {
         "boxsets" => include_str!("fixtures/boxsets.json"),
         "favourites" => include_str!("fixtures/favourites.json"),
         "boxset_sea_stories" => include_str!("fixtures/boxset_sea_stories.json"),
+        "boxset_lone_wolves" => include_str!("fixtures/boxset_lone_wolves.json"),
         "boxset_harbour_trilogy" => include_str!("fixtures/boxset_harbour_trilogy.json"),
         "similar" => include_str!("fixtures/similar.json"),
         "resume" => include_str!("fixtures/resume.json"),
@@ -446,6 +447,10 @@ fn answer(state: &State, seen: &Seen) -> Answer {
             (Some("b0000000000000000000000000000002"), _) => {
                 Answer::Json(200, of_types(fixture("boxset_harbour_trilogy"), seen))
             }
+            (Some("b0000000000000000000000000000003"), _) => Answer::Json(
+                200,
+                limited(of_types(fixture("boxset_lone_wolves"), seen), seen),
+            ),
             _ => Answer::Json(200, json!({ "Items": [], "TotalRecordCount": 0 })),
         },
         ("GET", path) if path == format!("/Items/{FILM}") => {

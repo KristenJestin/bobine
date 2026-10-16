@@ -1053,7 +1053,14 @@ impl MediaServer for FakeServer {
                 let collection = collection(&state, n);
                 CollectionCard {
                     films: Some(collection.films.len() as u32),
-                    poster: image(&collection.id.0, ImageKind::Primary),
+                    // As the Jellyfin provider does for a collection with no picture of its own.
+                    poster: match collection.backdrop {
+                        Some(_) => image(&collection.id.0, ImageKind::Primary),
+                        None => collection
+                            .films
+                            .first()
+                            .and_then(|film| film.poster.clone()),
+                    },
                     id: collection.id,
                     name: collection.name,
                 }
@@ -1199,7 +1206,10 @@ fn collection(state: &State, n: usize) -> CollectionDetail {
              sont sortis."
                 .into(),
         ),
-        backdrop: image(&id, ImageKind::Backdrop),
+        // Every fourth has no picture, to show the first film's poster in its place.
+        backdrop: (n % 4 != 3)
+            .then(|| image(&id, ImageKind::Backdrop))
+            .flatten(),
         films,
         id: ItemId(id),
     }

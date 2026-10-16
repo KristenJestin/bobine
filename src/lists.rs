@@ -116,6 +116,26 @@ mod tests {
     }
 
     #[test]
+    fn a_collection_with_no_picture_of_its_own_wears_its_first_films_poster() {
+        let server = FakeServer::new(12, false);
+        let bare: Vec<CollectionCard> = server
+            .collections()
+            .unwrap()
+            .into_iter()
+            .filter(|card| server.collection(&card.id).unwrap().backdrop.is_none())
+            .collect();
+        assert!(
+            !bare.is_empty(),
+            "the fake holds collections with no picture"
+        );
+        for card in bare {
+            let first = server.collection(&card.id).unwrap().films.remove(0);
+            assert_eq!(card.poster, first.poster, "{}", card.name);
+            assert!(card.poster.is_some(), "{}", card.name);
+        }
+    }
+
+    #[test]
     fn the_collections_are_listed_by_name() {
         let names: Vec<String> = all_cards().into_iter().map(|c| c.name).collect();
         assert!(names.is_sorted(), "{names:?}");
