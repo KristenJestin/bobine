@@ -22,8 +22,6 @@ const WIDTH: f32 = 680.;
 const MESSAGE_HEIGHT: f32 = 64.;
 /// Room kept under the last row.
 const LIST_END: f32 = 8.;
-/// What the highlight keeps free at the right of a row for its "Entrée" key.
-const HINT_ROOM: f32 = 64.;
 /// How far the palette slides while it fades.
 const SLIDE: f32 = 14.;
 
@@ -94,13 +92,13 @@ pub fn palette(
                 .child(
                     div()
                         .relative()
-                        .px(px(10.))
+                        .px(px(search::LIST_PAD))
                         .pb(px(LIST_END))
                         .child(
                             div()
                                 .absolute()
-                                .left(px(10.))
-                                .right(px(10.))
+                                .left(px(search::LIST_PAD))
+                                .right(px(search::LIST_PAD))
                                 .top(px(highlight))
                                 .h(px(search::highlight_height()))
                                 .rounded(px(10.))
@@ -111,12 +109,12 @@ pub fn palette(
                         .child(
                             div()
                                 .absolute()
-                                .right(px(20.))
+                                .right(px(search::LIST_PAD + search::HINT_INSET))
                                 .top(px(search::hint_top(highlight)))
                                 .h(px(search::HINT_HEIGHT))
                                 .flex()
                                 .items_center()
-                                .child(key_cap("Entrée")),
+                                .child(key_cap(search::ENTER_KEY)),
                         ),
                 )
                 .into_any_element(),
@@ -330,7 +328,7 @@ fn result(shell: &mut Shell, hit: Hit, index: usize, cx: &mut Context<Shell>) ->
                 }),
         )
         // Room for the highlight's "Entrée", so a row reads the same selected or not.
-        .pr(px(HINT_ROOM))
+        .pr(px(search::hint_room()))
         .into_any_element()
 }
 
@@ -342,12 +340,12 @@ fn key_cap(label: &'static str) -> Div {
 fn key_frame() -> Div {
     div()
         .flex_none()
-        .px(px(5.))
-        .py(px(1.))
+        .px(px(search::KEY_PAD_X))
+        .py(px(search::KEY_PAD_Y))
         .rounded(px(4.))
         .border_1()
         .border_color(rgba(0x33333aff))
-        .text_size(px(10.))
+        .text_size(px(search::KEY_TEXT))
         .text_color(theme::dim())
 }
 

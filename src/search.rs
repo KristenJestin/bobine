@@ -27,6 +27,33 @@ pub const POSTER_WIDTH: f32 = 67.;
 pub const PERSON_PHOTO: f32 = 84.;
 /// The "Entrée" key, drawn at the right end of the highlight.
 pub const HINT_HEIGHT: f32 = 18.;
+pub const ENTER_KEY: &str = "Entrée";
+/// A key cap's own sizes: its drawing and the room a row keeps for it both read these.
+pub const KEY_TEXT: f32 = 10.;
+pub const KEY_PAD_X: f32 = 5.;
+pub const KEY_PAD_Y: f32 = 1.;
+/// The cap's outline, `border_1`.
+pub const KEY_BORDER: f32 = 1.;
+/// The space around the list of rows, which the highlight and the rows stay inside.
+pub const LIST_PAD: f32 = 10.;
+/// How far inside the highlight's right edge the "Entrée" key ends.
+pub const HINT_INSET: f32 = 10.;
+/// What a row keeps free between its text and the key.
+const HINT_GAP: f32 = 8.;
+/// What a glyph of the interface font is at most wide, in em: the text is only measured when
+/// drawn, and a row has to reserve its room before.
+const GLYPH_EM: f32 = 0.6;
+
+/// How wide a key cap is for `label`.
+pub fn key_cap_width(label: &str) -> f32 {
+    label.chars().count() as f32 * KEY_TEXT * GLYPH_EM + 2. * (KEY_PAD_X + KEY_BORDER)
+}
+
+/// What a row keeps free at its right for the highlight's "Entrée" key, counted from the row's
+/// edge, which is the highlight's.
+pub fn hint_room() -> f32 {
+    HINT_INSET + key_cap_width(ENTER_KEY) + HINT_GAP
+}
 
 /// The height of the highlight, which is a row without the space under it.
 pub fn highlight_height() -> f32 {
@@ -757,6 +784,26 @@ mod tests {
             assert!(highlight_height() >= image + 12., "{image} in a row");
         }
         assert_eq!(highlight_height() + ROW_GAP, ROW_HEIGHT);
+    }
+
+    #[test]
+    fn a_row_keeps_room_for_the_enter_key_and_a_little_more() {
+        let key = key_cap_width(ENTER_KEY);
+        // The key is inside the highlight by its inset, and its width is the cap's own.
+        assert!(
+            hint_room() >= HINT_INSET + key + HINT_GAP,
+            "{}",
+            hint_room()
+        );
+        assert_eq!(hint_room(), HINT_INSET + key + HINT_GAP);
+        // The key is taller than its text, and the hint's height holds the cap.
+        assert!(std::hint::black_box(HINT_HEIGHT) >= KEY_TEXT + 2. * (KEY_PAD_Y + KEY_BORDER));
+    }
+
+    #[test]
+    fn a_longer_label_makes_a_wider_key() {
+        assert!(key_cap_width("Échap") < key_cap_width("Entrée"));
+        assert_eq!(key_cap_width(""), 2. * (KEY_PAD_X + KEY_BORDER));
     }
 
     #[test]
