@@ -648,7 +648,8 @@ impl Shell {
 mod tests {
     use super::*;
     use crate::fake::FakeServer;
-    use bobine::provider::MediaServer;
+    use bobine::provider::{Connector, MediaServer};
+    use std::sync::Arc;
 
     /// What the server answered to one load of the Home.
     struct Answers {
@@ -713,6 +714,56 @@ mod tests {
             ids(&home.next_row),
             latest,
         ]
+    }
+
+    /// While the header moves by itself, only the header is drawn again: the shell, which draws
+    /// the whole window, is neither notified nor built again at the header's rate.
+    #[gpui_kit::test]
+    fn an_idle_home_with_its_header_showing_does_not_rebuild_the_window(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        let server: Arc<dyn Connector> = Arc::new(FakeServer::new(6, true));
+        let window =
+            cx.add_window(|_, cx| Shell::new(None, Box::new(move || Ok(server)), None, cx));
+        cx.run_until_parked();
+        let shell = window.root(cx).unwrap();
+        cx.read(|cx| {
+            let shell = shell.read(cx);
+            assert_eq!(shell.navigator.current(), Screen::Home);
+            assert!(
+                shell.home.featured().len() > 1,
+                "the header must take turns"
+            );
+            assert!(shell.hero_ticker.is_some(), "the header's time must run");
+        });
+        let notified = Rc::new(std::cell::Cell::new(0));
+        cx.update(|cx| {
+            let notified = Rc::clone(&notified);
+            cx.observe(&shell, move |_, _| notified.set(notified.get() + 1))
+                .detach();
+        });
+        let drawn = |cx: &mut gpui_kit::TestAppContext| {
+            cx.read(|cx| {
+                let draws = shell.read(cx).draws.borrow();
+                (draws.shell.len(), draws.hero.len())
+            })
+        };
+        let (shell_before, hero_before) = drawn(cx);
+
+        // Two seconds of the header's time, look after look.
+        for _ in 0..(2000 / HERO_TICK.as_millis()) {
+            cx.executor().advance_clock(HERO_TICK);
+            cx.run_until_parked();
+        }
+
+        let (shell_after, hero_after) = drawn(cx);
+        assert!(
+            hero_after - hero_before >= 30,
+            "the header must have moved: drawn {} times",
+            hero_after - hero_before
+        );
+        assert_eq!(notified.get(), 0, "the shell was notified");
+        assert_eq!(shell_after - shell_before, 0, "the shell was built again");
     }
 
     #[test]
