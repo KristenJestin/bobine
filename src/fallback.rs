@@ -11,9 +11,13 @@ use crate::film_page::Plan;
 use crate::player::PlayerError;
 use crate::player::session::Session;
 
-/// How long an open file may go without a picture: the seek to a resume point over the network
-/// comes first.
-pub const FIRST_PICTURE_WAIT: Duration = Duration::from_secs(10);
+/// How long an open file may go without a picture: the seek to a resume point over a slow
+/// network comes first.
+pub const FIRST_PICTURE_WAIT: Duration = Duration::from_secs(20);
+
+/// The same for a conversion: a slow server encodes its first segment after the resume point,
+/// a 4K one to H.264 at that, before any picture comes.
+pub const FIRST_CONVERTED_PICTURE_WAIT: Duration = Duration::from_secs(60);
 
 /// How long the conversion notice stays once the converted picture shows.
 pub const NOTICE_FOR: Duration = Duration::from_secs(5);
@@ -35,9 +39,13 @@ pub fn step(method: PlayMethod, session: &Session, planned: Duration, now: Insta
         return Step::Nothing;
     }
     let failed = session.error().is_some();
+    let wait = match method {
+        PlayMethod::DirectPlay => FIRST_PICTURE_WAIT,
+        PlayMethod::Transcode => FIRST_CONVERTED_PICTURE_WAIT,
+    };
     let late = session
         .loaded_at()
-        .is_some_and(|loaded| now.duration_since(loaded) >= FIRST_PICTURE_WAIT);
+        .is_some_and(|loaded| now.duration_since(loaded) >= wait);
     match method {
         PlayMethod::DirectPlay if failed || late => Step::Convert {
             from: if session.position_known() {
@@ -220,7 +228,7 @@ mod tests {
             f.after(1, vec![PlayerEvent::Loaded, PlayerEvent::Position(4330.)]),
             Step::Nothing
         );
-        assert_eq!(f.after(9, vec![]), Step::Nothing, "still within the wait");
+        assert_eq!(f.after(19, vec![]), Step::Nothing, "still within the wait");
         assert_eq!(
             f.after(1, vec![]),
             Step::Convert {
@@ -234,7 +242,12 @@ mod tests {
         let mut f = Fixture::new();
         f.convert(Duration::from_secs(60));
         assert_eq!(f.after(1, vec![PlayerEvent::Loaded]), Step::Nothing);
-        assert_eq!(f.after(10, vec![]), Step::CannotPlay);
+        assert_eq!(
+            f.after(59, vec![]),
+            Step::Nothing,
+            "a slow server's first converted picture"
+        );
+        assert_eq!(f.after(1, vec![]), Step::CannotPlay);
     }
 
     #[test]
