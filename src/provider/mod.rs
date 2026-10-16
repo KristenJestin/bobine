@@ -125,6 +125,28 @@ pub trait MediaServer: Send + Sync {
     /// A new playback of a version the player could not play as it is: the server converts it,
     /// from `request.start`, with the tracks asked.
     fn transcode(&self, request: &TranscodeRequest) -> Result<Playback, ProviderError>;
+    /// The stretches of a film or an episode the server marked (intro, credits…), by start. A
+    /// server that does not know them, or an item without any, answers none: never an error.
+    fn media_segments(&self, item: &ItemId) -> Result<Vec<Segment>, ProviderError>;
+}
+
+/// What a marked stretch of a film or an episode is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SegmentKind {
+    Intro,
+    /// The credits.
+    Outro,
+    /// What happened before, at the start of an episode.
+    Recap,
+    Preview,
+}
+
+/// A stretch of a film or an episode the server marked, from `start` to `end` in its time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Segment {
+    pub kind: SegmentKind,
+    pub start: Duration,
+    pub end: Duration,
 }
 
 /// A film, a series or an episode, as a row of the Home lists it.

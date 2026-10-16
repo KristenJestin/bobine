@@ -47,6 +47,8 @@ pub enum KeyAction {
     ToggleFullscreen,
     ExitFullscreen,
     Leave,
+    /// Enter: the skip button, while it shows.
+    PressSkip,
 }
 
 /// The action of a key, by GPUI's name for it. Escape leaves fullscreen first, then the player.
@@ -61,6 +63,7 @@ pub fn key_action(key: &str, with_modifier: bool, fullscreen: bool) -> Option<Ke
         "left" => Some(KeyAction::SeekBy(-SKIP_SECONDS)),
         "right" => Some(KeyAction::SeekBy(SKIP_SECONDS)),
         "f" => Some(KeyAction::ToggleFullscreen),
+        "enter" => Some(KeyAction::PressSkip),
         "escape" if fullscreen => Some(KeyAction::ExitFullscreen),
         "escape" => Some(KeyAction::Leave),
         _ => None,
@@ -154,7 +157,17 @@ mod tests {
     #[test]
     fn other_keys_do_nothing() {
         assert_eq!(key_action("a", false, false), None);
-        assert_eq!(key_action("enter", false, false), None);
+        assert_eq!(key_action("tab", false, false), None);
+    }
+
+    #[test]
+    fn enter_presses_the_skip_button() {
+        assert_eq!(
+            key_action("enter", false, false),
+            Some(KeyAction::PressSkip)
+        );
+        assert_eq!(key_action("enter", false, true), Some(KeyAction::PressSkip));
+        assert_eq!(key_action("enter", true, false), None);
     }
 
     #[test]

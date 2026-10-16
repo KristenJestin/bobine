@@ -2521,3 +2521,66 @@ fn a_tile_the_server_does_not_have_is_not_found() {
         Err(ProviderError::NotFound)
     );
 }
+
+#[test]
+fn the_segments_of_a_film_are_read_typed_and_in_order() {
+    let s = Setup::new();
+    let segments = s.signed_in().media_segments(&film()).unwrap();
+    let seconds = |start: u64, end: u64| (Duration::from_secs(start), Duration::from_secs(end));
+    let found: Vec<(SegmentKind, (Duration, Duration))> = segments
+        .iter()
+        .map(|segment| (segment.kind, (segment.start, segment.end)))
+        .collect();
+    assert_eq!(
+        found,
+        [
+            (SegmentKind::Recap, seconds(0, 90)),
+            (SegmentKind::Intro, seconds(90, 150)),
+            (SegmentKind::Preview, seconds(7080, 7140)),
+            (SegmentKind::Outro, seconds(7140, 7860)),
+        ]
+    );
+    let asked = s.fake.last("GET", &format!("/MediaSegments/{FILM}"));
+    let types: Vec<&str> = asked
+        .query
+        .iter()
+        .filter(|(key, _)| key.eq_ignore_ascii_case("includeSegmentTypes"))
+        .map(|(_, value)| value.as_str())
+        .collect();
+    assert_eq!(types, ["Intro", "Outro", "Recap", "Preview"]);
+}
+
+#[test]
+fn a_server_without_media_segments_has_none_and_no_error() {
+    let s = Setup::new();
+    s.fake
+        .state
+        .lock()
+        .unwrap()
+        .broken
+        .push((format!("/MediaSegments/{FILM}"), 404));
+    assert_eq!(s.signed_in().media_segments(&film()).unwrap(), []);
+}
+
+#[test]
+fn an_item_without_segments_has_none() {
+    let s = Setup::new();
+    let other = ItemId("f0000000000000000000000000000099".into());
+    assert_eq!(s.signed_in().media_segments(&other).unwrap(), []);
+}
+
+#[test]
+fn a_segments_route_that_fails_is_an_error_left_to_the_caller() {
+    let s = Setup::new();
+    let server = s.signed_in();
+    s.fake
+        .state
+        .lock()
+        .unwrap()
+        .broken
+        .push((format!("/MediaSegments/{FILM}"), 500));
+    assert_eq!(
+        server.media_segments(&film()),
+        Err(ProviderError::Server(500))
+    );
+}

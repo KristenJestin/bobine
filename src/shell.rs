@@ -6,6 +6,7 @@ mod pages;
 mod palette;
 mod preview;
 mod series;
+mod skip;
 
 pub use home::{HomePage, ListPage};
 pub use lists::{CollectionPage, CollectionsPage, MyListPage};
@@ -14,14 +15,15 @@ pub use palette::{PersonPage, SearchState};
 pub use series::SeriesPage;
 
 use std::cell::RefCell;
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    Animation, AnimationExt, Context, Entity, FocusHandle, Focusable, IntoElement, KeyDownEvent,
-    Pixels, Render, SharedString, Size, Subscription, Task, Window, div, px,
+    Animation, AnimationExt, App, Context, Entity, FocusHandle, Focusable, IntoElement,
+    KeyDownEvent, Pixels, Render, SharedString, Size, Subscription, Task, Window, div, px,
 };
 
 use bobine::provider::{
@@ -30,12 +32,14 @@ use bobine::provider::{
 };
 
 use crate::chrome::{back_link, pill_bar};
+use crate::config::Settings;
 use crate::fallback::Fallback;
 use crate::images::Images;
 use crate::motion::{self, Fade, Presence};
 use crate::navigation::{Navigator, Screen};
 use crate::player::libmpv::Libmpv;
 use crate::player::mpv::MpvPlayer;
+use crate::player::segments::{Button, Label, offered};
 use crate::player::session::{Session, WindowRequest};
 use crate::player::{Media, Player};
 use crate::reports::{self, Reporting};
@@ -44,8 +48,10 @@ use crate::search;
 use crate::series_page::{self, UpNext};
 use crate::theme;
 use crate::video::Rect;
+use crate::video::blackout::{self, layer::Screens};
 use crate::video::subsurface::{VideoSurface, Wayland};
 use preview::SeekPreview;
+use uuid::Uuid;
 
 /// How often the player is asked what changed, and the controls checked for hiding.
 const PLAYER_TICK: Duration = Duration::from_millis(100);
@@ -116,6 +122,16 @@ pub struct Shell {
     pub playback: Option<Playback>,
     /// What the video binds of the compositor, once for this window: films reuse it.
     wayland: Option<Rc<RefCell<Wayland>>>,
+    /// What the viewer chose, and where it is kept (`None`: kept nowhere).
+    pub settings: Settings,
+    settings_path: Option<PathBuf>,
+    /// What turns the other monitors black, from the first film on; `None` after that when the
+    /// compositor cannot (no layer shell): the switch is not offered.
+    screens: Option<Screens>,
+    screens_tried: bool,
+    window_seen: blackout::Steady<(bool, Option<Uuid>)>,
+    /// The "Black out other screens" switch slides from one side to the other.
+    pub blackout_switch: Fade,
     /// The kept session is being looked for: nothing to show yet.
     pub starting: bool,
     connector: Option<Arc<dyn Connector>>,
@@ -187,6 +203,12 @@ pub struct Playback {
     reporting: Option<Reporting>,
     /// The episode after the one playing: the card offers it at the end.
     next: Option<Episode>,
+    /// Told apart from every other playback: an answer on its way for one already left is
+    /// dropped.
+    generation: u64,
+    /// The skip button fades in and out; what it said stays drawn while it fades out.
+    skip_fade: Presence<Button>,
+    skip_label: Option<Label>,
     /// The pointer over the seek bar: the time under it and the thumbnail of that moment.
     seek: SeekPreview,
     /// What the server converts when the file does not play; `None` for a local file.
@@ -204,7 +226,17 @@ pub struct Film {
 }
 
 impl Shell {
-    pub fn new(font: Option<SharedString>, open: OpenConnector, cx: &mut Context<Self>) -> Self {
+    pub fn new(
+        font: Option<SharedString>,
+        open: OpenConnector,
+        settings_path: Option<PathBuf>,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let settings = settings_path
+            .as_deref()
+            .map(Settings::read)
+            .unwrap_or_default();
+        let blackout_switch = Fade::starting_at(motion::quick(), settings.black_out_other_monitors);
         let this = cx.weak_entity();
         let hero_view = cx.new(|_| screens::HeroView::new(this));
         let mut shell = Self {
@@ -213,6 +245,12 @@ impl Shell {
             font,
             playback: None,
             wayland: None,
+            settings,
+            settings_path,
+            screens: None,
+            screens_tried: false,
+            window_seen: blackout::Steady::default(),
+            blackout_switch,
             starting: true,
             connector: None,
             server: None,
@@ -288,6 +326,10 @@ impl Shell {
                 .insert(Rc::new(RefCell::new(Wayland::new(window)?)))
                 .clone(),
         };
+        if !self.screens_tried {
+            self.screens_tried = true;
+            self.screens = Screens::connect().ok();
+        }
         let display = VideoSurface::new(wayland, mpv.clone())?;
         let mut player = MpvPlayer::new(mpv);
         player.load(media).map_err(|e| e.to_string())?;
@@ -320,6 +362,9 @@ impl Shell {
             had_error: false,
             reporting,
             next: None,
+            generation: 0,
+            skip_fade: Presence::new(motion::quick()),
+            skip_label: None,
             seek: SeekPreview::new(),
             fallback: None,
             notice_fade: Fade::new(motion::quick()),
@@ -336,12 +381,15 @@ impl Shell {
     /// Closes the player: the video surface and mpv go before anything else does. The server is
     /// told the playback stopped; the handle ends once it has been.
     pub fn stop_playback(&mut self) -> Option<std::thread::JoinHandle<()>> {
-        let Playback {
-            session, reporting, ..
-        } = self.playback.take()?;
-        let reports = reporting.map(|reporting| reporting.finish(&session));
-        drop(session);
-        reports
+        // The covers first: mpv shutting down can take a moment.
+        blackout::stop_with(self.screens.as_mut(), || {
+            let Playback {
+                session, reporting, ..
+            } = self.playback.take()?;
+            let reports = reporting.map(|reporting| reporting.finish(&session));
+            drop(session);
+            reports
+        })
     }
 
     /// The window is closing: the film goes, the server is told where it stopped (a moment
@@ -351,7 +399,45 @@ impl Shell {
         if let Some(reports) = self.stop_playback() {
             reports::wait(reports, CLOSE_WAITS_FOR_REPORTS);
         }
+        self.screens = None;
         self.wayland = None;
+    }
+
+    /// The "Black out other screens" switch is offered: the compositor can cover a monitor.
+    #[cfg(feature = "harness")]
+    pub fn blackout_offered(&self) -> bool {
+        self.screens.is_some()
+    }
+
+    /// The switch was pressed: the option changes, is kept, and applies at once.
+    pub fn toggle_blackout(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.settings.black_out_other_monitors = !self.settings.black_out_other_monitors;
+        if let Some(path) = &self.settings_path {
+            // Not kept, the option still holds until Bobine quits.
+            let _ = self.settings.save(path);
+        }
+        self.follow_blackout(window, cx);
+        cx.notify();
+    }
+
+    /// The other monitors are covered while a film plays fullscreen with the option on, and
+    /// uncovered as soon as one of those stops, whoever ended the fullscreen.
+    fn follow_blackout(&mut self, window: &Window, cx: &App) {
+        let Some(screens) = &mut self.screens else {
+            return;
+        };
+        let fullscreen = window.is_fullscreen();
+        let window_on = window.display(cx).and_then(|display| display.uuid().ok());
+        // Not on the tick the fullscreen starts: GPUI may still name the old monitor then.
+        let steady = self.window_seen.settles((fullscreen, window_on));
+        let wanted = steady
+            && blackout::wanted(
+                self.settings.black_out_other_monitors,
+                self.playback.is_some(),
+                fullscreen,
+            );
+        screens.want(wanted, window_on);
+        screens.beat();
     }
 
     /// Back to the page the film was started from. `ended`: the file ended by itself, and the
@@ -372,6 +458,7 @@ impl Shell {
         }
         self.release_tiles(window, cx);
         let reports = self.stop_playback();
+        self.follow_blackout(window, cx);
         self.navigator.back();
         if let Some(reports) = reports {
             self.after_playback(reports, cx);
@@ -401,6 +488,7 @@ impl Shell {
     }
 
     fn tick(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.follow_blackout(window, cx);
         let Some(playback) = &mut self.playback else {
             return;
         };
@@ -433,15 +521,18 @@ impl Shell {
             .fallback
             .as_ref()
             .is_some_and(|f| f.notice_shown(&playback.session, now));
+        let skip_label = playback.session.skip_button().map(|button| button.label);
         // Hidden controls have nothing to redraw: the video is not GPUI's.
         if shown
             || shown != playback.controls_shown
             || has_error != playback.had_error
             || notice != playback.notice_shown
+            || skip_label != playback.skip_label
         {
             playback.controls_shown = shown;
             playback.had_error = has_error;
             playback.notice_shown = notice;
+            playback.skip_label = skip_label;
             cx.notify();
         }
     }
@@ -514,17 +605,33 @@ impl Shell {
         let Some(playback) = &mut self.playback else {
             return;
         };
-        match playback
+        let request = playback
             .session
-            .key(key, with_modifier, window.is_fullscreen())
-        {
+            .key(key, with_modifier, window.is_fullscreen());
+        self.player_request(request, window, cx);
+        cx.notify();
+    }
+
+    /// What the session asks of the window after a key or a click.
+    fn player_request(
+        &mut self,
+        request: Option<WindowRequest>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match request {
             Some(WindowRequest::ToggleFullscreen | WindowRequest::ExitFullscreen) => {
                 window.toggle_fullscreen();
             }
             Some(WindowRequest::Leave) => self.leave_player(false, window, cx),
+            // The same end as the file's own: the next tick reports it and leaves.
+            Some(WindowRequest::EndPlayback) => self.tick(window, cx),
+            Some(WindowRequest::NextEpisode) => {
+                self.tick(window, cx);
+                self.play_up_next_now(window, cx);
+            }
             None => {}
         }
-        cx.notify();
     }
 
     pub fn player_back(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -642,6 +749,9 @@ impl Render for Shell {
                         .set(session.controls_visible(now), now);
                     playback.panel_fade.set(session.panel_open(), now);
                     let preview = playback.seek.draw(session.duration, now);
+                    let skip = playback
+                        .skip_fade
+                        .follow(offered(session.skip_button(), preview.is_some()), now);
                     let notice = playback
                         .fallback
                         .as_ref()
@@ -650,8 +760,14 @@ impl Render for Shell {
                     if playback.controls_fade.moving(now)
                         || playback.panel_fade.moving(now)
                         || playback.notice_fade.moving(now)
+                        || playback.skip_fade.moving(now)
                         || playback.seek.moving(now)
                     {
+                        window.request_animation_frame();
+                    }
+                    let switch = &mut self.blackout_switch;
+                    switch.set(self.settings.black_out_other_monitors, now);
+                    if switch.moving(now) {
                         window.request_animation_frame();
                     }
                     let shown = screens::player::Shown {
@@ -659,6 +775,8 @@ impl Render for Shell {
                         panel: playback.panel_fade.level(now),
                         preview,
                         notice: playback.notice_fade.level(now),
+                        blackout: self.screens.is_some().then(|| switch.level(now)),
+                        skip,
                     };
                     screens::player::render(session, shown, window, cx).into_any_element()
                 }

@@ -61,6 +61,7 @@ icons! {
     Minimize => "minimize",
     Star => "star",
     Circle => "circle",
+    SkipForward => "skip-forward",
 }
 
 /// The asset source of the window: the icons above and nothing else.
