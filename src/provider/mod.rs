@@ -218,10 +218,11 @@ pub struct Series {
     pub community_rating: Option<f32>,
     /// How many of its episodes the user has not watched.
     pub unwatched: u32,
-    /// Every one of its episodes is watched.
-    pub watched: bool,
-    /// In the user's list.
-    pub favourite: bool,
+    /// Every one of its episodes is watched: unknown for a series found through one of its
+    /// episodes or seasons, which says nothing of it.
+    pub watched: Option<bool>,
+    /// In the user's list: unknown like `watched`.
+    pub favourite: Option<bool>,
     pub poster: Option<ImageRef>,
     pub backdrop: Option<ImageRef>,
     /// The season the server handed in place of the series (a new season in Recently added):

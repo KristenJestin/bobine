@@ -1051,6 +1051,18 @@ impl Shell {
         }
     }
 
+    /// A genre of a page's facts: the library of `entry`, filtered on that genre, the same state
+    /// as choosing it in the genre menu. It opens over the page, which Back returns to.
+    pub fn open_genre(&mut self, entry: NavEntry, genre: String, cx: &mut Context<Self>) {
+        let Some(screen) = entry.target() else {
+            return;
+        };
+        self.forward.clear();
+        self.navigator.open(screen);
+        self.arrived(cx);
+        self.change_tools(|tools| tools.filters.genre = Some(genre), cx);
+    }
+
     /// The menus of the tools above the grid shown, and where their chips were drawn.
     fn tool_menus(&mut self) -> Option<(&mut Menus<Tool>, &[ChipBounds; 3])> {
         match self.navigator.current() {
@@ -1214,13 +1226,18 @@ impl Shell {
 
     fn load_collection(&mut self, depth: usize, id: ItemId, cx: &mut Context<Self>) {
         let asked = id.clone();
+        let stamp = self.marks.stamp();
         self.ask(
             cx,
             move |server| server.collection_of(&asked),
             move |shell, collection, _| {
+                let collection = collection.ok().flatten();
+                if let Some(collection) = &collection {
+                    shell.marks.listed(stamp, &collection.others);
+                }
                 if let Some(page) = shell.detail_page(depth, &id) {
                     // A failed lookup hides the row: the page is whole without it.
-                    page.collection = collection.ok().flatten();
+                    page.collection = collection;
                 }
             },
         );
@@ -1454,6 +1471,8 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        #[cfg(test)]
+        self.planned.push((plan.film.clone(), plan.start));
         let opened = match opened {
             Ok(opened) => opened,
             Err(error) => {
@@ -3158,5 +3177,315 @@ mod tests {
         with_a_page_ahead(&window, cx);
         sign_out(&window, cx);
         assert_eq!(pages_ahead(&window, cx), 0);
+    }
+
+    /// The window of a page opened by `open`, drawn in a window tall enough for all of it.
+    fn drawn_page(
+        window: &gpui_kit::WindowHandle<Shell>,
+        cx: &mut gpui_kit::TestAppContext,
+        open: impl FnOnce(&mut Shell, &mut Context<Shell>),
+    ) -> gpui_kit::VisualTestContext {
+        window.update(cx, |shell, _, cx| open(shell, cx)).unwrap();
+        let visual = drawn(window, cx);
+        visual.simulate_resize(gpui_kit::size(px(1600.), px(3000.)));
+        visual.run_until_parked();
+        visual
+    }
+
+    fn click_on(visual: &mut gpui_kit::VisualTestContext, what: &'static str) {
+        let at = visual
+            .debug_bounds(what)
+            .unwrap_or_else(|| panic!("{what} was not drawn"))
+            .center();
+        visual.simulate_mouse_move(at, None, gpui_kit::Modifiers::none());
+        visual.simulate_click(at, gpui_kit::Modifiers::none());
+        visual.run_until_parked();
+    }
+
+    #[gpui_kit::test]
+    fn a_click_on_a_cast_member_opens_their_page(cx: &mut gpui_kit::TestAppContext) {
+        let pages: [fn(&mut Shell, &mut Context<Shell>); 2] = [
+            |shell, cx| shell.open_film(ItemId(crate::fake::FILM.into()), cx),
+            |shell, cx| shell.open_series(ItemId(crate::fake::SERIES.into()), cx),
+        ];
+        for open in pages {
+            let (server, window) = signed_in_window(cx);
+            let mut visual = drawn_page(&window, cx, open);
+            let screen = current(&window, cx);
+            click_on(&mut visual, "cast-member 1");
+            assert_eq!(current(&window, cx), Screen::Person, "from {screen:?}");
+            let cast = match screen {
+                Screen::FilmDetail => server.film(&ItemId(crate::fake::FILM.into())).unwrap().cast,
+                _ => {
+                    server
+                        .series_detail(&ItemId(crate::fake::SERIES.into()))
+                        .unwrap()
+                        .cast
+                }
+            };
+            let opened = window
+                .update(cx, |shell, _, _| {
+                    let page = shell.people.last().expect("the person page");
+                    (page.id.clone(), page.name.clone())
+                })
+                .unwrap();
+            assert_eq!(opened, (cast[1].id.clone(), cast[1].name.clone()));
+        }
+    }
+
+    /// The comma between two genres is drawn beside the link, not in it: the highlight and the
+    /// click stop at the word.
+    #[gpui_kit::test]
+    fn the_comma_after_a_genre_is_outside_its_link(cx: &mut gpui_kit::TestAppContext) {
+        let (_server, window) = signed_in_window(cx);
+        let mut visual = drawn_page(&window, cx, |shell, cx| {
+            shell.open_film(ItemId(crate::fake::FILM.into()), cx)
+        });
+        // The film's genres are "Drame, Aventure".
+        let link = visual.debug_bounds("genre Drame").expect("the first genre");
+        let comma = visual
+            .debug_bounds("genre-separator Drame")
+            .expect("the comma after the first genre");
+        assert!(comma.left() >= link.right(), "{comma:?} inside {link:?}");
+        assert!(
+            visual.debug_bounds("genre-separator Aventure").is_none(),
+            "a comma after the last genre"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn a_click_on_a_genre_of_a_film_opens_the_films_library_filtered_on_it(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        let (_server, window) = signed_in_window(cx);
+        let mut visual = drawn_page(&window, cx, |shell, cx| {
+            shell.open_film(ItemId(crate::fake::FILM.into()), cx)
+        });
+        // The film's genres are "Drame, Aventure".
+        click_on(&mut visual, "genre Aventure");
+        assert_eq!(current(&window, cx), Screen::Library);
+        let (films, series) = window
+            .update(cx, |shell, _, _| {
+                (
+                    shell.library.tools.filters.genre.clone(),
+                    shell.series.tools.filters.genre.clone(),
+                )
+            })
+            .unwrap();
+        assert_eq!((films.as_deref(), series), (Some("Aventure"), None));
+    }
+
+    /// Escape and the mouse's back button return to the page the genre was clicked on, not to
+    /// the Home; the library's pill stays the lit one while it shows.
+    #[gpui_kit::test]
+    fn back_from_a_genre_returns_to_the_film_page_it_came_from(cx: &mut gpui_kit::TestAppContext) {
+        let (_server, window) = signed_in_window(cx);
+        assert_eq!(current(&window, cx), Screen::Home);
+        let mut visual = drawn_page(&window, cx, |shell, cx| {
+            shell.open_film(ItemId(crate::fake::FILM.into()), cx)
+        });
+        click_on(&mut visual, "genre Aventure");
+        assert_eq!(current(&window, cx), Screen::Library);
+        let section = window
+            .update(cx, |shell, _, _| shell.navigator.section())
+            .unwrap();
+        assert_eq!(section, Screen::Library, "the pill of the library is lit");
+
+        window.update(cx, |shell, _, cx| shell.escape(cx)).unwrap();
+        assert_eq!(current(&window, cx), Screen::FilmDetail);
+        let film = window
+            .update(cx, |shell, _, _| {
+                shell.details.last().map(|page| page.id.clone())
+            })
+            .unwrap();
+        assert_eq!(film, Some(ItemId(crate::fake::FILM.into())));
+    }
+
+    #[gpui_kit::test]
+    fn a_click_on_a_genre_of_a_series_opens_the_series_library_filtered_on_it(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        let (_server, window) = signed_in_window(cx);
+        let mut visual = drawn_page(&window, cx, |shell, cx| {
+            shell.open_series(ItemId(crate::fake::SERIES.into()), cx)
+        });
+        // The series' genres are "Science-fiction, Drame".
+        click_on(&mut visual, "genre Drame");
+        assert_eq!(current(&window, cx), Screen::Series);
+        let (films, series) = window
+            .update(cx, |shell, _, _| {
+                (
+                    shell.library.tools.filters.genre.clone(),
+                    shell.series.tools.filters.genre.clone(),
+                )
+            })
+            .unwrap();
+        assert_eq!((films, series.as_deref()), (None, Some("Drame")));
+    }
+
+    /// The library was seen before: its list is asked again under the genre, as the genre menu
+    /// does, not kept as it was.
+    #[gpui_kit::test]
+    fn a_genre_clicked_over_a_library_already_loaded_filters_its_list(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        let (_server, window) = signed_in_window(cx);
+        window
+            .update(cx, |shell, _, cx| shell.select(NavEntry::Films, cx))
+            .unwrap();
+        cx.run_until_parked();
+        let before = window
+            .update(cx, |shell, _, _| shell.library.grid.epoch())
+            .unwrap();
+        let mut visual = drawn_page(&window, cx, |shell, cx| {
+            shell.open_film(ItemId(crate::fake::FILM.into()), cx)
+        });
+        click_on(&mut visual, "genre Aventure");
+        let (genre, epoch) = window
+            .update(cx, |shell, _, _| {
+                (
+                    shell.library.tools.filters.genre.clone(),
+                    shell.library.grid.epoch(),
+                )
+            })
+            .unwrap();
+        assert_eq!(genre.as_deref(), Some("Aventure"));
+        assert_ne!(epoch, before, "the list was not asked again");
+    }
+
+    /// The series page of the tests, on its second season, where the series is begun: episode
+    /// 4 (the row at index 3) is stopped at 30 min. Playbacks are refused once asked, so that
+    /// no player starts.
+    fn series_page_of_tests(
+        cx: &mut gpui_kit::TestAppContext,
+    ) -> (
+        FakeServer,
+        gpui_kit::WindowHandle<Shell>,
+        gpui_kit::VisualTestContext,
+    ) {
+        let (server, window) = signed_in_window(cx);
+        server.state.lock().unwrap().play_error =
+            Some(ProviderError::Unreachable("refused".into()));
+        let visual = drawn_page(&window, cx, |shell, cx| {
+            shell.open_series(ItemId(crate::fake::SERIES.into()), cx)
+        });
+        (server, window, visual)
+    }
+
+    fn episode_still(index: usize) -> gpui_kit::ElementId {
+        gpui_kit::ElementId::from(("episode-still", index))
+    }
+
+    fn pointer_over(
+        visual: &mut gpui_kit::VisualTestContext,
+        what: &str,
+        id: &gpui_kit::ElementId,
+    ) {
+        let selector: &'static str = Box::leak(format!("{what} {id}").into_boxed_str());
+        let at = visual
+            .debug_bounds(selector)
+            .unwrap_or_else(|| panic!("{selector} was not drawn"))
+            .center();
+        visual.simulate_mouse_move(at, None, gpui_kit::Modifiers::none());
+        visual.run_until_parked();
+    }
+
+    #[gpui_kit::test]
+    fn hovering_an_episode_shows_the_play_button_over_its_picture(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        let (_server, _window, mut visual) = series_page_of_tests(cx);
+        let id = episode_still(3);
+        let play: &'static str = Box::leak(format!("card-play {id}").into_boxed_str());
+        assert!(
+            visual.debug_bounds(play).is_none(),
+            "drawn before the pointer"
+        );
+        pointer_over(&mut visual, "card-hover", &id);
+        let play = visual.debug_bounds(play).expect("the play button");
+        let still = visual
+            .debug_bounds(Box::leak(format!("card-hover {id}").into_boxed_str()))
+            .expect("the still");
+        assert!(
+            still.contains(&play.center()),
+            "the button is over the picture"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn a_click_on_the_play_button_of_an_episode_plays_it_from_where_it_stopped(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        let (server, window, mut visual) = series_page_of_tests(cx);
+        let id = episode_still(3);
+        pointer_over(&mut visual, "card-hover", &id);
+        let play: &'static str = Box::leak(format!("card-play {id}").into_boxed_str());
+        click_on(&mut visual, play);
+        let asked = server.state.lock().unwrap().record.plays.clone();
+        let stopped = {
+            let state = server.state.lock().unwrap();
+            let wanted = ItemId("series-0-s2-e4".into());
+            let found = state.episodes.iter().find(|e| e.item.id == wanted);
+            found.expect("episode 4 of season 2").clone()
+        };
+        assert!(stopped.item.resume.is_some(), "the episode was started");
+        assert_eq!(
+            asked
+                .iter()
+                .map(|(film, _)| film.clone())
+                .collect::<Vec<_>>(),
+            [stopped.item.id],
+            "once, and the episode that was clicked"
+        );
+        assert_eq!(current(&window, cx), Screen::SeriesDetail);
+        let planned = window
+            .update(cx, |shell, _, _| shell.planned.clone())
+            .unwrap();
+        assert_eq!(
+            planned,
+            [(
+                ItemId("series-0-s2-e4".into()),
+                std::time::Duration::from_secs(30 * 60)
+            )],
+            "the player starts where the episode stopped"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn a_click_anywhere_on_an_episode_row_plays_it(cx: &mut gpui_kit::TestAppContext) {
+        let (server, _window, mut visual) = series_page_of_tests(cx);
+        // The title of the row, away from the picture and from the check.
+        let still = visual
+            .debug_bounds(Box::leak(
+                format!("card-hover {}", episode_still(3)).into_boxed_str(),
+            ))
+            .expect("the still");
+        let at = gpui_kit::point(still.right() + gpui_kit::px(120.), still.center().y);
+        visual.simulate_mouse_move(at, None, gpui_kit::Modifiers::none());
+        visual.simulate_click(at, gpui_kit::Modifiers::none());
+        visual.run_until_parked();
+        let asked = server.state.lock().unwrap().record.plays.clone();
+        assert_eq!(asked.len(), 1, "{asked:?}");
+    }
+
+    #[gpui_kit::test]
+    fn a_click_on_the_picture_of_an_episode_beside_the_button_plays_it_once(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        let (server, _window, mut visual) = series_page_of_tests(cx);
+        let id = episode_still(3);
+        pointer_over(&mut visual, "card-hover", &id);
+        let still = visual
+            .debug_bounds(Box::leak(format!("card-hover {id}").into_boxed_str()))
+            .expect("the still");
+        let at = gpui_kit::point(
+            still.left() + gpui_kit::px(10.),
+            still.top() + gpui_kit::px(10.),
+        );
+        visual.simulate_mouse_move(at, None, gpui_kit::Modifiers::none());
+        visual.simulate_click(at, gpui_kit::Modifiers::none());
+        visual.run_until_parked();
+        let asked = server.state.lock().unwrap().record.plays.clone();
+        assert_eq!(asked.len(), 1, "{asked:?}");
     }
 }

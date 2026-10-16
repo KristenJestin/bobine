@@ -162,11 +162,9 @@ impl Said for Film {
 }
 
 impl Said for Series {
-    /// A new season handed for its series says nothing of the series.
+    /// A new season or a lone episode handed for its series says nothing of the series.
     fn said(&self) -> Option<(&ItemId, bool, bool)> {
-        self.season
-            .is_none()
-            .then_some((&self.id, self.favourite, self.watched))
+        Some((&self.id, self.favourite?, self.watched?))
     }
 }
 
@@ -375,8 +373,9 @@ mod tests {
         }
         let asked = marks.stamp();
         (film.favourite, film.watched) = (false, false);
-        (series.favourite, series.watched) = (false, false);
+        (series.favourite, series.watched) = (Some(false), Some(false));
         let mut season = series.clone();
+        (season.favourite, season.watched) = (None, None);
         season.season = Some(bobine::provider::Season {
             id: ItemId("season".into()),
             name: "Season 3".into(),
