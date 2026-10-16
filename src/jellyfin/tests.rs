@@ -233,6 +233,14 @@ fn signing_out_while_the_server_is_unreachable_still_signs_out_locally() {
 }
 
 #[test]
+fn the_address_of_the_session_signed_in_is_known_before_it_signs_out() {
+    let s = Setup::new();
+    s.signed_in();
+    assert_eq!(s.connector.last_address(), Some(s.fake.url.clone()));
+    assert_eq!(s.restart().last_address(), Some(s.fake.url.clone()));
+}
+
+#[test]
 fn a_keyring_that_cannot_delete_the_token_still_leaves_no_session_to_restore() {
     let s = Setup::new();
     let server = s.signed_in();

@@ -156,7 +156,11 @@ impl Connector for JellyfinConnector {
     }
 
     fn last_address(&self) -> Option<String> {
-        AccountFile::open(&self.path).ok()?.last_address
+        let account = AccountFile::open(&self.path).ok()?;
+        account
+            .login
+            .map(|login| login.address)
+            .or(account.last_address)
     }
 }
 

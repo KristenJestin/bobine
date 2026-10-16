@@ -597,10 +597,7 @@ impl Connector for FakeServer {
         if user != USER || password != PASSWORD {
             return Err(ProviderError::WrongCredentials);
         }
-        let mut state = self.state();
-        state.kept = true;
-        state.last_address = Some(address.to_string());
-        drop(state);
+        self.state().kept = true;
         Ok(self.session())
     }
 
@@ -609,7 +606,11 @@ impl Connector for FakeServer {
     }
 
     fn last_address(&self) -> Option<String> {
-        self.state().last_address.clone()
+        let state = self.state();
+        state
+            .last_address
+            .clone()
+            .or_else(|| state.kept.then(|| SERVER_ADDRESS.to_string()))
     }
 }
 
@@ -821,11 +822,9 @@ impl MediaServer for FakeServer {
         state.kept = false;
         let reports = state.record.reports.len();
         state.record.logouts.push(reports);
-        // A session kept from an earlier start did not log in here: the server is the one the
-        // tests and the harness invent.
-        state
-            .last_address
-            .get_or_insert_with(|| SERVER_ADDRESS.to_string());
+        // As Jellyfin, only the logout writes it down; the server is the one the tests and the
+        // harness invent.
+        state.last_address = Some(SERVER_ADDRESS.to_string());
         state.logout_error.clone().map_or(Ok(()), Err)
     }
 
