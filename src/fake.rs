@@ -100,6 +100,8 @@ pub struct State {
     /// How long a stopped report takes to reach the server, so that one sent later can overtake
     /// it.
     pub stop_delay: std::time::Duration,
+    /// How long the server takes to answer a logout, so that the login waiting for it shows.
+    pub logout_delay: std::time::Duration,
     /// The logout fails with this, after the server forgot the session (a keyring that cannot
     /// be reached).
     pub logout_error: Option<ProviderError>,
@@ -496,6 +498,7 @@ impl FakeServer {
                 tiles: Vec::new(),
                 tile_delay: std::time::Duration::ZERO,
                 stop_delay: std::time::Duration::ZERO,
+                logout_delay: std::time::Duration::ZERO,
                 logout_error: None,
             })),
             info: ServerInfo {
@@ -818,6 +821,8 @@ impl MediaServer for FakeServer {
     }
 
     fn logout(&self) -> Result<(), ProviderError> {
+        let delay = self.state().logout_delay;
+        std::thread::sleep(delay);
         let mut state = self.state();
         state.kept = false;
         let reports = state.record.reports.len();

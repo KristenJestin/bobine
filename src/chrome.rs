@@ -36,9 +36,9 @@ pub struct AccountView {
 
 const MENU_WIDTH: f32 = 240.;
 /// The user and their server, above the choices.
-const MENU_HEADER: f32 = 44.;
+pub const MENU_HEADER: f32 = 44.;
 /// The rule between the header and the choices, with its margins.
-const MENU_RULE: f32 = 13.;
+pub const MENU_RULE: f32 = 13.;
 
 /// Where the account menu goes and how tall it is: under the button, its right edge on the
 /// button's (the button is at the bar's end), and above it when there is no room below.
