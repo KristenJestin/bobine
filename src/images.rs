@@ -61,6 +61,11 @@ impl<K: Hash + Eq + Clone, V> Lru<K, V> {
         self.entries.get(key).map(|(value, ..)| value)
     }
 
+    #[cfg(test)]
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
     /// Every value, the cache left empty.
     pub fn drain(&mut self) -> Vec<V> {
         self.used = 0;

@@ -1,16 +1,61 @@
 //! What frames the screens: the floating pill bar of the root screens and the back link of the
 //! detail pages.
 
+use std::cell::Cell;
+use std::rc::Rc;
+
 use gpui_kit::prelude::*;
-use gpui_kit::{Context, Div, FontWeight, IntoElement, Stateful, Window, div, px, rgb, rgba};
+use gpui_kit::{
+    Bounds, Context, Div, FontWeight, IntoElement, MouseDownEvent, Pixels, Point, Stateful, Window,
+    anchored, canvas, deferred, div, point, px, rgb, rgba,
+};
 
 use crate::icons::{IconName, icon};
+use crate::menu;
 use crate::navigation::{NavEntry, Screen};
 use crate::shell::Shell;
 use crate::theme;
 
-/// Centred at the top, over the screen; the search field opens the palette.
-pub fn pill_bar(current: Screen, window: &mut Window, cx: &mut Context<Shell>) -> impl IntoElement {
+/// The account menu is the only one of the bar: its button opens it, so that it is its own key.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Account;
+
+/// Where the account button was last drawn, shared with the shell for its menu.
+pub type ButtonBounds = Rc<Cell<Option<Bounds<Pixels>>>>;
+
+/// The account button and its menu, as the bar draws them this frame.
+pub struct AccountView {
+    pub user: String,
+    pub server: String,
+    /// The menu is open: it answers the mouse.
+    pub open: bool,
+    /// How much of the menu shows, from 0 to 1: it may be fading out.
+    pub shown: Option<f32>,
+    pub bounds: ButtonBounds,
+}
+
+const MENU_WIDTH: f32 = 240.;
+/// The user and their server, above the choices.
+pub const MENU_HEADER: f32 = 44.;
+/// The rule between the header and the choices, with its margins.
+pub const MENU_RULE: f32 = 13.;
+
+/// Where the account menu goes and how tall it is: under the button, its right edge on the
+/// button's (the button is at the bar's end), and above it when there is no room below.
+pub fn account_menu_place(button: Bounds<Pixels>, window_height: f32) -> (Point<Pixels>, f32) {
+    let wanted = menu::height(1) + MENU_HEADER + MENU_RULE;
+    let (at, height) = menu::place(button, wanted, window_height);
+    (point(button.right() - px(MENU_WIDTH), at.y), height)
+}
+
+/// Centred at the top, over the screen; the search field opens the palette, the account button
+/// the menu to sign out.
+pub fn pill_bar(
+    current: Screen,
+    account: Option<AccountView>,
+    window: &mut Window,
+    cx: &mut Context<Shell>,
+) -> impl IntoElement {
     let entries = NavEntry::ALL.into_iter().enumerate().map(|(index, entry)| {
         let active = entry.is_current(current);
         let live = entry.target().is_some();
@@ -57,8 +102,151 @@ pub fn pill_bar(current: Screen, window: &mut Window, cx: &mut Context<Shell>) -
                 .bg(rgba(0x141416ec))
                 .child(logo(32., 15., 9.).mr(px(6.)))
                 .children(entries)
-                .child(search_field(window, cx)),
+                .child(search_field(window, cx))
+                .children(account.map(|account| account_button(account, window, cx))),
         )
+}
+
+/// The user's avatar, filled; a click opens their menu under it.
+fn account_button(
+    account: AccountView,
+    window: &mut Window,
+    cx: &mut Context<Shell>,
+) -> impl IntoElement {
+    let drawn = account.bounds.clone();
+    let shades = theme::Shades {
+        rest: rgba(0xffffff00),
+        hover: theme::line(),
+        press: rgb(0x2e2e33),
+    };
+    let button = theme::eased("nav-account", shades, window, cx)
+        .size(px(32.))
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded_full()
+        .text_color(if account.open {
+            theme::text()
+        } else {
+            theme::muted()
+        })
+        .cursor_pointer()
+        .hover(|style| style.text_color(theme::text()))
+        .on_click(cx.listener(|shell, _, _, cx| shell.toggle_account_menu(cx)))
+        .child(icon(IconName::UserCircle, 22.));
+    let under = account.bounds.get().zip(account.shown);
+    div()
+        .relative()
+        .child(button)
+        // Where the button is drawn, for its menu.
+        .child(
+            canvas(move |at, _, _| drawn.set(Some(at)), |_, _, _, _| {})
+                .absolute()
+                .inset_0(),
+        )
+        .children(under.map(|(button, shown)| {
+            account_menu(
+                button,
+                shown,
+                account.open,
+                &account.user,
+                &account.server,
+                window,
+                cx,
+            )
+        }))
+}
+
+/// Who is signed in, and the way out, over the rest of the page, `shown` of the way in. Only an
+/// open menu answers the mouse: one fading out lets clicks through.
+fn account_menu(
+    button: Bounds<Pixels>,
+    shown: f32,
+    open: bool,
+    user: &str,
+    server: &str,
+    window: &mut Window,
+    cx: &mut Context<Shell>,
+) -> impl IntoElement {
+    let (at, height) = account_menu_place(button, f32::from(window.viewport_size().height));
+    // It comes into place from a little nearer its button.
+    let toward_button = if at.y > button.top() { -8. } else { 8. };
+    let rise = point(px(0.), px(toward_button * (1. - shown)));
+    let sign_out = theme::eased("sign-out", theme::Shades::line(), window, cx)
+        .flex()
+        .items_center()
+        .gap(px(10.))
+        .flex_none()
+        .h(px(menu::LINE))
+        .px(px(12.))
+        .rounded(px(7.))
+        .text_size(px(13.))
+        .cursor_pointer()
+        .when(open, |line| {
+            line.on_click(cx.listener(|shell, _, window, cx| shell.sign_out(window, cx)))
+        })
+        .child(icon(IconName::SignOut, 14.).text_color(theme::muted()))
+        .child("Sign out");
+    deferred(
+        anchored()
+            .position(at + rise)
+            .snap_to_window_with_margin(px(menu::MARGIN))
+            .child(
+                div()
+                    .id("account-menu")
+                    .opacity(shown)
+                    .h(px(height))
+                    .overflow_y_scroll()
+                    .w(px(MENU_WIDTH))
+                    .p(px(6.))
+                    .flex()
+                    .flex_col()
+                    .rounded(px(theme::RADIUS_LARGE))
+                    .border_1()
+                    .border_color(theme::line())
+                    .bg(theme::panel())
+                    .when(open, |menu| {
+                        menu.occlude().on_mouse_down_out(cx.listener(
+                            |shell, event: &MouseDownEvent, _, cx| {
+                                shell.pressed_outside_account_menu(event.position, cx);
+                            },
+                        ))
+                    })
+                    .child(
+                        div()
+                            .h(px(MENU_HEADER))
+                            .flex_none()
+                            .px(px(12.))
+                            .flex()
+                            .flex_col()
+                            .justify_center()
+                            .child(
+                                div()
+                                    .truncate()
+                                    .text_size(px(13.))
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .child(user.to_string()),
+                            )
+                            .child(
+                                div()
+                                    .truncate()
+                                    .text_size(px(12.))
+                                    .text_color(theme::dim())
+                                    .child(server.to_string()),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .flex_none()
+                            .h(px(1.))
+                            .mx(px(6.))
+                            .my(px(6.))
+                            .bg(theme::line()),
+                    )
+                    .child(sign_out),
+            ),
+    )
 }
 
 /// The Bobine mark: a letter on a tile, until there is a drawn logo.
@@ -142,4 +330,50 @@ pub fn back_link(
         }))
         .child(icon(IconName::ArrowLeft, 16.))
         .child(label)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::menu::Menus;
+    use gpui_kit::size;
+
+    fn button_at(top: f32) -> Bounds<Pixels> {
+        Bounds::new(point(px(900.), px(top)), size(px(32.), px(32.)))
+    }
+
+    #[test]
+    fn the_account_menu_opens_under_its_button_with_the_same_right_edge() {
+        let (at, height) = account_menu_place(button_at(16.), 810.);
+        assert_eq!(at, point(px(932. - MENU_WIDTH), px(54.)));
+        assert_eq!(height, menu::height(1) + MENU_HEADER + MENU_RULE);
+    }
+
+    #[test]
+    fn the_account_menu_closes_on_an_outside_click() {
+        let mut menus = Menus::default();
+        menus.toggle(Account);
+        menus.pressed_outside(None);
+        assert_eq!(menus.open(), None);
+    }
+
+    #[test]
+    fn the_account_menu_closes_on_escape() {
+        let mut menus = Menus::default();
+        menus.toggle(Account);
+        assert!(menus.escape());
+        assert_eq!(menus.open(), None);
+        // With none open, Escape is for the page.
+        assert!(!menus.escape());
+    }
+
+    #[test]
+    fn a_click_on_the_account_button_closes_its_open_menu() {
+        let mut menus = Menus::default();
+        menus.toggle(Account);
+        // The press reaches the menu's outside first, then the button's click.
+        menus.pressed_outside(Some(Account));
+        menus.toggle(Account);
+        assert_eq!(menus.open(), None);
+    }
 }

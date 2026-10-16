@@ -75,6 +75,8 @@ impl TokenStore for SecretServiceStore {
 #[derive(Default)]
 pub struct MemoryStore {
     pub tokens: std::sync::Mutex<HashMap<String, Token>>,
+    /// The keyring cannot be reached when a token is deleted.
+    pub delete_fails: std::sync::atomic::AtomicBool,
 }
 
 #[cfg(test)]
@@ -90,6 +92,9 @@ impl TokenStore for MemoryStore {
     }
 
     fn delete(&self, account: &str) -> Result<(), ProviderError> {
+        if self.delete_fails.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(ProviderError::Keyring("locked".into()));
+        }
         self.tokens.lock().unwrap().remove(account);
         Ok(())
     }

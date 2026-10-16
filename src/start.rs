@@ -2,8 +2,16 @@
 //! on the server or the keyring: the window runs them on its background executor.
 
 use std::sync::Arc;
+use std::thread::JoinHandle;
+use std::time::Duration;
 
 use bobine::provider::{Connector, MediaServer, ProviderError, ServerInfo};
+
+use crate::reports;
+
+/// How long the last playback reports are waited for before the logout goes anyway: a slow
+/// server must not keep the user from leaving.
+const REPORTS_BEFORE_LOGOUT: Duration = Duration::from_secs(5);
 
 /// Where the application opens.
 pub enum Start {
@@ -31,6 +39,23 @@ pub fn login(
     connector
         .login(address.trim(), user.trim(), &password)
         .map_err(|error| error_message(&error))
+}
+
+/// Leaves the account: the playback's last reports go first (they need the token), then the
+/// server is told, the token leaves the keyring and the account file forgets the session. Blocks
+/// on the server: the window runs it on its background executor. What it gives back is why the
+/// local sign out could not be complete (the keyring, the account file); the server not
+/// answering is no reason: the token is dropped here all the same.
+pub fn sign_out(server: &dyn MediaServer, reports: Option<JoinHandle<()>>) -> Option<&'static str> {
+    if let Some(reports) = reports {
+        reports::wait(reports, REPORTS_BEFORE_LOGOUT);
+    }
+    server.logout().err().map(|error| match error {
+        ProviderError::Keyring(_) => {
+            "The saved token could not be removed from the system keyring."
+        }
+        error => error_message(&error),
+    })
 }
 
 /// What the login screen says under the address once the server answered.
@@ -68,7 +93,14 @@ pub fn brings_the_login_back(error: &ProviderError, login_shown: bool) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::fake::{FakeServer, PASSWORD, USER};
+    use crate::fake::{FILM, FakeServer, PASSWORD, Report, USER};
+    use crate::player::PlayerEvent;
+    use crate::player::fake::FakePlayer;
+    use crate::player::session::Session;
+    use crate::reports::{self, Reporting};
+    use crate::video::fake::FakeDisplay;
+    use bobine::provider::{ItemId, MediaSourceId, PlayMethod, PlaySessionId, PlaybackReport};
+    use std::time::{Duration, Instant};
 
     #[test]
     fn the_errors_are_told_in_plain_english() {
@@ -132,6 +164,93 @@ mod tests {
         };
         session.logout().unwrap();
         assert!(matches!(start(&server), Start::Login(None)));
+    }
+
+    #[test]
+    fn after_signing_out_the_keyring_holds_no_token_and_the_next_start_shows_the_login() {
+        let server = FakeServer::new(3, true);
+        let Start::Home(session) = start(&server) else {
+            panic!("no kept session");
+        };
+        sign_out(&*session, None);
+        assert!(!server.state.lock().unwrap().kept);
+        assert!(matches!(start(&server), Start::Login(None)));
+    }
+
+    #[test]
+    fn signing_out_during_playback_stops_the_player_first() {
+        let server = FakeServer::new(3, true);
+        // The "stopped" report takes a while to reach the server: a logout sent meanwhile would
+        // find the token gone.
+        server.state.lock().unwrap().stop_delay = Duration::from_millis(150);
+        let player = FakePlayer::default();
+        let playing = Session::new(
+            Box::new(FakePlayer {
+                calls: player.calls.clone(),
+                queued: player.queued.clone(),
+            }),
+            Box::new(FakeDisplay::default()),
+            "Le Dernier Hiver".into(),
+            None,
+        );
+        let mut reporting = Reporting::start(
+            Arc::new(server.clone()),
+            PlaybackReport {
+                session: PlaySessionId("session-1".into()),
+                film: ItemId(FILM.into()),
+                source: MediaSourceId("source-4k".into()),
+                position: Duration::ZERO,
+                paused: false,
+                audio_track: None,
+                subtitle_track: None,
+                method: PlayMethod::DirectPlay,
+            },
+        );
+        let mut playing = playing;
+        player.queued.borrow_mut().push(PlayerEvent::Loaded);
+        let ended = playing.update(Instant::now());
+        reporting.tick(Instant::now(), &playing, ended);
+        // What `Shell::stop_playback` does, then what the sign out waits for.
+        let stopping = reports::last_reports(Some(reporting), None, &playing);
+        drop(playing);
+        let Start::Home(session) = start(&server) else {
+            panic!("no kept session");
+        };
+        assert_eq!(sign_out(&*session, stopping), None);
+        let state = server.state.lock().unwrap();
+        assert!(matches!(
+            state.record.reports.last(),
+            Some(Report::Stopped(_))
+        ));
+        // The one logout came after both the "started" and the "stopped".
+        assert_eq!(state.record.logouts, [state.record.reports.len()]);
+    }
+
+    #[test]
+    fn a_keyring_that_cannot_delete_the_token_is_told_and_the_next_start_shows_the_login() {
+        let server = FakeServer::new(3, true);
+        server.state.lock().unwrap().logout_error = Some(ProviderError::Keyring(String::new()));
+        let Start::Home(session) = start(&server) else {
+            panic!("no kept session");
+        };
+        assert_eq!(
+            sign_out(&*session, None),
+            Some("The saved token could not be removed from the system keyring.")
+        );
+        assert!(matches!(start(&server), Start::Login(None)));
+    }
+
+    #[test]
+    fn a_logout_that_fails_for_another_reason_says_so() {
+        let server = FakeServer::new(3, true);
+        server.state.lock().unwrap().logout_error = Some(ProviderError::Storage(String::new()));
+        let Start::Home(session) = start(&server) else {
+            panic!("no kept session");
+        };
+        assert_eq!(
+            sign_out(&*session, None),
+            Some("The account file cannot be written.")
+        );
     }
 
     #[test]
