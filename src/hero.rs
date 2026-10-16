@@ -150,6 +150,19 @@ pub fn text_levels(level: f32) -> (f32, f32) {
     ((1. - 2. * level).max(0.), (2. * level - 1.).max(0.))
 }
 
+/// Whether the header's ticker runs: only while the Home shows and there are two titles or more
+/// to take turns, so that nothing wakes the window the rest of the time.
+pub fn ticks(on_home: bool, titles: usize) -> bool {
+    on_home && titles > 1
+}
+
+/// Whether the header's time is stopped. The pointer holds it only if it is over the header
+/// and still inside the window: the window hears nothing when the pointer leaves it, so
+/// "over the header" can stay true for a pointer that is gone.
+pub fn holds(on_home: bool, over_header: bool, pointer_in_window: bool) -> bool {
+    !on_home || (over_header && pointer_in_window)
+}
+
 /// Where the title shown is in a list asked again, if it still is.
 pub fn kept(shown: Option<&ItemId>, features: &[Feature]) -> Option<usize> {
     features
@@ -224,6 +237,30 @@ mod tests {
             logo: None,
             resume: None,
         }
+    }
+
+    #[test]
+    fn the_ticker_runs_only_while_the_home_shows_two_titles_or_more() {
+        assert!(ticks(true, 2));
+        assert!(ticks(true, 5));
+        assert!(!ticks(true, 1));
+        assert!(!ticks(true, 0));
+        // Left for another page: it stops, whatever the header holds.
+        assert!(!ticks(false, 5));
+    }
+
+    #[test]
+    fn the_time_stops_for_a_pointer_over_the_header_and_inside_the_window() {
+        assert!(holds(true, true, true));
+        assert!(!holds(true, true, false));
+        assert!(!holds(true, false, true));
+        assert!(!holds(true, false, false));
+    }
+
+    #[test]
+    fn the_time_stops_too_when_the_home_is_not_shown() {
+        assert!(holds(false, false, false));
+        assert!(holds(false, true, true));
     }
 
     #[test]

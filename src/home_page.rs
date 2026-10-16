@@ -134,6 +134,22 @@ impl ListKind {
     }
 }
 
+/// How many times the Home was asked: an answer to an older ask comes late, and is dropped.
+#[derive(Debug, Default)]
+pub struct Asks(u64);
+
+impl Asks {
+    /// A new ask: the one the answers must be of.
+    pub fn next(&mut self) -> u64 {
+        self.0 += 1;
+        self.0
+    }
+
+    pub fn is_latest(&self, ask: u64) -> bool {
+        self.0 == ask
+    }
+}
+
 /// How many titles a row of the Home holds; "Tout voir" shows them all.
 pub const ROW: u32 = 16;
 
@@ -285,6 +301,23 @@ mod tests {
     }
 
     // What is asked of the server, and when.
+
+    #[test]
+    fn the_answer_to_an_older_ask_is_not_taken_for_the_newest() {
+        let mut asks = Asks::default();
+        let old = asks.next();
+        let new = asks.next();
+        // The server answers the second ask first, the first one comes late.
+        assert!(asks.is_latest(new));
+        assert!(!asks.is_latest(old));
+    }
+
+    #[test]
+    fn the_answer_to_the_only_ask_is_the_newest() {
+        let mut asks = Asks::default();
+        let only = asks.next();
+        assert!(asks.is_latest(only));
+    }
 
     #[test]
     fn the_full_list_of_new_series_follows_the_row_by_when_episodes_came_in() {

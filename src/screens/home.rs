@@ -117,6 +117,8 @@ fn rows(shell: &Shell) -> Vec<RowSpec> {
 }
 
 pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -> impl IntoElement {
+    // The header's time runs while this is drawn.
+    shell.start_hero_ticker(window, cx);
     let viewport = window.viewport_size();
     let (width, window_height) = (f32::from(viewport.width), f32::from(viewport.height));
     let hero_height = (window_height * 0.72).clamp(460., 760.);
@@ -255,7 +257,9 @@ fn hero(
         .w_full()
         .h(px(height))
         .overflow_hidden()
-        .on_hover(cx.listener(|shell, hovered: &bool, _, cx| shell.hover_hero(*hovered, cx)))
+        .on_hover(
+            cx.listener(|shell, hovered: &bool, window, cx| shell.hover_hero(*hovered, window, cx)),
+        )
         .children(layers)
         .children((features.len() > 1).then(|| marks(shell, features.len(), now, window, cx)))
 }

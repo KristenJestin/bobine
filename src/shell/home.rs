@@ -13,7 +13,7 @@ use super::pages::{Loadable, Origin, route_wheel};
 use super::{Film as Playing, Shell};
 use crate::grid::{Grid, Listed};
 use crate::hero::{self, Carousel};
-use crate::home_page::{self, ListKind, PlayTarget, StartError};
+use crate::home_page::{self, Asks, ListKind, PlayTarget, StartError};
 use crate::navigation::Screen;
 use crate::scroll;
 
@@ -53,7 +53,7 @@ pub struct HomePage {
     pub busy: bool,
     pub error: Option<&'static str>,
     /// How many times the page was asked: an answer to an older ask is not shown.
-    asked: u64,
+    asked: Asks,
 }
 
 impl Default for HomePage {
@@ -70,7 +70,7 @@ impl Default for HomePage {
             gesture: scroll::Gesture::default(),
             busy: false,
             error: None,
-            asked: 0,
+            asked: Asks::default(),
         }
     }
 }
@@ -107,8 +107,7 @@ impl Shell {
         // The pointer may have been over the header when the Home was left, and its leaving
         // never heard: the header says again whether it is over it.
         self.home.hovered = false;
-        self.home.asked += 1;
-        let asked = self.home.asked;
+        let asked = self.home.asked.next();
         let home = &mut self.home;
         home.features.get_or_insert(Loadable::Loading);
         home.resume.get_or_insert(Loadable::Loading);
@@ -119,21 +118,21 @@ impl Shell {
             cx,
             |server| server.featured(FEATURED),
             move |shell, features, cx| {
-                if shell.home.asked != asked {
+                if !shell.home.asked.is_latest(asked) {
                     return;
                 }
                 let features = match features {
                     Ok(features) => Loadable::Ready(features),
                     Err(error) => Loadable::Failed(shell.failed(error, cx)),
                 };
-                shell.show_features(features, cx);
+                shell.show_features(features);
             },
         );
         self.ask(
             cx,
             |server| server.continue_watching(),
             move |shell, started, cx| {
-                if shell.home.asked == asked {
+                if shell.home.asked.is_latest(asked) {
                     shell.home.resume = Some(match started {
                         Ok(started) => Loadable::Ready(started),
                         Err(error) => Loadable::Failed(shell.failed(error, cx)),
@@ -145,7 +144,7 @@ impl Shell {
             cx,
             |server| server.next_episodes(home_page::ROW),
             move |shell, next, cx| {
-                if shell.home.asked == asked {
+                if shell.home.asked.is_latest(asked) {
                     shell.home.next_up = Some(match next {
                         Ok(next) => Loadable::Ready(next),
                         Err(error) => Loadable::Failed(shell.failed(error, cx)),
@@ -157,7 +156,7 @@ impl Shell {
             cx,
             |server| server.libraries(),
             move |shell, libraries, cx| {
-                if shell.home.asked != asked {
+                if !shell.home.asked.is_latest(asked) {
                     return;
                 }
                 match libraries {
@@ -171,7 +170,7 @@ impl Shell {
     }
 
     /// The header's titles came: the one shown stays shown when it is still among them.
-    fn show_features(&mut self, features: Loadable<Vec<Feature>>, cx: &mut Context<Self>) {
+    fn show_features(&mut self, features: Loadable<Vec<Feature>>) {
         let now = Instant::now();
         let shown = self
             .home
@@ -185,7 +184,6 @@ impl Shell {
         let kept = hero::kept(shown.as_ref(), list);
         self.home.carousel.retarget(list.len(), kept, now);
         self.home.features = Some(features);
-        self.start_hero_ticker(cx);
     }
 
     /// One row for each library of films or of series.
@@ -219,7 +217,7 @@ impl Shell {
                     move |server| server.latest(&id, home_page::ROW)
                 },
                 move |shell, titles, cx| {
-                    if shell.home.asked != asked {
+                    if !shell.home.asked.is_latest(asked) {
                         return;
                     }
                     let titles = match titles {
@@ -237,15 +235,20 @@ impl Shell {
     }
 
     /// The header changes title by itself while the Home shows, its time not stopped: a look
-    /// every few milliseconds then, none the rest of the time.
-    pub(super) fn start_hero_ticker(&mut self, cx: &mut Context<Self>) {
-        if self.hero_ticker.is_some() || self.home.carousel.len() < 2 {
+    /// every few milliseconds then, none the rest of the time. Asked by the Home each time it
+    /// is drawn; a ticker already running, or one title only, leaves it as it is.
+    pub fn start_hero_ticker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let on_home = self.navigator.current() == Screen::Home;
+        if self.hero_ticker.is_some() || !hero::ticks(on_home, self.home.carousel.len()) {
             return;
         }
-        let ticker: Task<()> = cx.spawn(async move |this, cx| {
+        // In the window's own context: the pointer's place is the window's to say.
+        let ticker: Task<()> = cx.spawn_in(window, async move |this, cx| {
             loop {
                 cx.background_executor().timer(HERO_TICK).await;
-                let going = this.update(cx, |shell, cx| shell.tick_hero(Instant::now(), cx));
+                let going = this.update_in(cx, |shell, window, cx| {
+                    shell.tick_hero(Instant::now(), window, cx)
+                });
                 if !matches!(going, Ok(true)) {
                     break;
                 }
@@ -255,10 +258,11 @@ impl Shell {
     }
 
     /// Whether the ticker goes on: not when the Home is left, and not when there is one title.
-    fn tick_hero(&mut self, now: Instant, cx: &mut Context<Self>) -> bool {
-        let shown = self.navigator.current() == Screen::Home && self.home.carousel.len() > 1;
-        self.home.carousel.pause(!shown || self.home.hovered, now);
-        if !shown {
+    fn tick_hero(&mut self, now: Instant, window: &Window, cx: &mut Context<Self>) -> bool {
+        let on_home = self.navigator.current() == Screen::Home;
+        let going = hero::ticks(on_home, self.home.carousel.len());
+        self.home.carousel.pause(self.header_holds(window), now);
+        if !going {
             self.hero_ticker = None;
             return false;
         }
@@ -270,16 +274,24 @@ impl Shell {
         true
     }
 
+    /// Whether the header's time is stopped now.
+    fn header_holds(&self, window: &Window) -> bool {
+        hero::holds(
+            self.navigator.current() == Screen::Home,
+            self.home.hovered,
+            window.is_window_hovered(),
+        )
+    }
+
     /// The pointer came over the header or left it.
-    pub fn hover_hero(&mut self, hovered: bool, cx: &mut Context<Self>) {
+    pub fn hover_hero(&mut self, hovered: bool, window: &Window, cx: &mut Context<Self>) {
         if self.home.hovered == hovered {
             return;
         }
         self.home.hovered = hovered;
-        self.home.carousel.pause(
-            hovered || self.navigator.current() != Screen::Home,
-            Instant::now(),
-        );
+        self.home
+            .carousel
+            .pause(self.header_holds(window), Instant::now());
         cx.notify();
     }
 
