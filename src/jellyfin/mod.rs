@@ -41,6 +41,15 @@ pub struct JellyfinConnector {
 }
 
 /// The name the server shows for this device: the machine's.
+/// Whether `path` is a whole address (a remote subtitle's) and not a path of the server.
+fn is_absolute(path: &str) -> bool {
+    let starts_with = |scheme: &str| {
+        path.get(..scheme.len())
+            .is_some_and(|start| start.eq_ignore_ascii_case(scheme))
+    };
+    starts_with("http://") || starts_with("https://")
+}
+
 fn device_name() -> String {
     std::fs::read_to_string("/proc/sys/kernel/hostname")
         .ok()
@@ -308,8 +317,12 @@ impl Jellyfin {
     }
 
     /// The address of `path` on the server, with the token: the server puts it in the paths it
-    /// gives; an older one may not.
+    /// gives; an older one may not. An absolute address is another host's (a remote subtitle):
+    /// as it is, never with our token.
     fn served(&self, path: &str) -> String {
+        if is_absolute(path) {
+            return path.to_string();
+        }
         let mut url = format!("{}{path}", self.http.base());
         if !path.contains("ApiKey=") && !path.contains("api_key=") {
             let separator = if path.contains('?') { '&' } else { '?' };
@@ -364,12 +377,12 @@ impl Jellyfin {
             "MediaSourceId": report.source.0,
             "PlaySessionId": report.session.0,
             "PositionTicks": dto::ticks(report.position),
-            "PlayMethod": match report.method {
-                PlayMethod::DirectPlay => "DirectPlay",
-                PlayMethod::Transcode => "Transcode",
-            },
         });
         if playing {
+            body["PlayMethod"] = json!(match report.method {
+                PlayMethod::DirectPlay => "DirectPlay",
+                PlayMethod::Transcode => "Transcode",
+            });
             body["IsPaused"] = json!(report.paused);
             body["CanSeek"] = json!(true);
             body["AudioStreamIndex"] = json!(report.audio_track);

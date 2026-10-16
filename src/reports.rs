@@ -32,8 +32,22 @@ pub struct Reporting {
 
 impl Reporting {
     pub fn start(server: Arc<dyn MediaServer>, base: PlaybackReport) -> Self {
+        Self::start_after(server, base, None)
+    }
+
+    /// Reports another playback of the same film, once `previous` has sent all of its own: the
+    /// "stopped" of an attempt that failed must not reach the server after the first report of
+    /// the conversion that replaces it.
+    pub fn start_after(
+        server: Arc<dyn MediaServer>,
+        base: PlaybackReport,
+        previous: Option<JoinHandle<()>>,
+    ) -> Self {
         let (sender, receiver) = channel::<(Kind, PlaybackReport)>();
         let worker = std::thread::spawn(move || {
+            if let Some(previous) = previous {
+                let _ = previous.join();
+            }
             for (kind, report) in receiver {
                 let sent = match kind {
                     Kind::Started => server.report_started(&report),
@@ -116,6 +130,19 @@ impl Reporting {
         drop(self.sender);
         self.worker
     }
+}
+
+/// What ends the reports of a playback the viewer leaves: the handle of its own reports, or,
+/// when the conversion has not answered yet and so reports nothing, the one of the attempt that
+/// failed, whose "stopped" is still on its way. A conversion's reports follow that one already.
+pub fn last_reports(
+    reporting: Option<Reporting>,
+    stopping: Option<JoinHandle<()>>,
+    session: &Session,
+) -> Option<JoinHandle<()>> {
+    reporting
+        .map(|reporting| reporting.finish(session))
+        .or(stopping)
 }
 
 /// Waits for the reports still to be sent, no longer than `bound`: a slow server must not keep
@@ -397,6 +424,98 @@ mod tests {
             summary(&server.reports()),
             [("started", 4400, false), ("stopped", 4400, false)]
         );
+    }
+
+    #[test]
+    fn the_reports_of_a_conversion_follow_the_stopped_of_the_attempt_that_failed() {
+        let mut f = Fixture::new();
+        f.server.state.lock().unwrap().stop_delay = Duration::from_millis(200);
+        f.after(0, vec![PlayerEvent::Loaded]);
+        let stopping = f.reporting.finish(&f.session);
+        let mut conversion = Reporting::start_after(
+            Arc::new(f.server.clone()),
+            PlaybackReport {
+                session: PlaySessionId("session-2".into()),
+                film: ItemId(FILM.into()),
+                source: MediaSourceId("source-4k".into()),
+                position: Duration::ZERO,
+                paused: false,
+                audio_track: None,
+                subtitle_track: None,
+                method: bobine::provider::PlayMethod::Transcode,
+            },
+            Some(stopping),
+        );
+        conversion.tick(f.now, &f.session, false);
+        conversion.finish(&f.session).join().unwrap();
+        assert_eq!(
+            summary(&f.server.reports()),
+            [
+                ("started", 0, false),
+                ("stopped", 0, false),
+                ("started", 0, false),
+                ("stopped", 0, false),
+            ]
+        );
+        let sessions: Vec<_> = f
+            .server
+            .reports()
+            .iter()
+            .map(|report| match report {
+                Report::Started(r) | Report::Progress(r) | Report::Stopped(r) => {
+                    r.session.0.clone()
+                }
+            })
+            .collect();
+        assert_eq!(
+            sessions,
+            ["session-1", "session-1", "session-2", "session-2"]
+        );
+    }
+
+    /// The attempt that failed is being told stopped, the server taking 200 ms to answer.
+    fn failed_attempt_stopping(f: &mut Fixture) -> JoinHandle<()> {
+        f.server.state.lock().unwrap().stop_delay = Duration::from_millis(200);
+        f.after(0, vec![PlayerEvent::Loaded]);
+        let base = f.reporting.base.clone();
+        let reporting = std::mem::replace(
+            &mut f.reporting,
+            Reporting::start(Arc::new(f.server.clone()), base),
+        );
+        reporting.finish(&f.session)
+    }
+
+    #[test]
+    fn leaving_before_the_conversion_answers_still_waits_for_the_stopped_of_the_failed_attempt() {
+        let mut f = Fixture::new();
+        let stopping = failed_attempt_stopping(&mut f);
+        let ends = last_reports(None, Some(stopping), &f.session).expect("a handle to wait for");
+        assert!(wait(ends, Duration::from_secs(5)));
+        assert_eq!(
+            summary(&f.server.reports()),
+            [("started", 0, false), ("stopped", 0, false)]
+        );
+    }
+
+    #[test]
+    fn leaving_during_a_conversion_ends_with_its_own_reports() {
+        let mut f = Fixture::new();
+        let stopping = failed_attempt_stopping(&mut f);
+        let mut conversion = Reporting::start_after(
+            Arc::new(f.server.clone()),
+            f.reporting.base.clone(),
+            Some(stopping),
+        );
+        conversion.tick(f.now, &f.session, false);
+        let ends = last_reports(Some(conversion), None, &f.session).unwrap();
+        assert!(wait(ends, Duration::from_secs(5)));
+        assert_eq!(f.server.reports().len(), 4);
+    }
+
+    #[test]
+    fn leaving_with_nothing_to_report_has_nothing_to_wait_for() {
+        let f = Fixture::new();
+        assert!(last_reports(None, None, &f.session).is_none());
     }
 
     #[test]

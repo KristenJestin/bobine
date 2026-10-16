@@ -55,7 +55,9 @@ pub struct Session {
     ended: bool,
     /// The file is open and playing: the server may be told.
     loaded: bool,
-    /// When the file was open, and when its first picture came.
+    /// When the player was first heard of for this file, when it said `Loaded`, and when its
+    /// first picture came.
+    opened_at: Option<Instant>,
     loaded_at: Option<Instant>,
     first_frame_at: Option<Instant>,
     /// How many seeks the viewer asked for, so a seek can be told to the server.
@@ -98,6 +100,7 @@ impl Session {
             subtitle_position: 100.,
             ended: false,
             loaded: false,
+            opened_at: None,
             loaded_at: None,
             first_frame_at: None,
             seeks: 0,
@@ -115,6 +118,7 @@ impl Session {
     pub fn restart(&mut self, media: Media<'_>) -> Result<(), PlayerError> {
         self.error = None;
         self.loaded = false;
+        self.opened_at = None;
         self.loaded_at = None;
         self.first_frame_at = None;
         self.ended = false;
@@ -132,6 +136,13 @@ impl Session {
         self.error = Some(error);
     }
 
+    /// From the first update after the file was given to the player: a file that never says
+    /// `Loaded` nor fails is waited for from here.
+    pub fn opened_at(&self) -> Option<Instant> {
+        self.opened_at
+    }
+
+    /// When the player said the file was open: the wait for its first picture counts from here.
     pub fn loaded_at(&self) -> Option<Instant> {
         self.loaded_at
     }
@@ -309,6 +320,7 @@ impl Session {
     /// Reads what the player says and shows or hides the cursor with the controls. Returns
     /// whether the film reached its end, now or at an earlier update.
     pub fn update(&mut self, now: Instant) -> bool {
+        self.opened_at.get_or_insert(now);
         for event in self.player.events() {
             match event {
                 PlayerEvent::Position(seconds) if !self.skipped_to_end => {
