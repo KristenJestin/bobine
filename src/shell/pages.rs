@@ -2378,7 +2378,7 @@ mod tests {
             crate::film_page::plan(&detail.film, &detail.versions, &choices, From::Resume).unwrap();
         let opened = server.play(&plan.film, &plan.source).unwrap();
         let player = FakePlayer::default();
-        let calls = player.calls.clone();
+        let (calls, queued) = (player.calls.clone(), player.queued.clone());
         player.queued.borrow_mut().extend([
             PlayerEvent::Loaded,
             PlayerEvent::FirstFrame,
@@ -2452,6 +2452,30 @@ mod tests {
         let stopped = stopped.expect("the direct playback is told stopped");
         assert_eq!(stopped.method, PlayMethod::DirectPlay);
         assert_eq!(stopped.position, Duration::from_secs(4500));
+        // The conversion opens: it is told started.
+        queued.borrow_mut().push(PlayerEvent::Loaded);
+        window
+            .update(cx, |shell, window, cx| shell.tick(window, cx))
+            .unwrap();
+        let converted_started = |report: &Report| matches!(report, Report::Started(r) if r.method == PlayMethod::Transcode);
+        let reports = (0..200)
+            .map(|_| {
+                let reports = server.state.lock().unwrap().record.reports.clone();
+                if !reports.iter().any(converted_started) {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                reports
+            })
+            .find(|reports| reports.iter().any(converted_started))
+            .expect("the conversion is told started");
+        let stopped = reports.iter().position(
+            |report| matches!(report, Report::Stopped(r) if r.method == PlayMethod::DirectPlay),
+        );
+        let started = reports.iter().position(converted_started);
+        assert!(
+            stopped.is_some() && stopped < started,
+            "the old stream stops before the new one starts: {reports:?}"
+        );
     }
 
     /// The server answered "play" just before the sign out: the film must not start behind the
