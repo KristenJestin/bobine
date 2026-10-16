@@ -247,7 +247,7 @@ fn bottom_bar(session: &Session, window: &mut Window, cx: &mut Context<Shell>) -
             cx.notify();
         }
     };
-    let back_10 = text_button("player-back-10", "−10 s", window, cx)
+    let back_10 = text_button("player-back-10", "−10s", window, cx)
         .on_click(cx.listener(skip(-SKIP_SECONDS)));
     let play = play_pause(session.paused, window, cx).on_click(cx.listener(|shell, _, _, cx| {
         if let Some(playback) = &mut shell.playback {
@@ -255,7 +255,7 @@ fn bottom_bar(session: &Session, window: &mut Window, cx: &mut Context<Shell>) -
         }
         cx.notify();
     }));
-    let forward_10 = text_button("player-forward-10", "+10 s", window, cx)
+    let forward_10 = text_button("player-forward-10", "+10s", window, cx)
         .on_click(cx.listener(skip(SKIP_SECONDS)));
 
     div()
