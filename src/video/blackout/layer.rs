@@ -16,6 +16,7 @@ use std::thread::{self, JoinHandle};
 use std::time::Instant;
 
 use uuid::Uuid;
+use wayland_client::backend::WaylandError;
 use wayland_client::globals::{GlobalListContents, registry_queue_init};
 use wayland_client::protocol::wl_buffer::WlBuffer;
 use wayland_client::protocol::wl_compositor::WlCompositor;
@@ -232,16 +233,19 @@ fn run(
             );
         }
         let fading = state.step(now);
-        if connection.flush().is_err() {
-            return;
-        }
+        let blocked = match flushed(connection.flush()) {
+            Flushed::Done => false,
+            Flushed::Blocked => true,
+            Flushed::Failed => return,
+        };
         let Some(guard) = queue.prepare_read() else {
             continue;
         };
         let mut fds = [
             libc::pollfd {
                 fd: guard.connection_fd().as_raw_fd(),
-                events: libc::POLLIN,
+                // A full socket is waited on until it drains: the rest is sent then.
+                events: libc::POLLIN | if blocked { libc::POLLOUT } else { 0 },
                 revents: 0,
             },
             libc::pollfd {
@@ -263,13 +267,30 @@ fn run(
         };
         // SAFETY: two valid pollfds, alive for the call.
         let ready = unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as libc::nfds_t, timeout) };
-        if ready > 0 && fds[0].revents != 0 {
+        if ready > 0 && fds[0].revents & !libc::POLLOUT != 0 {
             if guard.read().is_err() {
                 return;
             }
         } else {
             drop(guard);
         }
+    }
+}
+
+/// How sending to the compositor went.
+#[derive(Debug, PartialEq)]
+enum Flushed {
+    Done,
+    /// The socket is full: try again when it can be written.
+    Blocked,
+    Failed,
+}
+
+fn flushed(result: Result<(), WaylandError>) -> Flushed {
+    match result {
+        Ok(()) => Flushed::Done,
+        Err(WaylandError::Io(e)) if e.kind() == std::io::ErrorKind::WouldBlock => Flushed::Blocked,
+        Err(_) => Flushed::Failed,
     }
 }
 
@@ -520,3 +541,23 @@ delegate_noop!(State: ignore WlSurface);
 delegate_noop!(State: WpViewporter);
 delegate_noop!(State: WpViewport);
 delegate_noop!(State: ZwlrLayerShellV1);
+
+#[cfg(test)]
+mod tests {
+    use std::io::{Error, ErrorKind};
+
+    use super::*;
+
+    #[test]
+    fn a_full_socket_is_waited_on_not_given_up() {
+        let full = WaylandError::Io(Error::from(ErrorKind::WouldBlock));
+        assert_eq!(flushed(Err(full)), Flushed::Blocked);
+    }
+
+    #[test]
+    fn a_lost_connection_ends_it() {
+        let lost = WaylandError::Io(Error::from(ErrorKind::BrokenPipe));
+        assert_eq!(flushed(Err(lost)), Flushed::Failed);
+        assert_eq!(flushed(Ok(())), Flushed::Done);
+    }
+}
