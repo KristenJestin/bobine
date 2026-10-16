@@ -3,6 +3,7 @@
 //! the video at the right. GPUI paints nothing else: the video shows through, from under the
 //! window.
 
+use bobine::provider::ItemId;
 use gpui_kit::prelude::*;
 use std::sync::Arc;
 
@@ -67,6 +68,9 @@ pub struct Shown {
     /// The "My list" button: whether the title is in the list, and why the last press failed;
     /// `None` for a file of no server.
     pub list: Option<(bool, Option<&'static str>)>,
+    /// What "Add to playlist" puts in a playlist: the film or the episode playing; `None` for a
+    /// file of no server.
+    pub add: Option<ItemId>,
     /// The tracks of the panel scroll on this.
     pub tracks_scroll: ScrollHandle,
     /// What floats over the seek bar where the pointer is.
@@ -109,7 +113,7 @@ pub fn render(
             .opacity(shown.controls)
             .child(shade(true))
             .child(shade(false))
-            .child(title_bar(session, shown.list, window, cx))
+            .child(title_bar(session, shown.list, shown.add, window, cx))
             .child(bottom_bar(session, window, cx))
             .children(shown.preview.map(preview))
     });
@@ -237,6 +241,7 @@ fn shade(top: bool) -> Div {
 fn title_bar(
     session: &Session,
     list: Option<(bool, Option<&'static str>)>,
+    add: Option<ItemId>,
     window: &mut Window,
     cx: &mut Context<Shell>,
 ) -> Div {
@@ -306,6 +311,9 @@ fn title_bar(
                 .items_center()
                 .gap(px(12.))
                 .children(list)
+                .children(add.map(|item| {
+                    super::playlist::playlist_button("player-playlist", item, window, cx)
+                }))
                 .child(tracks),
         )
 }

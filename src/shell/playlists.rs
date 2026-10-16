@@ -1,17 +1,20 @@
 //! A playlist's page: its titles in their order, each played or opened, "Play all", and an
 //! entry taken out. Every call to the server runs off the window's thread, like the others.
 
+use std::time::Instant;
+
 use bobine::provider::{EntryId, ItemId, PlaylistEntry, Title};
-use gpui_kit::{Context, UniformListScrollHandle, Window};
+use gpui_kit::{
+    AppContext, Bounds, Context, Entity, Focusable, Pixels, Point, UniformListScrollHandle, Window,
+};
 
 use super::pages::{Loadable, Origin};
 use super::{Film as Playing, Shell};
 use crate::home_page::{self, PlayTarget, StartError};
+use crate::input::TextInput;
+use crate::motion::{self, Fade};
 use crate::navigation::Screen;
-use crate::playlists;
-
-/// What the window says when the server did not take a change of a playlist.
-pub const PLAYLIST_FAILED: &str = "The playlist could not be changed.";
+use crate::playlists::{self, Picker};
 
 pub struct PlaylistPage {
     pub id: ItemId,
@@ -22,7 +25,202 @@ pub struct PlaylistPage {
     pub busy: bool,
 }
 
+/// The "Add to playlist" menu, while it shows (it stays fading out after it closed).
+pub struct PlaylistMenu {
+    pub picker: Picker,
+    /// Where the button that opened it was drawn; none when it was opened otherwise.
+    pub anchor: Option<Bounds<Pixels>>,
+    /// The screen it was opened on: it goes when another shows.
+    screen: Screen,
+    /// Closed means fading out.
+    pub open: bool,
+    pub fade: Fade,
+    /// The name of a new playlist, once "New playlist…" was pressed.
+    pub naming: Option<Entity<TextInput>>,
+}
+
 impl Shell {
+    pub fn playlist_menu_is_open(&self) -> bool {
+        self.playlist_menu.as_ref().is_some_and(|menu| menu.open)
+    }
+
+    /// "Add to playlist" for `item`, from the button drawn at `anchor`: the menu opens under it
+    /// and the playlists are asked; pressed again, it closes.
+    pub fn open_playlist_menu(
+        &mut self,
+        item: ItemId,
+        anchor: Option<Bounds<Pixels>>,
+        cx: &mut Context<Self>,
+    ) {
+        if self
+            .playlist_menu
+            .as_ref()
+            .is_some_and(|menu| menu.open && menu.picker.item == item)
+        {
+            self.close_playlist_menu(cx);
+            return;
+        }
+        let mut fade = Fade::new(motion::quick());
+        fade.set(true, Instant::now());
+        self.playlist_menu = Some(PlaylistMenu {
+            picker: Picker::new(item.clone()),
+            anchor,
+            screen: self.navigator.current(),
+            open: true,
+            fade,
+            naming: None,
+        });
+        self.ask(
+            cx,
+            |server| server.playlists(),
+            move |shell, found, cx| {
+                let found = match found {
+                    Ok(found) => Loadable::Ready(found),
+                    Err(error) => Loadable::Failed(shell.failed(error, cx)),
+                };
+                if let Some(menu) = &mut shell.playlist_menu
+                    && menu.picker.item == item
+                {
+                    menu.picker.playlists = Some(found);
+                }
+                cx.notify();
+            },
+        );
+        cx.notify();
+    }
+
+    /// The menu fades out; the keys go back to the window.
+    pub fn close_playlist_menu(&mut self, cx: &mut Context<Self>) {
+        if let Some(menu) = &mut self.playlist_menu
+            && menu.open
+        {
+            menu.open = false;
+            menu.naming = None;
+            menu.fade.set(false, Instant::now());
+            cx.notify();
+        }
+    }
+
+    /// The mouse went down outside the menu: it closes, unless it is on the button that opened
+    /// it, whose click closes it.
+    pub fn pressed_outside_playlist_menu(&mut self, at: Point<Pixels>, cx: &mut Context<Self>) {
+        let on_button = self
+            .playlist_menu
+            .as_ref()
+            .and_then(|menu| menu.anchor)
+            .is_some_and(|button| button.contains(&at));
+        if !on_button {
+            self.close_playlist_menu(cx);
+        }
+    }
+
+    /// What the menu still is at a draw: gone once faded out, or once another screen shows.
+    pub(super) fn follow_playlist_menu(&mut self, window: &mut Window) {
+        let screen = self.navigator.current();
+        let now = Instant::now();
+        let Some(menu) = &mut self.playlist_menu else {
+            return;
+        };
+        if menu.screen != screen {
+            self.playlist_menu = None;
+            return;
+        }
+        if menu.fade.moving(now) {
+            window.request_animation_frame();
+        } else if !menu.open {
+            self.playlist_menu = None;
+        }
+    }
+
+    /// A press on a playlist of the menu: checked at once, asked of the server.
+    pub fn pick_playlist(&mut self, playlist: ItemId, cx: &mut Context<Self>) {
+        let Some(menu) = &mut self.playlist_menu else {
+            return;
+        };
+        let Some(asked) = menu.picker.pick(&playlist) else {
+            return;
+        };
+        let item = menu.picker.item.clone();
+        let added = item.clone();
+        cx.notify();
+        self.ask(
+            cx,
+            move |server| server.add_to_playlist(&asked, &added),
+            move |shell, answer, cx| {
+                if let Err(error) = &answer {
+                    shell.failed(error.clone(), cx);
+                }
+                let said = shell
+                    .playlist_menu
+                    .as_mut()
+                    .filter(|menu| menu.picker.item == item)
+                    .and_then(|menu| menu.picker.picked(&playlist, &answer));
+                if answer.is_err() {
+                    shell.show_notice(said.unwrap_or(playlists::FAILED), cx);
+                }
+                cx.notify();
+            },
+        );
+    }
+
+    /// "New playlist…": a field for its name, which takes the keys.
+    pub fn start_naming(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(menu) = &mut self.playlist_menu else {
+            return;
+        };
+        let input = cx.new(|cx| TextInput::new("Playlist name", false, cx));
+        window.focus(&input.focus_handle(cx), cx);
+        menu.naming = Some(input);
+        cx.notify();
+    }
+
+    /// Enter in the name's field: the playlist is made with the title in it, its line checked
+    /// at once.
+    pub fn make_playlist(&mut self, cx: &mut Context<Self>) {
+        let Some(menu) = &mut self.playlist_menu else {
+            return;
+        };
+        let Some(input) = menu.naming.take() else {
+            return;
+        };
+        let name = input.read(cx).text().to_string();
+        let Some((token, name)) = menu.picker.make(&name) else {
+            menu.naming = Some(input);
+            return;
+        };
+        let item = menu.picker.item.clone();
+        let added = item.clone();
+        cx.notify();
+        self.ask(
+            cx,
+            move |server| server.create_playlist(&name, &added),
+            move |shell, answer, cx| {
+                if let Err(error) = &answer {
+                    shell.failed(error.clone(), cx);
+                }
+                let said = shell
+                    .playlist_menu
+                    .as_mut()
+                    .filter(|menu| menu.picker.item == item)
+                    .and_then(|menu| menu.picker.made(token, &answer));
+                if answer.is_err() {
+                    shell.show_notice(said.unwrap_or(playlists::FAILED), cx);
+                }
+                cx.notify();
+            },
+        );
+    }
+
+    /// A key while the menu is open: Escape closes it, Enter makes the playlist named; the
+    /// others are the name field's, never the page's or the player's.
+    pub(super) fn playlist_menu_key(&mut self, key: &str, cx: &mut Context<Self>) {
+        match key {
+            "escape" => self.close_playlist_menu(cx),
+            "enter" => self.make_playlist(cx),
+            _ => {}
+        }
+    }
+
     /// A playlist's card of the Lists.
     pub fn open_playlist(&mut self, id: ItemId, cx: &mut Context<Self>) {
         self.forward.clear();
@@ -199,7 +397,7 @@ impl Shell {
                 {
                     playlists::put_back(entries, at, gone);
                 }
-                shell.show_notice(PLAYLIST_FAILED, cx);
+                shell.show_notice(playlists::FAILED, cx);
                 cx.notify();
             },
         );
@@ -349,7 +547,168 @@ mod tests {
         cx.run_until_parked();
         assert_eq!(shown(&window, cx), before, "back at its place");
         let said = window.read_with(cx, |shell, _| shell.notice).unwrap();
-        assert_eq!(said, Some(PLAYLIST_FAILED));
+        assert_eq!(said, Some(playlists::FAILED));
         assert_eq!(server.playlist(&ItemId(WATCHLIST.into())).unwrap(), before);
+    }
+
+    /// The page of a film in no playlist, its "Add to playlist" menu opened by a click on its
+    /// button, the playlists come.
+    fn menu_on_a_film(
+        cx: &mut TestAppContext,
+        change: impl FnOnce(&mut crate::fake::State),
+    ) -> (FakeServer, WindowHandle<Shell>, ItemId) {
+        let server = FakeServer::new(12, true);
+        change(&mut server.state.lock().unwrap());
+        let connector: Arc<dyn bobine::provider::Connector> = Arc::new(server.clone());
+        let window =
+            cx.add_window(|_, cx| Shell::new(None, Box::new(move || Ok(connector)), None, cx));
+        cx.run_until_parked();
+        let film = ItemId("film-6".into());
+        window
+            .update(cx, |shell, _, cx| shell.open_film(film.clone(), cx))
+            .unwrap();
+        click(&window, cx, "film-playlist");
+        window
+            .read_with(cx, |shell, _| {
+                let menu = shell.playlist_menu.as_ref().expect("the menu opened");
+                assert!(menu.open && menu.anchor.is_some(), "under its button");
+                assert_eq!(menu.picker.item, film);
+            })
+            .unwrap();
+        (server, window, film)
+    }
+
+    fn click(window: &WindowHandle<Shell>, cx: &mut TestAppContext, what: &'static str) {
+        let mut visual = gpui_kit::VisualTestContext::from_window((*window).into(), cx);
+        visual.run_until_parked();
+        let at = visual
+            .debug_bounds(what)
+            .unwrap_or_else(|| panic!("no {what}"))
+            .center();
+        visual.simulate_click(at, gpui_kit::Modifiers::none());
+        visual.run_until_parked();
+    }
+
+    fn lines(window: &WindowHandle<Shell>, cx: &mut TestAppContext) -> Vec<(String, bool)> {
+        window
+            .read_with(cx, |shell, _| {
+                let menu = shell.playlist_menu.as_ref().unwrap();
+                let lines = menu.picker.lines().into_iter();
+                lines.map(|line| (line.name, line.checked)).collect()
+            })
+            .unwrap()
+    }
+
+    /// "New playlist…", `name` typed in its field, and Enter.
+    fn new_playlist(window: &WindowHandle<Shell>, cx: &mut TestAppContext, name: &str) {
+        click(window, cx, "playlist-new");
+        window
+            .update(cx, |shell, _, cx| {
+                let menu = shell.playlist_menu.as_ref().unwrap();
+                let input = menu.naming.clone().expect("the name field shows");
+                input.update(cx, |input, cx| input.set_text(name, cx));
+            })
+            .unwrap();
+        let mut visual = gpui_kit::VisualTestContext::from_window((*window).into(), cx);
+        visual.simulate_keystrokes("enter");
+    }
+
+    fn held_by(server: &FakeServer, name: &str, item: &ItemId) -> bool {
+        let playlists = server.playlists().unwrap();
+        let found = playlists.iter().find(|p| p.name == name);
+        found.is_some_and(|p| playlists::holds(&p.entries, item))
+    }
+
+    #[gpui_kit::test]
+    fn an_item_is_added_to_an_existing_playlist_and_to_a_new_one(cx: &mut TestAppContext) {
+        let (server, window, film) = menu_on_a_film(cx, |_| {});
+        assert_eq!(
+            lines(&window, cx),
+            [("Late night".into(), false), ("Watchlist".into(), false)]
+        );
+
+        click(&window, cx, "playlist-line Watchlist");
+        assert_eq!(lines(&window, cx)[1], ("Watchlist".into(), true));
+        assert!(held_by(&server, "Watchlist", &film));
+
+        new_playlist(&window, cx, "Road trip");
+        assert_eq!(lines(&window, cx)[2], ("Road trip".into(), true));
+        cx.run_until_parked();
+        assert!(held_by(&server, "Road trip", &film));
+        assert_eq!(
+            server.state.lock().unwrap().record.playlist_calls,
+            [
+                PlaylistCall::Add(ItemId(WATCHLIST.into()), film.clone()),
+                PlaylistCall::Create("Road trip".into(), film),
+            ]
+        );
+        // The menu stays open for another; Escape closes it, and the page stays.
+        let mut visual = gpui_kit::VisualTestContext::from_window(window.into(), cx);
+        visual.simulate_keystrokes("escape");
+        window
+            .read_with(cx, |shell, _| {
+                assert!(!shell.playlist_menu_is_open());
+                assert_eq!(shell.navigator.current(), Screen::FilmDetail);
+            })
+            .unwrap();
+    }
+
+    #[gpui_kit::test]
+    fn a_refused_change_is_put_back_and_explained_to_the_viewer(cx: &mut TestAppContext) {
+        let (server, window, film) = menu_on_a_film(cx, |state| state.playlist_fails = true);
+
+        click(&window, cx, "playlist-line Late night");
+        assert_eq!(
+            lines(&window, cx)[0],
+            ("Late night".into(), false),
+            "put back"
+        );
+        new_playlist(&window, cx, "Road trip");
+        cx.run_until_parked();
+        assert_eq!(lines(&window, cx).len(), 2, "the refused playlist is gone");
+        window
+            .read_with(cx, |shell, _| {
+                let menu = shell.playlist_menu.as_ref().unwrap();
+                assert_eq!(
+                    menu.picker.error,
+                    Some(playlists::FAILED),
+                    "said in the menu"
+                );
+                assert_eq!(shell.notice, Some(playlists::FAILED), "and over the page");
+            })
+            .unwrap();
+        assert!(!held_by(&server, "Late night", &film));
+        assert!(!held_by(&server, "Road trip", &film));
+    }
+
+    #[gpui_kit::test]
+    fn a_click_outside_the_menu_closes_it(cx: &mut TestAppContext) {
+        let (_server, window, _) = menu_on_a_film(cx, |_| {});
+        let mut visual = gpui_kit::VisualTestContext::from_window(window.into(), cx);
+        visual.simulate_click(
+            gpui_kit::point(gpui_kit::px(5.), gpui_kit::px(400.)),
+            gpui_kit::Modifiers::none(),
+        );
+        visual.run_until_parked();
+        let open = window.read_with(cx, |shell, _| shell.playlist_menu_is_open());
+        assert!(!open.unwrap());
+    }
+
+    #[gpui_kit::test]
+    fn the_series_page_opens_add_to_playlist_for_its_series(cx: &mut TestAppContext) {
+        let (_server, window, _) = menu_on_a_film(cx, |_| {});
+        let series = ItemId(crate::fake::SERIES.into());
+        window
+            .update(cx, |shell, _, cx| {
+                shell.close_playlist_menu(cx);
+                shell.open_series(series.clone(), cx);
+            })
+            .unwrap();
+        click(&window, cx, "series-playlist");
+        let item = window.read_with(cx, |shell, _| {
+            let menu = shell.playlist_menu.as_ref().expect("the menu opened");
+            menu.picker.item.clone()
+        });
+        assert_eq!(item.unwrap(), series);
     }
 }

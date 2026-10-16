@@ -206,6 +206,7 @@ fn hero(
         })
         .on_click(cx.listener(|shell, _, _, cx| shell.toggle_watched(cx)));
     let in_list = list_button("film-list", favourite, window, cx);
+    let add = super::playlist::playlist_button("film-playlist", film.id.clone(), window, cx);
     let buttons = div()
         .flex()
         .gap(px(10.))
@@ -213,7 +214,8 @@ fn hero(
         .child(play)
         .children(from_start)
         .child(watched)
-        .child(in_list);
+        .child(in_list)
+        .child(add);
 
     let chips = chips_row(&detail.versions, choices, menu, chips, window, cx);
 

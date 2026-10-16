@@ -1,9 +1,10 @@
 //! A card that answers the pointer: a poster, or a wide card of the Home. The pointer over its
-//! picture brings a veil, a play button in the middle and, on a poster, the "My list" and
-//! "Watched" buttons in a corner; a click anywhere else opens the title's page. Each card is a
+//! picture brings a veil, a play button in the middle and, on a poster, the "Favorite",
+//! "Watched" and "Add to playlist" buttons in a corner; a click anywhere else opens the title's page. Each card is a
 //! view of its own, kept by the shell for each card drawn: the pointer coming, going and moving
 //! over it redraws that card alone, not the page around it, however long the rows.
 
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::time::Instant;
@@ -11,8 +12,8 @@ use std::time::Instant;
 use bobine::provider::{Episode, ItemId};
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    AnyElement, App, Context, Div, ElementId, Entity, IntoElement, Render, Rgba, SharedString,
-    Stateful, WeakEntity, Window, div, px, rgb, rgba,
+    AnyElement, App, Bounds, Context, Div, ElementId, Entity, IntoElement, Pixels, Render, Rgba,
+    SharedString, Stateful, WeakEntity, Window, canvas, div, px, rgb, rgba,
 };
 
 use super::home::Pick;
@@ -303,7 +304,7 @@ impl Card {
         .child(icon(IconName::Play, 22.))
     }
 
-    /// "Favorite" and "Watched", side by side in the top right corner.
+    /// "Favorite", "Watched" and "Add to playlist", side by side in the top right corner.
     fn corner(&self, quick: Quick, window: &mut Window, cx: &mut Context<Self>) -> Div {
         let my_list = self.quick_button(
             Action::MyList,
@@ -319,6 +320,7 @@ impl Card {
             window,
             cx,
         );
+        let add = self.playlist_button(quick.item.clone(), window, cx);
         div()
             .absolute()
             .top(px(8.))
@@ -327,6 +329,55 @@ impl Card {
             .gap(px(6.))
             .child(my_list)
             .child(watched)
+            .child(add)
+    }
+
+    /// "Add to playlist": the menu opens under it.
+    fn playlist_button(
+        &self,
+        item: ItemId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let bounds: Rc<Cell<Option<Bounds<Pixels>>>> = Rc::default();
+        let drawn = bounds.clone();
+        let shell = self.shell.clone();
+        let button = theme::eased(
+            "playlist",
+            theme::Shades {
+                rest: rgba(0x09090acc),
+                hover: rgba(0x2e2e33ee),
+                press: rgba(0x3a3a40ee),
+            },
+            window,
+            cx,
+        )
+        .debug_selector(|| format!("card-playlist {}", self.name))
+        .size(px(30.))
+        .rounded_full()
+        .flex()
+        .items_center()
+        .justify_center()
+        .cursor_pointer()
+        // Like the play button, it never opens the page behind it.
+        .on_click(move |_, _, cx: &mut App| {
+            cx.stop_propagation();
+            let item = item.clone();
+            let at = bounds.get();
+            shell
+                .update(cx, |shell, cx| shell.open_playlist_menu(item, at, cx))
+                .ok();
+        })
+        .child(icon(IconName::ListPlus, 14.));
+        div()
+            .relative()
+            .child(button)
+            .child(
+                canvas(move |at, _, _| drawn.set(Some(at)), |_, _, _, _| {})
+                    .absolute()
+                    .inset_0(),
+            )
+            .into_any_element()
     }
 
     /// A small round button, filled with the accent while it is on; the change eases.

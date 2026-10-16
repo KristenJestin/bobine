@@ -16,7 +16,7 @@ pub use lists::{
 };
 pub use pages::{Chip, DetailPage, GONE, LibraryPage, Loadable, LoginForm, OpenConnector, Tool};
 pub use palette::{PersonPage, SearchState};
-pub use playlists::PlaylistPage;
+pub use playlists::{PlaylistMenu, PlaylistPage};
 pub use series::SeriesPage;
 
 use std::cell::RefCell;
@@ -188,6 +188,8 @@ pub struct Shell {
     pub lists: ListsPage,
     /// The playlists' pages open, the last one on top: one per `Screen::Playlist`.
     pub playlist_pages: Vec<PlaylistPage>,
+    /// The "Add to playlist" menu, while it shows.
+    pub playlist_menu: Option<PlaylistMenu>,
     /// The search palette, while it shows (it stays fading out after it closed).
     pub search: Option<SearchState>,
     /// The pages gone back from, the last one on top: the mouse's forward button opens them again.
@@ -275,6 +277,8 @@ pub struct Playback {
     refusal_shown: bool,
     /// The "My list" button of the player.
     pub list: Option<PlayerList>,
+    /// What plays, as the server knows it: what "Add to playlist" puts in a playlist.
+    pub playing: Option<bobine::provider::ItemId>,
     _ticker: Task<()>,
     _bounds: Subscription,
 }
@@ -342,6 +346,7 @@ impl Shell {
             my_list: Default::default(),
             lists: Default::default(),
             playlist_pages: Vec::new(),
+            playlist_menu: None,
             search: None,
             forward: Vec::new(),
             #[cfg(test)]
@@ -466,6 +471,7 @@ impl Shell {
             refusal_fade: Fade::new(motion::quick()),
             refusal_shown: false,
             list: None,
+            playing: None,
             _ticker: ticker,
             _bounds: bounds,
         });
@@ -814,7 +820,9 @@ impl Render for Shell {
             self.library.menus.close();
             self.series.menus.close();
             self.account_menu.close();
+            self.close_playlist_menu(cx);
         }
+        self.follow_playlist_menu(window);
         #[cfg(feature = "harness")]
         self.note_frame();
         #[cfg(any(test, feature = "harness"))]
@@ -914,6 +922,10 @@ impl Render for Shell {
                     app.search_key(key, window, cx);
                     return;
                 }
+                if app.playlist_menu_is_open() {
+                    app.playlist_menu_key(key, cx);
+                    return;
+                }
                 if app.navigator.current() == Screen::Player && app.playback.is_some() {
                     let held = &event.keystroke.modifiers;
                     let with_modifier = held.control || held.alt || held.platform || held.function;
@@ -983,6 +995,7 @@ impl Render for Shell {
                             .list
                             .as_ref()
                             .map(|list| (list.toggle.on(), list.error)),
+                        add: playback.playing.clone(),
                         tracks_scroll: playback.tracks_scroll.clone(),
                     };
                     screens::player::render(session, shown, window, cx).into_any_element()
@@ -1042,6 +1055,7 @@ impl Render for Shell {
                 back_label.filter(|_| screen.shows_back_link()),
                 |root, label| root.child(back_link(label, window, cx)),
             )
+            .children(screens::playlist::add_menu(self, window, cx))
             .children(self.notice_pill(screen, window))
             .children(screens::search::palette(self, window, cx))
     }

@@ -11,7 +11,7 @@ mod lists;
 mod login;
 mod person;
 pub mod player;
-mod playlist;
+pub mod playlist;
 pub mod search;
 mod series_detail;
 pub mod skip;

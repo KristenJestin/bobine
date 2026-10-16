@@ -344,12 +344,14 @@ mod tests {
 
         hover(cx, &id);
         assert_eq!(veil(&window, cx, &id), 1.);
-        // The play button in the middle, the two buttons in the top right corner.
+        // The play button in the middle, the three buttons in the top right corner.
         let play = bounds(cx, "card-play", &id);
         assert!(card.contains(&play.center()));
-        for button in ["card-my-list", "card-watched"] {
+        for button in ["card-my-list", "card-watched", "card-playlist"] {
             let button = bounds(cx, button, &id);
-            assert!(button.top() < card.top() + px(40.) && button.right() > card.right() - px(80.));
+            assert!(
+                button.top() < card.top() + px(40.) && button.right() > card.right() - px(120.)
+            );
         }
 
         cx.simulate_mouse_move(point(px(5.), px(5.)), None, Modifiers::none());
@@ -441,6 +443,25 @@ mod tests {
         let plays = server.state.lock().unwrap().record.plays.clone();
         assert_eq!(plays.len(), 1);
         assert_eq!(plays[0].0, next.item.id);
+        assert_eq!(screen(&window, cx), Screen::Home, "the page was opened");
+    }
+
+    #[gpui_kit::test]
+    fn the_corner_of_a_poster_opens_add_to_playlist_under_its_button(cx: &mut TestAppContext) {
+        let (_, window, cx) = home(cx);
+        let (id, film) = poster(&window, cx, |target| matches!(target, PlayTarget::Film(_)));
+        click(cx, "card-playlist", &id);
+        let button = bounds(cx, "card-playlist", &id);
+        let (item, anchor) = window
+            .read_with(cx, |shell, _| {
+                let menu = shell.playlist_menu.as_ref().expect("the menu opened");
+                (menu.picker.item.clone(), menu.anchor)
+            })
+            .unwrap();
+        assert_eq!(item, film);
+        assert_eq!(anchor, Some(button));
+        let menu = cx.debug_bounds("playlist-menu").expect("the menu is drawn");
+        assert!(menu.top() >= button.bottom(), "under its button");
         assert_eq!(screen(&window, cx), Screen::Home, "the page was opened");
     }
 

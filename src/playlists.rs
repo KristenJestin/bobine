@@ -1,9 +1,13 @@
 //! The words of the Lists page and of a playlist, and what they keep of the server's answer.
 
-use bobine::provider::{EntryId, ImageRef, PlaylistEntry, Title};
+use bobine::provider::{EntryId, ImageRef, ItemId, Playlist, PlaylistEntry, ProviderError, Title};
 
 use crate::lists::plural;
 use crate::series_page::{self, Next};
+use crate::shell::Loadable;
+
+/// What the window says when the server did not take a change of a playlist.
+pub const FAILED: &str = "The playlist could not be changed.";
 
 /// How many posters a card's mosaic shows: two by two.
 pub const MOSAIC: usize = 4;
@@ -94,6 +98,154 @@ pub fn put_back(entries: &mut Vec<PlaylistEntry>, at: usize, entry: PlaylistEntr
     entries.insert(at.min(entries.len()), entry);
 }
 
+/// Whether `entries` hold `item`: the title itself, or, for a series, one of its episodes (a
+/// series put in a playlist is put in as its episodes).
+pub fn holds(entries: &[PlaylistEntry], item: &ItemId) -> bool {
+    entries.iter().any(|entry| match &entry.title {
+        Title::Episode(episode) => &episode.item.id == item || &episode.series == item,
+        title => title.id() == item,
+    })
+}
+
+/// A line of the "Add to playlist" menu.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Line {
+    /// None for a playlist being made, until the server gives its id.
+    pub id: Option<ItemId>,
+    pub name: String,
+    /// The playlist holds the title: the line takes no press.
+    pub checked: bool,
+}
+
+/// A playlist asked to be made from the menu, with the title in it.
+#[derive(Debug, Clone)]
+struct Making {
+    token: u32,
+    name: String,
+    id: Option<ItemId>,
+}
+
+/// The "Add to playlist" menu of one title: the playlists, a check on those that hold it. A
+/// press shows the check at once and asks the server; a refusal takes it back and says why.
+pub struct Picker {
+    pub item: ItemId,
+    pub playlists: Option<Loadable<Vec<Playlist>>>,
+    /// The playlists the title was put in from here: checked while asked, and after.
+    added: Vec<ItemId>,
+    /// Those whose answer has not come.
+    pending: Vec<ItemId>,
+    making: Vec<Making>,
+    made: u32,
+    /// Why the last change did not take.
+    pub error: Option<&'static str>,
+}
+
+impl Picker {
+    pub fn new(item: ItemId) -> Self {
+        Self {
+            item,
+            playlists: Some(Loadable::Loading),
+            added: Vec::new(),
+            pending: Vec::new(),
+            making: Vec::new(),
+            made: 0,
+            error: None,
+        }
+    }
+
+    /// The lines: the playlists by name, then those being made.
+    pub fn lines(&self) -> Vec<Line> {
+        let found = match &self.playlists {
+            Some(Loadable::Ready(found)) => found.as_slice(),
+            _ => &[],
+        };
+        found
+            .iter()
+            .map(|playlist| Line {
+                id: Some(playlist.id.clone()),
+                name: playlist.name.clone(),
+                checked: self.added.contains(&playlist.id) || holds(&playlist.entries, &self.item),
+            })
+            .chain(self.making.iter().map(|making| Line {
+                id: making.id.clone(),
+                name: making.name.clone(),
+                checked: true,
+            }))
+            .collect()
+    }
+
+    /// A press on the playlist `id`: checked at once. Returns the playlist to ask the server to
+    /// put the title in; none when it already holds it.
+    pub fn pick(&mut self, id: &ItemId) -> Option<ItemId> {
+        let line = self
+            .lines()
+            .into_iter()
+            .find(|line| line.id.as_ref() == Some(id))?;
+        if line.checked {
+            return None;
+        }
+        self.error = None;
+        self.added.push(id.clone());
+        self.pending.push(id.clone());
+        Some(id.clone())
+    }
+
+    /// The server answered the press on `id`. A refusal takes the check back; returns what to
+    /// tell the viewer then.
+    pub fn picked(
+        &mut self,
+        id: &ItemId,
+        answer: &Result<(), ProviderError>,
+    ) -> Option<&'static str> {
+        self.pending.retain(|pending| pending != id);
+        if answer.is_ok() {
+            return None;
+        }
+        self.added.retain(|added| added != id);
+        self.error = Some(FAILED);
+        self.error
+    }
+
+    /// "New playlist…" with `name` typed: the line shows at once, checked. Returns what to ask
+    /// the server, with the token its answer comes back with; none for a name of only spaces.
+    pub fn make(&mut self, name: &str) -> Option<(u32, String)> {
+        let name = name.trim();
+        if name.is_empty() {
+            return None;
+        }
+        self.error = None;
+        self.made += 1;
+        self.making.push(Making {
+            token: self.made,
+            name: name.into(),
+            id: None,
+        });
+        Some((self.made, name.into()))
+    }
+
+    /// The server answered the playlist made with `token`: the line takes its id, or goes on a
+    /// refusal; returns what to tell the viewer then.
+    pub fn made(
+        &mut self,
+        token: u32,
+        answer: &Result<ItemId, ProviderError>,
+    ) -> Option<&'static str> {
+        match answer {
+            Ok(id) => {
+                if let Some(making) = self.making.iter_mut().find(|m| m.token == token) {
+                    making.id = Some(id.clone());
+                }
+                None
+            }
+            Err(_) => {
+                self.making.retain(|making| making.token != token);
+                self.error = Some(FAILED);
+                self.error
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -137,6 +289,74 @@ mod tests {
         assert!(lines[1].0.contains(" · S1 · E2 · "), "{lines:?}");
         assert_eq!(lines[1].1, "S1 · E2");
         assert!(lines[2].1.starts_with("Series"), "{lines:?}");
+    }
+
+    fn picker_of(item: &str) -> Picker {
+        let mut picker = Picker::new(ItemId(item.into()));
+        let server = FakeServer::new(12, false);
+        picker.playlists = Some(Loadable::Ready(server.playlists().unwrap()));
+        picker
+    }
+
+    fn checked(picker: &Picker) -> Vec<(String, bool)> {
+        picker
+            .lines()
+            .into_iter()
+            .map(|line| (line.name, line.checked))
+            .collect()
+    }
+
+    #[test]
+    fn the_menu_checks_the_playlists_that_already_hold_the_title() {
+        let picker = picker_of("film-3");
+        assert_eq!(
+            checked(&picker),
+            [("Late night".into(), true), ("Watchlist".into(), false)]
+        );
+        // A series is held through its episodes as well.
+        let picker = picker_of("series-1");
+        assert_eq!(
+            checked(&picker),
+            [("Late night".into(), false), ("Watchlist".into(), true)]
+        );
+    }
+
+    #[test]
+    fn a_pick_is_checked_at_once_and_unchecked_when_refused() {
+        let mut picker = picker_of("film-6");
+        let watchlist = ItemId("playlist-watchlist".into());
+        assert_eq!(picker.pick(&watchlist), Some(watchlist.clone()));
+        assert!(checked(&picker)[1].1);
+        assert_eq!(picker.pick(&watchlist), None, "already checked");
+        assert_eq!(
+            picker.picked(&watchlist, &Err(ProviderError::Forbidden)),
+            Some(FAILED)
+        );
+        assert!(!checked(&picker)[1].1);
+        assert_eq!(picker.error, Some(FAILED));
+        // Picked again, it is asked again, and the word goes.
+        assert_eq!(picker.pick(&watchlist), Some(watchlist.clone()));
+        assert_eq!(picker.error, None);
+        assert_eq!(picker.picked(&watchlist, &Ok(())), None);
+        assert!(checked(&picker)[1].1);
+    }
+
+    #[test]
+    fn a_new_playlist_shows_at_once_and_goes_when_refused() {
+        let mut picker = picker_of("film-6");
+        assert_eq!(picker.make("   "), None);
+        let (first, name) = picker.make("  Road trip ").unwrap();
+        assert_eq!(name, "Road trip");
+        assert_eq!(checked(&picker)[2], ("Road trip".into(), true));
+        assert_eq!(picker.lines()[2].id, None);
+        assert_eq!(picker.made(first, &Ok(ItemId("new".into()))), None);
+        assert_eq!(picker.lines()[2].id, Some(ItemId("new".into())));
+        let (second, _) = picker.make("Snow days").unwrap();
+        assert_eq!(
+            picker.made(second, &Err(ProviderError::Server(500))),
+            Some(FAILED)
+        );
+        assert_eq!(picker.lines().len(), 3, "the refused one is gone");
     }
 
     #[test]

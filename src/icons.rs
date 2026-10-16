@@ -55,6 +55,7 @@ icons! {
     Search => "search",
     X => "x",
     List => "list",
+    ListPlus => "list-plus",
     Volume2 => "volume-2",
     VolumeX => "volume-x",
     Maximize => "maximize",

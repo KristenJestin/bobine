@@ -194,7 +194,13 @@ fn hero(
                     .flex()
                     .gap(px(10.))
                     .children(play)
-                    .child(list_button("series-list", shown.favourite, window, cx)),
+                    .child(list_button("series-list", shown.favourite, window, cx))
+                    .child(super::playlist::playlist_button(
+                        "series-playlist",
+                        series.id.clone(),
+                        window,
+                        cx,
+                    )),
             )
             .children(started)
             .children(shown.error.map(|why| {

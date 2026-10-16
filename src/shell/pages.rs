@@ -521,6 +521,7 @@ impl Shell {
         self.list = None;
         self.collection_pages.clear();
         self.playlist_pages.clear();
+        self.playlist_menu = None;
         self.forward.clear();
         self.search = None;
         self.navigator.switch_root(Screen::Login);
@@ -1332,6 +1333,10 @@ impl Shell {
 
     /// Escape cancels the next episode's card, else closes the open menu, else goes back.
     pub fn escape(&mut self, cx: &mut Context<Self>) {
+        if self.playlist_menu_is_open() {
+            self.close_playlist_menu(cx);
+            return;
+        }
         if self.cancel_up_next(cx) {
             return;
         }
@@ -1547,6 +1552,7 @@ impl Shell {
                 if let Some(playback) = &mut self.playback {
                     playback.fallback = Some(fallback);
                     playback.session.offer_quality();
+                    playback.playing = Some(opened.film.clone());
                 }
                 self.load_trickplay(opened.film.clone(), opened.source.clone(), cx);
                 self.playback_started(&opened.film, next, cx);
