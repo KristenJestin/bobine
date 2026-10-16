@@ -189,6 +189,16 @@ mod tests {
     }
 
     #[test]
+    fn the_search_glass_is_phosphors_bold_one_with_an_open_lens() {
+        // The fill weight has a solid lens, which reads as a coloured emoji: the bold weight is
+        // a ring and a handle, drawn as one outline-shaped fill.
+        let svg = Icons.load(&IconName::Search.path()).unwrap().unwrap();
+        let svg = std::str::from_utf8(&svg).unwrap();
+        assert!(svg.contains("M232.49,215.51,185,168a92.12"), "{svg}");
+        assert!(!svg.contains("M168,112a56,56"), "the solid lens is back");
+    }
+
+    #[test]
     fn an_unknown_path_is_not_an_icon() {
         assert!(Icons.load("icons/nothing.svg").unwrap().is_none());
     }
