@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use bobine::provider::{
     Collection, Connector, Episode, FilmDetail, FilmQuery, FilterChoices, ItemId, LibraryKind,
-    MediaServer, MediaSource, Page, Playback as Opened, PlaybackReport, ProviderError,
+    MediaServer, MediaSource, Page, PlayMethod, Playback as Opened, PlaybackReport, ProviderError,
 };
 use gpui_kit::prelude::*;
 use gpui_kit::{
@@ -19,6 +19,7 @@ use gpui_kit::{
 };
 
 use super::{Film as Playing, HomePage, Shell};
+use crate::fallback::Fallback;
 use crate::favourite::{self, ListPage, Toggle};
 use crate::film_page::{self, Choices, From, Plan};
 use crate::grid::{Grid, Listed, RETRY_AFTER};
@@ -1271,7 +1272,7 @@ impl Shell {
             }
         };
         let reporting = Reporting::start(
-            server,
+            server.clone(),
             PlaybackReport {
                 session: opened.session.clone(),
                 film: opened.film.clone(),
@@ -1280,14 +1281,17 @@ impl Shell {
                 paused: false,
                 audio_track: plan.audio_index,
                 subtitle_track: plan.subtitle_index,
+                method: PlayMethod::DirectPlay,
             },
         );
         let externals = plan.externals(&opened);
         let media = plan.media(&opened, &externals);
+        let fallback = Fallback::new(server.clone(), plan.clone());
         match self.play(mpv, media, playing, Some(reporting), window, cx) {
             Ok(()) => {
                 if let Some(playback) = &mut self.playback {
                     playback.next = next;
+                    playback.fallback = Some(fallback);
                 }
             }
             Err(error) => {

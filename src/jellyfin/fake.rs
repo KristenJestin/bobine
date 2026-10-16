@@ -16,6 +16,8 @@ pub const FILMS_LIBRARY: &str = "11111111111111111111111111111111";
 pub const FILM: &str = "f0000000000000000000000000000001";
 pub const SOURCE: &str = "5a000000000000000000000000000001";
 pub const PLAY_SESSION: &str = "9c0ffee09c0ffee09c0ffee09c0ffee0";
+/// The play session of a playback the server converts.
+pub const TRANSCODE_SESSION: &str = "7e57c0de7e57c0de7e57c0de7e57c0de";
 pub const IMAGE: &[u8] = b"\x89PNG fake image";
 pub const LETTERS_LIBRARY: &str = "33333333333333333333333333333333";
 pub const SERIES_LIBRARY: &str = "22222222222222222222222222222222";
@@ -107,6 +109,10 @@ pub struct State {
     gate_arrivals: usize,
     /// For each held search request, whether all the others had arrived when it was let go.
     pub gate_met: Vec<bool>,
+    /// The film's version cannot be played as it is: the server only offers to convert it.
+    pub transcode_only: bool,
+    /// The server converts nothing: no transcoding address in its answer.
+    pub no_transcoding: bool,
 }
 
 /// How long a held search request waits for the others before it is let go anyway.
@@ -457,8 +463,9 @@ fn answer(state: &State, seen: &Seen) -> Answer {
             Answer::Json(200, fixture("similar"))
         }
         ("POST", path) if path == format!("/Items/{FILM}/PlaybackInfo") => {
-            Answer::Json(200, fixture("playback_info"))
+            Answer::Json(200, playback_info(state, seen))
         }
+        ("DELETE", "/Videos/ActiveEncodings") => Answer::Empty(204),
         ("POST", path) if path == format!("/Items/{EPISODE}/PlaybackInfo") => {
             let episode = &fixture("episodes")["Items"][0];
             Answer::Json(
@@ -524,6 +531,45 @@ fn answer(state: &State, seen: &Seen) -> Answer {
         ("GET", path) if path.starts_with(&images) => Answer::Bytes(IMAGE.to_vec()),
         _ => Answer::Empty(404),
     }
+}
+
+/// The film's playback info: direct play, unless it is turned off by the request or the
+/// version only converts; then the transcoding address, unless the server converts nothing.
+fn playback_info(state: &State, seen: &Seen) -> Value {
+    let mut info = fixture("playback_info");
+    let direct = seen.json()["EnableDirectPlay"] != false && !state.transcode_only;
+    if direct {
+        return info;
+    }
+    info["PlaySessionId"] = json!(TRANSCODE_SESSION);
+    let source = &mut info["MediaSources"][0];
+    source["SupportsDirectPlay"] = json!(false);
+    source["SupportsDirectStream"] = json!(false);
+    if !state.no_transcoding {
+        source["TranscodingUrl"] = json!(format!(
+            "/videos/{FILM}/master.m3u8?DeviceId=d&MediaSourceId={SOURCE}\
+             &VideoCodec=h264&AudioCodec=aac&PlaySessionId={TRANSCODE_SESSION}\
+             &SegmentContainer=ts&ApiKey={TOKEN}"
+        ));
+        source["TranscodingSubProtocol"] = json!("hls");
+    }
+    // In a conversion, an embedded text subtitle is extracted into a file; a picture one is
+    // drawn into the picture.
+    for stream in source["MediaStreams"].as_array_mut().unwrap() {
+        if stream["Type"] != "Subtitle" || stream["IsExternal"] == true {
+            continue;
+        }
+        if stream["Codec"] == "subrip" {
+            let index = stream["Index"].clone();
+            stream["DeliveryMethod"] = json!("External");
+            stream["DeliveryUrl"] = json!(format!(
+                "/Videos/{FILM}/{SOURCE}/Subtitles/{index}/0/Stream.srt?ApiKey={TOKEN}"
+            ));
+        } else {
+            stream["DeliveryMethod"] = json!("Encode");
+        }
+    }
+    info
 }
 
 /// Waits until every held search request has arrived; false if they did not all come in time.

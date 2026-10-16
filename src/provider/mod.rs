@@ -104,6 +104,9 @@ pub trait MediaServer: Send + Sync {
     fn favourites(&self) -> Result<Vec<Favourite>, ProviderError>;
     /// Puts a film or a series in the user's list, or takes it out.
     fn set_favourite(&self, item: &ItemId, favourite: bool) -> Result<(), ProviderError>;
+    /// A new playback of a version the player could not play as it is: the server converts it,
+    /// from `request.start`, with the tracks asked.
+    fn transcode(&self, request: &TranscodeRequest) -> Result<Playback, ProviderError>;
 }
 
 /// A film, a series or an episode, as a row of the Home lists it.
@@ -252,6 +255,13 @@ pub struct MediaSourceId(pub String);
 /// The id that ties the reports of one playback together.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PlaySessionId(pub String);
+
+/// How the server sends a version: the file as it is, or converted by the server.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlayMethod {
+    DirectPlay,
+    Transcode,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LibraryKind {
@@ -475,6 +485,19 @@ pub struct Playback {
     pub external_subtitles: Vec<ExternalSubtitle>,
 }
 
+/// What the server converts: a version, from where the viewer was, with the tracks they chose.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TranscodeRequest {
+    pub film: ItemId,
+    pub source: MediaSourceId,
+    pub start: Duration,
+    /// The server's indexes. The subtitle is an embedded one, which the server extracts into a
+    /// file or draws into the picture: an external file is added by the player, as in direct
+    /// play.
+    pub audio_track: Option<i32>,
+    pub subtitle_track: Option<i32>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExternalSubtitle {
     /// The subtitle track it is, by its index.
@@ -492,6 +515,7 @@ pub struct PlaybackReport {
     pub paused: bool,
     pub audio_track: Option<i32>,
     pub subtitle_track: Option<i32>,
+    pub method: PlayMethod,
 }
 
 /// What went wrong, said without the token or any URL that carries it.
