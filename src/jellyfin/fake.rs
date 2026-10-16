@@ -40,6 +40,7 @@ fn fixture(name: &str) -> Value {
         "person_episodes" => include_str!("fixtures/person_episodes.json"),
         "playback_info" => include_str!("fixtures/playback_info.json"),
         "series" => include_str!("fixtures/series.json"),
+        "latest_series" => include_str!("fixtures/latest_series.json"),
         "series_detail" => include_str!("fixtures/series_detail.json"),
         "series_similar" => include_str!("fixtures/series_similar.json"),
         "seasons" => include_str!("fixtures/seasons.json"),
@@ -348,7 +349,7 @@ fn answer(state: &State, seen: &Seen) -> Answer {
         ("GET", "/Items/Latest") => {
             let name = match seen.param("ParentId") {
                 Some(FILMS_LIBRARY) => "films",
-                Some(SERIES_LIBRARY) => "series",
+                Some(SERIES_LIBRARY) => "latest_series",
                 _ => return Answer::Empty(404),
             };
             let limit: usize = seen

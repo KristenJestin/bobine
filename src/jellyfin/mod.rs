@@ -645,7 +645,14 @@ impl MediaServer for Jellyfin {
                 ("enableImageTypes", "Primary,Backdrop".into()),
             ],
         )?;
-        Ok(found.into_iter().map(Item::title).collect())
+        // Two episodes of one series, or one episode beside its series, are one entry.
+        let mut titles: Vec<Title> = Vec::new();
+        for title in found.into_iter().map(Item::latest) {
+            if !titles.iter().any(|seen| seen.id() == title.id()) {
+                titles.push(title);
+            }
+        }
+        Ok(titles)
     }
 
     /// The simplest honest choice: the newest titles, films and series, that the user has not

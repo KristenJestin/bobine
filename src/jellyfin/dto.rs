@@ -259,6 +259,32 @@ impl Item {
         }
     }
 
+    /// What a library's latest list holds: `/Items/Latest` groups the episodes of a series only
+    /// when several came in, so a lone one comes as the episode, and is listed as its series.
+    pub fn latest(self) -> Title {
+        if self.kind.as_deref() != Some("Episode") {
+            return self.title();
+        }
+        let Some(id) = self.series_id.clone() else {
+            return self.title();
+        };
+        let poster = self.series_primary_image_tag.as_ref().map(|tag| ImageRef {
+            item: ItemId(id.clone()),
+            kind: ImageKind::Primary,
+            tag: tag.clone(),
+        });
+        Title::Series(Series {
+            id: ItemId(id),
+            title: self.series_name.unwrap_or_default(),
+            year: None,
+            end_year: None,
+            community_rating: None,
+            unwatched: 0,
+            poster,
+            backdrop: None,
+        })
+    }
+
     /// What the top of the Home says of a film or a series.
     pub fn feature(&self) -> Feature {
         let film = self.film();

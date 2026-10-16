@@ -491,6 +491,23 @@ fn the_latest_of_a_series_library_are_series() {
     let s = Setup::new();
     let latest = s
         .signed_in()
+        .latest(&ItemId(SERIES_LIBRARY.into()), 2)
+        .unwrap();
+    let names: Vec<&str> = latest
+        .iter()
+        .map(|title| match title {
+            Title::Series(series) => series.title.as_str(),
+            other => panic!("a series: {other:?}"),
+        })
+        .collect();
+    assert_eq!(names, ["Tidewater", "Glass Orchard"]);
+}
+
+#[test]
+fn a_series_that_gained_one_episode_is_listed_as_the_series() {
+    let s = Setup::new();
+    let latest = s
+        .signed_in()
         .latest(&ItemId(SERIES_LIBRARY.into()), 10)
         .unwrap();
     let names: Vec<&str> = latest
@@ -500,7 +517,24 @@ fn the_latest_of_a_series_library_are_series() {
             other => panic!("a series: {other:?}"),
         })
         .collect();
-    assert_eq!(names, ["Tidewater", "Glass Orchard", "Bramble Line"]);
+    // Two episodes of one series come as one series, at the place of the first.
+    assert_eq!(
+        names,
+        [
+            "Tidewater",
+            "Glass Orchard",
+            "Harbour Lights",
+            "Bramble Line"
+        ]
+    );
+    let Title::Series(lights) = &latest[2] else {
+        unreachable!()
+    };
+    assert_eq!(lights.id, ItemId("5e000000000000000000000000000001".into()));
+    assert_eq!(
+        lights.poster.as_ref().map(|p| (&p.item, p.tag.as_str())),
+        Some((&lights.id, "poster-hl"))
+    );
 }
 
 #[test]
