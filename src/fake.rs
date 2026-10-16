@@ -375,6 +375,7 @@ pub fn series() -> Vec<Series> {
                 favourite: false,
                 poster: image(&id, ImageKind::Primary),
                 backdrop: image(&id, ImageKind::Backdrop),
+                season: None,
                 id: ItemId(id),
             }
         })

@@ -196,7 +196,7 @@ fn series_card(
             )
     };
     let offer = Offer {
-        open: Open::Series(series.id.clone()),
+        open: Open::Series(series.id.clone(), None),
         play: Play::Target(PlayTarget::Series(series.id.clone())),
         quick: None,
         draw: Rc::new(draw),

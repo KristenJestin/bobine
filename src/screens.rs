@@ -224,13 +224,15 @@ fn film_look(
 }
 
 /// A series as its grid and rows show it: like a film, with the episodes left to watch top
-/// right (a check once all are watched) and its years below.
+/// right (a check once all are watched) and its years below. `fresh` is for the Recently added
+/// row, where a season handed for its series says which one is new.
 fn series_look(
     series: &Series,
     image: Option<Arc<RenderImage>>,
     width: f32,
     name: &ElementId,
     watched: bool,
+    fresh: bool,
 ) -> Look {
     Look {
         name: name.clone(),
@@ -247,7 +249,7 @@ fn series_look(
         outlined: false,
         progress: None,
         title: series.title.clone(),
-        caption: series_page::years(series).unwrap_or_default(),
+        caption: series_page::card_detail(series, fresh).unwrap_or_default(),
     }
 }
 
@@ -279,19 +281,23 @@ fn film_offer(
     }
 }
 
-/// The card of a series poster: a click opens the series, its layer plays its next episode,
-/// puts it in the list and marks all of it watched.
+/// The card of a series poster: a click opens the series (on its new season, for a card of
+/// one), its layer plays its next episode, puts it in the list and marks all of it watched.
 fn series_offer(
     marks: &Marks,
     series: &Series,
     image: Option<Arc<RenderImage>>,
     width: f32,
     name: &ElementId,
+    fresh: bool,
 ) -> Offer {
     let quick = Quick::new(marks, &series.id, series.favourite, series.watched);
-    let look = series_look(series, image, width, name, quick.watched.now);
+    let look = series_look(series, image, width, name, quick.watched.now, fresh);
     Offer {
-        open: Open::Series(series.id.clone()),
+        open: Open::Series(
+            series.id.clone(),
+            series.season.as_ref().map(|season| season.id.clone()),
+        ),
         play: Play::Target(PlayTarget::Series(series.id.clone())),
         quick: Some(quick),
         draw: Rc::new(move |layer| look.draw(Some(layer))),
@@ -354,9 +360,21 @@ fn series_poster(
     id: impl Into<ElementId>,
     cx: &mut Context<Shell>,
 ) -> Stateful<Div> {
+    series_card(shell, series, width, false, id, cx)
+}
+
+/// A series poster; `fresh`: see `series_look`.
+fn series_card(
+    shell: &mut Shell,
+    series: &Series,
+    width: f32,
+    fresh: bool,
+    id: impl Into<ElementId>,
+    cx: &mut Context<Shell>,
+) -> Stateful<Div> {
     let image = shell.image(series.poster.as_ref(), images::POSTER, cx);
     let id = id.into();
-    let offer = series_offer(&shell.marks, series, image, width, &id);
+    let offer = series_offer(&shell.marks, series, image, width, &id, fresh);
     card(shell, id, offer, cx)
 }
 

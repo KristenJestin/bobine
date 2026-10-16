@@ -290,6 +290,9 @@ impl Item {
     }
 
     pub fn series(&self) -> Series {
+        if let Some(series) = self.season_as_series() {
+            return series;
+        }
         let film = self.film();
         Series {
             id: film.id,
@@ -309,7 +312,43 @@ impl Item {
             favourite: film.favourite,
             poster: film.poster,
             backdrop: film.backdrop,
+            season: None,
         }
+    }
+
+    /// A season the server hands where a series is expected (a series that gained a season, in
+    /// `/Items/Latest`): its series, with the season to open it on. A season has no page of its
+    /// own, and no backdrop worth borrowing.
+    fn season_as_series(&self) -> Option<Series> {
+        if self.kind.as_deref() != Some("Season") {
+            return None;
+        }
+        let id = ItemId(self.series_id.clone()?);
+        // The series' poster when the server gave it, else the season's own.
+        let poster = match &self.series_primary_image_tag {
+            Some(tag) => Some(ImageRef {
+                item: id.clone(),
+                kind: ImageKind::Primary,
+                tag: tag.clone(),
+            }),
+            None => self.primary(),
+        };
+        let season = self.season();
+        Some(Series {
+            id,
+            title: self.series_name.clone().unwrap_or_default(),
+            year: None,
+            end_year: None,
+            community_rating: None,
+            // What is left to watch in the new season, which is what the card is about.
+            unwatched: season.unwatched,
+            // The season's own state is not its series': the card offers no button for them.
+            watched: false,
+            favourite: false,
+            poster,
+            backdrop: None,
+            season: Some(season),
+        })
     }
 
     pub fn collection_card(&self) -> CollectionCard {
@@ -351,18 +390,20 @@ impl Item {
         }
     }
 
-    /// What a row of the Home lists: an episode, a series, else a film.
-    pub fn title(self) -> Title {
-        match self.kind.as_deref() {
+    /// What a row of the Home lists: an episode, a series (or the season of one), else a film.
+    /// A season that names no series has no page to open: it is not listed.
+    pub fn title(self) -> Option<Title> {
+        Some(match self.kind.as_deref() {
             Some("Episode") => Title::Episode(self.episode()),
-            Some("Series") => Title::Series(self.series()),
+            Some("Season") if self.series_id.is_none() => return None,
+            Some("Series" | "Season") => Title::Series(self.series()),
             _ => Title::Film(self.film()),
-        }
+        })
     }
 
     /// What a library's latest list holds: `/Items/Latest` groups the episodes of a series only
     /// when several came in, so a lone one comes as the episode, and is listed as its series.
-    pub fn latest(self) -> Title {
+    pub fn latest(self) -> Option<Title> {
         if self.kind.as_deref() != Some("Episode") {
             return self.title();
         }
@@ -374,7 +415,7 @@ impl Item {
             kind: ImageKind::Primary,
             tag: tag.clone(),
         });
-        Title::Series(Series {
+        Some(Title::Series(Series {
             id: ItemId(id),
             title: self.series_name.unwrap_or_default(),
             year: None,
@@ -386,7 +427,8 @@ impl Item {
             favourite: false,
             poster,
             backdrop: None,
-        })
+            season: None,
+        }))
     }
 
     /// What the top of the Home says of a film or a series.

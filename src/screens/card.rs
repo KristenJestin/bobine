@@ -27,7 +27,8 @@ use crate::theme;
 #[derive(Clone)]
 pub enum Open {
     Film(ItemId),
-    Series(ItemId),
+    /// The series, and the season to open it on.
+    Series(ItemId, Option<ItemId>),
     /// The title is read where the card's row holds it, when the card is clicked.
     Pick(Pick),
 }
@@ -209,7 +210,7 @@ impl Render for Card {
                 shell
                     .update(cx, |shell, cx| match open {
                         Open::Film(id) => shell.open_film(id, cx),
-                        Open::Series(id) => shell.open_series(id, cx),
+                        Open::Series(id, season) => shell.open_series_on(id, season, cx),
                         Open::Pick(pick) => {
                             if let Some(title) = pick.title(shell.list.as_ref().map(|l| &l.grid)) {
                                 shell.open_title(&title, cx);

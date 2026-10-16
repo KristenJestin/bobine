@@ -146,7 +146,7 @@ fn list_card(
     let marks = &shell.marks;
     let offer = match listed(shell, index).expect("the card was just found") {
         Title::Film(film) if poster => film_offer(marks, film, image, width, &id, false),
-        Title::Series(series) if poster => series_offer(marks, series, image, width, &id),
+        Title::Series(series) if poster => series_offer(marks, series, image, width, &id, false),
         title => wide_offer(title, image, Pick::Listed(index, title.id().clone()), width),
     };
     card(shell, id, offer, cx).into_any_element()
