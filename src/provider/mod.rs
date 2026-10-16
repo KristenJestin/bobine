@@ -217,6 +217,9 @@ pub struct Series {
     pub unwatched: u32,
     pub poster: Option<ImageRef>,
     pub backdrop: Option<ImageRef>,
+    /// The season the server handed in place of the series (a new season in Recently added):
+    /// the card says it, and the page opens on it.
+    pub season: Option<Season>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

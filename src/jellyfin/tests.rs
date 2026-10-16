@@ -935,6 +935,114 @@ fn the_latest_of_a_films_library_are_films() {
 }
 
 #[test]
+fn a_new_season_in_the_latest_is_listed_as_its_series() {
+    let s = Setup::new();
+    let latest = s
+        .signed_in()
+        .latest(&ItemId(SERIES_LIBRARY.into()), 10)
+        .unwrap();
+    let Title::Series(reach) = &latest[4] else {
+        panic!("a series: {:?}", latest[4])
+    };
+    assert_eq!(reach.title, "Northern Reach");
+    assert_eq!(reach.id, ItemId("5e000000000000000000000000000004".into()));
+    assert_eq!(
+        reach.poster.as_ref().map(|p| (&p.item, p.tag.as_str())),
+        Some((&reach.id, "poster-nr"))
+    );
+    let season = reach.season.as_ref().expect("the season it opens on");
+    assert_eq!(season.id, ItemId("5c000000000000000000000000000009".into()));
+    assert_eq!(season.number, Some(9));
+}
+
+#[test]
+fn a_new_season_without_a_series_picture_keeps_its_own_poster() {
+    let s = Setup::new();
+    let latest = s
+        .signed_in()
+        .latest(&ItemId(SERIES_LIBRARY.into()), 10)
+        .unwrap();
+    let Title::Series(lanterns) = &latest[5] else {
+        panic!("a series: {:?}", latest[5])
+    };
+    assert_eq!(lanterns.title, "Paper Lanterns");
+    assert_eq!(
+        lanterns
+            .poster
+            .as_ref()
+            .map(|p| (&p.item.0[..], p.tag.as_str())),
+        Some(("5c000000000000000000000000000002", "season-pl-2"))
+    );
+}
+
+#[test]
+fn a_new_season_card_counts_the_episodes_left_in_that_season() {
+    let s = Setup::new();
+    let latest = s
+        .signed_in()
+        .latest(&ItemId(SERIES_LIBRARY.into()), 10)
+        .unwrap();
+    let Title::Series(reach) = &latest[4] else {
+        panic!("a series: {:?}", latest[4])
+    };
+    assert_eq!(reach.unwatched, 8);
+}
+
+#[test]
+fn a_series_and_its_own_new_season_in_the_latest_are_listed_once() {
+    let s = Setup::new();
+    let latest = s
+        .signed_in()
+        .latest(&ItemId(SERIES_LIBRARY.into()), 10)
+        .unwrap();
+    let reach = ItemId("5e000000000000000000000000000004".into());
+    assert_eq!(
+        latest.iter().filter(|title| title.id() == &reach).count(),
+        1
+    );
+}
+
+#[test]
+fn a_season_without_its_series_is_left_out_of_the_latest() {
+    let s = Setup::new();
+    let latest = s
+        .signed_in()
+        .latest(&ItemId(SERIES_LIBRARY.into()), 10)
+        .unwrap();
+    let orphan = ItemId("5c000000000000000000000000000001".into());
+    assert!(latest.iter().all(|title| title.id() != &orphan));
+    assert_eq!(latest.len(), 6);
+}
+
+fn season_item() -> super::dto::Item {
+    serde_json::from_value(serde_json::json!({
+        "Id": "5c000000000000000000000000000009", "Name": "Season 9", "Type": "Season",
+        "IndexNumber": 9, "SeriesId": "5e000000000000000000000000000004",
+        "SeriesName": "Northern Reach", "SeriesPrimaryImageTag": "poster-nr",
+        "ImageTags": { "Primary": "season-nr-9" }
+    }))
+    .unwrap()
+}
+
+#[test]
+fn a_season_handed_as_a_title_is_its_series() {
+    let Some(Title::Series(series)) = season_item().title() else {
+        panic!("a series")
+    };
+    assert_eq!(series.id, ItemId("5e000000000000000000000000000004".into()));
+    assert_eq!(series.title, "Northern Reach");
+    assert_eq!(series.season.map(|season| season.number), Some(Some(9)));
+}
+
+#[test]
+fn a_series_is_never_built_from_a_season_item() {
+    let series = season_item().series();
+    assert_eq!(series.id, ItemId("5e000000000000000000000000000004".into()));
+    assert_eq!(series.title, "Northern Reach");
+    assert_eq!(series.backdrop, None);
+}
+
+#[test]
 fn the_latest_of_a_series_library_are_series() {
     let s = Setup::new();
     let latest = s
@@ -985,7 +1093,9 @@ fn a_series_that_gained_one_episode_is_listed_as_the_series() {
             "Tidewater",
             "Glass Orchard",
             "Harbour Lights",
-            "Bramble Line"
+            "Bramble Line",
+            "Northern Reach",
+            "Paper Lanterns"
         ]
     );
     let Title::Series(lights) = &latest[2] else {

@@ -132,7 +132,7 @@ fn card(
             match listed(shell, index).expect("the card was just found") {
                 Title::Film(film) => poster_with(film, image, width, id, cx).into_any_element(),
                 Title::Series(series) => {
-                    series_poster_with(series, image, width, id, cx).into_any_element()
+                    series_poster_with(series, image, width, false, id, cx).into_any_element()
                 }
                 Title::Episode(_) => unreachable!("a poster is for a film or a series"),
             }

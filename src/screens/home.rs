@@ -16,7 +16,7 @@ use gpui_kit::{
 };
 
 use super::film_detail::{EDGE, ROW_POSTER, hero_frame, meta_line};
-use super::{note, picture, poster, progress_bar, row_heading, series_poster};
+use super::{note, picture, poster, progress_bar, row_heading, series_poster_with};
 use crate::grid::Grid;
 use crate::hero::{self, Headline};
 use crate::home_page::{self, ListKind, PlayTarget};
@@ -747,7 +747,9 @@ fn poster_card(
     match title {
         Title::Film(film) => poster(shell, film, ROW_POSTER, id, false, cx).into_any_element(),
         Title::Series(series) => {
-            series_poster(shell, series, ROW_POSTER, id, cx).into_any_element()
+            // The posters of the Home are the rows of Recently added.
+            let image = shell.image(series.poster.as_ref(), images::POSTER, cx);
+            series_poster_with(series, image, ROW_POSTER, true, id, cx).into_any_element()
         }
         // Posters are for what a library gained: an episode never comes here.
         Title::Episode(_) => div().into_any_element(),
