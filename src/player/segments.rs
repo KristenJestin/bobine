@@ -77,6 +77,12 @@ pub fn button_at(
     Some(Button { label, press })
 }
 
+/// The button as the window offers it: it gives way while the seek preview shows, both sit
+/// above the bar on the right and the button would cover the thumbnail.
+pub fn offered(button: Option<Button>, previewing: bool) -> Option<Button> {
+    button.filter(|_| !previewing)
+}
+
 /// When the button shows: when its segment starts and each time the pointer moves, for
 /// `SHOWN_FOR`; never outside its segment.
 #[derive(Debug, Default)]
@@ -227,6 +233,16 @@ mod tests {
     }
 
     #[test]
+    fn the_button_gives_way_while_the_seek_preview_shows() {
+        let segments = [segment(SegmentKind::Outro, 2700, 2820)];
+        let button = button_at(&segments, 2750., DURATION, true);
+        assert!(button.is_some());
+        assert_eq!(offered(button, true), None);
+        assert_eq!(offered(button, false), button);
+        assert_eq!(offered(None, false), None);
+    }
+
+    #[test]
     fn an_item_without_segments_has_no_button() {
         assert_eq!(label(&[], 60., true), None);
     }
@@ -245,7 +261,12 @@ mod tests {
     }
 
     fn intro() -> Option<Button> {
-        button_at(&[segment(SegmentKind::Intro, 40, 130)], 60., DURATION, false)
+        button_at(
+            &[segment(SegmentKind::Intro, 40, 130)],
+            60.,
+            DURATION,
+            false,
+        )
     }
 
     #[test]
@@ -316,7 +337,12 @@ mod tests {
         let start = Instant::now();
         let mut prompt = Prompt::default();
         prompt.follow(intro(), start);
-        let credits = button_at(&[segment(SegmentKind::Outro, 2700, 2820)], 2710., DURATION, false);
+        let credits = button_at(
+            &[segment(SegmentKind::Outro, 2700, 2820)],
+            2710.,
+            DURATION,
+            false,
+        );
         prompt.follow(credits, at(start, 20.));
         assert!(prompt.visible(at(start, 20.)));
         assert!(!prompt.visible(at(start, 25.)));

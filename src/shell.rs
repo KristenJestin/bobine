@@ -37,7 +37,7 @@ use crate::motion::{self, Fade, Presence};
 use crate::navigation::{Navigator, Screen};
 use crate::player::libmpv::Libmpv;
 use crate::player::mpv::MpvPlayer;
-use crate::player::segments::{Button, Label};
+use crate::player::segments::{Button, Label, offered};
 use crate::player::session::{Session, WindowRequest};
 use crate::player::{Media, Player};
 use crate::reports::{self, Reporting};
@@ -671,8 +671,10 @@ impl Render for Shell {
                         .controls_fade
                         .set(session.controls_visible(now), now);
                     playback.panel_fade.set(session.panel_open(), now);
-                    let skip = playback.skip_fade.follow(session.skip_button(), now);
                     let preview = playback.seek.draw(session.duration, now);
+                    let skip = playback
+                        .skip_fade
+                        .follow(offered(session.skip_button(), preview.is_some()), now);
                     let notice = playback
                         .fallback
                         .as_ref()
