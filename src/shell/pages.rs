@@ -1331,11 +1331,8 @@ impl Shell {
         error: Option<&'static str>,
         cx: &mut Context<Self>,
     ) {
-        // A poster plays from any page: away from the Home, the window says what went wrong.
-        let away = !matches!(self.navigator.current(), Screen::Home | Screen::HomeList);
-        if let (Origin::Home, Some(said), true) = (origin, error, away) {
-            self.show_notice(said, cx);
-        }
+        // The header and the posters play from any page: the window says what went wrong where
+        // it is, for a moment, in the pill of its other messages.
         let (busy, shown) = match origin {
             Origin::Film(depth, id) => match self.detail_page(*depth, id) {
                 Some(page) => (&mut page.busy, &mut page.error),
@@ -1345,7 +1342,13 @@ impl Shell {
                 Some(page) if &page.id == id => (&mut page.busy, &mut page.error),
                 _ => return,
             },
-            Origin::Home => (&mut self.home.busy, &mut self.home.error),
+            Origin::Home => {
+                self.home.busy = false;
+                if let Some(said) = error {
+                    self.show_notice(said, cx);
+                }
+                return;
+            }
         };
         *busy = false;
         if error.is_some() {

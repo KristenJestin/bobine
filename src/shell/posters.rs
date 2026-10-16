@@ -113,7 +113,9 @@ impl Shell {
         window: &mut Window,
     ) -> Option<AnyElement> {
         let now = Instant::now();
-        let wanted = self.notice.filter(|_| screen.shows_pill_bar());
+        let wanted = self
+            .notice
+            .filter(|_| !matches!(screen, Screen::Login | Screen::Player));
         let drawn = self.notice_fade.follow(wanted, now);
         if self.notice_fade.moving(now) {
             window.request_animation_frame();
@@ -129,6 +131,7 @@ mod tests {
     use std::sync::Arc;
 
     use bobine::provider::{Connector, MediaServer};
+    use gpui_kit::SharedString;
     use gpui_kit::{
         Bounds, Modifiers, Pixels, TestAppContext, VisualTestContext, WindowHandle, point, px, size,
     };
@@ -702,5 +705,70 @@ mod tests {
             assert!(record.plays.is_empty() && record.favourite_calls.is_empty());
             assert!(record.watched.is_empty());
         }
+    }
+
+    fn pill_drawn(cx: &mut VisualTestContext, said: &str) -> bool {
+        let selector: &'static str = Box::leak(format!("pill {said}").into_boxed_str());
+        cx.debug_bounds(selector).is_some()
+    }
+
+    fn notice(window: &WindowHandle<Shell>, cx: &mut VisualTestContext) -> Option<&'static str> {
+        window.read_with(cx, |shell, _| shell.notice).unwrap()
+    }
+
+    #[gpui_kit::test]
+    fn a_play_refused_from_a_library_poster_leaves_no_error_on_the_home(cx: &mut TestAppContext) {
+        let (_, window, cx) = home(cx);
+        window
+            .update(cx, |shell, _, cx| shell.select(NavEntry::Films, cx))
+            .unwrap();
+        cx.run_until_parked();
+        click(cx, "card-play", &ElementId::from(("film", 0_usize)));
+        let said = notice(&window, cx).expect("the refusal was told");
+        assert!(
+            pill_drawn(cx, said),
+            "the refusal was not shown on the library"
+        );
+        cx.executor()
+            .advance_clock(NOTICE_FOR + Duration::from_secs(1));
+        window
+            .update(cx, |shell, _, cx| shell.select(NavEntry::Home, cx))
+            .unwrap();
+        cx.run_until_parked();
+        assert_eq!(screen(&window, cx), Screen::Home);
+        assert!(!pill_drawn(cx, said), "the Home shows an old refusal");
+    }
+
+    #[gpui_kit::test]
+    fn on_the_home_a_refused_play_then_a_refused_change_show_one_pill(cx: &mut TestAppContext) {
+        let (server, window, cx) = home(cx);
+        let (id, _) = poster(&window, cx, film_out_of_the_list(&server));
+        click(cx, "card-play", &id);
+        let refused_play = notice(&window, cx).expect("the refused play was told");
+        assert!(pill_drawn(cx, refused_play));
+        server.state.lock().unwrap().favourite_fails = true;
+        click(cx, "card-my-list", &id);
+        cx.executor().advance_clock(Duration::from_secs(1));
+        cx.run_until_parked();
+        assert!(pill_drawn(cx, crate::favourite::FAILED));
+        assert!(!pill_drawn(cx, refused_play), "two pills over each other");
+    }
+
+    #[gpui_kit::test]
+    fn a_play_refused_from_a_poster_of_a_film_page_is_told_there(cx: &mut TestAppContext) {
+        let (server, window, cx) = home(cx);
+        let film = server.state.lock().unwrap().films[0].id.clone();
+        window
+            .update(cx, |shell, _, cx| shell.open_film(film, cx))
+            .unwrap();
+        cx.run_until_parked();
+        let id = ElementId::from((SharedString::from("Similar titles-film"), 0_usize));
+        click(cx, "card-play", &id);
+        assert_eq!(screen(&window, cx), Screen::FilmDetail);
+        let said = notice(&window, cx).expect("the refusal was told");
+        assert!(
+            pill_drawn(cx, said),
+            "the refusal was not shown on the page"
+        );
     }
 }

@@ -178,7 +178,6 @@ pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -
     } else {
         None
     };
-    let error = shell.home.error;
 
     div()
         .id("home-page")
@@ -200,21 +199,12 @@ pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -
                 .children(status.map(|status| div().px(px(EDGE)).child(note(status))))
                 .children(shown),
         )
-        .children(error.map(error_pill))
-}
-
-/// What went wrong with the last play button, over the page, fading in.
-pub(super) fn error_pill(why: &'static str) -> impl IntoElement {
-    pill(why).id(("home-error", why.len())).with_animation(
-        ("home-error-in", why.len()),
-        Animation::new(motion::quick()).with_easing(motion::ease_out),
-        |pill, t| pill.opacity(t),
-    )
 }
 
 /// What went wrong, in a pill at the foot of the page.
 pub fn pill(why: &'static str) -> Div {
     div()
+        .debug_selector(|| format!("pill {why}"))
         .absolute()
         .bottom(px(28.))
         .left(px(EDGE))

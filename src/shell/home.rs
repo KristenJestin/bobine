@@ -65,7 +65,6 @@ pub struct HomePage {
     gesture: scroll::Gesture,
     /// A play button was pressed and the server has not answered: nothing else starts.
     pub busy: bool,
-    pub error: Option<&'static str>,
     /// How many times the page was asked: an answer to an older ask is not shown.
     asked: Asks,
 }
@@ -84,7 +83,6 @@ impl Default for HomePage {
             rows: Vec::new(),
             gesture: scroll::Gesture::default(),
             busy: false,
-            error: None,
             asked: Asks::default(),
         }
     }
@@ -517,7 +515,6 @@ impl Shell {
             return;
         };
         self.home.busy = true;
-        self.home.error = None;
         self.notify_hero(cx);
         let task = cx
             .background_executor()

@@ -10,7 +10,7 @@ use gpui_kit::{
     uniform_list,
 };
 
-use super::home::{Pick, card_picture, error_pill, wide_offer};
+use super::home::{Pick, card_picture, wide_offer};
 use super::{card, centered, film_offer, note, series_offer};
 use crate::grid::{self, GAP, MARGIN};
 use crate::home_page::ListKind;
@@ -51,7 +51,6 @@ pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -
         _ => None,
     };
     let scroll = list.scroll.clone();
-    let error = shell.home.error;
 
     let rows_list = uniform_list(
         "home-list",
@@ -109,7 +108,6 @@ pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -
         )
         .children(status.map(|why| div().px(px(MARGIN)).child(note(why))))
         .child(rows_list)
-        .children(error.map(error_pill))
         .into_any_element()
 }
 
