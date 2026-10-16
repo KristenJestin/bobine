@@ -23,6 +23,12 @@ pub fn fraction_at(x: f32, window_width: f32) -> f32 {
     (x - EDGE) / (window_width - 2. * EDGE).max(1.)
 }
 
+/// Whether the pointer resting on the seek bar has left it for good: the controls went, and the
+/// strip with them, so no `on_hover(false)` will ever say so.
+pub fn bar_is_left(was_shown: bool, shown: bool) -> bool {
+    was_shown && !shown
+}
+
 /// What the preview needs of one playback.
 pub struct SeekPreview {
     pub scrub: Scrub,
@@ -317,6 +323,14 @@ mod tests {
         assert_eq!(fraction_at(720., 1440.), 0.5);
         assert_eq!(fraction_at(1400., 1440.), 1.);
         assert!(fraction_at(10., 1440.) < 0.);
+    }
+
+    #[test]
+    fn the_pointer_leaves_the_bar_when_the_controls_hide_under_it() {
+        assert!(bar_is_left(true, false));
+        assert!(!bar_is_left(true, true));
+        assert!(!bar_is_left(false, false));
+        assert!(!bar_is_left(false, true));
     }
 
     #[test]

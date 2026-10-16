@@ -405,6 +405,9 @@ impl Shell {
         }
         let shown = playback.session.controls_visible(now);
         let has_error = playback.session.error().is_some();
+        if preview::bar_is_left(playback.controls_shown, shown) {
+            playback.seek.scrub.left_bar();
+        }
         // Hidden controls have nothing to redraw: the video is not GPUI's.
         if shown || shown != playback.controls_shown || has_error != playback.had_error {
             playback.controls_shown = shown;
