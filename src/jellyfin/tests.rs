@@ -1456,7 +1456,7 @@ fn a_film_in_no_collection() {
     let alone = s.signed_in().collection_of(&ItemId(OTHER_FILM.into()));
     assert_eq!(alone, Ok(None));
     // Every collection was looked through, none held it.
-    assert_eq!(boxset_lookups(&s).len(), 1 + 4);
+    assert_eq!(boxset_lookups(&s).len(), 1 + 5);
 }
 
 #[test]
@@ -2549,7 +2549,8 @@ fn the_collections_of_the_server_with_their_posters() {
             "Sea Stories",
             "Harbour Trilogy",
             "Lone Wolves",
-            "Paper Moons"
+            "Paper Moons",
+            "Tide Tales"
         ]
     );
     assert_eq!(cards[1].id, ItemId(HARBOUR_TRILOGY.into()));
@@ -2564,6 +2565,7 @@ fn the_collections_of_the_server_with_their_posters() {
 
 const LONE_WOLVES: &str = "b0000000000000000000000000000003";
 const PAPER_MOONS: &str = "b0000000000000000000000000000004";
+const TIDE_TALES: &str = "b0000000000000000000000000000005";
 
 #[test]
 fn the_collections_are_read_without_asking_for_any_film() {
@@ -2578,7 +2580,10 @@ fn the_collections_are_read_without_asking_for_any_film() {
 #[test]
 fn a_collection_with_no_picture_shows_the_poster_of_its_first_film() {
     let s = Setup::new();
-    let poster = s.signed_in().collection_poster(&ItemId(LONE_WOLVES.into()));
+    let poster = s
+        .signed_in()
+        .collection_poster(&ItemId(LONE_WOLVES.into()))
+        .unwrap();
     // The earliest release that has a poster: the 2009 film has none, the 2011 one has.
     assert_eq!(
         poster,
@@ -2596,27 +2601,42 @@ fn a_collection_with_no_picture_shows_the_poster_of_its_first_film() {
     );
     assert_eq!(asked.param("limit"), Some("1"));
     assert_eq!(asked.param("imageTypes"), Some("Primary"));
-    assert_eq!(asked.param("includeItemTypes"), Some("Movie"));
+    assert_eq!(asked.param("includeItemTypes"), Some("Movie,Series"));
     assert_eq!(asked.param("userId"), Some(USER_ID));
+}
+
+#[test]
+fn a_collection_of_series_shows_the_poster_of_its_first_series_with_one() {
+    let s = Setup::new();
+    let poster = s.signed_in().collection_poster(&ItemId(TIDE_TALES.into()));
+    assert_eq!(
+        poster.unwrap(),
+        Some(ImageRef {
+            item: ItemId("50000000000000000000000000000012".into()),
+            kind: ImageKind::Primary,
+            tag: "poster-tf".into()
+        })
+    );
 }
 
 #[test]
 fn a_collection_whose_films_have_no_poster_either_stays_without() {
     let s = Setup::new();
     let poster = s.signed_in().collection_poster(&ItemId(PAPER_MOONS.into()));
-    assert_eq!(poster, None);
+    assert_eq!(poster.unwrap(), None);
 }
 
 #[test]
-fn a_failing_poster_request_leaves_the_card_bare_and_the_grid_shown() {
+fn a_failing_poster_request_is_an_error_and_the_grid_is_shown() {
     let s = Setup::new();
     s.fake.state.lock().unwrap().broken_parent = Some(LONE_WOLVES.into());
     let server = s.signed_in();
     let cards = server.collections().unwrap();
-    assert_eq!(cards.len(), 4);
-    assert_eq!(server.collection_poster(&cards[2].id), None);
+    assert_eq!(cards.len(), 5);
+    // An error, not "no poster": the shell asks again once for the one, never for the other.
+    assert!(server.collection_poster(&cards[2].id).is_err());
     s.fake.state.lock().unwrap().broken_parent = None;
-    assert!(server.collection_poster(&cards[2].id).is_some());
+    assert!(server.collection_poster(&cards[2].id).unwrap().is_some());
 }
 
 #[test]

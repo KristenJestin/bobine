@@ -3,8 +3,9 @@
     { "Name": "Sea Stories", "Id": "b0000000000000000000000000000001", "Type": "BoxSet", "IsFolder": true, "ChildCount": 2, "Overview": "Two tales told from the deck.", "ImageTags": { "Primary": "poster-ss" }, "BackdropImageTags": ["backdrop-ss"] },
     { "Name": "Harbour Trilogy", "Id": "b0000000000000000000000000000002", "Type": "BoxSet", "IsFolder": true, "ChildCount": 3, "Overview": "A lighthouse, a return, and the lights that follow.", "ImageTags": { "Primary": "poster-ht" }, "BackdropImageTags": ["backdrop-ht"] },
     { "Name": "Lone Wolves", "Id": "b0000000000000000000000000000003", "Type": "BoxSet", "IsFolder": true, "ImageTags": {} },
-    { "Name": "Paper Moons", "Id": "b0000000000000000000000000000004", "Type": "BoxSet", "IsFolder": true, "ChildCount": 0, "ImageTags": {} }
+    { "Name": "Paper Moons", "Id": "b0000000000000000000000000000004", "Type": "BoxSet", "IsFolder": true, "ChildCount": 0, "ImageTags": {} },
+    { "Name": "Tide Tales", "Id": "b0000000000000000000000000000005", "Type": "BoxSet", "IsFolder": true, "ChildCount": 2, "ImageTags": {} }
   ],
-  "TotalRecordCount": 4,
+  "TotalRecordCount": 5,
   "StartIndex": 0
 }

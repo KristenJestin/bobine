@@ -1141,12 +1141,12 @@ impl MediaServer for FakeServer {
         Ok(cards)
     }
 
-    fn collection_poster(&self, id: &ItemId) -> Option<ImageRef> {
-        self.collection(id)
-            .ok()?
+    fn collection_poster(&self, id: &ItemId) -> Result<Option<ImageRef>, ProviderError> {
+        Ok(self
+            .collection(id)?
             .films
             .iter()
-            .find_map(|film| film.poster.clone())
+            .find_map(|film| film.poster.clone()))
     }
 
     fn collection(&self, id: &ItemId) -> Result<CollectionDetail, ProviderError> {

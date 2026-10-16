@@ -3498,4 +3498,32 @@ mod tests {
             assert!(visual.debug_bounds("detail-logo").is_none(), "{screen:?}");
         }
     }
+
+    #[gpui_kit::test]
+    fn every_bare_collection_gets_a_poster_whatever_its_place_in_the_grid(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        let (_server, window) = signed_in_window(cx);
+        window
+            .update(cx, |shell, _, cx| shell.select(NavEntry::Collections, cx))
+            .unwrap();
+        cx.run_until_parked();
+        window
+            .update(cx, |shell, _, _| {
+                let Some(Loadable::Ready(cards)) = &shell.collections.cards else {
+                    panic!("the collections are not here");
+                };
+                assert!(
+                    cards.len() > 2 * crate::lists::POSTERS_IN_FLIGHT,
+                    "a long grid"
+                );
+                let bare: Vec<&str> = cards
+                    .iter()
+                    .filter(|card| card.poster.is_none())
+                    .map(|card| card.name.as_str())
+                    .collect();
+                assert!(bare.is_empty(), "still bare: {bare:?}");
+            })
+            .unwrap();
+    }
 }
