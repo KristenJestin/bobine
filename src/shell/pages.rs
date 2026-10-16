@@ -1403,6 +1403,7 @@ impl Shell {
             title: plan.title.clone(),
             subtitle: Some(parts.join(" · ")),
             list: Some(plan.film.clone()),
+            desktop: Some(crate::mpris::Title::film(&detail.film)),
         };
         let origin = Origin::Film(depth, page.id.clone());
         page.busy = true;
@@ -1511,11 +1512,13 @@ impl Shell {
         let media = plan.media(&opened, &externals);
         let fallback = Fallback::new(server.clone(), plan.clone(), &opened);
         let list = playing.list.clone();
+        let desktop = playing.desktop.clone();
         match self.play(mpv, media, playing, Some(reporting), window, cx) {
             Ok(()) => {
                 self.arm_playback(fallback, window, cx);
                 self.load_trickplay(opened.film.clone(), opened.source.clone(), cx);
                 self.playback_started(&opened.film, next, cx);
+                self.publish(desktop, cx);
                 if let Some(item) = list {
                     self.follow_list(item, cx);
                 }
@@ -2686,6 +2689,7 @@ mod tests {
                     title: plan.title.clone(),
                     subtitle: None,
                     list: None,
+                    desktop: None,
                 };
                 shell.start_playback(Origin::Home, plan, opened, playing, None, window, cx);
                 assert!(shell.playback.is_none());

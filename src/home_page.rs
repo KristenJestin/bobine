@@ -64,6 +64,8 @@ pub struct Started {
     pub subtitle: String,
     /// What the player's "My list" button puts in the list: the film, or the series.
     pub list: ItemId,
+    /// What the desktop's media controls show.
+    pub desktop: crate::mpris::Title,
     pub opened: Result<Playback, ProviderError>,
 }
 
@@ -91,6 +93,7 @@ pub fn start(server: &dyn MediaServer, target: &PlayTarget) -> Result<Started, S
                 title: plan.title.clone(),
                 subtitle: parts.join(" · "),
                 list: plan.film.clone(),
+                desktop: crate::mpris::Title::film(&detail.film),
                 opened: server.play(&plan.film, &plan.source),
                 plan,
             })
@@ -121,6 +124,7 @@ pub fn start(server: &dyn MediaServer, target: &PlayTarget) -> Result<Started, S
                 title,
                 subtitle,
                 list: episode.series.clone(),
+                desktop: crate::mpris::Title::episode(episode),
             })
         }
     }

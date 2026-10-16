@@ -1673,6 +1673,7 @@ fn play(mut args: Args, shell: &Entity<Shell>, window: &mut Window, cx: &mut App
                                 title: "Second movie".to_string(),
                                 subtitle: None,
                                 list: None,
+                                desktop: None,
                             };
                             let played = Libmpv::new(&[("ao", "null")])
                                 .map_err(|e| e.to_string())
@@ -1728,6 +1729,7 @@ fn play_file(
             .unwrap_or_else(|| "Test movie".to_string()),
         subtitle: Some("local file · direct play".to_string()),
         list: None,
+        desktop: None,
     };
     let external = args.sub.as_deref().map(|url| ExternalSubtitle {
         url,
