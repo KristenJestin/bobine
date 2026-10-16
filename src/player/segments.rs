@@ -6,6 +6,8 @@ use std::time::{Duration, Instant};
 
 use bobine::provider::{Segment, SegmentKind};
 
+use crate::series_page::reached_the_end;
+
 /// Without a pointer move for this long, the button fades out, though its segment goes on.
 pub const SHOWN_FOR: Duration = Duration::from_secs(5);
 
@@ -49,8 +51,15 @@ pub struct Button {
 }
 
 /// The button of the segment `position` (seconds) is in, if any; the first of them when
-/// segments overlap. The credits offer the next episode when there is one (`has_next`).
-pub fn button_at(segments: &[Segment], position: f64, has_next: bool) -> Option<Button> {
+/// segments overlap. The credits end the playback (and offer the next episode when there is
+/// one, `has_next`) only when they run to the real end of the `duration`; with something after
+/// them, or a duration not known yet, they only seek past themselves.
+pub fn button_at(
+    segments: &[Segment],
+    position: f64,
+    duration: f64,
+    has_next: bool,
+) -> Option<Button> {
     let segment = segments.iter().find(|segment| {
         segment.start.as_secs_f64() <= position && position < segment.end.as_secs_f64()
     })?;
@@ -59,6 +68,9 @@ pub fn button_at(segments: &[Segment], position: f64, has_next: bool) -> Option<
         SegmentKind::Intro => (Label::Intro, Press::SeekTo(end)),
         SegmentKind::Recap => (Label::Recap, Press::SeekTo(end)),
         SegmentKind::Preview => (Label::Preview, Press::SeekTo(end)),
+        SegmentKind::Outro if !reached_the_end(end, duration) => {
+            (Label::Credits, Press::SeekTo(end))
+        }
         SegmentKind::Outro if has_next => (Label::NextEpisode, Press::NextEpisode),
         SegmentKind::Outro => (Label::Credits, Press::EndPlayback),
     };
@@ -107,6 +119,9 @@ mod tests {
         }
     }
 
+    /// The episode of `episode_segments`: its credits run to the very end.
+    const DURATION: f64 = 2820.;
+
     fn episode_segments() -> Vec<Segment> {
         vec![
             segment(SegmentKind::Recap, 0, 40),
@@ -116,13 +131,13 @@ mod tests {
     }
 
     fn label(segments: &[Segment], position: f64, has_next: bool) -> Option<Label> {
-        button_at(segments, position, has_next).map(|button| button.label)
+        button_at(segments, position, DURATION, has_next).map(|button| button.label)
     }
 
     #[test]
     fn during_an_intro_the_button_skips_it_and_seeks_to_its_end() {
         let segments = episode_segments();
-        let button = button_at(&segments, 60., true).unwrap();
+        let button = button_at(&segments, 60., DURATION, true).unwrap();
         assert_eq!(button.label, Label::Intro);
         assert_eq!(button.label.text(), "Skip intro");
         assert_eq!(button.press, Press::SeekTo(130.));
@@ -131,7 +146,7 @@ mod tests {
     #[test]
     fn during_a_recap_the_button_skips_the_summary() {
         let segments = episode_segments();
-        let button = button_at(&segments, 10., true).unwrap();
+        let button = button_at(&segments, 10., DURATION, true).unwrap();
         assert_eq!(button.label.text(), "Skip recap");
         assert_eq!(button.press, Press::SeekTo(40.));
     }
@@ -139,7 +154,7 @@ mod tests {
     #[test]
     fn during_a_preview_the_button_skips_it() {
         let segments = [segment(SegmentKind::Preview, 100, 130)];
-        let button = button_at(&segments, 100., false).unwrap();
+        let button = button_at(&segments, 100., DURATION, false).unwrap();
         assert_eq!(button.label.text(), "Skip preview");
         assert_eq!(button.press, Press::SeekTo(130.));
     }
@@ -162,7 +177,7 @@ mod tests {
     #[test]
     fn the_credits_of_an_episode_with_a_next_one_offer_it() {
         let segments = episode_segments();
-        let button = button_at(&segments, 2750., true).unwrap();
+        let button = button_at(&segments, 2750., DURATION, true).unwrap();
         assert_eq!(button.label.text(), "Next episode");
         assert_eq!(button.press, Press::NextEpisode);
     }
@@ -170,9 +185,45 @@ mod tests {
     #[test]
     fn the_credits_of_a_last_episode_or_a_film_end_the_playback() {
         let segments = episode_segments();
-        let button = button_at(&segments, 2750., false).unwrap();
+        let button = button_at(&segments, 2750., DURATION, false).unwrap();
         assert_eq!(button.label.text(), "Skip credits");
         assert_eq!(button.press, Press::EndPlayback);
+    }
+
+    #[test]
+    fn credits_at_the_end_end_the_film() {
+        // Ten seconds before the duration still is the real end.
+        let segments = [segment(SegmentKind::Outro, 2700, 2810)];
+        let button = button_at(&segments, 2750., DURATION, false).unwrap();
+        assert_eq!(button.label.text(), "Skip credits");
+        assert_eq!(button.press, Press::EndPlayback);
+    }
+
+    #[test]
+    fn credits_followed_by_a_scene_seek_past_them() {
+        let segments = [segment(SegmentKind::Outro, 2700, 2780)];
+        let button = button_at(&segments, 2750., DURATION, false).unwrap();
+        assert_eq!(button.label.text(), "Skip credits");
+        assert_eq!(button.press, Press::SeekTo(2780.));
+    }
+
+    #[test]
+    fn a_next_episode_is_offered_only_for_credits_at_the_end() {
+        let at_the_end = [segment(SegmentKind::Outro, 2700, 2820)];
+        let button = button_at(&at_the_end, 2750., DURATION, true).unwrap();
+        assert_eq!(button.label, Label::NextEpisode);
+        let before_a_scene = [segment(SegmentKind::Outro, 2700, 2780)];
+        let button = button_at(&before_a_scene, 2750., DURATION, true).unwrap();
+        assert_eq!(button.label, Label::Credits);
+        assert_eq!(button.press, Press::SeekTo(2780.));
+    }
+
+    #[test]
+    fn credits_of_an_unknown_duration_seek_to_their_end() {
+        let segments = [segment(SegmentKind::Outro, 2700, 2820)];
+        let button = button_at(&segments, 2750., 0., true).unwrap();
+        assert_eq!(button.label, Label::Credits);
+        assert_eq!(button.press, Press::SeekTo(2820.));
     }
 
     #[test]
@@ -194,7 +245,7 @@ mod tests {
     }
 
     fn intro() -> Option<Button> {
-        button_at(&[segment(SegmentKind::Intro, 40, 130)], 60., false)
+        button_at(&[segment(SegmentKind::Intro, 40, 130)], 60., DURATION, false)
     }
 
     #[test]
@@ -265,7 +316,7 @@ mod tests {
         let start = Instant::now();
         let mut prompt = Prompt::default();
         prompt.follow(intro(), start);
-        let credits = button_at(&[segment(SegmentKind::Outro, 2700, 2820)], 2710., false);
+        let credits = button_at(&[segment(SegmentKind::Outro, 2700, 2820)], 2710., DURATION, false);
         prompt.follow(credits, at(start, 20.));
         assert!(prompt.visible(at(start, 20.)));
         assert!(!prompt.visible(at(start, 25.)));

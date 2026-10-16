@@ -345,7 +345,7 @@ impl Session {
     fn follow_segments(&mut self, now: Instant) {
         let button = self
             .position_known
-            .then(|| button_at(&self.segments, self.position, self.has_next))
+            .then(|| button_at(&self.segments, self.position, self.duration, self.has_next))
             .flatten();
         if button.map(|button| button.label) != self.pressed {
             self.pressed = None;
