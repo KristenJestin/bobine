@@ -1809,6 +1809,17 @@ fn watched_and_unwatched() {
 }
 
 #[test]
+fn a_series_is_marked_watched_as_a_whole() {
+    let s = Setup::new();
+    let server = s.signed_in();
+    server.set_watched(&series(), true).unwrap();
+    let path = format!("/UserPlayedItems/{SERIES}");
+    assert_eq!(s.fake.last("POST", &path).param("userId"), Some(USER_ID));
+    server.set_watched(&series(), false).unwrap();
+    assert_eq!(s.fake.last("DELETE", &path).param("userId"), Some(USER_ID));
+}
+
+#[test]
 fn image_at_the_requested_size() {
     let s = Setup::new();
     let server = s.signed_in();
@@ -2031,6 +2042,32 @@ fn a_person_with_endless_titles_stops_at_the_cap() {
 }
 
 #[test]
+fn a_persons_series_says_whether_it_is_in_the_list_and_watched_unless_found_by_an_episode() {
+    let s = Setup::new();
+    let state = |person: &str| {
+        let found = s.signed_in().person_titles(&ItemId(person.into())).unwrap();
+        found
+            .series
+            .into_iter()
+            .map(|x| (x.title, x.favourite, x.watched))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        state("9e000000000000000000000000000001"),
+        [
+            ("Dockside".to_string(), Some(true), Some(true)),
+            ("Harbour Lights".to_string(), Some(false), Some(false)),
+        ]
+    );
+    // An episode says nothing of its series.
+    assert!(
+        state(PERSON_IN_EPISODES)
+            .iter()
+            .all(|(_, favourite, watched)| favourite.is_none() && watched.is_none())
+    );
+}
+
+#[test]
 fn a_person_seen_only_in_episodes_has_their_series() {
     let s = Setup::new();
     let person = ItemId(PERSON_IN_EPISODES.into());
@@ -2203,6 +2240,52 @@ fn series_can_be_sorted_by_when_their_latest_episode_came_in() {
     let asked = s.fake.last("GET", "/Items");
     assert_eq!(asked.param("SortBy"), Some("DateLastContentAdded,SortName"));
     assert_eq!(asked.param("SortOrder"), Some("Descending,Ascending"));
+}
+
+#[test]
+fn a_title_in_a_list_says_whether_it_is_in_the_users_list() {
+    let s = Setup::new();
+    let server = s.signed_in();
+    let films = server
+        .films(
+            &ItemId(FILMS_LIBRARY.into()),
+            &query(FilmSort::Title, false, 0, 10),
+        )
+        .unwrap();
+    let favourite = |title: &str| {
+        films
+            .items
+            .iter()
+            .find(|f| f.title == title)
+            .unwrap()
+            .favourite
+    };
+    assert!(favourite("Amber Fields"));
+    assert!(!favourite("The Quiet Harbour"));
+    let shows = server
+        .series(&series_library(), &query(FilmSort::Title, false, 0, 10))
+        .unwrap();
+    let tidewater = shows.items.iter().find(|s| s.id == series()).unwrap();
+    assert!(tidewater.favourite);
+    assert!(!shows.items[1].favourite);
+}
+
+#[test]
+fn a_series_in_a_list_says_whether_all_of_it_is_watched() {
+    let s = Setup::new();
+    let page = s
+        .signed_in()
+        .series(&series_library(), &query(FilmSort::Title, false, 0, 10))
+        .unwrap();
+    let watched = |title: &str| {
+        page.items
+            .iter()
+            .find(|s| s.title == title)
+            .unwrap()
+            .watched
+    };
+    assert!(watched("Glass Orchard"));
+    assert!(!watched("Tidewater"));
 }
 
 #[test]

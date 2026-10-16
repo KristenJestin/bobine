@@ -277,6 +277,7 @@ impl Item {
                 .map(|u| u.playback_position_ticks)
                 .filter(|&t| t > 0)
                 .map(duration),
+            favourite: user_data.is_some_and(|u| u.is_favorite),
             poster: self
                 .image_tags
                 .get("Primary")
@@ -307,6 +308,8 @@ impl Item {
                 .as_ref()
                 .and_then(|u| u.unplayed_item_count)
                 .unwrap_or(0),
+            watched: film.watched,
+            favourite: film.favourite,
             poster: film.poster,
             backdrop: film.backdrop,
             season: None,
@@ -339,6 +342,9 @@ impl Item {
             community_rating: None,
             // What is left to watch in the new season, which is what the card is about.
             unwatched: season.unwatched,
+            // The season's own state is not its series': the card offers no button for them.
+            watched: false,
+            favourite: false,
             poster,
             backdrop: None,
             season: Some(season),
@@ -416,6 +422,9 @@ impl Item {
             end_year: None,
             community_rating: None,
             unwatched: 0,
+            // The episode says nothing of its series' state: the series page reads it.
+            watched: false,
+            favourite: false,
             poster,
             backdrop: None,
             season: None,
@@ -463,6 +472,8 @@ impl Item {
             title: self.name.clone(),
             year: self.production_year,
             poster: self.primary(),
+            favourite: self.user_data.as_ref().map(|u| u.is_favorite),
+            watched: self.user_data.as_ref().map(|u| u.played),
         }
     }
 
@@ -478,6 +489,8 @@ impl Item {
                 kind: ImageKind::Primary,
                 tag: tag.clone(),
             }),
+            favourite: None,
+            watched: None,
         })
     }
 
