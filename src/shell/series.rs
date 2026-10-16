@@ -436,7 +436,7 @@ impl Shell {
         cx.notify();
     }
 
-    /// "Lire" on the card: the next episode at once.
+    /// "Play" on the card: the next episode at once.
     pub fn play_up_next_now(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(episode) = self.take_up_next(true) {
             self.up_next_ticker = None;
@@ -459,7 +459,7 @@ impl Shell {
         )
     }
 
-    /// "Annuler" on the card, or Escape. Whether there was a card to cancel.
+    /// "Cancel" on the card, or Escape. Whether there was a card to cancel.
     pub fn cancel_up_next(&mut self, cx: &mut Context<Self>) -> bool {
         if self.up_next.episode().is_none() {
             return false;

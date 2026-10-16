@@ -169,7 +169,7 @@ mod tests {
     }
 
     #[test]
-    fn pressing_ma_liste_shows_the_new_state_before_the_server_answers() {
+    fn pressing_my_list_shows_the_new_state_before_the_server_answers() {
         let mut toggle = Toggle::default();
         assert_eq!(toggle.press(), Some(true));
         assert_eq!(
@@ -493,7 +493,7 @@ mod tests {
     }
 
     #[test]
-    fn ma_liste_is_asked_again_when_the_change_is_answered_on_top_of_it() {
+    fn my_list_is_asked_again_when_the_change_is_answered_on_top_of_it() {
         let mut stack = [Page::new("film-a", 1, true)];
         let pressed = press(&mut stack[0]).unwrap();
         // My list → film → remove → Escape before the answer: My list is the screen shown,
@@ -502,7 +502,7 @@ mod tests {
     }
 
     #[test]
-    fn ma_liste_is_left_alone_when_it_is_not_the_screen_shown_or_the_change_failed() {
+    fn my_list_is_left_alone_when_it_is_not_the_screen_shown_or_the_change_failed() {
         let mut stack = [Page::new("film-a", 1, true)];
         let pressed = press(&mut stack[0]).unwrap();
         assert!(!answer_to(&mut stack, Screen::FilmDetail, &pressed, Ok(())));

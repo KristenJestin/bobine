@@ -1,4 +1,4 @@
-//! The full list behind a row's "Tout voir": a grid of its cards, the way the libraries show
+//! The full list behind a row's "See all": a grid of its cards, the way the libraries show
 //! theirs. Only the rows in view are built, and only their pages are asked of the server.
 
 use std::ops::Range;

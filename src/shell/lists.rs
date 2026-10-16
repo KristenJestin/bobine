@@ -272,7 +272,7 @@ mod tests {
     }
 
     #[test]
-    fn ma_liste_shows_the_change_made_just_before() {
+    fn my_list_shows_the_change_made_just_before() {
         let mut counter = 0;
         let mut page = MyListPage::default();
         // My list → film → remove → Escape: the list is asked while the server takes the

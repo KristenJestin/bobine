@@ -305,7 +305,7 @@ mod tests {
     }
 
     #[test]
-    fn the_collections_and_ma_liste_entries_open_their_screens_under_the_pill_bar() {
+    fn the_collections_and_my_list_entries_open_their_screens_under_the_pill_bar() {
         let mut nav = on_library();
         assert!(nav.select(NavEntry::Collections));
         assert_eq!(nav.current(), Screen::Collections);
@@ -348,7 +348,7 @@ mod tests {
     }
 
     #[test]
-    fn a_film_or_a_series_opened_from_ma_liste_goes_back_to_it() {
+    fn a_film_or_a_series_opened_from_my_list_goes_back_to_it() {
         let mut nav = on_library();
         assert!(nav.select(NavEntry::MyList));
         nav.open(Screen::FilmDetail);
