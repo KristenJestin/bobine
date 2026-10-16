@@ -111,6 +111,12 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // An answer that took its time: the viewer has moved on, maybe to a film, which a
+        // trailer must not replace.
+        if self.playback.is_some() || !self.on_top(&origin) {
+            self.tried(&origin, None, cx);
+            return;
+        }
         let said = match stream {
             Ok(stream) => {
                 self.tried(&origin, None, cx);
@@ -127,6 +133,26 @@ impl Shell {
             Err(error) => self.failed(error, cx),
         };
         self.tried(&origin, Some(said), cx);
+    }
+
+    /// The page a trailer was asked from is still the one shown.
+    fn on_top(&self, origin: &Origin) -> bool {
+        match origin {
+            Origin::Film(depth, id) => {
+                self.navigator.current() == Screen::FilmDetail
+                    && self.details.len() == depth + 1
+                    && self.details.get(*depth).is_some_and(|page| &page.id == id)
+            }
+            Origin::Series(depth, id) => {
+                self.navigator.current() == Screen::SeriesDetail
+                    && self.series_pages.len() == depth + 1
+                    && self
+                        .series_pages
+                        .get(*depth)
+                        .is_some_and(|page| &page.id == id)
+            }
+            Origin::Home => false,
+        }
     }
 
     /// What makes a trailer no watching, for the player and for the tests alike: its own mpv
@@ -587,5 +613,90 @@ mod tests {
             .unwrap();
         let mut visual = drawn_page(&window, cx);
         assert!(visual.debug_bounds(SERIES_TRAILER).is_none());
+    }
+
+    #[gpui_kit::test]
+    fn a_late_trailer_answer_does_not_replace_the_film_that_plays(cx: &mut TestAppContext) {
+        use crate::player::PlayerEvent;
+        use crate::player::fake::FakePlayer;
+        use crate::player::session::Session;
+        use crate::reports::Reporting;
+        use crate::video::fake::FakeDisplay;
+        use bobine::provider::{MediaSourceId, PlayMethod, PlaySessionId, PlaybackReport};
+
+        use crate::fake::Report;
+
+        let (server, window) = signed_in_window(local(), false, cx);
+        on_film(&window, cx);
+        // The server's answer arrives only once the window parks: everything below happens
+        // while it is on its way.
+        window
+            .update(cx, |shell, window, cx| {
+                shell.play_trailer(window, cx);
+                shell.navigator.back();
+                let player = FakePlayer::default();
+                player.queued.borrow_mut().push(PlayerEvent::Loaded);
+                let session = Session::new(
+                    Box::new(player),
+                    Box::new(FakeDisplay::default()),
+                    "Le Dernier Hiver".into(),
+                    None,
+                );
+                let reporting = Reporting::start(
+                    Arc::new(server.clone()),
+                    PlaybackReport {
+                        session: PlaySessionId("session-1".into()),
+                        film: ItemId(FILM.into()),
+                        source: MediaSourceId("source-4k".into()),
+                        position: std::time::Duration::ZERO,
+                        paused: false,
+                        audio_track: None,
+                        subtitle_track: None,
+                        method: PlayMethod::DirectPlay,
+                    },
+                );
+                shell.begin_playback(session, Some(reporting), window, cx);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        assert_eq!(
+            server.state.lock().unwrap().record.trailer_asks,
+            [ItemId(FILM.into())],
+            "the answer came"
+        );
+        assert!(opened(&window, cx).is_empty(), "and opened nothing");
+        window
+            .update(cx, |shell, window, cx| {
+                let playback = shell.playback.as_ref().expect("the film still plays");
+                assert_eq!(playback.session.title, "Le Dernier Hiver");
+                assert!(playback.reporting.is_some(), "the film's reports go on");
+                shell.tick(window, cx);
+                shell.leave_player(false, window, cx);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        let reports = server.reports();
+        assert!(
+            matches!(reports.last(), Some(Report::Stopped(report)) if report.film.0 == FILM),
+            "the film was told stopped: {reports:?}"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn a_trailer_answer_for_a_page_left_opens_nothing(cx: &mut TestAppContext) {
+        let (_server, window) = signed_in_window(local(), false, cx);
+        on_film(&window, cx);
+        window
+            .update(cx, |shell, window, cx| {
+                shell.play_trailer(window, cx);
+                shell.navigator.back();
+            })
+            .unwrap();
+        cx.run_until_parked();
+        assert!(opened(&window, cx).is_empty());
+        assert_ne!(current(&window, cx), Screen::Player);
+        window
+            .update(cx, |shell, _, _| assert!(shell.playback.is_none()))
+            .unwrap();
     }
 }
