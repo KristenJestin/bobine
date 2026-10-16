@@ -384,22 +384,45 @@ pub(super) fn heading(
         cx,
         |_, _| Fade::new(motion::page()),
     );
-    let now = Instant::now();
+    // The executor's clock, which the tests drive.
+    let now = cx.background_executor().now();
     fade.update(cx, |fade, _| fade.set(true, now));
     let fade = *fade.read(cx);
     if fade.moving(now) {
         window.request_animation_frame();
     }
+    logo_over_title(
+        img(image)
+            .debug_selector(|| "detail-logo".to_string())
+            .w(px(width))
+            .h(px(height))
+            .object_fit(ObjectFit::Contain),
+        title_text(title.to_string()),
+        TEXT_WIDTH,
+        fade.level(now),
+    )
+    .debug_selector(|| "detail-heading".to_string())
+    .into_any_element()
+}
+
+/// A logo come in place of its title: the logo's box holds the place, the logo fades in
+/// (`level`) while the title, `width` wide and laid at its foot, fades out. The title shows alone
+/// until the logo is here, so the heading is never empty.
+pub(super) fn logo_over_title(logo: impl IntoElement, title: Div, width: f32, level: f32) -> Div {
     div()
-        .opacity(fade.level(now))
-        .child(
-            img(image)
-                .debug_selector(|| "detail-logo".to_string())
-                .w(px(width))
-                .h(px(height))
-                .object_fit(ObjectFit::Contain),
-        )
-        .into_any_element()
+        .relative()
+        .child(div().opacity(level).child(logo))
+        .when(level < 1., |heading| {
+            heading.child(
+                div()
+                    .absolute()
+                    .left_0()
+                    .bottom_0()
+                    .w(px(width))
+                    .opacity(1. - level)
+                    .child(title),
+            )
+        })
 }
 
 /// `2025 | ★ 6.0 | 2 h 11`: the facts under a title, apart.

@@ -3561,6 +3561,10 @@ mod tests {
                 })
                 .unwrap();
             let mut visual = drawn(&window, cx);
+            cx.executor()
+                .advance_clock(motion::page() + Duration::from_millis(10));
+            visual.update(|window, _| window.refresh());
+            visual.run_until_parked();
             let screen = current(&window, cx);
             let logo = visual.debug_bounds("detail-logo").expect("the logo");
             assert!(visual.debug_bounds("detail-title").is_none(), "{screen:?}");
@@ -3571,6 +3575,39 @@ mod tests {
                 logo.size
             );
         }
+    }
+
+    #[gpui_kit::test]
+    fn the_title_fades_out_over_the_logo_that_comes_in_its_place(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        let (_server, window) = signed_in_window(cx);
+        window
+            .update(cx, |shell, _, cx| {
+                shell.open_film(ItemId(crate::fake::FILM.into()), cx)
+            })
+            .unwrap();
+        let mut visual = drawn(&window, cx);
+        // The picture came: the title is still there, fading out over it, and the heading takes
+        // the logo's height, no more.
+        let heading = visual.debug_bounds("detail-heading").expect("the heading");
+        let logo = visual.debug_bounds("detail-logo").expect("the logo");
+        assert!(
+            visual.debug_bounds("detail-title").is_some(),
+            "the title left before the logo came in"
+        );
+        assert_eq!(
+            (heading.top(), heading.bottom()),
+            (logo.top(), logo.bottom())
+        );
+        // Once the logo is in, the title is gone, and nothing moved.
+        cx.executor()
+            .advance_clock(motion::page() + Duration::from_millis(10));
+        visual.update(|window, _| window.refresh());
+        visual.run_until_parked();
+        assert!(visual.debug_bounds("detail-title").is_none());
+        assert_eq!(visual.debug_bounds("detail-heading"), Some(heading));
+        assert_eq!(visual.debug_bounds("detail-logo"), Some(logo));
     }
 
     #[gpui_kit::test]

@@ -16,7 +16,7 @@ use gpui_kit::{
 };
 
 use super::card::{Offer, Open, Play};
-use super::film_detail::{EDGE, ROW_POSTER, hero_frame, meta_line};
+use super::film_detail::{EDGE, ROW_POSTER, hero_frame, logo_over_title, meta_line};
 use super::{card, note, picture, poster, progress_bar, row_heading, series_card};
 use crate::grid::Grid;
 use crate::hero::{self, Headline};
@@ -464,8 +464,9 @@ impl Draw<'_> {
             )
     }
 
-    /// The logo, at the size it fits in the room given, once it is here; the title in text until
-    /// then, so that the header is never empty while the logo comes.
+    /// The logo, at the size it fits in the room given, once it is here, taking over from the
+    /// title; the title in text until then, so that the header is never empty while the logo
+    /// comes.
     fn logo_or_title(
         &mut self,
         logo: &ImageRef,
@@ -485,10 +486,13 @@ impl Draw<'_> {
                 if level < 1. {
                     window.request_animation_frame();
                 }
-                div()
-                    .opacity(level)
-                    .child(img(image).w(px(w)).h(px(h)).object_fit(ObjectFit::Contain))
-                    .into_any_element()
+                logo_over_title(
+                    img(image).w(px(w)).h(px(h)).object_fit(ObjectFit::Contain),
+                    title_text(title.to_string()),
+                    HERO_TEXT_WIDTH,
+                    level,
+                )
+                .into_any_element()
             }
             None => title_text(title.to_string()).into_any_element(),
         }
