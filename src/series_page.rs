@@ -180,6 +180,17 @@ pub fn land_episodes(
     }
 }
 
+/// A click on an episode, or the card's own countdown, starts it: whether it can, the page not
+/// waiting. Only then does another episode chosen take the card away; a click the page ignores
+/// leaves it counting down.
+pub fn starts_episode(waiting: bool, card: &mut UpNext) -> bool {
+    if waiting {
+        return false;
+    }
+    card.cancel();
+    true
+}
+
 /// The chips' choices once the episode the main button plays is known anew: kept while it stays
 /// the same, else that episode's defaults.
 pub fn choices_after(
@@ -783,6 +794,19 @@ mod tests {
         assert!(card.episode().is_some());
         let played = card.take(now + COUNTDOWN * 2, false, top(), false).unwrap();
         assert_eq!(played.item.id, id(2, 5));
+    }
+
+    #[test]
+    fn a_click_while_the_page_waits_keeps_the_card() {
+        let server = FakeServer::new(1, true);
+        let now = Instant::now();
+        let mut card = UpNext::default();
+        card.start(episode(&server, 2, 5), page(), now);
+        assert!(!starts_episode(true, &mut card));
+        assert_eq!(card.episode().map(|e| e.item.id.clone()), Some(id(2, 5)));
+        // Once the page is free, another episode chosen takes the card away.
+        assert!(starts_episode(false, &mut card));
+        assert!(card.episode().is_none());
     }
 
     #[test]

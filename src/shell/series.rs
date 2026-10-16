@@ -320,15 +320,16 @@ impl Shell {
     /// chips' choices, any other with its defaults. The episode after it is looked for at the
     /// same time, for the end.
     pub fn play_episode(&mut self, episode: Episode, window: &mut Window, cx: &mut Context<Self>) {
-        // Another episode chosen while the card counts down: the card goes.
-        self.cancel_up_next(cx);
         let depth = self.series_pages.len().wrapping_sub(1);
         let Some(page) = self.series_pages.last_mut() else {
             return;
         };
-        if page.waiting() {
+        // Another episode chosen while the card counts down: the card goes, unless the page
+        // ignores the click.
+        if !series_page::starts_episode(page.waiting(), &mut self.up_next) {
             return;
         }
+        self.up_next_ticker = None;
         let choices = series_page::choices_for(page.next.as_ref(), page.choices.as_ref(), &episode);
         let Some(plan) = film_page::plan(&episode.item, &episode.versions, &choices, From::Resume)
         else {
