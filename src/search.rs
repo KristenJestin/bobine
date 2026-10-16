@@ -25,9 +25,9 @@ pub const ROW_GAP: f32 = 4.;
 pub const POSTER_HEIGHT: f32 = 100.;
 pub const POSTER_WIDTH: f32 = 67.;
 pub const PERSON_PHOTO: f32 = 84.;
-/// The "Entrée" key, drawn at the right end of the highlight.
+/// The "Enter" key, drawn at the right end of the highlight.
 pub const HINT_HEIGHT: f32 = 18.;
-pub const ENTER_KEY: &str = "Entrée";
+pub const ENTER_KEY: &str = "Enter";
 /// A key cap's own sizes: its drawing and the room a row keeps for it both read these.
 pub const KEY_TEXT: f32 = 10.;
 pub const KEY_PAD_X: f32 = 5.;
@@ -36,7 +36,7 @@ pub const KEY_PAD_Y: f32 = 1.;
 pub const KEY_BORDER: f32 = 1.;
 /// The space around the list of rows, which the highlight and the rows stay inside.
 pub const LIST_PAD: f32 = 10.;
-/// How far inside the highlight's right edge the "Entrée" key ends.
+/// How far inside the highlight's right edge the "Enter" key ends.
 pub const HINT_INSET: f32 = 10.;
 /// What a row keeps free between its text and the key.
 const HINT_GAP: f32 = 8.;
@@ -49,7 +49,7 @@ pub fn key_cap_width(label: &str) -> f32 {
     label.chars().count() as f32 * KEY_TEXT * GLYPH_EM + 2. * (KEY_PAD_X + KEY_BORDER)
 }
 
-/// What a row keeps free at its right for the highlight's "Entrée" key, counted from the row's
+/// What a row keeps free at its right for the highlight's "Enter" key, counted from the row's
 /// edge, which is the highlight's.
 pub fn hint_room() -> f32 {
     HINT_INSET + key_cap_width(ENTER_KEY) + HINT_GAP
@@ -60,7 +60,7 @@ pub fn highlight_height() -> f32 {
     ROW_HEIGHT - ROW_GAP
 }
 
-/// Where the "Entrée" key starts when the highlight starts at `highlight_top`: always centred
+/// Where the "Enter" key starts when the highlight starts at `highlight_top`: always centred
 /// in it, so it travels with the highlight, whatever the highlight's glide gives.
 pub fn hint_top(highlight_top: f32) -> f32 {
     highlight_top + (highlight_height() - HINT_HEIGHT) / 2.
@@ -84,8 +84,8 @@ impl Group {
     pub fn label(self) -> &'static str {
         match self {
             Group::Films => "Films",
-            Group::Series => "Séries",
-            Group::People => "Personnes",
+            Group::Series => "Series",
+            Group::People => "People",
         }
     }
 }
@@ -115,9 +115,9 @@ impl Hit {
                 let mut parts: Vec<String> = film.year.iter().map(i32::to_string).collect();
                 parts.extend(film_page::rating(film));
                 if film.watched {
-                    parts.push("vu".into());
+                    parts.push("watched".into());
                 } else if film.resume.is_some() {
-                    parts.push("commencé".into());
+                    parts.push("started".into());
                 }
                 parts.join(" · ")
             }
@@ -355,8 +355,8 @@ impl Palette {
         }
         match &self.status {
             Status::Idle => None,
-            Status::Searching => Some("Recherche…".into()),
-            Status::Found => Some(format!("Aucun résultat pour « {} »", self.query)),
+            Status::Searching => Some("Searching…".into()),
+            Status::Found => Some(format!("No results for “{}”", self.query)),
             Status::Failed(why) => Some((*why).into()),
         }
     }
@@ -455,7 +455,7 @@ mod tests {
     fn fake() -> (FakeServer, Arc<dyn MediaServer>) {
         let fake = FakeServer::new(16, false);
         let server = fake
-            .login("https://media.exemple.org", USER, PASSWORD)
+            .login("https://media.example.org", USER, PASSWORD)
             .unwrap();
         (fake, server)
     }
@@ -542,7 +542,7 @@ mod tests {
                 Line::Hit(..) => None,
             })
             .collect();
-        assert_eq!(headings, ["Films", "Séries"]);
+        assert_eq!(headings, ["Films", "Series"]);
         assert_eq!(
             titles(&palette),
             ["Le Dernier Hiver", "Hivernage", "Hiver blanc"]
@@ -642,10 +642,7 @@ mod tests {
         let t = Instant::now();
         let mut palette = Palette::default();
         search(&mut palette, &*server(), "zzzz", t);
-        assert_eq!(
-            palette.message().as_deref(),
-            Some("Aucun résultat pour « zzzz »")
-        );
+        assert_eq!(palette.message().as_deref(), Some("No results for “zzzz”"));
     }
 
     #[test]
@@ -653,7 +650,7 @@ mod tests {
         let t = Instant::now();
         let mut palette = Palette::default();
         palette.typed("hiv", t);
-        assert_eq!(palette.message().as_deref(), Some("Recherche…"));
+        assert_eq!(palette.message().as_deref(), Some("Searching…"));
     }
 
     #[test]
@@ -673,8 +670,8 @@ mod tests {
         let mut palette = Palette::default();
         palette.typed("hiv", t);
         let ask = palette.ask(t + DEBOUNCE).unwrap();
-        assert!(palette.answered(&ask, Err("La recherche a échoué.")));
-        assert_eq!(palette.message().as_deref(), Some("La recherche a échoué."));
+        assert!(palette.answered(&ask, Err("The search failed.")));
+        assert_eq!(palette.message().as_deref(), Some("The search failed."));
     }
 
     #[test]
@@ -788,7 +785,7 @@ mod tests {
 
     #[test]
     fn a_longer_label_makes_a_wider_key() {
-        assert!(key_cap_width("Échap") < key_cap_width("Entrée"));
+        assert!(key_cap_width("Esc") < key_cap_width("Enter"));
         assert_eq!(key_cap_width(""), 2. * (KEY_PAD_X + KEY_BORDER));
     }
 
@@ -857,9 +854,13 @@ mod tests {
             "{}",
             started.caption()
         );
-        assert!(started.caption().ends_with(" · commencé"));
+        assert!(started.caption().ends_with(" · started"));
         let watched = server().search("Racines", 1).unwrap().films.remove(0);
-        assert!(Hit::Film(Box::new(watched)).caption().ends_with(" · vu"));
+        assert!(
+            Hit::Film(Box::new(watched))
+                .caption()
+                .ends_with(" · watched")
+        );
     }
 
     #[test]

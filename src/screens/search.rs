@@ -156,7 +156,7 @@ pub fn palette(
                 .text_color(theme::muted())
                 .child(icon(IconName::Search, 18.))
                 .child(div().flex_1().text_color(theme::text()).child(input))
-                .child(key_cap("Échap")),
+                .child(key_cap("Esc")),
         )
         .child(
             div()
@@ -190,10 +190,10 @@ pub fn palette(
                         .gap(px(6.))
                         .child(key_icon(IconName::ChevronUp))
                         .child(key_icon(IconName::ChevronDown))
-                        .child("choisir"),
+                        .child("select"),
                 )
-                .child(hint(&["Entrée"], "ouvrir"))
-                .child(hint(&["Échap"], "fermer")),
+                .child(hint(&["Enter"], "open"))
+                .child(hint(&["Esc"], "close")),
         );
 
     Some(
@@ -327,7 +327,7 @@ fn result(shell: &mut Shell, hit: Hit, index: usize, cx: &mut Context<Shell>) ->
                     )
                 }),
         )
-        // Room for the highlight's "Entrée", so a row reads the same selected or not.
+        // Room for the highlight's "Enter", so a row reads the same selected or not.
         .pr(px(search::hint_room()))
         .into_any_element()
 }
