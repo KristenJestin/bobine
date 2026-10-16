@@ -60,6 +60,8 @@ pub struct Session {
     quality_offered: bool,
     /// The server converts what plays.
     converted: bool,
+    /// The file did not play as it is: "Original" is the server's conversion of it.
+    direct_failed: bool,
     pub position: f64,
     /// mpv sent a `time-pos`: before it, `position` is the 0 it starts at, not where the film is.
     position_known: bool,
@@ -121,6 +123,7 @@ impl Session {
             quality: Quality::Original,
             quality_offered: false,
             converted: false,
+            direct_failed: false,
             position: 0.,
             position_known: false,
             duration: 0.,
@@ -393,6 +396,16 @@ impl Session {
     pub fn playing_as(&mut self, quality: Quality, converted: bool) {
         self.quality = quality;
         self.converted = converted;
+    }
+
+    /// The file did not play as it is: the server converts it whatever the quality.
+    pub fn direct_play_failed(&mut self) {
+        self.direct_failed = true;
+    }
+
+    /// How the quality page names `quality`.
+    pub fn quality_label(&self, quality: Quality) -> String {
+        quality.label(!self.direct_failed)
     }
 
     /// The lines of "Playback info".

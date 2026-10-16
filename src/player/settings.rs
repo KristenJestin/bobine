@@ -51,9 +51,11 @@ impl Quality {
         Self::Cap(1_000_000),
     ];
 
-    pub fn label(self) -> String {
+    /// `direct`: the file plays as it is, which "Original" says.
+    pub fn label(self, direct: bool) -> String {
         match self {
-            Self::Original => "Original (direct)".into(),
+            Self::Original if direct => "Original (direct)".into(),
+            Self::Original => "Original".into(),
             Self::Cap(bits) => bitrate(bits as f64),
         }
     }
@@ -161,7 +163,12 @@ mod tests {
         assert_eq!(bitrate(20_000_000.), "20 Mbps");
         assert_eq!(bitrate(18_460_000.), "18.5 Mbps");
         assert_eq!(bitrate(850_000.), "850 kbps");
-        assert_eq!(Quality::Original.label(), "Original (direct)");
-        assert_eq!(Quality::Cap(4_000_000).label(), "4 Mbps");
+        assert_eq!(Quality::Original.label(true), "Original (direct)");
+        assert_eq!(Quality::Cap(4_000_000).label(true), "4 Mbps");
+    }
+
+    #[test]
+    fn original_after_a_failed_direct_play_is_not_called_direct() {
+        assert_eq!(Quality::Original.label(false), "Original");
     }
 }

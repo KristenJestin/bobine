@@ -733,7 +733,7 @@ fn settings_menu(
                 let quality = *quality;
                 choice_line(
                     ("quality", index),
-                    quality.label(),
+                    session.quality_label(quality),
                     session.quality() == quality,
                     open,
                     window,

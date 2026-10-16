@@ -159,6 +159,7 @@ impl Fallback {
                 self.method = PlayMethod::Transcode;
                 self.asking = Some(from);
                 self.direct_failed = true;
+                session.direct_play_failed();
                 // Its words go: the conversion says what it does instead.
                 session.forget_error();
                 Some(self.original.transcode_request(from))
@@ -857,5 +858,25 @@ mod tests {
             None,
             "never converted twice"
         );
+    }
+
+    #[test]
+    fn original_after_a_failed_direct_play_is_named_without_direct() {
+        let server = Arc::new(FakeServer::new(3, false));
+        let (mut fallback, mut session, player) = playing(&server);
+        assert_eq!(
+            session.quality_label(Quality::Original),
+            "Original (direct)"
+        );
+        let mut now = Instant::now();
+        tick(
+            &mut fallback,
+            &mut session,
+            &player,
+            &mut now,
+            1,
+            vec![failed()],
+        );
+        assert_eq!(session.quality_label(Quality::Original), "Original");
     }
 }
