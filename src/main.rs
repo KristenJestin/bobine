@@ -8,6 +8,7 @@ mod film_page;
 mod grid;
 #[cfg(feature = "harness")]
 mod harness;
+mod hero;
 mod icons;
 mod images;
 mod input;
