@@ -21,6 +21,7 @@ use crate::film_page::{self, Choices, From};
 use crate::icons::{IconName, icon};
 use crate::images;
 use crate::menu;
+use crate::motion::{self, Fade};
 use crate::shell::{Chip, Loadable, Shell};
 use crate::theme;
 
@@ -59,7 +60,7 @@ pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -
     if page.menu_fade.moving(now) {
         window.request_animation_frame();
     }
-    let (error, busy) = (page.error, page.busy);
+    let (error, busy, favourite) = (page.error, page.busy, page.favourite.on());
     let chips = page.chips.clone();
     let collection = page.collection.clone();
     let scroll = page.scroll.clone();
@@ -67,7 +68,7 @@ pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -
     let height = f32::from(window.viewport_size().height);
 
     let hero = hero(
-        shell, &detail, &choices, menu, &chips, error, busy, height, window, cx,
+        shell, &detail, &choices, menu, &chips, error, busy, favourite, height, window, cx,
     );
     let mut rows: Vec<AnyElement> = Vec::new();
     if !detail.cast.is_empty() {
@@ -141,6 +142,7 @@ fn hero(
     chips: &[ChipBounds; 3],
     error: Option<&'static str>,
     busy: bool,
+    favourite: bool,
     window_height: f32,
     window: &mut Window,
     cx: &mut Context<Shell>,
@@ -174,13 +176,15 @@ fn hero(
                 .border_color(theme::accent())
         })
         .on_click(cx.listener(|shell, _, _, cx| shell.toggle_watched(cx)));
+    let in_list = list_button("film-list", favourite, window, cx);
     let buttons = div()
         .flex()
         .gap(px(10.))
         .when(busy, |row| row.opacity(0.6))
         .child(play)
         .children(from_start)
-        .child(watched);
+        .child(watched)
+        .child(in_list);
 
     let chips = chips_row(&detail.versions, choices, menu, chips, window, cx);
 
@@ -224,6 +228,47 @@ fn hero(
             }))
             .child(chips),
     )
+}
+
+/// "Ma liste": a plus while the item is out of the list, a check once it is in, the green of
+/// the other states of the page; the change eases from one to the other.
+pub(super) fn list_button(
+    id: &'static str,
+    in_list: bool,
+    window: &mut Window,
+    cx: &mut Context<Shell>,
+) -> Stateful<Div> {
+    let fade = window.use_keyed_state(SharedString::from(format!("{id}-fade")), cx, |_, _| {
+        Fade::starting_at(motion::quick(), in_list)
+    });
+    let now = Instant::now();
+    fade.update(cx, |fade, _| fade.set(in_list, now));
+    let fade = *fade.read(cx);
+    let level = fade.level(now);
+    if fade.moving(now) {
+        window.request_animation_frame();
+    }
+    let size = theme::BUTTON_ICON;
+    let icons = div()
+        .relative()
+        .flex_none()
+        .size(px(size))
+        .child(
+            icon(IconName::Plus, size)
+                .absolute()
+                .inset_0()
+                .opacity(1. - level),
+        )
+        .child(
+            icon(IconName::CheckCircle, size)
+                .absolute()
+                .inset_0()
+                .opacity(level),
+        );
+    theme::ghost_button_with(id, Some(icons.into_any_element()), "Ma liste", window, cx)
+        .text_color(motion::mix(theme::text(), theme::accent(), level))
+        .border_color(motion::mix(rgb(0x3a3a40), theme::accent(), level))
+        .on_click(cx.listener(|shell, _, _, cx| shell.toggle_favourite(cx)))
 }
 
 /// The backdrop over the whole width, darkened towards the text and the page below.

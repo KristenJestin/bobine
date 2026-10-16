@@ -18,6 +18,7 @@ use gpui_kit::{
 };
 
 use super::{Film as Playing, Shell};
+use crate::favourite::Toggle;
 use crate::film_page::{self, Choices, From, Plan};
 use crate::grid::{self, Grid, Listed};
 use crate::images::{self, Key};
@@ -168,6 +169,8 @@ pub struct DetailPage {
     pub menu_fade: Presence<Chip>,
     /// Where each chip was last drawn, so its menu opens under it.
     pub chips: [Rc<Cell<Option<Bounds<Pixels>>>>; 3],
+    /// "Ma liste".
+    pub favourite: Toggle,
     pub scroll: ScrollHandle,
     /// The rows that scroll sideways: the cast, the collection, similar titles.
     pub rows: [ScrollHandle; 3],
@@ -537,6 +540,7 @@ impl Shell {
             menus: Menus::default(),
             menu_fade: Presence::new(motion::quick()),
             chips: Default::default(),
+            favourite: Toggle::default(),
             scroll: ScrollHandle::new(),
             rows: Default::default(),
             gesture: Default::default(),
@@ -549,7 +553,7 @@ impl Shell {
     }
 
     /// The page at `depth` of the detail pages, if it still shows `id`.
-    fn detail_page(&mut self, depth: usize, id: &ItemId) -> Option<&mut DetailPage> {
+    pub(super) fn detail_page(&mut self, depth: usize, id: &ItemId) -> Option<&mut DetailPage> {
         self.details.get_mut(depth).filter(|page| &page.id == id)
     }
 
@@ -583,6 +587,7 @@ impl Shell {
                 {
                     page.choices = Some(Choices::new(&detail.versions));
                 }
+                page.favourite.sync(detail.favourite);
                 page.detail = Loadable::Ready(detail);
                 if with_collection {
                     shell.load_collection(depth, id, cx);
@@ -889,6 +894,7 @@ impl Shell {
                 if let Some(page) = shell.detail_page(depth, &id)
                     && let Loadable::Ready(shown) = &mut page.detail
                 {
+                    page.favourite.sync(detail.favourite);
                     *shown = detail;
                 }
             },

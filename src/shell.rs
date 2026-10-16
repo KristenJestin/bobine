@@ -1,5 +1,6 @@
 //! The root view: the screen the navigator points at, framed by the pill bar or the back link.
 
+mod lists;
 mod pages;
 mod palette;
 mod series;

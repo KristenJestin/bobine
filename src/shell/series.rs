@@ -12,6 +12,7 @@ use gpui_kit::{Bounds, Context, Pixels, ScrollHandle, ScrollWheelEvent, Task, Wi
 
 use super::pages::{Chip, Loadable, Origin, route_wheel};
 use super::{Film as Playing, Shell};
+use crate::favourite::Toggle;
 use crate::film_page::{self, Choices, From};
 use crate::menu::Menus;
 use crate::motion::{self, Presence};
@@ -36,6 +37,8 @@ pub struct SeriesPage {
     pub menus: Menus<Chip>,
     pub menu_fade: Presence<Chip>,
     pub chips: [Rc<Cell<Option<Bounds<Pixels>>>>; 3],
+    /// "Ma liste".
+    pub favourite: Toggle,
     pub scroll: ScrollHandle,
     /// The rows that scroll sideways: the cast, similar series.
     pub rows: [ScrollHandle; 2],
@@ -79,6 +82,7 @@ impl Shell {
             menus: Menus::default(),
             menu_fade: Presence::new(motion::quick()),
             chips: Default::default(),
+            favourite: Toggle::default(),
             scroll: ScrollHandle::new(),
             rows: Default::default(),
             gesture: Default::default(),
@@ -92,7 +96,7 @@ impl Shell {
     }
 
     /// The page at `depth` of the series pages, if it still shows `id`.
-    fn series_page(&mut self, depth: usize, id: &ItemId) -> Option<&mut SeriesPage> {
+    pub(super) fn series_page(&mut self, depth: usize, id: &ItemId) -> Option<&mut SeriesPage> {
         self.series_pages
             .get_mut(depth)
             .filter(|page| &page.id == id)
@@ -160,6 +164,7 @@ impl Shell {
                 page.season = page.season.min(fresh.seasons.len().saturating_sub(1));
                 page.next = fresh.next;
                 page.seasons = fresh.seasons;
+                page.favourite.sync(fresh.detail.favourite);
                 page.detail = Loadable::Ready(fresh.detail);
                 // What was watched may have changed in every season: the one shown is asked
                 // again, and stays drawn as it was until it comes; the others are forgotten.

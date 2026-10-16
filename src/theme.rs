@@ -5,8 +5,8 @@ use std::time::Instant;
 
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    App, Div, ElementId, FontWeight, MouseButton, Rgba, SharedString, Stateful, Window, div, px,
-    rgb, rgba,
+    AnyElement, App, Div, ElementId, FontWeight, MouseButton, Rgba, SharedString, Stateful, Window,
+    div, px, rgb, rgba,
 };
 
 use crate::icons::{IconName, icon};
@@ -60,7 +60,7 @@ pub fn font_family(cx: &App) -> Option<SharedString> {
 }
 
 /// The size of an icon beside the text of a button.
-const BUTTON_ICON: f32 = 16.;
+pub const BUTTON_ICON: f32 = 16.;
 
 /// The background of something that answers the pointer: at rest, under it, pressed.
 #[derive(Clone, Copy)]
@@ -182,6 +182,24 @@ pub fn ghost_button(
     window: &mut Window,
     cx: &mut App,
 ) -> Stateful<Div> {
+    ghost_button_with(
+        id,
+        leading.map(|name| icon(name, BUTTON_ICON).into_any_element()),
+        label,
+        window,
+        cx,
+    )
+}
+
+/// An outlined button whose leading element is the caller's: an icon that eases from one to
+/// another.
+pub fn ghost_button_with(
+    id: impl Into<ElementId>,
+    leading: Option<AnyElement>,
+    label: impl Into<SharedString>,
+    window: &mut Window,
+    cx: &mut App,
+) -> Stateful<Div> {
     let shades = Shades {
         rest: rgba(0x14141680),
         hover: line(),
@@ -201,6 +219,6 @@ pub fn ghost_button(
         .text_size(px(14.))
         .font_weight(FontWeight::SEMIBOLD)
         .cursor_pointer()
-        .children(leading.map(|name| icon(name, BUTTON_ICON)))
+        .children(leading)
         .child(label.into())
 }
