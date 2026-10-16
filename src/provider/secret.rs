@@ -14,7 +14,8 @@
 
 use std::fmt;
 
-/// The access token the server gave at login.
+/// A secret kept in the keyring: the access token the server gave at login, and the API keys of
+/// the integrations.
 #[derive(Clone, PartialEq, Eq)]
 pub struct Token(String);
 

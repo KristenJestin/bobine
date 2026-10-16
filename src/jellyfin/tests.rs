@@ -113,6 +113,7 @@ fn login_success_keeps_the_token_in_the_keyring() {
     let server = s.signed_in();
     assert_eq!(server.server().name, "Lighthouse");
     assert_eq!(server.user_name(), USER);
+    assert_eq!(server.user_id(), USER_ID);
     assert_eq!(s.tokens(), vec![TOKEN.to_string()]);
 
     let auth = s.fake.last("POST", "/Users/AuthenticateByName");
@@ -154,6 +155,7 @@ fn token_restored_at_start() {
     let _ = s.signed_in();
     let server = s.restart().restore().unwrap().expect("a session");
     assert_eq!(server.user_name(), USER);
+    assert_eq!(server.user_id(), USER_ID);
     assert_eq!(server.server().name, "Lighthouse");
     server.libraries().unwrap();
     let header = s.fake.last("GET", "/UserViews").authorization.unwrap();

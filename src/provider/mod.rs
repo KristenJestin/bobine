@@ -51,6 +51,9 @@ pub trait MediaServer: Send + Sync {
     fn server(&self) -> &ServerInfo;
     /// The name of the signed-in user.
     fn user_name(&self) -> &str;
+    /// The id of the signed-in user on the server: what tells two users of one server apart,
+    /// where the name can change.
+    fn user_id(&self) -> &str;
 
     fn libraries(&self) -> Result<Vec<Library>, ProviderError>;
     fn films(&self, library: &ItemId, query: &FilmQuery) -> Result<Page<Film>, ProviderError>;

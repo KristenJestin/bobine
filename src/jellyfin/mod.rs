@@ -410,6 +410,10 @@ impl MediaServer for Jellyfin {
         &self.login.user_name
     }
 
+    fn user_id(&self) -> &str {
+        &self.login.user_id
+    }
+
     fn libraries(&self) -> Result<Vec<Library>, ProviderError> {
         let views: QueryResult = self.http.get("libraries", "/UserViews", &[self.user()])?;
         Ok(views.items.into_iter().map(Item::into_library).collect())

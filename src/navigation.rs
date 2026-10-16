@@ -17,6 +17,8 @@ pub enum Screen {
     Collections,
     CollectionDetail,
     MyList,
+    /// The viewer's choices, reached from the account menu.
+    Settings,
 }
 
 impl Screen {
@@ -31,7 +33,11 @@ impl Screen {
     pub fn shows_back_link(self) -> bool {
         matches!(
             self,
-            Screen::FilmDetail | Screen::SeriesDetail | Screen::Person | Screen::CollectionDetail
+            Screen::FilmDetail
+                | Screen::SeriesDetail
+                | Screen::Person
+                | Screen::CollectionDetail
+                | Screen::Settings
         )
     }
 
@@ -57,6 +63,7 @@ impl Screen {
             Screen::Collections => "Collections",
             Screen::CollectionDetail => "Collection",
             Screen::MyList => "My list",
+            Screen::Settings => "Settings",
         }
     }
 }
@@ -206,6 +213,7 @@ mod tests {
             Screen::Collections,
             Screen::CollectionDetail,
             Screen::MyList,
+            Screen::Settings,
         ]
         .into_iter()
         .filter(|screen| !screen.shows_pill_bar())
@@ -219,6 +227,19 @@ mod tests {
         assert!(Screen::FilmDetail.shows_pill_bar());
         assert!(!Screen::Home.shows_back_link());
         assert!(!Screen::Library.shows_back_link());
+    }
+
+    #[test]
+    fn the_settings_open_over_the_screen_they_were_reached_from_and_back_returns_to_it() {
+        let mut nav = on_library();
+        nav.open(Screen::Settings);
+        assert_eq!(nav.current(), Screen::Settings);
+        assert!(Screen::Settings.shows_pill_bar());
+        assert_eq!(nav.back_label(), Some("Films"));
+        // The pill of the screen the settings were reached from stays the one highlighted.
+        assert_eq!(nav.section(), Screen::Library);
+        assert!(nav.back());
+        assert_eq!(nav.current(), Screen::Library);
     }
 
     #[test]
