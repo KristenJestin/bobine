@@ -1036,7 +1036,13 @@ impl Render for Shell {
                 ))
             })
             .when(screen.shows_pill_bar(), |root| {
-                root.child(pill_bar(highlight, account, window, cx))
+                root.child(pill_bar(
+                    highlight,
+                    account,
+                    self.seerr.client.is_some(),
+                    window,
+                    cx,
+                ))
             })
             .when_some(
                 back_label.filter(|_| screen.shows_back_link()),

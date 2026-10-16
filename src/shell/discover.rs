@@ -3,15 +3,25 @@
 //! while it is not configured but the Integrations section of the Settings.
 
 use std::sync::Arc;
+use std::time::Duration;
 
-use bobine::provider::{Token, TokenStore};
-use bobine::requests::{RequestError, RequestServer, ServerCheck};
+use bobine::provider::{TmdbIndex, Token, TokenStore};
+use bobine::requests::{
+    DiscoverRow, Discovered, MediaKind, MyRequest, RequestError, RequestServer, ServerCheck,
+};
 use gpui_kit::prelude::*;
-use gpui_kit::{Context, Entity, Subscription};
+use gpui_kit::{Context, Entity, ScrollHandle, ScrollWheelEvent, Subscription, Task, Window};
 
+use super::pages::route_wheel;
 use super::{Loadable, Shell};
+use crate::discover;
 use crate::input::TextInput;
+use crate::navigation::Screen;
+use crate::scroll;
 use crate::secret_field::{self, SecretField};
+
+/// How long the Discover search waits for the viewer to stop typing.
+const SEARCH_AFTER: Duration = Duration::from_millis(300);
 
 /// Where the keyring keeps the request server's API key, for the signed-in user.
 pub const SEERR_KEY: &str = "seerr-api-key";
@@ -48,9 +58,36 @@ pub struct Seerr {
     /// The number of the client being made: an older making that ends late is dropped.
     making: u64,
     _key_changed: Option<Subscription>,
+    /// The library by TMDb id: what of the request server's titles is in it.
+    pub index: Option<TmdbIndex>,
+    pub discover: DiscoverPage,
+}
+
+/// The Discover screen: its search, its rows, and the viewer's requests.
+#[derive(Default)]
+pub struct DiscoverPage {
+    /// Trending, popular movies, popular series, upcoming: `DiscoverRow::ALL`'s order.
+    pub rows: [Option<Loadable<Vec<Discovered>>>; 4],
+    pub mine: Option<Loadable<Vec<MyRequest>>>,
+    pub field: Option<Entity<TextInput>>,
+    /// What the results are for; empty: the rows show.
+    pub query: String,
+    pub results: Option<Loadable<Vec<Discovered>>>,
+    /// The search last sent: an answer to an older one is dropped.
+    ticket: u64,
+    waiting: Option<Task<()>>,
+    pub scroll: ScrollHandle,
+    /// My requests, then the four rows: each scrolls sideways.
+    pub row_scrolls: [ScrollHandle; 5],
+    gesture: scroll::Gesture,
+    _typed: Option<Subscription>,
 }
 
 impl Shell {
+    pub fn seerr_client(&self) -> Option<Arc<dyn RequestServer>> {
+        self.seerr.client.clone()
+    }
+
     /// The fields of the Integrations section, for the signed-in user: the address from the
     /// settings file, the key from the keyring. The client follows them.
     pub(super) fn set_up_seerr(&mut self, cx: &mut Context<Self>) {
@@ -149,13 +186,195 @@ impl Shell {
         .detach();
     }
 
-    /// The client is there: what needs it can be read.
-    fn seerr_connected(&mut self, _cx: &mut Context<Self>) {}
+    /// The client is there: the library is indexed by TMDb id, and a Discover showing reads.
+    fn seerr_connected(&mut self, cx: &mut Context<Self>) {
+        self.load_tmdb_index(cx);
+        if self.navigator.current() == Screen::Discover {
+            self.load_discover(cx);
+        }
+    }
 
-    /// No client any more: nothing of it shows.
+    /// No client any more: nothing of it shows, and its screens are left.
     fn seerr_gone(&mut self, cx: &mut Context<Self>) {
         self.seerr.client = None;
+        self.seerr.index = None;
+        self.seerr.discover = DiscoverPage::default();
+        self.navigator.forget(|screen| screen == Screen::Discover);
         cx.notify();
+    }
+
+    fn load_tmdb_index(&mut self, cx: &mut Context<Self>) {
+        self.ask(
+            cx,
+            |server| server.tmdb_index(),
+            |shell, index, _| {
+                // Without it, every title is said not in the library: nothing worse.
+                if let Ok(index) = index {
+                    shell.seerr.index = Some(index);
+                }
+            },
+        );
+    }
+
+    /// Runs `work` against the request server off the window's thread, then `then` with its
+    /// answer, if the same client is still there.
+    pub(super) fn ask_seerr<R: Send + 'static>(
+        &self,
+        cx: &mut Context<Self>,
+        work: impl FnOnce(&dyn RequestServer) -> R + Send + 'static,
+        then: impl FnOnce(&mut Self, R, &mut Context<Self>) + 'static,
+    ) {
+        let Some(client) = self.seerr.client.clone() else {
+            return;
+        };
+        let making = self.seerr.making;
+        let task = cx
+            .background_executor()
+            .spawn(async move { work(&*client) });
+        cx.spawn(async move |this, cx| {
+            let answer = task.await;
+            this.update(cx, |shell, cx| {
+                if shell.seerr.making == making && shell.seerr.client.is_some() {
+                    then(shell, answer, cx);
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Discover shows: the rows once, the viewer's requests each time, the library again.
+    pub(super) fn load_discover(&mut self, cx: &mut Context<Self>) {
+        if self.seerr.client.is_none() {
+            return;
+        }
+        if self.seerr.discover.field.is_none() {
+            let field = cx.new(|cx| TextInput::new("Search movies and series on TMDb", false, cx));
+            let typed = cx.observe(&field, |shell, _, cx| shell.discover_typed(cx));
+            self.seerr.discover.field = Some(field);
+            self.seerr.discover._typed = Some(typed);
+        }
+        for (at, row) in DiscoverRow::ALL.into_iter().enumerate() {
+            if matches!(self.seerr.discover.rows[at], Some(Loadable::Ready(_))) {
+                continue;
+            }
+            self.seerr.discover.rows[at] = Some(Loadable::Loading);
+            self.ask_seerr(
+                cx,
+                move |seerr| seerr.discover(row),
+                move |shell, found, _| {
+                    shell.seerr.discover.rows[at] = Some(match found {
+                        Ok(found) => Loadable::Ready(found),
+                        Err(error) => Loadable::Failed(discover::error_line(&error)),
+                    });
+                },
+            );
+        }
+        if self.seerr.discover.mine.is_none() {
+            self.seerr.discover.mine = Some(Loadable::Loading);
+        }
+        self.ask_seerr(
+            cx,
+            |seerr| seerr.my_requests(),
+            |shell, mine, _| {
+                let page = &mut shell.seerr.discover;
+                match mine {
+                    Ok(mine) => page.mine = Some(Loadable::Ready(mine)),
+                    // Requests already shown stay: the line says only a first failure.
+                    Err(error) if !matches!(page.mine, Some(Loadable::Ready(_))) => {
+                        page.mine = Some(Loadable::Failed(discover::error_line(&error)));
+                    }
+                    Err(_) => {}
+                }
+            },
+        );
+        self.load_tmdb_index(cx);
+    }
+
+    /// The search field changed: the search goes out once the viewer stops typing.
+    fn discover_typed(&mut self, cx: &mut Context<Self>) {
+        let Some(field) = &self.seerr.discover.field else {
+            return;
+        };
+        let query = field.read(cx).text().trim().to_string();
+        let page = &mut self.seerr.discover;
+        if query == page.query {
+            return;
+        }
+        page.query = query.clone();
+        page.ticket += 1;
+        let ticket = page.ticket;
+        if query.is_empty() {
+            page.results = None;
+            page.waiting = None;
+            cx.notify();
+            return;
+        }
+        page.results = Some(Loadable::Loading);
+        let executor = cx.background_executor().clone();
+        page.waiting = Some(cx.spawn(async move |this, cx| {
+            executor.timer(SEARCH_AFTER).await;
+            this.update(cx, |shell, cx| shell.search_discover(ticket, query, cx))
+                .ok();
+        }));
+        cx.notify();
+    }
+
+    fn search_discover(&mut self, ticket: u64, query: String, cx: &mut Context<Self>) {
+        if self.seerr.discover.ticket != ticket {
+            return;
+        }
+        self.ask_seerr(
+            cx,
+            move |seerr| seerr.search(&query),
+            move |shell, found, _| {
+                let page = &mut shell.seerr.discover;
+                if page.ticket != ticket {
+                    return;
+                }
+                page.results = Some(match found {
+                    Ok(found) => Loadable::Ready(found),
+                    Err(error) => Loadable::Failed(discover::error_line(&error)),
+                });
+            },
+        );
+    }
+
+    /// The library page of a title, when the library holds it.
+    pub fn library_page_of(&self, kind: MediaKind, tmdb: u64) -> Option<bobine::provider::ItemId> {
+        discover::in_library(self.seerr.index.as_ref(), kind, tmdb)
+    }
+
+    /// A card of Discover: a title in the library opens its own page.
+    pub fn open_discovered(&mut self, kind: MediaKind, tmdb: u64, cx: &mut Context<Self>) {
+        match (kind, self.library_page_of(kind, tmdb)) {
+            (MediaKind::Movie, Some(film)) => self.open_film(film, cx),
+            (MediaKind::Tv, Some(series)) => self.open_series(series, cx),
+            (_, None) => self.open_request(kind, tmdb, cx),
+        }
+    }
+
+    /// The page of a title the library does not hold, to request it.
+    pub fn open_request(&mut self, _kind: MediaKind, _tmdb: u64, _cx: &mut Context<Self>) {}
+
+    /// The wheel over Discover: the page up and down, the row under the pointer sideways.
+    pub fn scroll_discover(
+        &mut self,
+        event: &ScrollWheelEvent,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) {
+        let page = &mut self.seerr.discover;
+        if route_wheel(
+            &page.scroll,
+            &page.row_scrolls,
+            &mut page.gesture,
+            event,
+            window,
+        ) {
+            cx.notify();
+        }
     }
 
     fn seerr_checked(&mut self, check: Result<ServerCheck, RequestError>) {
@@ -210,8 +429,11 @@ pub(super) mod tests {
 
     use super::*;
     use crate::config::Settings;
+    use crate::fake::FILM;
     use crate::fake::{FakeServer, MemoryKeyring};
     use crate::fake_seerr::FakeSeerr;
+    use crate::navigation::NavEntry;
+    use bobine::provider::ItemId;
 
     pub const ADDRESS: &str = "https://seerr.example.org";
     pub const KEY: &str = "k3y-seerr-0123456789abcdef";
@@ -401,5 +623,186 @@ pub(super) mod tests {
                 );
             })
             .unwrap();
+    }
+
+    fn on_discover(seerr: &FakeSeerr, cx: &mut TestAppContext) -> WindowHandle<Shell> {
+        let window = configured(seerr, cx);
+        window
+            .update(cx, |shell, _, cx| shell.select(NavEntry::Discover, cx))
+            .unwrap();
+        cx.run_until_parked();
+        window
+    }
+
+    fn screen(window: &WindowHandle<Shell>, cx: &mut TestAppContext) -> Screen {
+        window
+            .update(cx, |shell, _, _| shell.navigator.current())
+            .unwrap()
+    }
+
+    #[gpui_kit::test]
+    fn not_configured_no_pill_no_row_no_palette_line(cx: &mut TestAppContext) {
+        let seerr = FakeSeerr::default();
+        let (window, _) = start(None, &Arc::new(MemoryKeyring::default()), &seerr, cx);
+        let mut visual = drawn(&window, cx);
+        assert!(visual.debug_bounds("nav Home").is_some());
+        assert!(visual.debug_bounds("nav Discover").is_none());
+        window
+            .update(cx, |shell, _, cx| shell.select(NavEntry::Discover, cx))
+            .unwrap();
+        assert_eq!(screen(&window, cx), Screen::Home);
+        window
+            .update(cx, |shell, _, cx| shell.open_film(ItemId(FILM.into()), cx))
+            .unwrap();
+        let mut visual = drawn(&window, cx);
+        assert!(visual.debug_bounds("similar-not-in-library").is_none());
+        let record = &seerr.state.lock().unwrap().record;
+        assert_eq!((record.checks, record.my_requests), (0, 0));
+    }
+
+    #[gpui_kit::test]
+    fn configured_the_discover_pill_shows_and_opens_discover(cx: &mut TestAppContext) {
+        let seerr = FakeSeerr::default();
+        let window = configured(&seerr, cx);
+        let mut visual = drawn(&window, cx);
+        click(&mut visual, "nav Discover");
+        assert_eq!(screen(&window, cx), Screen::Discover);
+        assert!(visual.debug_bounds("discover-page").is_some());
+    }
+
+    #[gpui_kit::test]
+    fn the_rows_load(cx: &mut TestAppContext) {
+        let seerr = FakeSeerr::default();
+        let window = on_discover(&seerr, cx);
+        window
+            .update(cx, |shell, _, _| {
+                for row in &shell.seerr.discover.rows {
+                    assert!(matches!(row, Some(Loadable::Ready(titles)) if !titles.is_empty()));
+                }
+            })
+            .unwrap();
+        let mut visual = drawn(&window, cx);
+        assert!(
+            visual
+                .debug_bounds("discover-card Northern Lights")
+                .is_some()
+        );
+        // A title of the library says so; one asked for says it is pending.
+        assert!(visual.debug_bounds("status In library").is_some());
+        assert!(visual.debug_bounds("status Pending").is_some());
+    }
+
+    #[gpui_kit::test]
+    fn my_requests_are_asked_again_each_time_discover_opens(cx: &mut TestAppContext) {
+        let seerr = FakeSeerr::default();
+        let window = on_discover(&seerr, cx);
+        window
+            .update(cx, |shell, _, cx| {
+                shell.select(NavEntry::Home, cx);
+                shell.select(NavEntry::Discover, cx);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        assert_eq!(seerr.state.lock().unwrap().record.my_requests, 2);
+        let mut visual = drawn(&window, cx);
+        assert!(visual.debug_bounds("status Requested").is_some());
+    }
+
+    fn type_in(window: &WindowHandle<Shell>, query: &str, cx: &mut TestAppContext) {
+        window
+            .update(cx, |shell, _, cx| {
+                let field = shell.seerr.discover.field.clone().unwrap();
+                field.update(cx, |field, cx| field.set_text(query, cx));
+            })
+            .unwrap();
+        cx.run_until_parked();
+    }
+
+    /// Types `query`, then waits for the search to go out and come back.
+    fn search(window: &WindowHandle<Shell>, query: &str, cx: &mut TestAppContext) {
+        type_in(window, query, cx);
+        cx.executor().advance_clock(SEARCH_AFTER);
+        cx.run_until_parked();
+    }
+
+    #[gpui_kit::test]
+    fn a_search_shows_results_with_their_status(cx: &mut TestAppContext) {
+        let seerr = FakeSeerr::default();
+        let window = on_discover(&seerr, cx);
+        type_in(&window, "w", cx);
+        search(&window, "winter", cx);
+        assert_eq!(
+            seerr.state.lock().unwrap().record.searches,
+            ["winter"],
+            "one search once the typing stopped"
+        );
+        let mut visual = drawn(&window, cx);
+        assert!(visual.debug_bounds("discover-results").is_some());
+        for card in [
+            "discover-card The Last Winter",
+            "discover-card Winter Light",
+            "discover-card Winter's End",
+        ] {
+            assert!(visual.debug_bounds(card).is_some(), "{card}");
+        }
+        assert!(visual.debug_bounds("status In library").is_some());
+        // Emptied, the rows come back.
+        search(&window, "", cx);
+        let mut visual = drawn(&window, cx);
+        assert!(visual.debug_bounds("discover-results").is_none());
+    }
+
+    #[gpui_kit::test]
+    fn a_title_already_in_the_library_opens_its_normal_page(cx: &mut TestAppContext) {
+        let seerr = FakeSeerr::default();
+        let window = on_discover(&seerr, cx);
+        window
+            .update(cx, |shell, _, cx| {
+                shell.open_discovered(MediaKind::Movie, crate::fake::IN_LIBRARY_FILM, cx)
+            })
+            .unwrap();
+        cx.run_until_parked();
+        assert_eq!(screen(&window, cx), Screen::FilmDetail);
+        window
+            .update(cx, |shell, _, _| {
+                assert_eq!(shell.details.last().unwrap().id, ItemId(FILM.into()))
+            })
+            .unwrap();
+    }
+
+    #[gpui_kit::test]
+    fn seerr_down_says_so_in_a_line_and_the_page_stays(cx: &mut TestAppContext) {
+        let seerr = FakeSeerr::default();
+        let window = configured(&seerr, cx);
+        seerr.state.lock().unwrap().failure = Some(RequestError::Unreachable("down".into()));
+        window
+            .update(cx, |shell, _, cx| shell.select(NavEntry::Discover, cx))
+            .unwrap();
+        cx.run_until_parked();
+        let mut visual = drawn(&window, cx);
+        assert!(visual.debug_bounds("discover-page").is_some());
+        assert!(visual.debug_bounds("discover-search").is_some());
+        window
+            .update(cx, |shell, _, _| {
+                assert!(matches!(
+                    shell.seerr.discover.rows[0],
+                    Some(Loadable::Failed("Seerr cannot be reached."))
+                ));
+            })
+            .unwrap();
+    }
+
+    #[gpui_kit::test]
+    fn clearing_the_key_takes_discover_away_and_leaves_its_screen(cx: &mut TestAppContext) {
+        let seerr = FakeSeerr::default();
+        let window = on_discover(&seerr, cx);
+        let key = window
+            .update(cx, |shell, _, _| shell.seerr.key.clone().unwrap())
+            .unwrap();
+        key.update(cx, |field, cx| field.clear(cx));
+        cx.run_until_parked();
+        assert_eq!(screen(&window, cx), Screen::Home);
+        let mut visual = drawn(&window, cx);
+        assert!(visual.debug_bounds("nav Discover").is_none());
     }
 }

@@ -51,6 +51,7 @@ pub(super) enum Reopen {
 /// How long the address must stay unchanged before the server is asked who it is.
 const PROBE_AFTER: Duration = Duration::from_millis(600);
 
+#[derive(Clone)]
 pub enum Loadable<T> {
     Loading,
     Ready(T),
@@ -259,6 +260,8 @@ pub enum Arrival {
     /// Back on a collection page from a film: its films' marks are asked again.
     Collection,
     Library(LibraryKind),
+    /// Discover: the viewer's requests are asked again each time.
+    Discover,
     /// A library already known is not asked again: its tools and its list stay as they were.
     Nothing,
 }
@@ -270,6 +273,7 @@ pub fn arrival(screen: Screen, films_known: bool, series_known: bool) -> Arrival
         Screen::MyList => Arrival::MyList,
         Screen::Collections => Arrival::Collections,
         Screen::CollectionDetail => Arrival::Collection,
+        Screen::Discover => Arrival::Discover,
         Screen::Library if !films_known => Arrival::Library(LibraryKind::Films),
         Screen::Series if !series_known => Arrival::Library(LibraryKind::Series),
         _ => Arrival::Nothing,
@@ -738,6 +742,10 @@ impl Shell {
 
     /// A click on the pill bar.
     pub fn select(&mut self, entry: NavEntry, cx: &mut Context<Self>) {
+        // Discover is not offered without a request server.
+        if entry == NavEntry::Discover && self.seerr.client.is_none() {
+            return;
+        }
         if !self.navigator.select(entry) {
             return;
         }
@@ -847,6 +855,7 @@ impl Shell {
             Arrival::Collections => self.load_collections(cx),
             Arrival::Collection => self.reload_collection(cx),
             Arrival::Library(kind) => self.load_library(kind, cx),
+            Arrival::Discover => self.load_discover(cx),
             Arrival::Nothing => {}
         }
     }
@@ -1610,11 +1619,38 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> Option<Arc<RenderImage>> {
         let image = image?;
-        let key = Key::new(image, width);
+        self.picture(
+            Key::new(image, width),
+            images::Wanted::Server(image.clone()),
+            cx,
+        )
+    }
+
+    /// A TMDb picture at `width`, through the request server, once it is here.
+    pub fn tmdb_image(
+        &mut self,
+        image: Option<&bobine::requests::TmdbImage>,
+        width: u32,
+        cx: &mut Context<Self>,
+    ) -> Option<Arc<RenderImage>> {
+        let image = image?;
+        self.picture(
+            Key::tmdb(image, width),
+            images::Wanted::Tmdb(image.clone()),
+            cx,
+        )
+    }
+
+    fn picture(
+        &mut self,
+        key: Key,
+        wanted: images::Wanted,
+        cx: &mut Context<Self>,
+    ) -> Option<Arc<RenderImage>> {
         if let Some(found) = self.images.cache.get(&key) {
             return Some(found.clone());
         }
-        self.images.want(&key, image, Instant::now());
+        self.images.want(&key, wanted, Instant::now());
         self.fetch_images(cx);
         // A failed image waiting for its retry is drawn here, with nothing else to end a fetch.
         self.wake_for_image_retries(cx);
@@ -1664,16 +1700,23 @@ impl Shell {
         while let Some((key, image)) = self.images.next_fetch() {
             let svg = cx.svg_renderer();
             let width = key.width();
-            self.ask(
-                cx,
-                move |server| {
-                    let bytes = server.image(&image, width).ok()?;
-                    let format = images::format(&bytes)?;
-                    Arc::new(Image::from_bytes(format, bytes))
-                        .to_image_data(svg)
-                        .ok()
-                },
-                move |shell, decoded, cx| {
+            let decode = move |bytes: Vec<u8>| {
+                let format = images::format(&bytes)?;
+                Arc::new(Image::from_bytes(format, bytes))
+                    .to_image_data(svg)
+                    .ok()
+            };
+            let (server, seerr) = (self.server.clone(), self.seerr_client());
+            let task = cx.background_executor().spawn(async move {
+                let bytes = match image {
+                    images::Wanted::Server(image) => server?.image(&image, width).ok(),
+                    images::Wanted::Tmdb(image) => seerr?.image(&image, width).ok(),
+                };
+                decode(bytes?)
+            });
+            cx.spawn(async move |this, cx| {
+                let decoded = task.await;
+                this.update(cx, |shell, cx| {
                     shell
                         .images
                         .fetched(&key, decoded.is_some(), Instant::now());
@@ -1687,8 +1730,11 @@ impl Shell {
                     shell.notify_hero(cx);
                     shell.fetch_images(cx);
                     shell.wake_for_image_retries(cx);
-                },
-            );
+                    cx.notify();
+                })
+                .ok();
+            })
+            .detach();
         }
     }
 }

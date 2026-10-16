@@ -7,6 +7,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use bobine::provider::{ImageKind, ImageRef};
+use bobine::requests::TmdbImage;
 use gpui_kit::{ImageFormat, RenderImage};
 
 /// Decoded images take four bytes a pixel: 256 MB is some 500 posters and a few backdrops.
@@ -99,10 +100,18 @@ impl<K: Hash + Eq + Clone, V> Lru<K, V> {
     }
 }
 
+/// Where an image comes from: the media server, or TMDb through the request server.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Wanted {
+    Server(ImageRef),
+    Tmdb(TmdbImage),
+}
+
 /// An image at one width.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Key {
-    item: String,
+    /// A TMDb picture has no item: its path is its tag.
+    item: Option<String>,
     kind: ImageKind,
     tag: String,
     width: u32,
@@ -111,9 +120,18 @@ pub struct Key {
 impl Key {
     pub fn new(image: &ImageRef, width: u32) -> Self {
         Self {
-            item: image.item.0.clone(),
+            item: Some(image.item.0.clone()),
             kind: image.kind,
             tag: image.tag.clone(),
+            width,
+        }
+    }
+
+    pub fn tmdb(image: &TmdbImage, width: u32) -> Self {
+        Self {
+            item: None,
+            kind: ImageKind::Primary,
+            tag: image.0.clone(),
             width,
         }
     }
@@ -140,7 +158,7 @@ pub struct Images {
     in_flight: HashSet<Key>,
     /// Drawn and waiting for a free fetch, oldest first, with the draw that last wanted them.
     waiting: VecDeque<Key>,
-    wanted: HashMap<Key, (ImageRef, u64)>,
+    wanted: HashMap<Key, (Wanted, u64)>,
     /// What the server could not give: asked again once their wait is over.
     failed: HashMap<Key, Failure>,
 }
@@ -165,7 +183,7 @@ impl Images {
     }
 
     /// `image` is drawn and not in the cache: it waits for a free fetch.
-    pub fn want(&mut self, key: &Key, image: &ImageRef, now: Instant) {
+    pub fn want(&mut self, key: &Key, image: Wanted, now: Instant) {
         if self.in_flight.contains(key) {
             return;
         }
@@ -179,14 +197,14 @@ impl Images {
         match self.wanted.get_mut(key) {
             Some(wanted) => wanted.1 = self.frame,
             None => {
-                self.wanted.insert(key.clone(), (image.clone(), self.frame));
+                self.wanted.insert(key.clone(), (image, self.frame));
                 self.waiting.push_back(key.clone());
             }
         }
     }
 
     /// The next image to fetch, if a fetch is free; those no longer drawn are let go.
-    pub fn next_fetch(&mut self) -> Option<(Key, ImageRef)> {
+    pub fn next_fetch(&mut self) -> Option<(Key, Wanted)> {
         while self.in_flight.len() < MAX_FETCHES {
             let key = self.waiting.pop_front()?;
             let Some((image, drawn)) = self.wanted.remove(&key) else {
@@ -299,15 +317,37 @@ mod tests {
         images.new_frame();
         for name in names {
             let (key, image) = image(name);
-            images.want(&key, &image, now);
+            images.want(&key, Wanted::Server(image), now);
         }
         started(images)
     }
 
     fn started(images: &mut Images) -> Vec<String> {
         std::iter::from_fn(|| images.next_fetch())
-            .map(|(_, image)| image.item.0)
+            .map(|(_, image)| match image {
+                Wanted::Server(image) => image.item.0,
+                Wanted::Tmdb(image) => image.0,
+            })
             .collect()
+    }
+
+    #[test]
+    fn a_tmdb_picture_is_never_taken_for_a_server_image_of_the_same_tag() {
+        let server = ImageRef {
+            item: bobine::provider::ItemId("tmdb".into()),
+            kind: ImageKind::Primary,
+            tag: "/a.jpg".into(),
+        };
+        let tmdb = TmdbImage("/a.jpg".into());
+        assert_ne!(Key::new(&server, POSTER), Key::tmdb(&tmdb, POSTER));
+        let mut images = Images::default();
+        images.new_frame();
+        images.want(
+            &Key::tmdb(&tmdb, POSTER),
+            Wanted::Tmdb(tmdb.clone()),
+            Instant::now(),
+        );
+        assert_eq!(started(&mut images), ["/a.jpg"]);
     }
 
     #[test]

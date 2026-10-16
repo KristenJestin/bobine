@@ -3,6 +3,7 @@
 
 mod card;
 mod collection_detail;
+mod discover;
 mod film_detail;
 mod home;
 mod home_list;
@@ -61,6 +62,7 @@ pub fn render(
         Screen::CollectionDetail => collection_detail::render(shell, window, cx).into_any_element(),
         Screen::MyList => lists::render_my_list(shell, window, cx).into_any_element(),
         Screen::Settings => settings::render(shell, window, cx).into_any_element(),
+        Screen::Discover => discover::render(shell, window, cx).into_any_element(),
     }
 }
 

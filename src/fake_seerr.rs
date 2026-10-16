@@ -143,6 +143,10 @@ impl FakeSeerr {
             .collect()
     }
 
+    pub fn requests(&self) -> Vec<Ask> {
+        self.state().record.requests.clone()
+    }
+
     fn find(&self, kind: MediaKind, id: TmdbId) -> Result<Discovered, RequestError> {
         self.titles()
             .into_iter()

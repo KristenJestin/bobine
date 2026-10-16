@@ -70,6 +70,11 @@ icons! {
     Info => "info",
     CornersOut => "corners-out",
     CornersIn => "corners-in",
+    Compass => "compass",
+    CheckSquare => "check-square",
+    Square => "square",
+    PaperPlane => "paper-plane",
+    Stack => "stack",
 }
 
 /// The asset source of the window: the icons above and nothing else.
