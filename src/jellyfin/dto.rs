@@ -472,6 +472,8 @@ impl Item {
             title: self.name.clone(),
             year: self.production_year,
             poster: self.primary(),
+            favourite: self.user_data.as_ref().map(|u| u.is_favorite),
+            watched: self.user_data.as_ref().map(|u| u.played),
         }
     }
 
@@ -487,6 +489,8 @@ impl Item {
                 kind: ImageKind::Primary,
                 tag: tag.clone(),
             }),
+            favourite: None,
+            watched: None,
         })
     }
 

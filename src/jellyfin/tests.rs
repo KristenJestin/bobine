@@ -2042,6 +2042,32 @@ fn a_person_with_endless_titles_stops_at_the_cap() {
 }
 
 #[test]
+fn a_persons_series_says_whether_it_is_in_the_list_and_watched_unless_found_by_an_episode() {
+    let s = Setup::new();
+    let state = |person: &str| {
+        let found = s.signed_in().person_titles(&ItemId(person.into())).unwrap();
+        found
+            .series
+            .into_iter()
+            .map(|x| (x.title, x.favourite, x.watched))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        state("9e000000000000000000000000000001"),
+        [
+            ("Dockside".to_string(), Some(true), Some(true)),
+            ("Harbour Lights".to_string(), Some(false), Some(false)),
+        ]
+    );
+    // An episode says nothing of its series.
+    assert!(
+        state(PERSON_IN_EPISODES)
+            .iter()
+            .all(|(_, favourite, watched)| favourite.is_none() && watched.is_none())
+    );
+}
+
+#[test]
 fn a_person_seen_only_in_episodes_has_their_series() {
     let s = Setup::new();
     let person = ItemId(PERSON_IN_EPISODES.into());

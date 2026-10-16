@@ -276,6 +276,10 @@ pub struct SeriesHit {
     pub title: String,
     pub year: Option<i32>,
     pub poster: Option<ImageRef>,
+    /// In the user's list, and all watched: unknown for a series found through one of its
+    /// episodes, which says nothing of it.
+    pub favourite: Option<bool>,
+    pub watched: Option<bool>,
 }
 
 /// A person as a search shows them: cast or crew, whatever the title.

@@ -389,6 +389,8 @@ fn hit(series: &Series) -> SeriesHit {
         title: series.title.clone(),
         year: series.year,
         poster: series.poster.clone(),
+        favourite: Some(series.favourite),
+        watched: Some(series.watched),
     }
 }
 
@@ -1105,7 +1107,7 @@ impl MediaServer for FakeServer {
                 .iter()
                 .enumerate()
                 .filter(|(i, _)| i % 2 == n % 2)
-                .map(|(_, s)| hit(s))
+                .map(|(_, s)| hit(&Self::counted(&state, s)))
                 .collect(),
         })
     }
