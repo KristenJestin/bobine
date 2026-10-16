@@ -146,7 +146,7 @@ pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -
         let near = home_page::row_in_view(y, spec.height(), scrolled, window_height);
         // A row comes in with a fade when its titles are here, instead of appearing at once.
         shown.push(
-            titles_row(shell, spec, index, scroll, near, width, window, cx)
+            titles_row(shell, spec, index, scroll, near, width, true, window, cx)
                 .with_animation(
                     ("home-row-in", spec.slot),
                     Animation::new(motion::page()).with_easing(motion::ease_out),
@@ -578,12 +578,13 @@ fn titles_row(
     scroll: &ScrollHandle,
     near: bool,
     width: f32,
+    see_all: bool,
     window: &mut Window,
     cx: &mut Context<Shell>,
 ) -> Div {
     let list = spec.list.clone();
     let library = spec.caption.clone();
-    let see_all = theme::eased(("see-all", index), theme::Shades::veil(), window, cx)
+    let see_all_link = theme::eased(("see-all", index), theme::Shades::veil(), window, cx)
         .flex()
         .items_center()
         .gap(px(6.))
@@ -618,7 +619,7 @@ fn titles_row(
                         .child(caption)
                 })),
         )
-        .children((!matches!(spec.body, Body::Failed(_))).then_some(see_all));
+        .children((see_all && !matches!(spec.body, Body::Failed(_))).then_some(see_all_link));
 
     let body = match &spec.body {
         Body::Failed(why) => div().px(px(EDGE)).child(note(*why)).into_any_element(),
@@ -659,6 +660,33 @@ fn titles_row(
         .gap(px(UNDER_HEADING))
         .child(heading)
         .child(body)
+}
+
+/// The number of the suggestion row, apart from the Home's own rows.
+const SUGGESTION: usize = 1000;
+
+/// A row of the Home to watch instead, under a page that holds nothing: the full list `empty`
+/// (never offered back), My list or Collections (`None`). It has no "See all": a full list does
+/// not open over another.
+pub(super) fn suggestion_row(
+    shell: &mut Shell,
+    empty: Option<&ListKind>,
+    scroll: &ScrollHandle,
+    width: f32,
+    window: &mut Window,
+    cx: &mut Context<Shell>,
+) -> Option<Div> {
+    let mut specs = rows(shell);
+    specs.retain(|spec| !matches!(spec.body, Body::Failed(_)));
+    let kinds: Vec<ListKind> = specs.iter().map(|spec| spec.list.clone()).collect();
+    let spec = specs.swap_remove(home_page::suggested(empty, &kinds)?);
+    let heading = spec.list.heading();
+    Some(
+        titles_row(
+            shell, &spec, SUGGESTION, scroll, true, width, false, window, cx,
+        )
+        .debug_selector(move || format!("suggested: {heading}")),
+    )
 }
 
 /// The cards of a row near enough the window for their pictures to be asked.

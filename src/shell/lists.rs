@@ -19,6 +19,8 @@ use crate::series_page::Refreshes;
 pub struct CollectionsPage {
     pub cards: Option<Loadable<Vec<CollectionCard>>>,
     pub scroll: UniformListScrollHandle,
+    /// The row offered instead when the server has no collection.
+    pub suggestions: ScrollHandle,
     /// The bare cards whose poster is still to ask, once the grid shows.
     posters: PosterQueue,
 }
@@ -35,6 +37,8 @@ pub struct CollectionPage {
 pub struct MyListPage {
     pub items: Option<Loadable<Vec<Favourite>>>,
     pub scroll: UniformListScrollHandle,
+    /// The row offered instead when the list holds nothing.
+    pub suggestions: ScrollHandle,
     /// Each time the list is asked it is numbered: a read sent before a change was answered may
     /// land after the read that follows it, and must not overwrite it.
     asked: Refreshes,
@@ -223,6 +227,7 @@ impl Shell {
     }
 
     pub fn open_collection(&mut self, id: ItemId, cx: &mut Context<Self>) {
+        self.forward.clear();
         self.collection_pages.push(CollectionPage {
             id,
             detail: Loadable::Loading,

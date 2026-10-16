@@ -6,17 +6,16 @@ use std::ops::Range;
 use bobine::provider::Title;
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    AnyElement, Context, ElementId, FontWeight, IntoElement, SharedString, Window, div, px,
-    uniform_list,
+    AnyElement, Context, Div, ElementId, IntoElement, SharedString, Window, div, px, uniform_list,
 };
 
-use super::home::{Pick, card_picture, wide_offer};
+use super::home::{Pick, card_picture, suggestion_row, wide_offer};
+use super::library::{GRID_TOP, heading, rows_frame};
 use super::{card, centered, film_offer, note, series_offer};
 use crate::grid::{self, GAP, MARGIN};
 use crate::home_page::ListKind;
 use crate::images;
 use crate::shell::Shell;
-use crate::theme;
 
 /// The narrowest a wide card gets before a column goes.
 const MIN_WIDE: f32 = 280.;
@@ -40,17 +39,24 @@ pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -
         grid::columns(width)
     };
     let card_width = (width - 2. * MARGIN - GAP * (columns - 1) as f32) / columns as f32;
-    let heading = list.kind.heading();
+    let title = list.kind.heading();
     let library = list.library.clone();
     let total = list.grid.total;
     let rows = list.grid.rows(columns);
     let status = match (list.error, total) {
         (Some(why), None) => Some(why),
         (_, None) => Some("Loading…"),
-        (_, Some(0)) => Some("Nothing in this list."),
         _ => None,
     };
     let scroll = list.scroll.clone();
+    let page =
+        page_under_the_bar().child(heading(title, library, total.filter(|total| *total > 0)));
+    if total == Some(0) {
+        let kind = list.kind.clone();
+        let suggestions = list.suggestions.clone();
+        let row = suggestion_row(shell, Some(&kind), &suggestions, width, window, cx);
+        return empty_page(page, kind.empty_reason(), row);
+    }
 
     let rows_list = uniform_list(
         "home-list",
@@ -74,41 +80,37 @@ pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -
     .track_scroll(&scroll)
     .flex_1();
 
+    page.children(status.map(|why| div().px(px(MARGIN)).child(note(why))))
+        .child(rows_frame().child(rows_list))
+        .into_any_element()
+}
+
+/// A page that holds nothing: its heading, why, and a row of the Home to watch instead. `page`
+/// is the page with its heading drawn. My list and Collections use it too.
+pub(super) fn empty_page(page: Div, reason: &'static str, suggestions: Option<Div>) -> AnyElement {
+    page.child(
+        div()
+            .debug_selector(|| "empty-reason".into())
+            .px(px(MARGIN))
+            .child(note(reason)),
+    )
+    .children(suggestions.map(|row| {
+        div()
+            .debug_selector(|| "suggestions".into())
+            .pt(px(40.))
+            .child(row)
+    }))
+    .into_any_element()
+}
+
+/// The page every full-width screen starts from: under the bar, a column.
+pub(super) fn page_under_the_bar() -> Div {
     div()
         .size_full()
         .relative()
         .flex()
         .flex_col()
-        .pt(px(96.))
-        .child(
-            div()
-                .flex()
-                .items_baseline()
-                .gap(px(14.))
-                .px(px(MARGIN))
-                .pb(px(24.))
-                .child(
-                    div()
-                        .text_size(px(28.))
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .child(heading),
-                )
-                .children(library.map(|name| {
-                    div()
-                        .text_size(px(14.))
-                        .text_color(theme::dim())
-                        .child(name)
-                }))
-                .children(total.filter(|total| *total > 0).map(|total| {
-                    div()
-                        .text_size(px(14.))
-                        .text_color(theme::dim())
-                        .child(grid::count(total))
-                })),
-        )
-        .children(status.map(|why| div().px(px(MARGIN)).child(note(why))))
-        .child(rows_list)
-        .into_any_element()
+        .pt(px(GRID_TOP))
 }
 
 fn listed(shell: &Shell, index: usize) -> Option<&Title> {

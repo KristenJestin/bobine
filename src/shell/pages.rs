@@ -10,12 +10,13 @@ use std::time::{Duration, Instant};
 
 use bobine::provider::{
     Collection, Connector, Episode, FilmDetail, FilmQuery, FilterChoices, ItemId, LibraryKind,
-    MediaServer, MediaSource, Page, PlayMethod, Playback as Opened, PlaybackReport, ProviderError,
+    MediaServer, MediaSource, Page, PersonHit, PlayMethod, Playback as Opened, PlaybackReport,
+    ProviderError,
 };
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    Bounds, Context, Entity, Image, Pixels, Point, RenderImage, ScrollHandle, ScrollWheelEvent,
-    Subscription, Task, TouchPhase, UniformListScrollHandle, Window, point, px,
+    Bounds, Context, Entity, Image, NavigationDirection, Pixels, Point, RenderImage, ScrollHandle,
+    ScrollWheelEvent, Subscription, Task, TouchPhase, UniformListScrollHandle, Window, point, px,
 };
 
 use super::{Film as Playing, HomePage, Shell};
@@ -24,6 +25,7 @@ use crate::fallback::Fallback;
 use crate::favourite::{self, ListPage, Toggle};
 use crate::film_page::{self, Choices, From, Plan};
 use crate::grid::{Grid, Listed, RETRY_AFTER};
+use crate::home_page::ListKind;
 use crate::images::{self, Key};
 use crate::input::TextInput;
 use crate::library_tools::{Sort, Tools};
@@ -35,6 +37,16 @@ use crate::poster_actions::{Action, Said};
 use crate::reports::Reporting;
 use crate::scroll::{self, Move, Phase, Wheel};
 use crate::start::{self, Start};
+
+/// A page gone back from, for the mouse's forward button to open again.
+pub(super) enum Reopen {
+    Film(ItemId),
+    /// The series, and the season it was left on.
+    Series(ItemId, Option<ItemId>),
+    Person(PersonHit),
+    List(ListKind, Option<String>),
+    Collection(ItemId),
+}
 
 /// How long the address must stay unchanged before the server is asked who it is.
 const PROBE_AFTER: Duration = Duration::from_millis(600);
@@ -495,6 +507,7 @@ impl Shell {
         self.people.clear();
         self.list = None;
         self.collection_pages.clear();
+        self.forward.clear();
         self.search = None;
         self.navigator.switch_root(Screen::Login);
         cx.notify();
@@ -597,6 +610,7 @@ impl Shell {
         self.people.clear();
         self.list = None;
         self.collection_pages.clear();
+        self.forward.clear();
         self.search = None;
         self.hero_view.update(cx, |hero, cx| {
             hero.forget_logos();
@@ -721,6 +735,7 @@ impl Shell {
         if !self.navigator.select(entry) {
             return;
         }
+        self.forward.clear();
         self.details.clear();
         self.series_pages.clear();
         self.up_next.cancel();
@@ -731,23 +746,85 @@ impl Shell {
         cx.notify();
     }
 
-    /// Escape or the back link.
+    /// Escape, the back link or the mouse's back button.
     pub fn go_back(&mut self, cx: &mut Context<Self>) -> bool {
-        match self.navigator.current() {
-            Screen::FilmDetail => drop(self.details.pop()),
-            Screen::SeriesDetail => drop(self.series_pages.pop()),
-            Screen::Person => drop(self.people.pop()),
-            Screen::HomeList => self.list = None,
-            Screen::CollectionDetail => drop(self.collection_pages.pop()),
-            _ => {}
-        }
+        let gone = match self.navigator.current() {
+            Screen::FilmDetail => self.details.pop().map(|page| Reopen::Film(page.id)),
+            Screen::SeriesDetail => self.series_pages.pop().map(|page| {
+                let season = page
+                    .seasons
+                    .get(page.season)
+                    .map(|season| season.id.clone());
+                Reopen::Series(page.id, season)
+            }),
+            Screen::Person => self.people.pop().map(|page| {
+                Reopen::Person(PersonHit {
+                    id: page.id,
+                    name: page.name,
+                    photo: page.photo,
+                })
+            }),
+            Screen::HomeList => self
+                .list
+                .take()
+                .map(|list| Reopen::List(list.kind, list.library)),
+            Screen::CollectionDetail => self
+                .collection_pages
+                .pop()
+                .map(|page| Reopen::Collection(page.id)),
+            _ => None,
+        };
         self.up_next.cancel();
         if !self.navigator.back() {
             return false;
         }
+        self.forward.extend(gone);
         self.arrived(cx);
         cx.notify();
         true
+    }
+
+    /// The mouse's forward button: the page last gone back from opens again, read afresh.
+    pub fn go_forward(&mut self, cx: &mut Context<Self>) -> bool {
+        // Opening a page forgets what was ahead: the rest is put back after.
+        let mut forward = std::mem::take(&mut self.forward);
+        let Some(page) = forward.pop() else {
+            return false;
+        };
+        match page {
+            Reopen::Film(id) => self.open_film(id, cx),
+            Reopen::Series(id, season) => self.open_series_on(id, season, cx),
+            Reopen::Person(person) => self.open_person(person, cx),
+            Reopen::List(kind, library) => self.open_list(kind, library, cx),
+            Reopen::Collection(id) => self.open_collection(id, cx),
+        }
+        self.forward = forward;
+        true
+    }
+
+    /// A side button of the mouse, wherever the pointer is. Back does what Escape does. Not on
+    /// the login nor in the player, where a film would stop on a stray press.
+    pub fn navigate(
+        &mut self,
+        direction: NavigationDirection,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.navigator.current().shows_pill_bar() {
+            return;
+        }
+        if self.search_is_open() {
+            if direction == NavigationDirection::Back {
+                self.close_search(window, cx);
+            }
+            return;
+        }
+        match direction {
+            NavigationDirection::Back => self.escape(cx),
+            NavigationDirection::Forward => {
+                self.go_forward(cx);
+            }
+        }
     }
 
     /// A root screen shows: what it lists may have changed since (a film watched, resumed).
@@ -1054,6 +1131,7 @@ impl Shell {
     }
 
     pub fn open_film(&mut self, id: ItemId, cx: &mut Context<Self>) {
+        self.forward.clear();
         let generation = self.next_generation();
         self.details.push(DetailPage::new(id, generation));
         self.navigator.open(Screen::FilmDetail);
@@ -2286,5 +2364,420 @@ mod tests {
                 assert_eq!(shell.navigator.current(), Screen::Home);
             })
             .unwrap();
+    }
+
+    /// The window as last drawn: where things are, and what the mouse reaches.
+    fn drawn(
+        window: &gpui_kit::WindowHandle<Shell>,
+        cx: &mut gpui_kit::TestAppContext,
+    ) -> gpui_kit::VisualTestContext {
+        let visual = gpui_kit::VisualTestContext::from_window((*window).into(), cx);
+        visual.run_until_parked();
+        visual
+    }
+
+    fn current(
+        window: &gpui_kit::WindowHandle<Shell>,
+        cx: &mut gpui_kit::TestAppContext,
+    ) -> Screen {
+        window
+            .update(cx, |shell, _, _| shell.navigator.current())
+            .unwrap()
+    }
+
+    #[gpui_kit::test]
+    fn the_pill_bar_and_ctrl_k_are_present_on_a_film_page_a_series_page_a_person_page_and_a_see_all_list(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        let (_server, window) = signed_in_window(cx);
+        let pages: [fn(&mut Shell, &mut Context<Shell>); 4] = [
+            |shell, cx| shell.open_film(ItemId(crate::fake::FILM.into()), cx),
+            |shell, cx| shell.open_series(ItemId(crate::fake::SERIES.into()), cx),
+            |shell, cx| shell.open_person(crate::fake::people()[0].clone(), cx),
+            |shell, cx| shell.open_list(ListKind::Resume, None, cx),
+        ];
+        for open in pages {
+            window
+                .update(cx, |shell, _, cx| {
+                    shell.select(NavEntry::Home, cx);
+                    open(shell, cx);
+                })
+                .unwrap();
+            let mut visual = drawn(&window, cx);
+            let screen = current(&window, cx);
+            assert!(visual.debug_bounds("pill-bar").is_some(), "{screen:?}");
+            visual.simulate_keystrokes("ctrl-k");
+            let opened = window
+                .update(cx, |shell, _, _| shell.search_is_open())
+                .unwrap();
+            assert!(opened, "Ctrl+K on {screen:?}");
+            visual.simulate_keystrokes("escape");
+            assert_eq!(current(&window, cx), screen);
+        }
+    }
+
+    #[gpui_kit::test]
+    fn the_mouse_back_button_goes_back_and_the_forward_button_goes_forward(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        use gpui_kit::{Modifiers, MouseButton, NavigationDirection};
+
+        let (_server, window) = signed_in_window(cx);
+        let film = ItemId(crate::fake::FILM.into());
+        window
+            .update(cx, |shell, _, cx| shell.open_film(film.clone(), cx))
+            .unwrap();
+        let mut visual = drawn(&window, cx);
+        // Over the bar, which lets no click through to the page: the side buttons still work.
+        let at = visual.debug_bounds("pill-bar").expect("the bar").center();
+        let mut press = |direction, cx: &mut gpui_kit::TestAppContext| {
+            let button = MouseButton::Navigate(direction);
+            visual.simulate_mouse_down(at, button, Modifiers::none());
+            visual.simulate_mouse_up(at, button, Modifiers::none());
+            drawn(&window, cx);
+        };
+        press(NavigationDirection::Back, cx);
+        assert_eq!(current(&window, cx), Screen::Home);
+        press(NavigationDirection::Forward, cx);
+        assert_eq!(current(&window, cx), Screen::FilmDetail);
+        let shown = window
+            .update(cx, |shell, _, _| {
+                shell
+                    .details
+                    .iter()
+                    .map(|page| page.id.clone())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap();
+        assert_eq!(shown, [film]);
+        // Nothing further to go forward to.
+        press(NavigationDirection::Forward, cx);
+        assert_eq!(current(&window, cx), Screen::FilmDetail);
+        // A page opened after going back leaves nothing to go forward to.
+        press(NavigationDirection::Back, cx);
+        window
+            .update(cx, |shell, _, cx| {
+                shell.open_series(ItemId(crate::fake::SERIES.into()), cx)
+            })
+            .unwrap();
+        press(NavigationDirection::Forward, cx);
+        assert_eq!(current(&window, cx), Screen::SeriesDetail);
+        press(NavigationDirection::Back, cx);
+        assert_eq!(current(&window, cx), Screen::Home);
+    }
+
+    #[gpui_kit::test]
+    fn a_see_all_list_uses_the_library_grid_layout(cx: &mut gpui_kit::TestAppContext) {
+        let (_server, window) = signed_in_window(cx);
+        window
+            .update(cx, |shell, _, cx| shell.select(NavEntry::Films, cx))
+            .unwrap();
+        // Where things are down the page and how big: the page itself may still be sliding in.
+        let layout = |visual: &mut gpui_kit::VisualTestContext| {
+            ["grid-heading", "grid-rows"].map(|part| {
+                let bounds = visual.debug_bounds(part).expect(part);
+                (bounds.origin.y, bounds.size)
+            })
+        };
+        let library = layout(&mut drawn(&window, cx));
+        let films = ListKind::Latest(
+            ItemId(crate::fake::FILMS_LIBRARY.into()),
+            LibraryKind::Films,
+        );
+        window
+            .update(cx, |shell, _, cx| {
+                shell.select(NavEntry::Home, cx);
+                shell.open_list(films, Some("Films".into()), cx);
+            })
+            .unwrap();
+        assert_eq!(layout(&mut drawn(&window, cx)), library);
+    }
+
+    #[gpui_kit::test]
+    fn an_empty_list_shows_its_reason_and_a_row_of_suggestions(cx: &mut gpui_kit::TestAppContext) {
+        let (server, window) = signed_in_window(cx);
+        // Everything started is finished: the list behind the Home's row is empty by now.
+        {
+            let mut state = server.state.lock().unwrap();
+            state.films.iter_mut().for_each(|film| film.resume = None);
+            let episodes = state.episodes.iter_mut();
+            episodes.for_each(|episode| episode.item.resume = None);
+        }
+        window
+            .update(cx, |shell, _, cx| {
+                shell.open_list(ListKind::Resume, None, cx)
+            })
+            .unwrap();
+        let mut visual = drawn(&window, cx);
+        assert!(visual.debug_bounds("empty-reason").is_some());
+        assert!(visual.debug_bounds("suggestions").is_some());
+        // What the Home still holds that was started is the row to watch instead; the list that
+        // is empty is never offered back.
+        assert!(visual.debug_bounds("suggested: Recently added").is_some());
+        assert!(
+            visual
+                .debug_bounds("suggested: Continue watching")
+                .is_none()
+        );
+    }
+
+    #[gpui_kit::test]
+    fn an_empty_my_list_and_an_empty_collections_page_show_their_reason_and_the_suggestion_row(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        let (server, window) = signed_in_window(cx);
+        server.state.lock().unwrap().favourites.clear();
+        window
+            .update(cx, |shell, _, cx| shell.select(NavEntry::MyList, cx))
+            .unwrap();
+        cx.run_until_parked();
+        let mut visual = drawn(&window, cx);
+        assert!(visual.debug_bounds("grid-heading").is_some());
+        assert!(visual.debug_bounds("empty-reason").is_some());
+        assert!(
+            visual
+                .debug_bounds("suggested: Continue watching")
+                .is_some()
+        );
+
+        window
+            .update(cx, |shell, _, cx| shell.select(NavEntry::Collections, cx))
+            .unwrap();
+        cx.run_until_parked();
+        window
+            .update(cx, |shell, _, cx| {
+                shell.collections.cards = Some(Loadable::Ready(Vec::new()));
+                cx.notify();
+            })
+            .unwrap();
+        let mut visual = drawn(&window, cx);
+        assert!(visual.debug_bounds("grid-heading").is_some());
+        assert!(visual.debug_bounds("empty-reason").is_some());
+        assert!(
+            visual
+                .debug_bounds("suggested: Continue watching")
+                .is_some()
+        );
+    }
+
+    /// A side button pressed at `at`, then released.
+    fn side_press(
+        window: &gpui_kit::WindowHandle<Shell>,
+        direction: gpui_kit::NavigationDirection,
+        at: Point<Pixels>,
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        let button = gpui_kit::MouseButton::Navigate(direction);
+        let mut visual = drawn(window, cx);
+        visual.simulate_mouse_down(at, button, gpui_kit::Modifiers::none());
+        visual.simulate_mouse_up(at, button, gpui_kit::Modifiers::none());
+        drawn(window, cx);
+    }
+
+    #[gpui_kit::test]
+    fn the_mouse_back_button_cancels_the_next_episode_card_and_stays(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        use gpui_kit::NavigationDirection::Back;
+
+        let (_server, window) = signed_in_window(cx);
+        let id = ItemId(crate::fake::SERIES.into());
+        window
+            .update(cx, |shell, _, cx| shell.open_series(id.clone(), cx))
+            .unwrap();
+        cx.run_until_parked();
+        window
+            .update(cx, |shell, _, _| {
+                let episode = crate::fake::episodes().remove(0);
+                shell.up_next.start(episode, (0, id), Instant::now());
+            })
+            .unwrap();
+        let at = drawn(&window, cx)
+            .debug_bounds("pill-bar")
+            .unwrap()
+            .center();
+        side_press(&window, Back, at, cx);
+        window
+            .update(cx, |shell, _, _| {
+                assert!(shell.up_next.episode().is_none(), "the card is still there");
+            })
+            .unwrap();
+        assert_eq!(current(&window, cx), Screen::SeriesDetail);
+        // Pressed again with nothing left to close, it goes back.
+        side_press(&window, Back, at, cx);
+        assert_eq!(current(&window, cx), Screen::Home);
+    }
+
+    #[gpui_kit::test]
+    fn the_mouse_back_button_closes_the_account_menu_and_stays(cx: &mut gpui_kit::TestAppContext) {
+        use gpui_kit::NavigationDirection::Back;
+
+        let (_server, window) = signed_in_window(cx);
+        window
+            .update(cx, |shell, _, cx| {
+                shell.open_film(ItemId(crate::fake::FILM.into()), cx);
+                shell.toggle_account_menu(cx);
+            })
+            .unwrap();
+        let at = drawn(&window, cx)
+            .debug_bounds("pill-bar")
+            .unwrap()
+            .center();
+        side_press(&window, Back, at, cx);
+        window
+            .update(cx, |shell, _, _| {
+                assert_eq!(shell.account_menu.open(), None, "the menu is still open");
+            })
+            .unwrap();
+        assert_eq!(current(&window, cx), Screen::FilmDetail);
+        side_press(&window, Back, at, cx);
+        assert_eq!(current(&window, cx), Screen::Home);
+    }
+
+    #[gpui_kit::test]
+    fn forward_reopens_a_series_on_the_season_it_was_left_on(cx: &mut gpui_kit::TestAppContext) {
+        use gpui_kit::NavigationDirection::{Back, Forward};
+
+        let (_server, window) = signed_in_window(cx);
+        window
+            .update(cx, |shell, _, cx| {
+                shell.open_series(ItemId(crate::fake::SERIES.into()), cx)
+            })
+            .unwrap();
+        cx.run_until_parked();
+        // The page opens on the season of the next episode: the first is another.
+        let season = |cx: &mut gpui_kit::TestAppContext| {
+            window
+                .update(cx, |shell, _, _| {
+                    shell.series_pages.last().map(|p| p.season)
+                })
+                .unwrap()
+        };
+        assert_ne!(season(cx), Some(0));
+        window
+            .update(cx, |shell, _, cx| shell.select_season(0, cx))
+            .unwrap();
+        let at = drawn(&window, cx)
+            .debug_bounds("pill-bar")
+            .unwrap()
+            .center();
+        side_press(&window, Back, at, cx);
+        side_press(&window, Forward, at, cx);
+        cx.run_until_parked();
+        assert_eq!(current(&window, cx), Screen::SeriesDetail);
+        assert_eq!(season(cx), Some(0));
+    }
+
+    /// Gone back from a film page once: the forward button has a page to open.
+    fn with_a_page_ahead(
+        window: &gpui_kit::WindowHandle<Shell>,
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        window
+            .update(cx, |shell, _, cx| {
+                shell.open_film(ItemId(crate::fake::FILM.into()), cx);
+                shell.go_back(cx);
+                assert_eq!(shell.forward.len(), 1);
+            })
+            .unwrap();
+    }
+
+    fn pages_ahead(
+        window: &gpui_kit::WindowHandle<Shell>,
+        cx: &mut gpui_kit::TestAppContext,
+    ) -> usize {
+        window
+            .update(cx, |shell, _, _| shell.forward.len())
+            .unwrap()
+    }
+
+    #[gpui_kit::test]
+    fn the_side_buttons_are_ignored_in_the_player_and_on_the_login(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        use gpui_kit::NavigationDirection::{Back, Forward};
+
+        let (server, window) = signed_in_window(cx);
+        play_a_film(&server, &window, cx);
+        for direction in [Back, Forward] {
+            window
+                .update(cx, |shell, window, cx| {
+                    shell.navigate(direction, window, cx)
+                })
+                .unwrap();
+            window
+                .update(cx, |shell, _, _| {
+                    assert_eq!(shell.navigator.current(), Screen::Player);
+                    assert!(shell.playback.is_some(), "a stray press stopped the film");
+                })
+                .unwrap();
+        }
+        sign_out(&window, cx);
+        cx.run_until_parked();
+        for direction in [Back, Forward] {
+            window
+                .update(cx, |shell, window, cx| {
+                    shell.navigate(direction, window, cx)
+                })
+                .unwrap();
+            assert_eq!(current(&window, cx), Screen::Login);
+        }
+    }
+
+    #[gpui_kit::test]
+    fn with_the_palette_open_back_closes_it_and_forward_does_nothing(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        use gpui_kit::NavigationDirection::{Back, Forward};
+
+        let (_server, window) = signed_in_window(cx);
+        with_a_page_ahead(&window, cx);
+        window
+            .update(cx, |shell, window, cx| shell.open_search(window, cx))
+            .unwrap();
+        window
+            .update(cx, |shell, window, cx| shell.navigate(Forward, window, cx))
+            .unwrap();
+        window
+            .update(cx, |shell, _, _| {
+                assert!(shell.search_is_open());
+                assert_eq!(shell.navigator.current(), Screen::Home);
+            })
+            .unwrap();
+        assert_eq!(pages_ahead(&window, cx), 1);
+        window
+            .update(cx, |shell, window, cx| shell.navigate(Back, window, cx))
+            .unwrap();
+        window
+            .update(cx, |shell, _, _| assert!(!shell.search_is_open()))
+            .unwrap();
+        assert_eq!(current(&window, cx), Screen::Home);
+        assert_eq!(pages_ahead(&window, cx), 1);
+    }
+
+    #[gpui_kit::test]
+    fn the_forward_stack_is_cleared_by_a_bar_entry(cx: &mut gpui_kit::TestAppContext) {
+        let (_server, window) = signed_in_window(cx);
+        with_a_page_ahead(&window, cx);
+        window
+            .update(cx, |shell, _, cx| shell.select(NavEntry::Films, cx))
+            .unwrap();
+        assert_eq!(pages_ahead(&window, cx), 0);
+    }
+
+    #[gpui_kit::test]
+    fn the_forward_stack_is_cleared_by_starting_a_playback(cx: &mut gpui_kit::TestAppContext) {
+        let (server, window) = signed_in_window(cx);
+        with_a_page_ahead(&window, cx);
+        play_a_film(&server, &window, cx);
+        assert_eq!(pages_ahead(&window, cx), 0);
+    }
+
+    #[gpui_kit::test]
+    fn the_forward_stack_is_cleared_by_signing_out(cx: &mut gpui_kit::TestAppContext) {
+        let (_server, window) = signed_in_window(cx);
+        with_a_page_ahead(&window, cx);
+        sign_out(&window, cx);
+        assert_eq!(pages_ahead(&window, cx), 0);
     }
 }

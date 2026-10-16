@@ -20,23 +20,26 @@ pub enum Screen {
 }
 
 impl Screen {
+    /// Everywhere but on the login, before there is a server, and in the player, which draws its
+    /// own controls.
     pub fn shows_pill_bar(self) -> bool {
-        matches!(
-            self,
-            Screen::Home | Screen::Library | Screen::Series | Screen::Collections | Screen::MyList
-        )
+        !matches!(self, Screen::Login | Screen::Player)
     }
 
-    /// Detail pages have no pill bar: they say where Escape leads instead. The player draws its
-    /// own controls.
+    /// Detail pages also say where Escape leads, under the bar. A full list does not: it is laid
+    /// out like the library grids, and the bar's Home leads back.
     pub fn shows_back_link(self) -> bool {
         matches!(
             self,
-            Screen::FilmDetail
-                | Screen::SeriesDetail
-                | Screen::Person
-                | Screen::HomeList
-                | Screen::CollectionDetail
+            Screen::FilmDetail | Screen::SeriesDetail | Screen::Person | Screen::CollectionDetail
+        )
+    }
+
+    /// Pages that draw a backdrop under the bar, which a shade at the top keeps readable.
+    pub fn has_backdrop(self) -> bool {
+        matches!(
+            self,
+            Screen::FilmDetail | Screen::SeriesDetail | Screen::CollectionDetail
         )
     }
 
@@ -117,6 +120,11 @@ impl Navigator {
         *self.stack.last().expect("the stack is never empty")
     }
 
+    /// The screen the stack started from: its entry of the pill bar is the one highlighted.
+    pub fn section(&self) -> Screen {
+        self.stack[0]
+    }
+
     /// Goes deeper (a film from a library, the player from a film): `back` returns here.
     pub fn open(&mut self, screen: Screen) {
         self.stack.push(screen);
@@ -178,26 +186,59 @@ mod tests {
     }
 
     #[test]
-    fn the_pill_bar_shows_on_home_and_library_only() {
-        let shown: Vec<Screen> = [
+    fn the_pill_bar_shows_on_every_screen_but_the_login_and_the_player() {
+        let hidden: Vec<Screen> = [
             Screen::Login,
             Screen::Home,
             Screen::Library,
             Screen::FilmDetail,
+            Screen::Person,
             Screen::Player,
+            Screen::Series,
+            Screen::SeriesDetail,
+            Screen::HomeList,
+            Screen::Collections,
+            Screen::CollectionDetail,
+            Screen::MyList,
         ]
         .into_iter()
-        .filter(|screen| screen.shows_pill_bar())
+        .filter(|screen| !screen.shows_pill_bar())
         .collect();
-        assert_eq!(shown, [Screen::Home, Screen::Library]);
+        assert_eq!(hidden, [Screen::Login, Screen::Player]);
     }
 
     #[test]
-    fn a_detail_page_shows_the_back_link_and_not_the_pill_bar() {
+    fn a_detail_page_shows_the_back_link_under_the_pill_bar() {
         assert!(Screen::FilmDetail.shows_back_link());
-        assert!(!Screen::FilmDetail.shows_pill_bar());
+        assert!(Screen::FilmDetail.shows_pill_bar());
         assert!(!Screen::Home.shows_back_link());
         assert!(!Screen::Library.shows_back_link());
+    }
+
+    #[test]
+    fn the_shade_at_the_top_is_for_the_pages_with_a_backdrop_and_not_the_person_page() {
+        assert!(Screen::FilmDetail.has_backdrop());
+        assert!(Screen::SeriesDetail.has_backdrop());
+        assert!(Screen::CollectionDetail.has_backdrop());
+        assert!(!Screen::Person.has_backdrop());
+        assert!(!Screen::Home.has_backdrop());
+    }
+
+    #[test]
+    fn the_pill_of_the_section_a_page_belongs_to_is_highlighted() {
+        let mut nav = on_library();
+        nav.open(Screen::FilmDetail);
+        nav.open(Screen::Person);
+        let current: Vec<NavEntry> = NavEntry::ALL
+            .into_iter()
+            .filter(|entry| entry.is_current(nav.section()))
+            .collect();
+        assert_eq!(current, [NavEntry::Films]);
+
+        let mut nav = Navigator::new();
+        nav.switch_root(Screen::Home);
+        nav.open(Screen::HomeList);
+        assert_eq!(nav.section(), Screen::Home);
     }
 
     #[test]
@@ -217,7 +258,7 @@ mod tests {
         let mut nav = Navigator::new();
         nav.switch_root(Screen::Home);
         nav.open(Screen::Person);
-        assert!(Screen::Person.shows_back_link() && !Screen::Person.shows_pill_bar());
+        assert!(Screen::Person.shows_back_link() && Screen::Person.shows_pill_bar());
         assert_eq!(nav.back_label(), Some("Home"));
         // A film opened from the person goes back to the person.
         nav.open(Screen::FilmDetail);
@@ -315,12 +356,12 @@ mod tests {
     }
 
     #[test]
-    fn a_collection_page_has_a_back_link_to_the_collections_and_no_pill_bar() {
+    fn a_collection_page_has_a_back_link_to_the_collections_under_the_pill_bar() {
         let mut nav = on_library();
         assert!(nav.select(NavEntry::Collections));
         nav.open(Screen::CollectionDetail);
         assert!(Screen::CollectionDetail.shows_back_link());
-        assert!(!Screen::CollectionDetail.shows_pill_bar());
+        assert!(Screen::CollectionDetail.shows_pill_bar());
         assert_eq!(nav.back_label(), Some("Collections"));
         assert!(nav.back());
         assert_eq!(nav.current(), Screen::Collections);
@@ -368,12 +409,12 @@ mod tests {
     }
 
     #[test]
-    fn a_series_page_has_a_back_link_to_the_series_and_no_pill_bar() {
+    fn a_series_page_has_a_back_link_to_the_series_under_the_pill_bar() {
         let mut nav = Navigator::new();
         nav.switch_root(Screen::Home);
         assert!(nav.select(NavEntry::Series));
         nav.open(Screen::SeriesDetail);
-        assert!(!Screen::SeriesDetail.shows_pill_bar());
+        assert!(Screen::SeriesDetail.shows_pill_bar());
         assert_eq!(nav.back_label(), Some("Series"));
         nav.open(Screen::Player);
         assert!(nav.back());
@@ -383,13 +424,13 @@ mod tests {
     }
 
     #[test]
-    fn a_full_list_has_a_back_link_to_the_home_and_no_pill_bar() {
+    fn a_full_list_has_the_pill_bar_and_no_back_link_like_the_library_grids() {
         let mut nav = Navigator::new();
         nav.switch_root(Screen::Home);
         nav.open(Screen::HomeList);
-        assert!(!Screen::HomeList.shows_pill_bar());
-        assert!(Screen::HomeList.shows_back_link());
-        assert_eq!(nav.back_label(), Some("Home"));
+        assert!(Screen::HomeList.shows_pill_bar());
+        assert!(!Screen::HomeList.shows_back_link());
+        assert_eq!(nav.back_label(), None);
         assert!(nav.back());
         assert_eq!(nav.current(), Screen::Home);
     }
