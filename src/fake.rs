@@ -10,8 +10,8 @@ use bobine::provider::{
     ExternalSubtitle, Favourite, Feature, FeatureKind, Film, FilmDetail, FilmQuery, FilmSort,
     FilterChoices, ImageKind, ImageRef, ItemId, Library, LibraryKind, MediaServer, MediaSource,
     MediaSourceId, Page, PersonHit, PersonTitles, PlaySessionId, Playback, PlaybackReport,
-    ProviderError, SearchResults, Season, Series, SeriesDetail, SeriesHit, ServerInfo, StreamUrl,
-    SubtitleTrack, Title, TranscodeRequest, Trickplay, VideoRange, VideoTrack,
+    ProviderError, SearchResults, Season, Segment, Series, SeriesDetail, SeriesHit, ServerInfo,
+    StreamUrl, SubtitleTrack, Title, TranscodeRequest, Trickplay, VideoRange, VideoTrack,
 };
 
 pub const USER: &str = "camille";
@@ -48,6 +48,8 @@ pub struct Record {
     pub favourite_calls: Vec<(ItemId, bool)>,
     /// How many times the list of favourites was asked.
     pub list_loads: u32,
+    /// The items whose media segments were asked, in order.
+    pub segment_asks: Vec<ItemId>,
     /// The tiles of trickplay asked, in the order they came.
     pub tiles: Vec<u32>,
     /// What the player asked the server to convert, in order.
@@ -83,6 +85,8 @@ pub struct State {
     pub favourite_fails: bool,
     /// How long changing the list takes, so that a double click or the optimistic state shows.
     pub favourite_delay: std::time::Duration,
+    /// The media segments every item has (none: a server that does not know them).
+    pub segments: Vec<Segment>,
     /// The trickplay layout every version has; none: the server made no trickplay images.
     pub trickplay: Option<Trickplay>,
     /// The JPEGs the tiles are, in turn: tile 0 is the first, tile 3 the first again if three.
@@ -473,6 +477,7 @@ impl FakeServer {
                     .to_vec(),
                 favourite_fails: false,
                 favourite_delay: std::time::Duration::ZERO,
+                segments: Vec::new(),
                 trickplay: None,
                 tiles: Vec::new(),
                 tile_delay: std::time::Duration::ZERO,
@@ -1155,6 +1160,12 @@ impl MediaServer for FakeServer {
             stream: StreamUrl::new(state.converted.clone()),
             external_subtitles,
         })
+    }
+
+    fn media_segments(&self, item: &ItemId) -> Result<Vec<Segment>, ProviderError> {
+        let mut state = self.state();
+        state.record.segment_asks.push(item.clone());
+        Ok(state.segments.clone())
     }
 }
 

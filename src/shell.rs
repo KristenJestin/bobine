@@ -6,6 +6,7 @@ mod pages;
 mod palette;
 mod preview;
 mod series;
+mod skip;
 
 pub use home::{HomePage, ListPage};
 pub use lists::{CollectionPage, CollectionsPage, MyListPage};
@@ -36,6 +37,7 @@ use crate::motion::{self, Fade, Presence};
 use crate::navigation::{Navigator, Screen};
 use crate::player::libmpv::Libmpv;
 use crate::player::mpv::MpvPlayer;
+use crate::player::segments::{Button, Label, offered};
 use crate::player::session::{Session, WindowRequest};
 use crate::player::{Media, Player};
 use crate::reports::{self, Reporting};
@@ -187,6 +189,12 @@ pub struct Playback {
     reporting: Option<Reporting>,
     /// The episode after the one playing: the card offers it at the end.
     next: Option<Episode>,
+    /// Told apart from every other playback: an answer on its way for one already left is
+    /// dropped.
+    generation: u64,
+    /// The skip button fades in and out; what it said stays drawn while it fades out.
+    skip_fade: Presence<Button>,
+    skip_label: Option<Label>,
     /// The pointer over the seek bar: the time under it and the thumbnail of that moment.
     seek: SeekPreview,
     /// What the server converts when the file does not play; `None` for a local file.
@@ -320,6 +328,9 @@ impl Shell {
             had_error: false,
             reporting,
             next: None,
+            generation: 0,
+            skip_fade: Presence::new(motion::quick()),
+            skip_label: None,
             seek: SeekPreview::new(),
             fallback: None,
             notice_fade: Fade::new(motion::quick()),
@@ -433,15 +444,18 @@ impl Shell {
             .fallback
             .as_ref()
             .is_some_and(|f| f.notice_shown(&playback.session, now));
+        let skip_label = playback.session.skip_button().map(|button| button.label);
         // Hidden controls have nothing to redraw: the video is not GPUI's.
         if shown
             || shown != playback.controls_shown
             || has_error != playback.had_error
             || notice != playback.notice_shown
+            || skip_label != playback.skip_label
         {
             playback.controls_shown = shown;
             playback.had_error = has_error;
             playback.notice_shown = notice;
+            playback.skip_label = skip_label;
             cx.notify();
         }
     }
@@ -514,17 +528,33 @@ impl Shell {
         let Some(playback) = &mut self.playback else {
             return;
         };
-        match playback
+        let request = playback
             .session
-            .key(key, with_modifier, window.is_fullscreen())
-        {
+            .key(key, with_modifier, window.is_fullscreen());
+        self.player_request(request, window, cx);
+        cx.notify();
+    }
+
+    /// What the session asks of the window after a key or a click.
+    fn player_request(
+        &mut self,
+        request: Option<WindowRequest>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match request {
             Some(WindowRequest::ToggleFullscreen | WindowRequest::ExitFullscreen) => {
                 window.toggle_fullscreen();
             }
             Some(WindowRequest::Leave) => self.leave_player(false, window, cx),
+            // The same end as the file's own: the next tick reports it and leaves.
+            Some(WindowRequest::EndPlayback) => self.tick(window, cx),
+            Some(WindowRequest::NextEpisode) => {
+                self.tick(window, cx);
+                self.play_up_next_now(window, cx);
+            }
             None => {}
         }
-        cx.notify();
     }
 
     pub fn player_back(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -642,6 +672,9 @@ impl Render for Shell {
                         .set(session.controls_visible(now), now);
                     playback.panel_fade.set(session.panel_open(), now);
                     let preview = playback.seek.draw(session.duration, now);
+                    let skip = playback
+                        .skip_fade
+                        .follow(offered(session.skip_button(), preview.is_some()), now);
                     let notice = playback
                         .fallback
                         .as_ref()
@@ -650,6 +683,7 @@ impl Render for Shell {
                     if playback.controls_fade.moving(now)
                         || playback.panel_fade.moving(now)
                         || playback.notice_fade.moving(now)
+                        || playback.skip_fade.moving(now)
                         || playback.seek.moving(now)
                     {
                         window.request_animation_frame();
@@ -659,6 +693,7 @@ impl Render for Shell {
                         panel: playback.panel_fade.level(now),
                         preview,
                         notice: playback.notice_fade.level(now),
+                        skip,
                     };
                     screens::player::render(session, shown, window, cx).into_any_element()
                 }
