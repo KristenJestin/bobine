@@ -72,19 +72,22 @@ pub struct Shown {
 #[derive(Clone)]
 pub struct Quick {
     pub item: ItemId,
+    /// A series goes in a playlist as its episodes.
+    pub series: bool,
     pub my_list: Shown,
     pub watched: Shown,
 }
 
 impl Quick {
     /// The buttons of `item`, as its list says it stands and as the presses since left it.
-    pub fn new(marks: &Marks, item: &ItemId, in_list: bool, watched: bool) -> Self {
+    pub fn new(marks: &Marks, item: &ItemId, series: bool, in_list: bool, watched: bool) -> Self {
         let shown = |action, listed| Shown {
             listed,
             now: marks.shown(item, action, listed),
         };
         Self {
             item: item.clone(),
+            series,
             my_list: shown(Action::MyList, in_list),
             watched: shown(Action::Watched, watched),
         }
@@ -321,7 +324,7 @@ impl Card {
             window,
             cx,
         );
-        let add = self.playlist_button(quick.item.clone(), window, cx);
+        let add = self.playlist_button(quick.item.clone(), quick.series, window, cx);
         div()
             .absolute()
             .top(px(8.))
@@ -337,6 +340,7 @@ impl Card {
     fn playlist_button(
         &self,
         item: ItemId,
+        series: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
@@ -366,7 +370,9 @@ impl Card {
             let item = item.clone();
             let at = bounds.get();
             shell
-                .update(cx, |shell, cx| shell.open_playlist_menu(item, at, cx))
+                .update(cx, |shell, cx| {
+                    shell.open_playlist_menu(item, series, at, cx)
+                })
                 .ok();
         })
         .child(icon(IconName::ListPlus, 14.));

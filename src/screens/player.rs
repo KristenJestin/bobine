@@ -312,7 +312,7 @@ fn title_bar(
                 .gap(px(12.))
                 .children(list)
                 .children(add.map(|item| {
-                    super::playlist::playlist_button("player-playlist", item, window, cx)
+                    super::playlist::playlist_button("player-playlist", item, false, window, cx)
                 }))
                 .child(tracks),
         )

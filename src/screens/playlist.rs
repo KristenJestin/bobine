@@ -234,10 +234,12 @@ fn round_button(
         .child(icon(name, 14.))
 }
 
-/// "Add to playlist" beside "Favorite": a click opens the menu under it, for `item`.
+/// "Add to playlist" beside "Favorite": a click opens the menu under it, for `item`, a series
+/// or not.
 pub fn playlist_button(
     id: &'static str,
     item: ItemId,
+    series: bool,
     window: &mut Window,
     cx: &mut Context<Shell>,
 ) -> Div {
@@ -249,7 +251,7 @@ pub fn playlist_button(
             theme::ghost_button(id, Some(IconName::ListPlus), "Add to playlist", window, cx)
                 .debug_selector(move || id.to_string())
                 .on_click(cx.listener(move |shell, _, _, cx| {
-                    shell.open_playlist_menu(item.clone(), bounds.get(), cx)
+                    shell.open_playlist_menu(item.clone(), series, bounds.get(), cx)
                 })),
         )
         // Where the button is drawn, for the menu.

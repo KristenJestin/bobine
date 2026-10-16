@@ -1039,7 +1039,7 @@ impl MediaServer for Jellyfin {
         Ok(self.entries(playlist, EPISODE_FIELDS, None)?.0)
     }
 
-    fn create_playlist(&self, name: &str, item: &ItemId) -> Result<ItemId, ProviderError> {
+    fn create_playlist(&self, name: &str, item: &ItemId) -> Result<(ItemId, usize), ProviderError> {
         let made: dto::PlaylistCreated = self.http.post(
             "new playlist",
             "/Playlists",
@@ -1051,7 +1051,10 @@ impl MediaServer for Jellyfin {
                 "MediaType": "Video",
             }),
         )?;
-        Ok(ItemId(made.id))
+        let id = ItemId(made.id);
+        // As for an add: made, but not counted, it holds the one title.
+        let count = self.entries(&id, "", Some(0)).map_or(1, |(_, count)| count);
+        Ok((id, count))
     }
 
     /// The server answers nothing of what it put in: its count, before and after, says it.

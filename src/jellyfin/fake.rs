@@ -133,6 +133,8 @@ pub struct State {
     /// The entries put in the playlist that holds titles so far: a series goes in as its
     /// episodes, as Jellyfin 10.9 and later do.
     pub playlist_added: usize,
+    /// The entries the playlist made last holds.
+    pub playlist_made: usize,
 }
 
 /// How many episodes the series of the pages puts in a playlist.
@@ -603,6 +605,10 @@ fn answer(state: &State, seen: &Seen) -> Answer {
             items["TotalRecordCount"] = json!(total + state.playlist_added);
             Answer::Json(200, items)
         }
+        ("GET", path) if path == format!("/Playlists/{NEW_PLAYLIST}/Items") => Answer::Json(
+            200,
+            json!({ "Items": [], "TotalRecordCount": state.playlist_made }),
+        ),
         ("GET", path) if path.starts_with("/Playlists/") && path.ends_with("/Items") => {
             Answer::Json(200, json!({ "Items": [], "TotalRecordCount": 0 }))
         }
@@ -736,6 +742,12 @@ impl FakeServer {
                             && matches!(answer, Answer::Empty(204))
                         {
                             state.playlist_added += match seen.param("ids") {
+                                Some(SERIES) => SERIES_EPISODES,
+                                _ => 1,
+                            };
+                        }
+                        if seen.method == "POST" && seen.path == "/Playlists" {
+                            state.playlist_made = match seen.json()["Ids"][0].as_str() {
                                 Some(SERIES) => SERIES_EPISODES,
                                 _ => 1,
                             };

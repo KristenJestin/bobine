@@ -1437,22 +1437,23 @@ impl MediaServer for FakeServer {
         Ok(Self::entries(&state, found))
     }
 
-    fn create_playlist(&self, name: &str, item: &ItemId) -> Result<ItemId, ProviderError> {
+    fn create_playlist(&self, name: &str, item: &ItemId) -> Result<(ItemId, usize), ProviderError> {
         let mut state = self.state();
         Self::change_playlist(&mut state, PlaylistCall::Create(name.into(), item.clone()))?;
         state.playlists_made += 1;
         let id = ItemId(format!("playlist-new-{}", state.playlists_made));
-        let entries = Self::put_in(&state, item)
+        let entries: Vec<_> = Self::put_in(&state, item)
             .into_iter()
             .enumerate()
             .map(|(n, item)| (EntryId(format!("{}-entry-{n}", id.0)), item))
             .collect();
+        let count = entries.len();
         state.playlists.push(KeptPlaylist {
             id: id.clone(),
             name: name.into(),
             entries,
         });
-        Ok(id)
+        Ok((id, count))
     }
 
     fn add_to_playlist(&self, playlist: &ItemId, item: &ItemId) -> Result<usize, ProviderError> {

@@ -207,7 +207,7 @@ fn hero(
         })
         .on_click(cx.listener(|shell, _, _, cx| shell.toggle_watched(cx)));
     let in_list = list_button("film-list", favourite, window, cx);
-    let add = super::playlist::playlist_button("film-playlist", film.id.clone(), window, cx);
+    let add = super::playlist::playlist_button("film-playlist", film.id.clone(), false, window, cx);
     let buttons = div()
         .flex()
         .gap(px(10.))

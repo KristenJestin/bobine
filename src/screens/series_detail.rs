@@ -200,6 +200,7 @@ fn hero(
                     .child(super::playlist::playlist_button(
                         "series-playlist",
                         series.id.clone(),
+                        true,
                         window,
                         cx,
                     )),

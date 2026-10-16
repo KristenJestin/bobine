@@ -268,7 +268,7 @@ fn film_offer(
     name: &ElementId,
     with_progress: bool,
 ) -> Offer {
-    let quick = Quick::new(marks, &film.id, film.favourite, film.watched);
+    let quick = Quick::new(marks, &film.id, false, film.favourite, film.watched);
     let look = film_look(
         film,
         image,
@@ -301,7 +301,7 @@ fn series_offer(
     let quick = series
         .favourite
         .zip(series.watched)
-        .map(|(in_list, watched)| Quick::new(marks, &series.id, in_list, watched));
+        .map(|(in_list, watched)| Quick::new(marks, &series.id, true, in_list, watched));
     let watched = quick.as_ref().is_some_and(|quick| quick.watched.now);
     let look = series_look(series, image, width, name, watched, fresh);
     Offer {

@@ -3118,12 +3118,22 @@ fn a_playlist_gives_its_titles_in_order_with_the_versions_of_its_episodes() {
 fn a_new_playlist_is_made_with_the_title_in_it() {
     let s = Setup::new();
     let made = s.signed_in().create_playlist("Road trip", &film()).unwrap();
-    assert_eq!(made, ItemId(NEW_PLAYLIST.into()));
+    assert_eq!(made, (ItemId(NEW_PLAYLIST.into()), 1));
     let body = s.fake.last("POST", "/Playlists").json();
     assert_eq!(body["Name"], "Road trip");
     assert_eq!(body["Ids"], serde_json::json!([FILM]));
     assert_eq!(body["UserId"], USER_ID);
     assert_eq!(body["MediaType"], "Video");
+}
+
+#[test]
+fn a_new_playlist_made_from_a_series_holds_its_episodes() {
+    let s = Setup::new();
+    let made = s
+        .signed_in()
+        .create_playlist("Road trip", &ItemId(SERIES.into()))
+        .unwrap();
+    assert_eq!(made, (ItemId(NEW_PLAYLIST.into()), SERIES_EPISODES));
 }
 
 #[test]

@@ -110,6 +110,7 @@ impl Shell {
     pub fn open_playlist_menu(
         &mut self,
         item: ItemId,
+        series: bool,
         anchor: Option<Bounds<Pixels>>,
         cx: &mut Context<Self>,
     ) {
@@ -124,7 +125,7 @@ impl Shell {
         let mut fade = Fade::new(motion::quick());
         fade.set(true, Instant::now());
         self.playlist_menu = Some(PlaylistMenu {
-            picker: Picker::new(item.clone()),
+            picker: Picker::new(item.clone(), series),
             anchor,
             screen: self.navigator.current(),
             open: true,
@@ -1221,10 +1222,10 @@ mod tests {
             .update(cx, |shell, _, cx| {
                 shell.close_playlist_menu(cx);
                 server.state.lock().unwrap().record = Default::default();
-                shell.open_playlist_menu(film.clone(), None, cx);
+                shell.open_playlist_menu(film.clone(), false, None, cx);
                 let first = shell.playlist_menu.as_ref().unwrap().generation;
                 shell.close_playlist_menu(cx);
-                shell.open_playlist_menu(film.clone(), None, cx);
+                shell.open_playlist_menu(film.clone(), false, None, cx);
                 (first, shell.playlist_menu.as_ref().unwrap().generation)
             })
             .unwrap();
@@ -1261,6 +1262,28 @@ mod tests {
             state.unreadable_playlists = vec![ItemId("playlist-late".into())]
         });
         assert_eq!(lines(&window, cx), [("Watchlist".into(), false)]);
+    }
+
+    #[gpui_kit::test]
+    fn new_playlist_from_a_series_says_how_many_episodes_went_in(cx: &mut TestAppContext) {
+        let (server, window, _) = menu_on_a_film(cx, |_| {});
+        let series = ItemId(crate::fake::SERIES.into());
+        window
+            .update(cx, |shell, _, cx| {
+                shell.close_playlist_menu(cx);
+                shell.open_series(series.clone(), cx);
+            })
+            .unwrap();
+        click(&window, cx, "series-playlist");
+        new_playlist(&window, cx, "Road trip");
+        cx.run_until_parked();
+        let state = server.state.lock().unwrap();
+        let episodes = state.episodes.iter().filter(|e| e.series == series).count();
+        drop(state);
+        let told = window.read_with(cx, |shell, _| {
+            shell.playlist_menu.as_ref().unwrap().picker.told.clone()
+        });
+        assert_eq!(told.unwrap(), Some(format!("Added {episodes} episodes.")));
     }
 
     /// A playlist's title playing on a fake player, the menu of its "Add to playlist" button

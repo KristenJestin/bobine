@@ -124,8 +124,9 @@ pub trait MediaServer: Send + Sync {
     fn playlists(&self, first: Option<usize>) -> Result<Vec<Playlist>, ProviderError>;
     /// What a playlist holds, in its order, the episodes with their versions.
     fn playlist(&self, playlist: &ItemId) -> Result<Vec<PlaylistEntry>, ProviderError>;
-    /// Makes a playlist named `name` that holds `item`: its id.
-    fn create_playlist(&self, name: &str, item: &ItemId) -> Result<ItemId, ProviderError>;
+    /// Makes a playlist named `name` that holds `item`: its id, and how many entries it holds.
+    /// A series goes in as its episodes.
+    fn create_playlist(&self, name: &str, item: &ItemId) -> Result<(ItemId, usize), ProviderError>;
     /// Puts a film, an episode or a series at the end of a playlist: how many entries it put
     /// in. A series goes in as its episodes.
     fn add_to_playlist(&self, playlist: &ItemId, item: &ItemId) -> Result<usize, ProviderError>;

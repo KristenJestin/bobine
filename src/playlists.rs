@@ -24,10 +24,10 @@ pub fn refusal(error: &ProviderError) -> &'static str {
     }
 }
 
-/// What the menu says once the server put in more than the title: a series goes in as its
-/// episodes.
-pub fn added(count: usize) -> Option<String> {
-    (count > 1).then(|| format!("Added {count} episodes."))
+/// What the menu says once a series went in, as its episodes; nothing for a movie or an
+/// episode, whatever the server counted.
+pub fn added(series: bool, count: usize) -> Option<String> {
+    (series && count > 1).then(|| format!("Added {count} episodes."))
 }
 
 /// How many posters a card's mosaic shows: two by two.
@@ -129,6 +129,8 @@ struct Making {
 /// press shows the check at once and asks the server; a refusal takes it back and says why.
 pub struct Picker {
     pub item: ItemId,
+    /// The title is a series: it goes in as its episodes.
+    series: bool,
     pub playlists: Option<Loadable<Vec<Playlist>>>,
     /// The playlists the title was put in from here: checked while asked, and after.
     added: Vec<ItemId>,
@@ -143,9 +145,10 @@ pub struct Picker {
 }
 
 impl Picker {
-    pub fn new(item: ItemId) -> Self {
+    pub fn new(item: ItemId, series: bool) -> Self {
         Self {
             item,
+            series,
             playlists: Some(Loadable::Loading),
             added: Vec::new(),
             pending: Vec::new(),
@@ -205,7 +208,7 @@ impl Picker {
         self.pending.retain(|pending| pending != id);
         match answer {
             Ok(count) => {
-                self.told = added(*count);
+                self.told = added(self.series, *count);
                 None
             }
             Err(error) => {
@@ -234,15 +237,17 @@ impl Picker {
         Some((self.made, name.into()))
     }
 
-    /// The server answered the playlist made with `token`: the line takes its id, or goes on a
-    /// refusal; returns what to tell the viewer then.
+    /// The server answered the playlist made with `token`: the line takes its id, and a series
+    /// says how many episodes went in; or the line goes on a refusal: returns what to tell the
+    /// viewer then.
     pub fn made(
         &mut self,
         token: u32,
-        answer: &Result<ItemId, ProviderError>,
+        answer: &Result<(ItemId, usize), ProviderError>,
     ) -> Option<&'static str> {
         match answer {
-            Ok(id) => {
+            Ok((id, count)) => {
+                self.told = added(self.series, *count);
                 if let Some(making) = self.making.iter_mut().find(|m| m.token == token) {
                     making.id = Some(id.clone());
                 }
@@ -303,8 +308,8 @@ mod tests {
         assert_eq!(lines[2].1, "S1 · E1");
     }
 
-    fn picker_of(item: &str) -> Picker {
-        let mut picker = Picker::new(ItemId(item.into()));
+    fn picker_of(item: &str, series: bool) -> Picker {
+        let mut picker = Picker::new(ItemId(item.into()), series);
         let server = FakeServer::new(12, false);
         picker.playlists = Some(Loadable::Ready(server.playlists(None).unwrap()));
         picker
@@ -320,12 +325,12 @@ mod tests {
 
     #[test]
     fn the_menu_checks_the_playlists_that_already_hold_the_title() {
-        let picker = picker_of("film-3");
+        let picker = picker_of("film-3", false);
         assert_eq!(
             checked(&picker),
             [("Late night".into(), true), ("Watchlist".into(), false)]
         );
-        let picker = picker_of("series-1-s1-e2");
+        let picker = picker_of("series-1-s1-e2", false);
         assert_eq!(
             checked(&picker),
             [("Late night".into(), false), ("Watchlist".into(), true)]
@@ -334,7 +339,7 @@ mod tests {
 
     #[test]
     fn an_episode_in_a_playlist_does_not_check_its_series() {
-        let picker = picker_of("series-1");
+        let picker = picker_of("series-1", true);
         assert_eq!(
             checked(&picker),
             [("Late night".into(), false), ("Watchlist".into(), false)]
@@ -343,16 +348,33 @@ mod tests {
 
     #[test]
     fn a_series_added_says_how_many_episodes_went_in() {
-        let mut picker = picker_of("series-3");
+        let mut picker = picker_of("series-3", true);
         let late = ItemId("playlist-late".into());
         picker.pick(&late);
         assert_eq!(picker.picked(&late, &Ok(24)), None);
         assert_eq!(picker.told.as_deref(), Some("Added 24 episodes."));
-        // A film puts itself in: the check says it.
-        let mut picker = picker_of("film-6");
-        picker.pick(&late);
-        picker.picked(&late, &Ok(1));
-        assert_eq!(picker.told, None);
+    }
+
+    #[test]
+    fn a_movie_or_an_episode_never_says_added_episodes_whatever_the_count() {
+        let late = ItemId("playlist-late".into());
+        for item in ["film-6", "series-1-s1-e1"] {
+            let mut picker = picker_of(item, false);
+            picker.pick(&late);
+            picker.picked(&late, &Ok(24));
+            assert_eq!(picker.told, None, "{item}");
+            let (token, _) = picker.make("Road trip").unwrap();
+            picker.made(token, &Ok((ItemId("new".into()), 24)));
+            assert_eq!(picker.told, None, "{item}, new playlist");
+        }
+    }
+
+    #[test]
+    fn a_new_playlist_made_from_a_series_says_how_many_episodes_went_in() {
+        let mut picker = picker_of("series-3", true);
+        let (token, _) = picker.make("Road trip").unwrap();
+        assert_eq!(picker.made(token, &Ok((ItemId("new".into()), 24))), None);
+        assert_eq!(picker.told.as_deref(), Some("Added 24 episodes."));
     }
 
     #[test]
@@ -367,7 +389,7 @@ mod tests {
 
     #[test]
     fn a_pick_is_checked_at_once_and_unchecked_when_refused() {
-        let mut picker = picker_of("film-6");
+        let mut picker = picker_of("film-6", false);
         let watchlist = ItemId("playlist-watchlist".into());
         assert_eq!(picker.pick(&watchlist), Some(watchlist.clone()));
         assert!(checked(&picker)[1].1);
@@ -387,13 +409,13 @@ mod tests {
 
     #[test]
     fn a_new_playlist_shows_at_once_and_goes_when_refused() {
-        let mut picker = picker_of("film-6");
+        let mut picker = picker_of("film-6", false);
         assert_eq!(picker.make("   "), None);
         let (first, name) = picker.make("  Road trip ").unwrap();
         assert_eq!(name, "Road trip");
         assert_eq!(checked(&picker)[2], ("Road trip".into(), true));
         assert_eq!(picker.lines()[2].id, None);
-        assert_eq!(picker.made(first, &Ok(ItemId("new".into()))), None);
+        assert_eq!(picker.made(first, &Ok((ItemId("new".into()), 1))), None);
         assert_eq!(picker.lines()[2].id, Some(ItemId("new".into())));
         let (second, _) = picker.make("Snow days").unwrap();
         assert_eq!(
