@@ -914,6 +914,28 @@ mod tests {
     }
 
     #[test]
+    fn skipping_credits_followed_by_a_scene_seeks_and_does_not_end_the_film() {
+        use bobine::provider::SegmentKind::Outro;
+        let mut f = fixture();
+        f.session.set_segments(vec![Segment {
+            kind: Outro,
+            start: Duration::from_secs(2700),
+            end: Duration::from_secs(2760),
+        }]);
+        f.session.set_next_episode(true);
+        f.queue(vec![PlayerEvent::Duration(2820.)]);
+        let start = Instant::now();
+        at(&mut f, start, 2710.);
+        assert_eq!(
+            f.session.skip_button().unwrap().label.text(),
+            "Skip credits"
+        );
+        assert_eq!(f.session.press_skip(), None);
+        assert_eq!(seeks(&f), [Call::Seek(Seek::To(2760.))]);
+        assert!(!f.session.update(start + Duration::from_millis(100)));
+    }
+
+    #[test]
     fn a_stale_position_does_not_bring_the_pressed_button_back() {
         let mut f = fixture();
         with_segments(&mut f, true);
