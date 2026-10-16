@@ -975,6 +975,19 @@ fn a_new_season_without_a_series_picture_keeps_its_own_poster() {
     );
 }
 
+#[test]
+fn a_new_season_card_counts_the_episodes_left_in_that_season() {
+    let s = Setup::new();
+    let latest = s
+        .signed_in()
+        .latest(&ItemId(SERIES_LIBRARY.into()), 10)
+        .unwrap();
+    let Title::Series(reach) = &latest[4] else {
+        panic!("a series: {:?}", latest[4])
+    };
+    assert_eq!(reach.unwatched, 8);
+}
+
 fn season_item() -> super::dto::Item {
     serde_json::from_value(serde_json::json!({
         "Id": "5c000000000000000000000000000009", "Name": "Season 9", "Type": "Season",

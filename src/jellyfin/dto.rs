@@ -330,16 +330,18 @@ impl Item {
             }),
             None => self.primary(),
         };
+        let season = self.season();
         Some(Series {
             id,
             title: self.series_name.clone().unwrap_or_default(),
             year: None,
             end_year: None,
             community_rating: None,
-            unwatched: 0,
+            // What is left to watch in the new season, which is what the card is about.
+            unwatched: season.unwatched,
             poster,
             backdrop: None,
-            season: Some(self.season()),
+            season: Some(season),
         })
     }
 
