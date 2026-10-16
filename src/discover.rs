@@ -205,10 +205,7 @@ mod tests {
             status_label(Availability::Available, false),
             Some("Available")
         );
-        assert_eq!(
-            status_label(Availability::Blocked, false),
-            Some("Blocked")
-        );
+        assert_eq!(status_label(Availability::Blocked, false), Some("Blocked"));
         assert_eq!(request_label(RequestStatus::Approved), "Requested");
         assert_eq!(request_label(RequestStatus::Pending), "Pending");
         assert_eq!(request_label(RequestStatus::Declined), "Declined");

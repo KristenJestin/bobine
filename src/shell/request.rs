@@ -297,7 +297,9 @@ mod tests {
     use super::super::discover::tests::{click, configured, drawn};
     use super::*;
     use crate::fake::{FILM, SERIES};
-    use crate::fake_seerr::{ASHEN_SHORE, COPPER_COAST, FakeSeerr, HARBOUR_WATCH, NORTHERN_LIGHTS, PAPER_MOONS};
+    use crate::fake_seerr::{
+        ASHEN_SHORE, COPPER_COAST, FakeSeerr, HARBOUR_WATCH, NORTHERN_LIGHTS, PAPER_MOONS,
+    };
     use crate::navigation::NavEntry;
     use bobine::provider::ItemId;
 

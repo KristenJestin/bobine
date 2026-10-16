@@ -58,7 +58,10 @@ fn a_redirect_is_not_followed_and_the_key_never_reaches_another_server() {
         seerr.request(&Ask::Movie(HARBOUR_NIGHTS)),
         Err(RequestError::Redirected)
     );
-    assert!(elsewhere.seen().is_empty(), "nothing reached the other server");
+    assert!(
+        elsewhere.seen().is_empty(),
+        "nothing reached the other server"
+    );
 }
 
 #[test]
