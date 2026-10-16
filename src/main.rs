@@ -85,9 +85,13 @@ fn main() {
             // Nor the real settings.
             #[cfg(feature = "harness")]
             let settings = settings.filter(|_| harness.connector().is_none());
-            // The harness never reaches the real keyring either.
+            // Nor the real keyring.
             #[cfg(feature = "harness")]
-            let secrets: Arc<dyn TokenStore> = Arc::new(fake::MemoryKeyring::default());
+            let secrets: Arc<dyn TokenStore> = if harness.connector().is_some() {
+                Arc::new(fake::MemoryKeyring::default())
+            } else {
+                Arc::new(SecretServiceStore)
+            };
             #[cfg(not(feature = "harness"))]
             let secrets: Arc<dyn TokenStore> = Arc::new(SecretServiceStore);
             let opened = cx.open_window(options, move |window, cx| {
