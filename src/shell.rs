@@ -193,6 +193,8 @@ pub struct Shell {
     pub playlist_pages: Vec<PlaylistPage>,
     /// The "Add to playlist" menu, while it shows.
     pub playlist_menu: Option<PlaylistMenu>,
+    /// How many times the menu was opened: each open's reads carry its number.
+    playlist_menus: u64,
     /// The search palette, while it shows (it stays fading out after it closed).
     pub search: Option<SearchState>,
     /// The pages gone back from, the last one on top: the mouse's forward button opens them again.
@@ -361,6 +363,7 @@ impl Shell {
             lists: Default::default(),
             playlist_pages: Vec::new(),
             playlist_menu: None,
+            playlist_menus: 0,
             search: None,
             forward: Vec::new(),
             #[cfg(test)]

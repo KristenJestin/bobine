@@ -3,9 +3,10 @@
 
 use std::time::Instant;
 
-use bobine::provider::{EntryId, ItemId, PlaylistEntry, Title};
+use bobine::provider::{EntryId, ItemId, Playlist, PlaylistEntry, ProviderError, Title};
 use gpui_kit::{
-    AppContext, Bounds, Context, Entity, Focusable, Pixels, Point, UniformListScrollHandle, Window,
+    AppContext, Bounds, Context, Entity, Focusable, Pixels, Point, Task, UniformListScrollHandle,
+    Window,
 };
 
 use super::pages::{Loadable, Origin};
@@ -91,6 +92,12 @@ pub struct PlaylistMenu {
     pub fade: Fade,
     /// The name of a new playlist, once "New playlist…" was pressed.
     pub naming: Option<Entity<TextInput>>,
+    /// Which open of the menu this is: the reads of an earlier one never land in it.
+    pub generation: u64,
+    /// The playlists listed, while what each holds is read in turn.
+    reading: Vec<Playlist>,
+    /// The reads for the checks, one after another; dropped, they stop.
+    fetch: Option<Task<()>>,
 }
 
 impl Shell {
@@ -123,25 +130,121 @@ impl Shell {
             open: true,
             fade,
             naming: None,
-        });
-        self.ask(
-            cx,
-            // The checks need what each playlist holds, whole.
-            |server| server.playlists(None),
-            move |shell, found, cx| {
-                let found = match found {
-                    Ok(found) => Loadable::Ready(found),
-                    Err(error) => Loadable::Failed(shell.failed(error, cx)),
-                };
-                if let Some(menu) = &mut shell.playlist_menu
-                    && menu.picker.item == item
-                {
-                    menu.picker.playlists = Some(found);
-                }
-                cx.notify();
+            generation: {
+                self.playlist_menus += 1;
+                self.playlist_menus
             },
-        );
+            reading: Vec::new(),
+            fetch: None,
+        });
+        self.read_menu_playlists(cx);
         cx.notify();
+    }
+
+    /// The checks need what each playlist holds, whole: the playlists are listed, then read
+    /// one after another, never two at once.
+    fn read_menu_playlists(&mut self, cx: &mut Context<Self>) {
+        let (Some(server), Some(menu)) = (self.server.clone(), &mut self.playlist_menu) else {
+            return;
+        };
+        let generation = menu.generation;
+        menu.fetch = Some(cx.spawn(async move |this, cx| {
+            let listing = server.clone();
+            let listed = cx
+                .background_executor()
+                .spawn(async move { listing.playlists(Some(0)) })
+                .await;
+            let mut next = this
+                .update(cx, |shell, cx| {
+                    cx.notify();
+                    shell.menu_listed(generation, listed, cx)
+                })
+                .ok()
+                .flatten();
+            while let Some((at, id)) = next {
+                let reading = server.clone();
+                let read = cx
+                    .background_executor()
+                    .spawn(async move { reading.playlist(&id) })
+                    .await;
+                next = this
+                    .update(cx, |shell, cx| {
+                        cx.notify();
+                        shell.menu_read(generation, at, read, cx)
+                    })
+                    .ok()
+                    .flatten();
+            }
+        }));
+    }
+
+    /// The menu of the open `generation`, while it shows.
+    fn menu_of(&mut self, generation: u64) -> Option<&mut PlaylistMenu> {
+        self.playlist_menu
+            .as_mut()
+            .filter(|menu| menu.open && menu.generation == generation)
+    }
+
+    /// The playlists of the menu opened `generation` are listed: the first to read, if any.
+    pub(super) fn menu_listed(
+        &mut self,
+        generation: u64,
+        found: Result<Vec<Playlist>, ProviderError>,
+        cx: &mut Context<Self>,
+    ) -> Option<(usize, ItemId)> {
+        self.menu_of(generation)?;
+        let found = match found {
+            Ok(found) => found,
+            Err(error) => {
+                let said = self.failed(error, cx);
+                self.menu_of(generation)?.picker.playlists = Some(Loadable::Failed(said));
+                return None;
+            }
+        };
+        let menu = self.menu_of(generation)?;
+        menu.reading = found;
+        Self::menu_next(menu, 0)
+    }
+
+    /// What the playlist `at` of the menu opened `generation` holds came: the next to read, if
+    /// any. One the server will not read is left out.
+    pub(super) fn menu_read(
+        &mut self,
+        generation: u64,
+        at: usize,
+        read: Result<Vec<PlaylistEntry>, ProviderError>,
+        cx: &mut Context<Self>,
+    ) -> Option<(usize, ItemId)> {
+        let menu = self.menu_of(generation)?;
+        match read {
+            Ok(entries) => {
+                menu.reading.get_mut(at)?.entries = entries;
+                Self::menu_next(menu, at + 1)
+            }
+            Err(ProviderError::Forbidden | ProviderError::NotFound) => {
+                if at < menu.reading.len() {
+                    menu.reading.remove(at);
+                }
+                Self::menu_next(menu, at)
+            }
+            Err(error) => {
+                let said = self.failed(error, cx);
+                self.menu_of(generation)?.picker.playlists = Some(Loadable::Failed(said));
+                None
+            }
+        }
+    }
+
+    /// The playlist `at` to read next; past the last, the menu shows them all.
+    fn menu_next(menu: &mut PlaylistMenu, at: usize) -> Option<(usize, ItemId)> {
+        match menu.reading.get(at) {
+            Some(playlist) => Some((at, playlist.id.clone())),
+            None => {
+                let found = std::mem::take(&mut menu.reading);
+                menu.picker.playlists = Some(Loadable::Ready(found));
+                None
+            }
+        }
     }
 
     /// The menu fades out; the keys go back to the window.
@@ -151,6 +254,7 @@ impl Shell {
         {
             menu.open = false;
             menu.naming = None;
+            menu.fetch = None;
             menu.fade.set(false, Instant::now());
             cx.notify();
         }
@@ -485,7 +589,7 @@ impl Shell {
 mod tests {
     use super::*;
     use crate::fake::{FakeServer, PlaylistCall};
-    use bobine::provider::{MediaServer, ProviderError};
+    use bobine::provider::MediaServer;
     use gpui_kit::{TestAppContext, WindowHandle};
     use std::sync::Arc;
 
@@ -1105,6 +1209,58 @@ mod tests {
             visual.debug_bounds("playlist-told").is_some(),
             "in the menu"
         );
+    }
+
+    #[gpui_kit::test]
+    fn a_menu_opened_closed_and_reopened_ignores_the_first_reads_and_runs_one_chain(
+        cx: &mut TestAppContext,
+    ) {
+        let (server, window, film) = menu_on_a_film(cx, |_| {});
+        let all = server.playlists(None).unwrap().len();
+        let (first, second) = window
+            .update(cx, |shell, _, cx| {
+                shell.close_playlist_menu(cx);
+                server.state.lock().unwrap().record = Default::default();
+                shell.open_playlist_menu(film.clone(), None, cx);
+                let first = shell.playlist_menu.as_ref().unwrap().generation;
+                shell.close_playlist_menu(cx);
+                shell.open_playlist_menu(film.clone(), None, cx);
+                (first, shell.playlist_menu.as_ref().unwrap().generation)
+            })
+            .unwrap();
+        assert_ne!(first, second);
+        cx.run_until_parked();
+        {
+            let state = server.state.lock().unwrap();
+            assert_eq!(
+                state.record.playlists_listed, 1,
+                "the first chain never ran"
+            );
+            assert_eq!(state.record.playlist_reads.len(), all, "one read each");
+        }
+        let lines_now = lines(&window, cx);
+        assert_eq!(lines_now.len(), all);
+        // An answer of the first open landing late changes nothing.
+        window
+            .update(cx, |shell, _, cx| {
+                shell.menu_listed(first, Ok(Vec::new()), cx);
+                shell.menu_read(first, 0, Err(ProviderError::NotFound), cx);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        assert_eq!(lines(&window, cx), lines_now);
+        assert_eq!(
+            server.state.lock().unwrap().record.playlist_reads.len(),
+            all
+        );
+    }
+
+    #[gpui_kit::test]
+    fn a_playlist_the_server_will_not_read_is_left_out_of_the_menu(cx: &mut TestAppContext) {
+        let (_server, window, _) = menu_on_a_film(cx, |state| {
+            state.unreadable_playlists = vec![ItemId("playlist-late".into())]
+        });
+        assert_eq!(lines(&window, cx), [("Watchlist".into(), false)]);
     }
 
     /// A playlist's title playing on a fake player, the menu of its "Add to playlist" button

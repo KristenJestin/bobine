@@ -113,6 +113,10 @@ pub struct Record {
     pub logouts: Vec<usize>,
     /// Every change asked of a playlist, answered or failed.
     pub playlist_calls: Vec<PlaylistCall>,
+    /// How many times the playlists were listed.
+    pub playlists_listed: u32,
+    /// The playlists read whole, in the order they were asked.
+    pub playlist_reads: Vec<ItemId>,
 }
 
 /// A change asked of a playlist.
@@ -215,6 +219,8 @@ pub struct State {
     pub playlist_refusal: Option<ProviderError>,
     /// Taking out these entries is refused, as a playlist the user may not change.
     pub refused_entries: Vec<EntryId>,
+    /// Reading these playlists is refused, as one shared and then taken away.
+    pub unreadable_playlists: Vec<ItemId>,
     /// How many playlists were made so far, for the ids of the next.
     pub playlists_made: usize,
     /// The id of the user the next login or restore gives a session to.
@@ -641,6 +647,7 @@ impl FakeServer {
                 playlists: playlists(),
                 playlist_refusal: None,
                 refused_entries: Vec::new(),
+                unreadable_playlists: Vec::new(),
                 playlists_made: 0,
                 user_id: USER_ID.into(),
             })),
@@ -1395,7 +1402,8 @@ impl MediaServer for FakeServer {
     }
 
     fn playlists(&self, first: Option<usize>) -> Result<Vec<Playlist>, ProviderError> {
-        let state = self.state();
+        let mut state = self.state();
+        state.record.playlists_listed += 1;
         let mut found: Vec<Playlist> = state
             .playlists
             .iter()
@@ -1416,7 +1424,11 @@ impl MediaServer for FakeServer {
     }
 
     fn playlist(&self, playlist: &ItemId) -> Result<Vec<PlaylistEntry>, ProviderError> {
-        let state = self.state();
+        let mut state = self.state();
+        state.record.playlist_reads.push(playlist.clone());
+        if state.unreadable_playlists.contains(playlist) {
+            return Err(ProviderError::Forbidden);
+        }
         let found = state
             .playlists
             .iter()
