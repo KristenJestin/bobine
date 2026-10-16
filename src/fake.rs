@@ -100,15 +100,10 @@ fn genre_of(id: &ItemId) -> &'static str {
     GENRES[number.unwrap_or(0) % GENRES.len()]
 }
 
-/// A title in lowercase without accents, the way the fake server orders names.
+/// A title in lowercase, accents kept: the way the fake Jellyfin server orders names, as raw
+/// strings.
 fn folded(title: &str) -> String {
-    title
-        .chars()
-        .map(|c| match crate::library_tools::letter_of(&c.to_string()) {
-            '#' => c.to_lowercase().next().unwrap_or(c),
-            letter => letter.to_ascii_lowercase(),
-        })
-        .collect()
+    title.to_lowercase()
 }
 
 /// What a title is filtered and sorted by.
@@ -985,26 +980,24 @@ mod tests {
     }
 
     #[test]
-    fn the_fake_counts_the_titles_before_a_letter_with_accents_among_the_plain() {
+    fn the_fake_counts_the_titles_before_a_letter_in_its_own_order() {
         let server = FakeServer::new(1, true);
         let tools = Tools {
             sort: Sort::Title,
             ..Tools::default()
         };
-        let before = |letter| {
-            let query = tools.letter_query(letter).unwrap();
-            server
-                .series(&ItemId("series".into()), &query)
+        let id = ItemId("series".into());
+        let all = server.series(&id, &tools.query(0)).unwrap();
+        let all = titles(&all);
+        for letter in 'A'..='Z' {
+            let before = server
+                .series(&id, &tools.letter_query(letter).unwrap())
                 .unwrap()
-                .total
-        };
-        // "Après la pluie" and "Archipel" are the first two: "Après" sorts as "Apres".
-        assert_eq!(before('B'), 2);
-        let all = server
-            .series(&ItemId("series".into()), &tools.query(0))
-            .unwrap();
-        assert_eq!(titles(&all)[..2], ["Après la pluie", "Archipel"]);
-        // "Désert" sorts with the D: four titles come before "H".
-        assert_eq!(before('H'), 4);
+                .total as usize;
+            let sorts_before =
+                |title: &&str| title.to_lowercase() < letter.to_lowercase().to_string();
+            assert!(all[..before].iter().all(sorts_before), "{letter}");
+            assert!(!all[before..].iter().any(|t| sorts_before(&t)), "{letter}");
+        }
     }
 }
