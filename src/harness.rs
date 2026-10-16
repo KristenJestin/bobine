@@ -838,11 +838,13 @@ impl Acts {
                 ),
                 (18.0, "unwatched off", Click(Unwatched)),
             ],
-            // Times count from the start of the playback, on a media of 40 s with `--segments 40`.
+            // Times count from when the screen is reached; the file starts playing about four
+            // seconds later on a loaded machine, so the segments come at those times plus four.
             "skip" => vec![
-                (7., "enter skips the intro", Key("enter")),
-                (11., "enter between the segments", Key("enter")),
-                (19., "enter skips the credits", Key("enter")),
+                (6.5, "enter skips the recap", Key("enter")),
+                (10., "enter skips the intro", Key("enter")),
+                (13., "enter between the segments", Key("enter")),
+                (22., "enter skips the credits", Key("enter")),
             ],
             other => {
                 eprintln!("bobine harness: unknown scenario {other}");
