@@ -18,14 +18,25 @@ pub const PER_GROUP: u32 = 5;
 /// A group's heading and a result's row have a fixed height: the view lays them out by hand, so
 /// the selected row can be found, scrolled to and highlighted without measuring anything.
 pub const HEADING_HEIGHT: f32 = 34.;
-pub const ROW_HEIGHT: f32 = 62.;
+pub const ROW_HEIGHT: f32 = 120.;
+/// The space kept between two rows, under each one.
+pub const ROW_GAP: f32 = 4.;
+/// A film's or series' poster in a row (2:3), and a person's round photo.
+pub const POSTER_HEIGHT: f32 = 100.;
+pub const POSTER_WIDTH: f32 = 67.;
+pub const PERSON_PHOTO: f32 = 84.;
+
+/// The height of the highlight, which is a row without the space under it.
+pub fn highlight_height() -> f32 {
+    ROW_HEIGHT - ROW_GAP
+}
 
 /// Where the palette starts, from the top of the window.
 pub const PANEL_TOP: f32 = 110.;
 /// The field and the footer, which come with any list, and room below the palette.
 pub const CHROME: f32 = 60. + 44. + 32.;
 /// The list of results, at the most, before it scrolls.
-pub const LIST_MAX: f32 = 440.;
+pub const LIST_MAX: f32 = 500.;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Group {
@@ -719,6 +730,24 @@ mod tests {
         assert_eq!(palette.selected(), 2);
         palette.select(9);
         assert_eq!(palette.selected(), 2);
+    }
+
+    #[test]
+    fn a_poster_in_a_row_is_about_twice_the_size_it_was() {
+        // It was 36 by 54 in a 62 px row.
+        let (height, width, photo) =
+            std::hint::black_box((POSTER_HEIGHT, POSTER_WIDTH, PERSON_PHOTO));
+        assert!((100. ..=112.).contains(&height), "{height}");
+        assert!((width / height - 2. / 3.).abs() < 0.02);
+        assert!(photo >= 80.);
+    }
+
+    #[test]
+    fn a_row_holds_its_poster_and_the_space_under_it() {
+        for image in std::hint::black_box([POSTER_HEIGHT, PERSON_PHOTO]) {
+            assert!(highlight_height() >= image + 12., "{image} in a row");
+        }
+        assert_eq!(highlight_height() + ROW_GAP, ROW_HEIGHT);
     }
 
     #[test]

@@ -100,7 +100,7 @@ pub fn palette(
                                 .left(px(10.))
                                 .right(px(10.))
                                 .top(px(highlight))
-                                .h(px(search::ROW_HEIGHT - 4.))
+                                .h(px(search::highlight_height()))
                                 .rounded(px(10.))
                                 .bg(rgba(0x232327ff)),
                         )
@@ -248,19 +248,31 @@ fn result(
         Hit::Series(series) => (series.poster.clone(), false),
         Hit::Person(person) => (person.photo.clone(), true),
     };
-    let image = shell.image(image.as_ref(), images::THUMB, cx);
-    let (width, radius) = if round { (42., 21.) } else { (36., 5.) };
+    let image = shell.image(
+        image.as_ref(),
+        if round { images::PHOTO } else { images::POSTER },
+        cx,
+    );
+    let (width, height, radius) = if round {
+        (
+            search::PERSON_PHOTO,
+            search::PERSON_PHOTO,
+            search::PERSON_PHOTO / 2.,
+        )
+    } else {
+        (search::POSTER_WIDTH, search::POSTER_HEIGHT, 6.)
+    };
     let caption = hit.caption();
     let title = hit.title().to_string();
     let initials = crate::film_page::initials(&title);
     div()
         .id(("palette-result", index))
-        .h(px(search::ROW_HEIGHT - 4.))
-        .mb(px(4.))
+        .h(px(search::highlight_height()))
+        .mb(px(search::ROW_GAP))
         .px(px(10.))
         .flex()
         .items_center()
-        .gap(px(12.))
+        .gap(px(16.))
         .cursor_pointer()
         .on_mouse_move(cx.listener(move |shell, _: &MouseMoveEvent, _, cx| {
             shell.search_hover(index, cx);
@@ -273,7 +285,7 @@ fn result(
                 .relative()
                 .flex_none()
                 .w(px(width))
-                .h(px(if round { width } else { 54. }))
+                .h(px(height))
                 .rounded(px(radius))
                 .overflow_hidden()
                 .flex()

@@ -26,8 +26,6 @@ const FORGET_AFTER: Duration = Duration::from_secs(300);
 /// The widths images are asked at, whatever the window's size, so one image serves every size.
 pub const POSTER: u32 = 300;
 pub const PHOTO: u32 = 200;
-/// A result of the search palette.
-pub const THUMB: u32 = 120;
 pub const CARD: u32 = 720;
 pub const BACKDROP: u32 = 1920;
 /// A title drawn as an image, in the header of the Home.
