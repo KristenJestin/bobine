@@ -902,6 +902,19 @@ fn the_latest_of_a_series_library_are_series() {
 }
 
 #[test]
+fn the_latest_asks_for_the_series_picture_of_a_lone_new_episode() {
+    let s = Setup::new();
+    s.signed_in()
+        .latest(&ItemId(SERIES_LIBRARY.into()), 10)
+        .unwrap();
+    // Without it Jellyfin may leave the series poster out of an episode that comes alone.
+    assert_eq!(
+        s.fake.last("GET", "/Items/Latest").param("Fields"),
+        Some("SeriesPrimaryImage")
+    );
+}
+
+#[test]
 fn a_series_that_gained_one_episode_is_listed_as_the_series() {
     let s = Setup::new();
     let latest = s
