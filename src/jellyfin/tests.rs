@@ -595,6 +595,63 @@ fn a_library_offers_its_genres_and_its_decades() {
     );
 }
 
+/// The choices of the films library while `path` answers `status`.
+fn choices_with(path: &str, status: u16) -> Result<FilterChoices, ProviderError> {
+    let s = Setup::new();
+    let server = s.signed_in();
+    s.fake
+        .state
+        .lock()
+        .unwrap()
+        .broken
+        .push((path.into(), status));
+    server.filter_choices(&ItemId(FILMS_LIBRARY.into()))
+}
+
+#[test]
+fn the_decades_stay_when_the_genres_cannot_be_had() {
+    let choices = choices_with("/Genres", 500).unwrap();
+    assert_eq!(choices.genres, Vec::<String>::new());
+    assert_eq!(choices.decades, [2020, 2010, 2000, 1990, 1980]);
+}
+
+#[test]
+fn the_genres_stay_when_the_decades_cannot_be_had() {
+    let choices = choices_with("/Items/Filters", 404).unwrap();
+    assert_eq!(choices.genres, ["Drama", "Mystery", "Thriller"]);
+    assert_eq!(choices.decades, Vec::<i32>::new());
+}
+
+#[test]
+fn a_lookup_refused_to_the_user_leaves_the_other_one() {
+    let choices = choices_with("/Genres", 403).unwrap();
+    assert_eq!(choices.decades, [2020, 2010, 2000, 1990, 1980]);
+}
+
+#[test]
+fn an_expired_session_on_one_lookup_is_the_usual_expired_session() {
+    // Not swallowed as a missing lookup, not another error: the one that asks to sign in again.
+    assert_eq!(
+        choices_with("/Genres", 401),
+        Err(ProviderError::SessionExpired)
+    );
+    assert_eq!(
+        choices_with("/Items/Filters", 401),
+        Err(ProviderError::SessionExpired)
+    );
+}
+
+#[test]
+fn both_lookups_failing_is_a_failure() {
+    let s = Setup::new();
+    let server = s.signed_in();
+    s.fake.state.lock().unwrap().forbidden = true;
+    assert_eq!(
+        server.filter_choices(&ItemId(FILMS_LIBRARY.into())),
+        Err(ProviderError::Forbidden)
+    );
+}
+
 fn letters() -> ItemId {
     ItemId(LETTERS_LIBRARY.into())
 }

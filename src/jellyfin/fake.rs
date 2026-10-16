@@ -85,6 +85,8 @@ pub struct State {
     /// The user may not see what is asked (parental control, access schedule): every
     /// authenticated route answers 403.
     pub forbidden: bool,
+    /// Routes that answer a status of their own, whatever the request: (path, status).
+    pub broken: Vec<(String, u16)>,
     /// The account is disabled: the login answers 403.
     pub account_disabled: bool,
     /// How long an image takes to be answered (a server converting a person's photo).
@@ -361,6 +363,9 @@ fn answer(state: &State, seen: &Seen) -> Answer {
     }
     if state.forbidden {
         return Answer::Empty(403);
+    }
+    if let Some((_, status)) = state.broken.iter().find(|(path, _)| *path == seen.path) {
+        return Answer::Empty(*status);
     }
     let images = format!("/Items/{FILM}/Images/");
     match route {

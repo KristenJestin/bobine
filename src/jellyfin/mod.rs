@@ -282,19 +282,31 @@ impl MediaServer for Jellyfin {
     }
 
     fn filter_choices(&self, library: &ItemId) -> Result<FilterChoices, ProviderError> {
-        let genres: QueryResult = self.http.get(
+        let genres: Result<QueryResult, _> = self.http.get(
             "genres",
             "/Genres",
             &[self.user(), ("parentId", library.0.clone())],
-        )?;
-        let filters: QueryFilters = self.http.get(
+        );
+        let filters: Result<QueryFilters, _> = self.http.get(
             "years",
             "/Items/Filters",
             &[self.user(), ("parentId", library.0.clone())],
-        )?;
-        let mut genres: Vec<String> = genres.items.into_iter().map(|g| g.name).collect();
+        );
+        // One lookup missing leaves its chip with nothing to offer, not the other one: only an
+        // expired session, which no lookup can do without, or both missing, is a failure.
+        let (genres, filters) = match (genres, filters) {
+            (Err(error @ ProviderError::SessionExpired), _)
+            | (_, Err(error @ ProviderError::SessionExpired))
+            | (Err(error), Err(_)) => return Err(error),
+            (genres, filters) => (genres.ok(), filters.ok()),
+        };
+        let mut genres: Vec<String> = genres
+            .map(|genres| genres.items.into_iter().map(|g| g.name).collect())
+            .unwrap_or_default();
         genres.sort_by_key(|genre| genre.to_lowercase());
-        let mut decades: Vec<i32> = filters.years.iter().map(|y| y - y.rem_euclid(10)).collect();
+        let mut decades: Vec<i32> = filters
+            .map(|filters| filters.years.iter().map(|y| y - y.rem_euclid(10)).collect())
+            .unwrap_or_default();
         decades.sort_unstable_by(|a, b| b.cmp(a));
         decades.dedup();
         Ok(FilterChoices { genres, decades })
