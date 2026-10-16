@@ -866,7 +866,7 @@ impl Shell {
                     Ok(None) if kind == LibraryKind::Series => {
                         Loadable::Failed("No series library on this server.")
                     }
-                    Ok(None) => Loadable::Failed("No film library on this server."),
+                    Ok(None) => Loadable::Failed("No movie library on this server."),
                     Err(error) => Loadable::Failed(shell.failed(error, cx)),
                 };
                 let library = match &loaded {
@@ -1385,7 +1385,7 @@ impl Shell {
             return;
         }
         let Some(plan) = film_page::plan(&detail.film, &detail.versions, choices, from) else {
-            page.error = Some("This film has no version to play.");
+            page.error = Some("This movie has no version to play.");
             cx.notify();
             return;
         };
@@ -2885,7 +2885,7 @@ mod tests {
         window
             .update(cx, |shell, _, cx| {
                 shell.select(NavEntry::Home, cx);
-                shell.open_list(films, Some("Films".into()), cx);
+                shell.open_list(films, Some("Movies".into()), cx);
             })
             .unwrap();
         assert_eq!(layout(&mut drawn(&window, cx)), library);
@@ -3487,5 +3487,276 @@ mod tests {
         visual.run_until_parked();
         let asked = server.state.lock().unwrap().record.plays.clone();
         assert_eq!(asked.len(), 1, "{asked:?}");
+    }
+
+    #[gpui_kit::test]
+    fn the_header_bars_are_short_and_thin(cx: &mut gpui_kit::TestAppContext) {
+        let (_server, window) = signed_in_window(cx);
+        let mut visual = drawn(&window, cx);
+        let (width, height) = crate::hero::MARK;
+        for title in 0..2 {
+            let bar = visual
+                .debug_bounds(Box::leak(format!("hero-mark {title}").into_boxed_str()))
+                .expect("a bar for each title of the header");
+            assert_eq!(
+                (bar.size.width, bar.size.height),
+                (px(width), px(height)),
+                "the bar of title {title}"
+            );
+        }
+        assert!(height <= 2. && width <= 40., "quiet: {width} x {height}");
+    }
+
+    #[gpui_kit::test]
+    fn buttons_in_a_row_share_one_height(cx: &mut gpui_kit::TestAppContext) {
+        let (_server, window) = signed_in_window(cx);
+        // The Home header, a movie page and a series page: a filled button beside outlined ones.
+        type Open = fn(&mut Shell, &mut Context<Shell>);
+        let rows: [(&[&str], Open); 3] = [
+            (&["play-1", "more-1"], |shell, cx| {
+                shell.select(NavEntry::Home, cx)
+            }),
+            (&["film-play", "film-watched", "film-list"], |shell, cx| {
+                shell.open_film(ItemId(crate::fake::FILM.into()), cx)
+            }),
+            (&["series-play", "series-list"], |shell, cx| {
+                shell.open_series(ItemId(crate::fake::SERIES.into()), cx)
+            }),
+        ];
+        for (buttons, open) in rows {
+            window
+                .update(cx, |shell, _, cx| {
+                    shell.select(NavEntry::Home, cx);
+                    open(shell, cx);
+                })
+                .unwrap();
+            let mut visual = drawn(&window, cx);
+            for button in buttons {
+                let bounds = visual
+                    .debug_bounds(Box::leak(button.to_string().into_boxed_str()))
+                    .unwrap_or_else(|| panic!("{button} was not drawn"));
+                assert_eq!(
+                    bounds.size.height,
+                    px(crate::theme::BUTTON_HEIGHT),
+                    "{button}"
+                );
+            }
+        }
+    }
+
+    #[gpui_kit::test]
+    fn a_movie_or_series_with_a_logo_shows_it_in_place_of_its_title(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        let (_server, window) = signed_in_window(cx);
+        let pages: [fn(&mut Shell, &mut Context<Shell>); 2] = [
+            |shell, cx| shell.open_film(ItemId(crate::fake::FILM.into()), cx),
+            |shell, cx| shell.open_series(ItemId(crate::fake::SERIES.into()), cx),
+        ];
+        for open in pages {
+            window
+                .update(cx, |shell, _, cx| {
+                    shell.select(NavEntry::Home, cx);
+                    open(shell, cx);
+                })
+                .unwrap();
+            let mut visual = drawn(&window, cx);
+            cx.executor()
+                .advance_clock(motion::page() + Duration::from_millis(10));
+            visual.update(|window, _| window.refresh());
+            visual.run_until_parked();
+            let screen = current(&window, cx);
+            let logo = visual.debug_bounds("detail-logo").expect("the logo");
+            assert!(visual.debug_bounds("detail-title").is_none(), "{screen:?}");
+            let (width, height) = crate::hero::PAGE_LOGO;
+            assert!(
+                logo.size.width <= px(width) && logo.size.height <= px(height),
+                "{screen:?}: {:?}",
+                logo.size
+            );
+        }
+    }
+
+    #[gpui_kit::test]
+    fn the_title_fades_out_over_the_logo_that_comes_in_its_place(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        let (_server, window) = signed_in_window(cx);
+        window
+            .update(cx, |shell, _, cx| {
+                shell.open_film(ItemId(crate::fake::FILM.into()), cx)
+            })
+            .unwrap();
+        let mut visual = drawn(&window, cx);
+        // The picture came: the title is still there, fading out over it, and the heading takes
+        // the logo's height, no more.
+        let heading = visual.debug_bounds("detail-heading").expect("the heading");
+        let logo = visual.debug_bounds("detail-logo").expect("the logo");
+        assert!(
+            visual.debug_bounds("detail-title").is_some(),
+            "the title left before the logo came in"
+        );
+        assert_eq!(
+            (heading.top(), heading.bottom()),
+            (logo.top(), logo.bottom())
+        );
+        // Once the logo is in, the title is gone, and nothing moved.
+        cx.executor()
+            .advance_clock(motion::page() + Duration::from_millis(10));
+        visual.update(|window, _| window.refresh());
+        visual.run_until_parked();
+        assert!(visual.debug_bounds("detail-title").is_none());
+        assert_eq!(visual.debug_bounds("detail-heading"), Some(heading));
+        assert_eq!(visual.debug_bounds("detail-logo"), Some(logo));
+    }
+
+    #[gpui_kit::test]
+    fn a_movie_or_series_without_a_logo_shows_its_title(cx: &mut gpui_kit::TestAppContext) {
+        let (_server, window) = signed_in_window(cx);
+        let pages: [fn(&mut Shell, &mut Context<Shell>); 2] = [
+            |shell, cx| shell.open_film(ItemId("film-1".into()), cx),
+            |shell, cx| shell.open_series(ItemId("series-1".into()), cx),
+        ];
+        for open in pages {
+            window
+                .update(cx, |shell, _, cx| {
+                    shell.select(NavEntry::Home, cx);
+                    open(shell, cx);
+                })
+                .unwrap();
+            let mut visual = drawn(&window, cx);
+            let screen = current(&window, cx);
+            assert!(visual.debug_bounds("detail-title").is_some(), "{screen:?}");
+            assert!(visual.debug_bounds("detail-logo").is_none(), "{screen:?}");
+        }
+    }
+
+    #[gpui_kit::test]
+    fn every_bare_collection_gets_a_poster_whatever_its_place_in_the_grid(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        let (_server, window) = signed_in_window(cx);
+        window
+            .update(cx, |shell, _, cx| shell.select(NavEntry::Collections, cx))
+            .unwrap();
+        cx.run_until_parked();
+        window
+            .update(cx, |shell, _, _| {
+                let Some(Loadable::Ready(cards)) = &shell.collections.cards else {
+                    panic!("the collections are not here");
+                };
+                assert!(
+                    cards.len() > 2 * crate::lists::POSTERS_IN_FLIGHT,
+                    "a long grid"
+                );
+                let bare: Vec<&str> = cards
+                    .iter()
+                    .filter(|card| card.poster.is_none())
+                    .map(|card| card.name.as_str())
+                    .collect();
+                assert!(bare.is_empty(), "still bare: {bare:?}");
+            })
+            .unwrap();
+    }
+
+    /// The collections whose poster was asked, with the server failing every poster with `error`.
+    fn collection_posters_asked_failing_with(
+        error: ProviderError,
+        cx: &mut gpui_kit::TestAppContext,
+    ) -> Vec<ItemId> {
+        let (server, window) = signed_in_window(cx);
+        server.state.lock().unwrap().collection_poster_error = Some(error);
+        window
+            .update(cx, |shell, _, cx| shell.select(NavEntry::Collections, cx))
+            .unwrap();
+        cx.run_until_parked();
+        server
+            .state
+            .lock()
+            .unwrap()
+            .collection_posters_asked
+            .clone()
+    }
+
+    fn asked_once_each(asked: &[ItemId]) -> bool {
+        !asked.is_empty()
+            && asked
+                .iter()
+                .all(|id| asked.iter().filter(|other| *other == id).count() == 1)
+    }
+
+    #[gpui_kit::test]
+    fn a_collection_poster_refused_for_an_expired_session_is_not_asked_again(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        let asked = collection_posters_asked_failing_with(ProviderError::SessionExpired, cx);
+        assert!(asked_once_each(&asked), "{asked:?}");
+    }
+
+    #[gpui_kit::test]
+    fn a_collection_poster_forbidden_to_the_user_is_not_asked_again(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        let asked = collection_posters_asked_failing_with(ProviderError::Forbidden, cx);
+        assert!(asked_once_each(&asked), "{asked:?}");
+    }
+
+    #[gpui_kit::test]
+    fn a_collection_poster_that_timed_out_is_asked_again_once(cx: &mut gpui_kit::TestAppContext) {
+        let asked = collection_posters_asked_failing_with(
+            ProviderError::Unreachable("timed out".into()),
+            cx,
+        );
+        assert!(
+            !asked.is_empty()
+                && asked
+                    .iter()
+                    .all(|id| asked.iter().filter(|other| *other == id).count() == 2),
+            "{asked:?}"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn the_meta_line_bars_cover_the_digits_and_no_more(cx: &mut gpui_kit::TestAppContext) {
+        let (_server, window) = signed_in_window(cx);
+        window
+            .update(cx, |shell, _, cx| {
+                shell.open_film(ItemId(crate::fake::FILM.into()), cx)
+            })
+            .unwrap();
+        let mut visual = drawn(&window, cx);
+        // GPUI's test context shapes no glyph: its text system is a stand-in font with fixed
+        // metrics (`NoopTextSystem`). So the digits' box is read from that font's metrics, the way
+        // a line is painted: the baseline sits half the leading below the ascent, and a digit
+        // rises from it by the cap height. The real font is checked on the headless screenshot.
+        let (ascent, descent, cap) = visual.update(|window, _| {
+            let text = window.text_system();
+            let font = text.resolve_font(&window.text_style().font());
+            let size = px(14.);
+            (
+                text.ascent(font, size),
+                text.descent(font, size).abs(),
+                text.cap_height(font, size),
+            )
+        });
+        for n in 1..4 {
+            let bar = visual
+                .debug_bounds(Box::leak(format!("meta-separator {n}").into_boxed_str()))
+                .expect("a bar of the meta line");
+            let line = visual
+                .debug_bounds(Box::leak(format!("meta-part {n}").into_boxed_str()))
+                .expect("a fact of the meta line");
+            let baseline = line.top() + (line.size.height - ascent - descent) / 2. + ascent;
+            let digits = (baseline - cap, baseline);
+            assert!(
+                (bar.top() - digits.0).abs() <= px(0.5)
+                    && (bar.bottom() - digits.1).abs() <= px(0.5),
+                "bar {n} from {:?} to {:?}, digits from {:?} to {:?}",
+                bar.top(),
+                bar.bottom(),
+                digits.0,
+                digits.1
+            );
+        }
     }
 }

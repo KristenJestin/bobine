@@ -108,11 +108,10 @@ pub trait MediaServer: Send + Sync {
 
     /// Every collection of the user, by name. One call, not pages: a server holds tens of them.
     fn collections(&self) -> Result<Vec<CollectionCard>, ProviderError>;
-    /// The poster of the earliest film of a collection that has one, to wear for a card with no
-    /// picture of its own. None when no film has a poster, and on any failure (the server not
-    /// answering, an expired session included): a bare card is no failure, and the next call
-    /// that needs the session says so.
-    fn collection_poster(&self, collection: &ItemId) -> Option<ImageRef>;
+    /// The poster of the earliest film or series of a collection that has one, to wear for a card
+    /// with no picture of its own. `Ok(None)` when none of them has a poster; an error when the
+    /// server did not answer, so that the caller can ask again.
+    fn collection_poster(&self, collection: &ItemId) -> Result<Option<ImageRef>, ProviderError>;
     /// A collection and its films, oldest release first.
     fn collection(&self, collection: &ItemId) -> Result<CollectionDetail, ProviderError>;
     /// The films and series the user put in their list, by title.
@@ -238,6 +237,8 @@ pub struct SeriesDetail {
     pub official_rating: Option<String>,
     pub cast: Vec<CastMember>,
     pub similar: Vec<Series>,
+    /// The title drawn as an image, when the server has one.
+    pub logo: Option<ImageRef>,
     /// In the user's list.
     pub favourite: bool,
 }
@@ -436,6 +437,8 @@ pub struct FilmDetail {
     pub cast: Vec<CastMember>,
     pub similar: Vec<Film>,
     pub versions: Vec<MediaSource>,
+    /// The title drawn as an image, when the server has one.
+    pub logo: Option<ImageRef>,
     /// In the user's list.
     pub favourite: bool,
 }

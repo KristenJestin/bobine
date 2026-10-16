@@ -16,7 +16,7 @@ use gpui_kit::{
 };
 
 use super::card::{Offer, Open, Play};
-use super::film_detail::{EDGE, ROW_POSTER, hero_frame, meta_line};
+use super::film_detail::{EDGE, ROW_POSTER, hero_frame, logo_over_title, meta_line};
 use super::{card, note, picture, poster, progress_bar, row_heading, series_card};
 use crate::grid::Grid;
 use crate::hero::{self, Headline};
@@ -282,6 +282,7 @@ impl Render for HeroView {
                     .iter()
                     .map(|f| shell.peek_image(f.logo.as_ref(), images::LOGO))
                     .collect(),
+                font: shell.font(),
             };
             (features, frame)
         };
@@ -307,6 +308,7 @@ struct Frame {
     /// The pictures of each title, when they are here.
     backdrops: Vec<Option<Arc<RenderImage>>>,
     logos: Vec<Option<Arc<RenderImage>>>,
+    font: Option<SharedString>,
 }
 
 /// One draw of the header: it holds what it read of the shell, and writes nothing to it.
@@ -437,7 +439,11 @@ impl Draw<'_> {
             .gap(px(14.))
             .child(kind_chip(hero::kind_label(feature)))
             .child(div().py(px(6.)).child(headline))
-            .child(meta_line(hero::meta(feature)))
+            .child(meta_line(
+                hero::meta(feature),
+                self.frame.font.clone(),
+                window,
+            ))
             .children(feature.overview.clone().map(|overview| {
                 div()
                     .max_w(px(500.))
@@ -458,8 +464,9 @@ impl Draw<'_> {
             )
     }
 
-    /// The logo, at the size it fits in the room given, once it is here; the title in text until
-    /// then, so that the header is never empty while the logo comes.
+    /// The logo, at the size it fits in the room given, once it is here, taking over from the
+    /// title; the title in text until then, so that the header is never empty while the logo
+    /// comes.
     fn logo_or_title(
         &mut self,
         logo: &ImageRef,
@@ -479,35 +486,39 @@ impl Draw<'_> {
                 if level < 1. {
                     window.request_animation_frame();
                 }
-                div()
-                    .opacity(level)
-                    .child(img(image).w(px(w)).h(px(h)).object_fit(ObjectFit::Contain))
-                    .into_any_element()
+                logo_over_title(
+                    img(image).w(px(w)).h(px(h)).object_fit(ObjectFit::Contain),
+                    title_text(title.to_string()),
+                    HERO_TEXT_WIDTH,
+                    level,
+                )
+                .into_any_element()
             }
             None => title_text(title.to_string()).into_any_element(),
         }
     }
 
-    /// A bar for each title under the header: the one shown fills as its time runs, a click on
-    /// one shows its title.
+    /// A bar for each title under the header, in line with its text: the one shown fills as its
+    /// time runs, a click on one shows its title.
     fn marks(&self, count: usize, window: &mut Window, cx: &mut Context<HeroView>) -> Div {
         let (current, progress) = (self.frame.current, self.frame.progress);
+        let (width, thickness) = hero::MARK;
         let shades = theme::Shades {
-            rest: rgba(0xffffff33),
-            hover: rgba(0xffffff66),
-            press: rgba(0xffffff80),
+            rest: rgba(0xffffff26),
+            hover: rgba(0xffffff4d),
+            press: rgba(0xffffff66),
         };
         div()
             .absolute()
-            .left(px(EDGE))
-            .right(px(EDGE))
-            .bottom(px(18.))
+            .left(px(HERO_INSET))
+            .bottom(px(36.))
             .flex()
             .gap(px(8.))
             .children((0..count).map(|index| {
                 let track = theme::eased(("hero-track", index), shades, window, cx)
-                    .w_full()
-                    .h(px(4.))
+                    .debug_selector(move || format!("hero-mark {index}"))
+                    .w(px(width))
+                    .h(px(thickness))
                     .rounded_full()
                     .overflow_hidden()
                     .children((index == current).then(|| {
@@ -515,17 +526,17 @@ impl Draw<'_> {
                             .h_full()
                             .w(relative(progress))
                             .rounded_full()
-                            .bg(theme::text())
+                            .bg(rgba(0xffffffb3))
                     }));
                 let target = self.target.clone();
                 // The bar is thin, its click is not.
                 div()
                     .id(("hero-mark", index))
-                    .flex_1()
+                    .flex_none()
+                    .w(px(width))
                     .h(px(22.))
                     .flex()
                     .items_end()
-                    .pb(px(0.))
                     .cursor_pointer()
                     .on_click(move |_, _, cx| {
                         target
@@ -545,7 +556,7 @@ fn title_text(title: String) -> Div {
         .child(title)
 }
 
-/// `● FILM` over the title.
+/// `● Movie` over the title.
 fn kind_chip(label: &'static str) -> Div {
     div().flex().child(
         div()

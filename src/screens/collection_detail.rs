@@ -34,7 +34,7 @@ pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -
 
     let hero = hero_frame(backdrop, height).child(
         hero_text(collection.name.clone())
-            .child(meta_line(lists::meta(&collection)))
+            .child(meta_line(lists::meta(&collection), shell.font(), window))
             .children(collection.overview.clone().map(|overview| {
                 div()
                     .text_size(px(15.))
@@ -65,7 +65,7 @@ pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -
                 .px(px(EDGE))
                 .pt(px(12.))
                 .pb(px(64.))
-                .child(row_heading("Films"))
+                .child(row_heading("Movies"))
                 .child(
                     div()
                         .flex()

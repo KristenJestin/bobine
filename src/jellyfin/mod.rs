@@ -420,7 +420,7 @@ impl MediaServer for Jellyfin {
     }
 
     fn films(&self, library: &ItemId, query: &FilmQuery) -> Result<Page<Film>, ProviderError> {
-        let found = self.page("films", "Movie", library, query)?;
+        let found = self.page("movies", "Movie", library, query)?;
         let films: Vec<Film> = found.items.iter().map(Item::film).collect();
         let total = found.total_record_count.unwrap_or(films.len() as u32);
         Ok(Page {
@@ -480,17 +480,18 @@ impl MediaServer for Jellyfin {
 
     fn film(&self, film: &ItemId) -> Result<FilmDetail, ProviderError> {
         let item: Item = self.http.get(
-            "film",
+            "movie",
             &format!("/Items/{}", encode(&film.0)),
             &[self.user()],
         )?;
         let similar: QueryResult = self.http.get(
-            "similar films",
+            "similar movies",
             &format!("/Items/{}/Similar", encode(&film.0)),
             &[self.user(), ("limit", SIMILAR.to_string())],
         )?;
         Ok(FilmDetail {
             film: item.film(),
+            logo: item.logo(),
             directors: item.directors(),
             cast: item.cast(),
             similar: similar.items.iter().map(Item::film).collect(),
@@ -758,6 +759,7 @@ impl MediaServer for Jellyfin {
             favourite: item.user_data.as_ref().is_some_and(|u| u.is_favorite),
             cast: item.cast(),
             similar: similar.items.iter().map(Item::series).collect(),
+            logo: item.logo(),
             overview: item.overview,
             genres: item.genres,
             official_rating: item.official_rating,
@@ -883,24 +885,22 @@ impl MediaServer for Jellyfin {
         Ok(found.items.iter().map(Item::collection_card).collect())
     }
 
-    fn collection_poster(&self, collection: &ItemId) -> Option<ImageRef> {
-        // `imageTypes` keeps the films with a poster: the first film listed may have none while
-        // the next has one.
-        let films = self
-            .items(
-                "collection poster",
-                &[
-                    ("parentId", collection.0.clone()),
-                    ("includeItemTypes", "Movie".into()),
-                    ("sortBy", "ProductionYear,PremiereDate,SortName".into()),
-                    ("imageTypes", "Primary".into()),
-                    ("limit", "1".into()),
-                    ("imageTypeLimit", "1".into()),
-                    ("enableImageTypes", "Primary".into()),
-                ],
-            )
-            .ok()?;
-        films.items.first()?.film().poster
+    fn collection_poster(&self, collection: &ItemId) -> Result<Option<ImageRef>, ProviderError> {
+        // `imageTypes` keeps the titles with a poster: the first one listed may have none while
+        // the next has one. A collection of series holds no film at all.
+        let found = self.items(
+            "collection poster",
+            &[
+                ("parentId", collection.0.clone()),
+                ("includeItemTypes", "Movie,Series".into()),
+                ("sortBy", "ProductionYear,PremiereDate,SortName".into()),
+                ("imageTypes", "Primary".into()),
+                ("limit", "1".into()),
+                ("imageTypeLimit", "1".into()),
+                ("enableImageTypes", "Primary".into()),
+            ],
+        )?;
+        Ok(found.items.first().and_then(|item| item.film().poster))
     }
 
     fn collection(&self, collection: &ItemId) -> Result<CollectionDetail, ProviderError> {
@@ -910,7 +910,7 @@ impl MediaServer for Jellyfin {
             &[self.user()],
         )?;
         let films = self.items(
-            "collection films",
+            "collection movies",
             &[
                 ("parentId", collection.0.clone()),
                 ("includeItemTypes", "Movie".into()),

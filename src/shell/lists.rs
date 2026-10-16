@@ -262,7 +262,12 @@ impl Shell {
         self.ask(
             cx,
             move |server| server.collection_poster(&asked),
-            move |shell, poster: Option<ImageRef>, cx| {
+            move |shell, poster: Result<Option<ImageRef>, ProviderError>, cx| {
+                // What the server answered, for the one who looks for a card left bare; the error
+                // carries no address and no token.
+                if let Err(error) = &poster {
+                    eprintln!("bobine: a collection poster could not be read: {error}");
+                }
                 let Some(Loadable::Ready(cards)) = &mut shell.collections.cards else {
                     return;
                 };

@@ -79,7 +79,7 @@ impl Shell {
         }
         // An episode never starts under the palette.
         self.cancel_up_next(cx);
-        let input = cx.new(|cx| TextInput::new("Search films, series, people", false, cx));
+        let input = cx.new(|cx| TextInput::new("Search movies, series, people", false, cx));
         let typed = cx.observe(&input, |shell, _, cx| shell.search_typed(cx));
         window.focus(&input.focus_handle(cx), cx);
         let now = Instant::now();

@@ -15,8 +15,8 @@ use gpui_kit::{
 
 use super::card::{Offer, Open, Play};
 use super::film_detail::{
-    EDGE, MenuState, ROW_POSTER, TEXT_WIDTH, cast_row, chips_row, facts_line, hero_frame,
-    hero_text, list_button, row,
+    EDGE, MenuState, ROW_POSTER, TEXT_WIDTH, cast_row, chips_row, facts_line, heading, hero_frame,
+    hero_text_under, list_button, row,
 };
 use super::{card, centered, note, picture, progress_bar, row_heading, series_poster};
 use crate::film_page::{self, Choices};
@@ -171,11 +171,13 @@ fn hero(
         .as_ref()
         .zip(shown.choices.as_ref())
         .map(|(next, choices)| chips_row(&next.versions, choices, menu, &shown.chips, window, cx));
+    let title = heading(shell, &series.title, detail.logo.as_ref(), window, cx);
     hero_frame(backdrop, height).child(
-        hero_text(series.title.clone())
+        hero_text_under(title)
             .child(facts_line(
                 series_page::meta(detail, shown.seasons.len()),
                 NavEntry::Series,
+                shell.font(),
                 window,
                 cx,
             ))
@@ -482,11 +484,9 @@ pub fn up_next_card(
     let (_, subtitle) = series_page::player_title(&episode);
     let play = theme::primary_button("up-next-play", Some(IconName::Play), "Play", window, cx)
         .px(px(16.))
-        .py(px(9.))
         .on_click(cx.listener(|shell, _, window, cx| shell.play_up_next_now(window, cx)));
     let cancel = theme::ghost_button("up-next-cancel", None, "Cancel", window, cx)
         .px(px(16.))
-        .py(px(9.))
         .on_click(cx.listener(|shell, _, _, cx| {
             shell.cancel_up_next(cx);
         }));
