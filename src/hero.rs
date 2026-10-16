@@ -2,11 +2,13 @@
 //! comes, the cross-fade between two, and what it says of a title. Time is always given, never
 //! read, so that each rule is tested without waiting.
 
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use bobine::provider::{Feature, FeatureKind, ImageRef, ItemId};
 
 use crate::film_page;
+use crate::images;
 use crate::motion;
 
 /// How long a title stays before the next one comes.
@@ -197,6 +199,65 @@ pub fn headline(feature: &Feature) -> Headline {
     }
 }
 
+/// Every picture the header draws now, with its width: the backdrops of the title shown, of the
+/// one fading out and of the next one (asked while this one shows, so that the change does not
+/// wait for it), and the logos of the first two. The header only reads the pictures; the shell
+/// asks for these outside the draw.
+pub fn pictures(
+    features: &[Feature],
+    current: usize,
+    leaving: Option<usize>,
+) -> Vec<(ImageRef, u32)> {
+    let Some(shown) = features.get(current) else {
+        return Vec::new();
+    };
+    let next = (features.len() > 1).then(|| &features[(current + 1) % features.len()]);
+    let leaving = leaving.and_then(|at| features.get(at));
+    let backdrops = [Some(shown), next, leaving]
+        .into_iter()
+        .flatten()
+        .filter_map(|feature| feature.backdrop.clone())
+        .map(|image| (image, images::BACKDROP));
+    let logos = [Some(shown), leaving]
+        .into_iter()
+        .flatten()
+        .filter_map(|feature| feature.logo.clone())
+        .map(|image| (image, images::LOGO));
+    backdrops.chain(logos).collect()
+}
+
+/// When each logo was first drawn: it fades in then, once, not again each time its title comes
+/// back. Only the titles of the header are remembered.
+#[derive(Debug, Default)]
+pub struct Logos(HashMap<ItemId, Instant>);
+
+impl Logos {
+    /// How much of the way in the logo of `title` is, from 0 to 1.
+    pub fn level(&mut self, title: &ItemId, now: Instant) -> f32 {
+        let since = *self.0.entry(title.clone()).or_insert(now);
+        motion::ease_out(
+            now.saturating_duration_since(since).as_secs_f32() / motion::page().as_secs_f32(),
+        )
+    }
+
+    /// Forgets the logos of titles that are no longer in the header.
+    pub fn keep_only(&mut self, features: &[Feature]) {
+        self.0.retain(|title, _| {
+            features.iter().any(|feature| {
+                feature
+                    .logo
+                    .as_ref()
+                    .is_some_and(|logo| &logo.item == title)
+            })
+        });
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+}
+
 /// `FILM` or `SÉRIE`, over the title.
 pub fn kind_label(feature: &Feature) -> &'static str {
     match feature.kind {
@@ -250,6 +311,88 @@ mod tests {
             logo: None,
             resume: None,
         }
+    }
+
+    fn with_pictures(id: &str) -> Feature {
+        let picture = |kind| ImageRef {
+            item: ItemId(id.into()),
+            kind,
+            tag: "t".into(),
+        };
+        Feature {
+            id: ItemId(id.into()),
+            backdrop: Some(picture(ImageKind::Backdrop)),
+            logo: Some(picture(ImageKind::Logo)),
+            ..feature(FeatureKind::Film)
+        }
+    }
+
+    #[test]
+    fn the_header_has_its_pictures_asked_outside_the_draw_for_the_title_shown_the_next_and_the_leaving()
+     {
+        let features = [with_pictures("a"), with_pictures("b"), with_pictures("c")];
+        let wanted: Vec<(String, ImageKind, u32)> = pictures(&features, 1, Some(0))
+            .into_iter()
+            .map(|(image, width)| (image.item.0, image.kind, width))
+            .collect();
+        assert_eq!(
+            wanted,
+            [
+                ("b".to_string(), ImageKind::Backdrop, images::BACKDROP),
+                ("c".to_string(), ImageKind::Backdrop, images::BACKDROP),
+                ("a".to_string(), ImageKind::Backdrop, images::BACKDROP),
+                ("b".to_string(), ImageKind::Logo, images::LOGO),
+                ("a".to_string(), ImageKind::Logo, images::LOGO),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_header_with_one_title_asks_no_next_one_and_a_title_without_pictures_none() {
+        let mut bare = feature(FeatureKind::Series);
+        bare.id = ItemId("b".into());
+        assert_eq!(pictures(&[with_pictures("a")], 0, None).len(), 2);
+        assert!(pictures(&[bare], 0, None).is_empty());
+        assert!(pictures(&[], 0, None).is_empty());
+    }
+
+    #[test]
+    fn a_logo_fades_in_the_first_time_it_is_drawn_and_not_again() {
+        let mut logos = Logos::default();
+        let id = ItemId("title-1".into());
+        let t0 = Instant::now();
+        assert_eq!(logos.level(&id, t0), 0.);
+        let midway = logos.level(&id, t0 + motion::page() / 2);
+        assert!(midway > 0. && midway < 1., "{midway}");
+        assert_eq!(logos.level(&id, t0 + motion::page()), 1.);
+        // Shown again later, as its title comes back: it is there at once.
+        assert_eq!(logos.level(&id, t0 + motion::page() * 40), 1.);
+    }
+
+    #[test]
+    fn each_logo_has_its_own_fade() {
+        let mut logos = Logos::default();
+        let t0 = Instant::now();
+        logos.level(&ItemId("title-1".into()), t0);
+        assert_eq!(
+            logos.level(&ItemId("title-2".into()), t0 + motion::page()),
+            0.
+        );
+    }
+
+    #[test]
+    fn the_logo_times_of_titles_that_left_the_header_are_forgotten() {
+        let mut logos = Logos::default();
+        let t0 = Instant::now();
+        for id in ["a", "b", "c"] {
+            logos.level(&ItemId(id.into()), t0);
+        }
+        logos.keep_only(&[with_pictures("b")]);
+        assert_eq!(logos.len(), 1);
+        // A title that came back after leaving fades in again, like a new one.
+        logos.level(&ItemId("a".into()), t0 + motion::page());
+        assert_eq!(logos.level(&ItemId("b".into()), t0 + motion::page()), 1.);
+        assert_eq!(logos.len(), 2);
     }
 
     #[test]

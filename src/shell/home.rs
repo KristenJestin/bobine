@@ -2,7 +2,6 @@
 //! start, and the full list behind "Tout voir". Like every page, each call to the server runs
 //! off the window's thread, and an answer that comes after a newer ask is dropped.
 
-use std::collections::HashMap;
 use std::ops::Range;
 use std::rc::Rc;
 use std::thread::JoinHandle;
@@ -18,7 +17,6 @@ use super::{Film as Playing, Shell};
 use crate::grid::{Grid, Listed};
 use crate::hero::{self, Carousel};
 use crate::home_page::{self, Asks, ListKind, PlayTarget, StartError};
-use crate::motion;
 use crate::navigation::Screen;
 use crate::scroll;
 
@@ -61,8 +59,6 @@ pub struct HomePage {
     pub next_row: Rc<[Title]>,
     /// One row for each library of films or of series, in the server's order.
     pub latest: Option<Loadable<Vec<LatestRow>>>,
-    /// When each logo was first drawn: it fades in then, once.
-    logos: HashMap<ItemId, Instant>,
     pub scroll: ScrollHandle,
     /// The rows that scroll sideways, in the order they are drawn.
     pub rows: Vec<ScrollHandle>,
@@ -84,7 +80,6 @@ impl Default for HomePage {
             next_up: None,
             next_row: Rc::from([]),
             latest: None,
-            logos: HashMap::new(),
             scroll: ScrollHandle::new(),
             rows: Vec::new(),
             gesture: scroll::Gesture::default(),
@@ -102,14 +97,6 @@ impl HomePage {
             Some(Loadable::Ready(features)) => features,
             _ => &[],
         }
-    }
-
-    /// How much of the way in the logo of `title` is, from 0 to 1.
-    pub fn logo_level(&mut self, title: &ItemId, now: Instant) -> f32 {
-        let since = *self.logos.entry(title.clone()).or_insert(now);
-        motion::ease_out(
-            now.saturating_duration_since(since).as_secs_f32() / motion::page().as_secs_f32(),
-        )
     }
 
     /// The same titles, shared: the header draws them while it also asks the shell for pictures.
@@ -329,6 +316,7 @@ impl Shell {
         // The window redraws while the bar grows; nothing while the pointer holds it.
         let moved = self.home.carousel.tick(now);
         if moved || !self.home.carousel.paused() {
+            self.ask_hero_images(cx);
             self.notify_hero(cx);
         }
         true
@@ -367,7 +355,25 @@ impl Shell {
     /// A click on one of the marks under the header.
     pub fn jump_hero(&mut self, to: usize, cx: &mut Context<Self>) {
         self.home.carousel.jump(to, Instant::now());
+        self.ask_hero_images(cx);
         self.notify_hero(cx);
+    }
+
+    /// Asks the pictures the header draws that are not here yet. The header only reads them
+    /// when it draws: a write to the shell during a draw would have the whole page built again.
+    pub fn ask_hero_images(&mut self, cx: &mut Context<Self>) {
+        let Some(features) = self.home.shared_features() else {
+            return;
+        };
+        let current = self
+            .home
+            .carousel
+            .current()
+            .min(features.len().saturating_sub(1));
+        let leaving = self.home.carousel.blend(Instant::now()).leaving;
+        for (image, width) in hero::pictures(&features, current, leaving) {
+            let _ = self.image(Some(&image), width, cx);
+        }
     }
 
     /// The wheel or the touchpad over the Home: the page goes up and down, the row under the
@@ -394,25 +400,13 @@ impl Shell {
         }
     }
 
-    /// "Plus d'infos" under the header's `at`th title.
-    pub fn open_feature(&mut self, at: usize, cx: &mut Context<Self>) {
-        let Some(feature) = self.home.featured().get(at) else {
-            return;
-        };
-        let id = feature.id.clone();
-        match feature.kind {
+    /// "Plus d'infos" under a title of the header: the title is named by the button, not by its
+    /// place, since the titles may change between the draw and the click.
+    pub fn open_feature(&mut self, kind: FeatureKind, id: ItemId, cx: &mut Context<Self>) {
+        match kind {
             FeatureKind::Film => self.open_film(id, cx),
             FeatureKind::Series => self.open_series(id, cx),
         }
-    }
-
-    /// "Lecture" under the header's `at`th title.
-    pub fn play_feature(&mut self, at: usize, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(feature) = self.home.featured().get(at) else {
-            return;
-        };
-        let target = home_page::play_target(feature);
-        self.play_from_home(target, window, cx);
     }
 
     /// "Lecture": the server opens a playback, then the player starts, like the page of the
@@ -582,35 +576,6 @@ impl Shell {
                     list.grid.loaded(epoch, 0, found);
                 }
             },
-        );
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_logo_fades_in_the_first_time_it_is_drawn_and_not_again() {
-        let mut home = HomePage::default();
-        let id = ItemId("title-1".into());
-        let t0 = Instant::now();
-        assert_eq!(home.logo_level(&id, t0), 0.);
-        let midway = home.logo_level(&id, t0 + motion::page() / 2);
-        assert!(midway > 0. && midway < 1., "{midway}");
-        assert_eq!(home.logo_level(&id, t0 + motion::page()), 1.);
-        // Shown again later, as its title comes back: it is there at once.
-        assert_eq!(home.logo_level(&id, t0 + motion::page() * 40), 1.);
-    }
-
-    #[test]
-    fn each_logo_has_its_own_fade() {
-        let mut home = HomePage::default();
-        let t0 = Instant::now();
-        home.logo_level(&ItemId("title-1".into()), t0);
-        assert_eq!(
-            home.logo_level(&ItemId("title-2".into()), t0 + motion::page()),
-            0.
         );
     }
 }

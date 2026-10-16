@@ -1316,6 +1316,19 @@ impl Shell {
         None
     }
 
+    /// The image at `width` if it is here, read without writing anything: for a draw that must
+    /// not touch the shell. Its asking is `ask_hero_images`'s, outside the draw.
+    pub fn peek_image(
+        &self,
+        image: Option<&bobine::provider::ImageRef>,
+        width: u32,
+    ) -> Option<Arc<RenderImage>> {
+        self.images
+            .cache
+            .peek(&Key::new(image?, width))
+            .map(Arc::clone)
+    }
+
     /// A failed image still on screen is asked again once its wait is over: the window is woken
     /// then, since an idle window does not redraw by itself.
     fn wake_for_image_retries(&mut self, cx: &mut Context<Self>) {
