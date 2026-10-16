@@ -10,7 +10,7 @@ use gpui_kit::{
 };
 
 use super::home::{Pick, card_picture, error_pill, wide_card};
-use super::{centered, note, poster, series_poster};
+use super::{centered, note, poster_with, series_poster_with};
 use crate::grid::{self, GAP, MARGIN};
 use crate::home_page::ListKind;
 use crate::images;
@@ -116,9 +116,8 @@ fn listed(shell: &Shell, index: usize) -> Option<&Title> {
     shell.list.as_ref()?.grid.film(index)
 }
 
-/// The `index`th card of the list. A wide card reads its title where it stands in the list and
-/// copies nothing: an episode carries all its versions. A poster takes a copy of its film or
-/// series, which is small, since drawing it needs the shell again.
+/// The `index`th card of the list. Neither a wide card nor a poster copies its title: the
+/// picture is asked first, then the title is read again where it stands in the list to draw.
 fn card(
     shell: &mut Shell,
     width: f32,
@@ -131,13 +130,21 @@ fn card(
     match listed(shell, index) {
         // Not here yet, or past the last one: the same room, empty.
         None => div().w(px(width)).flex_none().into_any_element(),
-        Some(Title::Film(film)) if !wide => {
-            let film = film.clone();
-            poster(shell, &film, width, id, false, cx).into_any_element()
-        }
-        Some(Title::Series(series)) if !wide => {
-            let series = series.clone();
-            series_poster(shell, &series, width, id, cx).into_any_element()
+        Some(title @ (Title::Film(_) | Title::Series(_))) if !wide => {
+            let picture = match title {
+                Title::Film(film) => film.poster.clone(),
+                Title::Series(series) => series.poster.clone(),
+                Title::Episode(_) => None,
+            };
+            let image = shell.image(picture.as_ref(), images::POSTER, cx);
+            // Asked first, so that the title is borrowed from the shell only to draw.
+            match listed(shell, index).expect("the card was just found") {
+                Title::Film(film) => poster_with(film, image, width, id, cx).into_any_element(),
+                Title::Series(series) => {
+                    series_poster_with(series, image, width, id, cx).into_any_element()
+                }
+                Title::Episode(_) => unreachable!("a poster is for a film or a series"),
+            }
         }
         Some(title) => {
             let picture = card_picture(title).cloned();
