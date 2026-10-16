@@ -198,7 +198,7 @@ fn hero(
                     .children(play)
                     .children(
                         trailer::choose(&detail.trailers, shell.ytdlp)
-                            .map(|_| trailer_button("series-trailer", shown.busy, window, cx)),
+                            .map(|_| trailer_button("series-trailer", window, cx)),
                     )
                     .child(list_button("series-list", shown.favourite, window, cx)),
             )

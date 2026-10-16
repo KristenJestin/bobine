@@ -200,7 +200,7 @@ fn hero(
         .on_click(cx.listener(|shell, _, window, cx| shell.play_film(From::Beginning, window, cx)))
     });
     let trailer = trailer::choose(&detail.trailers, shell.ytdlp)
-        .map(|_| trailer_button("film-trailer", busy, window, cx));
+        .map(|_| trailer_button("film-trailer", window, cx));
     let watched = theme::ghost_button("film-watched", Some(IconName::Check), "Watched", window, cx)
         .when(film.watched, |button| {
             button
@@ -312,10 +312,9 @@ pub(super) fn list_button(
 }
 
 /// "Trailer": it fades in the first time the page draws it, like what the page shows by
-/// itself, and dims while the page waits for the server.
+/// itself. Like its neighbours, it has no dimming of its own: its row decides.
 pub(super) fn trailer_button(
     id: &'static str,
-    busy: bool,
     window: &mut Window,
     cx: &mut Context<Shell>,
 ) -> Stateful<Div> {
@@ -328,10 +327,9 @@ pub(super) fn trailer_button(
     if fade.moving(now) {
         window.request_animation_frame();
     }
-    let dim = if busy { 0.6 } else { 1. };
     theme::ghost_button(id, Some(IconName::PlayCircle), "Trailer", window, cx)
         .debug_selector(|| id.into())
-        .opacity(fade.level(now) * dim)
+        .opacity(fade.level(now))
         .on_click(cx.listener(|shell, _, window, cx| shell.play_trailer(window, cx)))
 }
 
