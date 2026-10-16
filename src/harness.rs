@@ -12,7 +12,7 @@
 //! `bobine --screen login|home|home-rows|home-list-resume|home-list-next|home-list-latest|library|detail|
 //! detail-rows|detail-cast|playing|series|series-page|series-rows|up-next|collections|collection-page|
 //! my-list|my-list-empty|film-list|series-list [--films N]
-//! [--media FILE] [--direct-fails] [--image-delay-ms N] [--photos-fail-once] [--scenario menu|scroll|select|panel|search|search-slow|search-keys|tools|tools-keys|home-rotate|home-hover|home-jump|home-scroll|home-lists|home-play]
+//! [--media FILE] [--direct-fails] [--image-delay-ms N] [--photos-fail-once] [--scenario menu|scroll|select|panel|blackout|search|search-slow|search-keys|tools|tools-keys|home-rotate|home-hover|home-jump|home-scroll|home-lists|home-play]
 //! [--search-delay-ms N] [--favourite-delay-ms N] [--favourite-fails] [--slower N] --quit-at S`
 //!
 //! A scenario sends clicks, keys and scroll events to the window as the compositor would, at set
@@ -563,6 +563,10 @@ enum Act {
     Hover(Target),
     /// Nothing is done: the frames that follow are counted under this name.
     Mark,
+    /// The "Black out other screens" switch pressed, as its click does.
+    Blackout,
+    /// The player's back arrow pressed, as its click does.
+    Leave,
     /// A touchpad gesture: its moves in pixels, from start to end.
     Swipe {
         over: Target,
@@ -651,6 +655,19 @@ impl Acts {
                 (4.5, "click the tracks button again", Click(TracksButton)),
                 (5.5, "click the tracks button", Click(TracksButton)),
                 (6.5, "escape", Key("escape")),
+            ],
+            // The other monitors turn black in fullscreen, and back when it ends or the film
+            // stops (`--screen playing`).
+            "blackout" => vec![
+                (1.5, "click the tracks button", Click(TracksButton)),
+                (2.5, "switch Black out other screens on", Blackout),
+                (3.5, "f goes fullscreen", Key("f")),
+                (6.5, "fullscreen", Mark),
+                (8.5, "f leaves fullscreen", Key("f")),
+                (11.5, "windowed", Mark),
+                (12.5, "f goes fullscreen again", Key("f")),
+                (15.5, "the film stops in fullscreen", Leave),
+                (18.5, "stopped", Mark),
             ],
             // Ctrl+K, typing, the arrows, Enter on a person, Escape from the person's page.
             "search" => vec![
@@ -999,6 +1016,14 @@ fn position(target: Target, shell: &Shell, window: &Window) -> Point<Pixels> {
 fn send(act: &Act, shell: &Entity<Shell>, window: &mut Window, cx: &mut App) {
     let at = |target, cx: &App, window: &Window| position(target, shell.read(cx), window);
     let events = match act {
+        Act::Blackout => {
+            shell.update(cx, |shell, cx| shell.toggle_blackout(window, cx));
+            Vec::new()
+        }
+        Act::Leave => {
+            shell.update(cx, |shell, cx| shell.player_back(window, cx));
+            Vec::new()
+        }
         Act::Type(text) => {
             shell.update(cx, |shell, cx| {
                 if let Some(search) = &shell.search {
@@ -1125,8 +1150,10 @@ fn state(label: &str, shell: &Shell, cx: &App) -> String {
     }
     if let Some(playback) = &shell.playback {
         return format!(
-            "PANEL {label}: panel_open={} screen={screen:?}",
-            playback.session.panel_open()
+            "PANEL {label}: panel_open={} blackout={} offered={} screen={screen:?}",
+            playback.session.panel_open(),
+            shell.settings.black_out_other_monitors,
+            shell.blackout_offered(),
         );
     }
     if screen == Screen::Home {
