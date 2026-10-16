@@ -74,6 +74,29 @@ pub fn palette(
     }
     let (highlight, body_height) = (state.highlight.value(now), state.body.value(now));
     let open = state.open;
+    let typed = input.read(cx).text().trim().to_string();
+    // With a request server, what the library may not hold can be looked for there.
+    let discover = (shell.seerr.client.is_some() && !typed.is_empty()).then(|| {
+        theme::eased("palette-discover", theme::Shades::line(), window, cx)
+            .debug_selector(|| "palette-discover".into())
+            .flex()
+            .items_center()
+            .gap(px(12.))
+            .mx(px(search::LIST_PAD))
+            .my(px(6.))
+            .px(px(12.))
+            .h(px(40.))
+            .rounded(px(10.))
+            .text_size(px(13.))
+            .cursor_pointer()
+            .child(icon(IconName::Compass, 16.).text_color(theme::muted()))
+            .child(format!("Search “{typed}” on Discover"))
+            .when(open, |line| {
+                line.on_click(
+                    cx.listener(|shell, _, window, cx| shell.search_on_discover(window, cx)),
+                )
+            })
+    });
 
     let list = if hits > 0 {
         let mut rows: Vec<AnyElement> = Vec::new();
@@ -158,6 +181,8 @@ pub fn palette(
                 .child(div().flex_1().text_color(theme::text()).child(input))
                 .child(key_cap("Esc")),
         )
+        // Above the results, so that it stays put while they come.
+        .children(discover.map(|line| div().border_b_1().border_color(theme::line()).child(line)))
         .child(
             div()
                 .h(px(body_height))

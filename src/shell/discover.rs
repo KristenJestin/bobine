@@ -397,6 +397,19 @@ impl Shell {
         discover::not_in_library(similar.clone(), self.seerr.index.as_ref())
     }
 
+    /// The palette's "Search on Discover": Discover opens on what was typed.
+    pub fn search_on_discover(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(state) = &self.search else {
+            return;
+        };
+        let typed = state.input.read(cx).text().trim().to_string();
+        self.close_search(window, cx);
+        self.select(crate::navigation::NavEntry::Discover, cx);
+        if let Some(field) = self.seerr.discover.field.clone() {
+            field.update(cx, |field, cx| field.set_text(&typed, cx));
+        }
+    }
+
     /// The wheel over Discover: the page up and down, the row under the pointer sideways.
     pub fn scroll_discover(
         &mut self,
@@ -695,8 +708,44 @@ pub(super) mod tests {
             .unwrap();
         let mut visual = drawn(&window, cx);
         assert!(visual.debug_bounds("similar-not-in-library").is_none());
+        palette_typed(&window, "winter", cx);
+        let mut visual = drawn(&window, cx);
+        assert!(
+            window
+                .update(cx, |shell, _, _| shell.search_is_open())
+                .unwrap()
+        );
+        assert!(visual.debug_bounds("palette-discover").is_none());
         let record = &seerr.state.lock().unwrap().record;
         assert_eq!((record.checks, record.my_requests), (0, 0));
+    }
+
+    /// The Ctrl+K palette open, `query` typed in it.
+    fn palette_typed(window: &WindowHandle<Shell>, query: &str, cx: &mut TestAppContext) {
+        window
+            .update(cx, |shell, window, cx| {
+                assert!(shell.open_search(window, cx));
+                let input = shell.search.as_ref().unwrap().input.clone();
+                input.update(cx, |field, cx| field.set_text(query, cx));
+            })
+            .unwrap();
+        cx.run_until_parked();
+    }
+
+    #[gpui_kit::test]
+    fn configured_the_palette_offers_to_search_on_discover(cx: &mut TestAppContext) {
+        let seerr = FakeSeerr::default();
+        let window = configured(&seerr, cx);
+        palette_typed(&window, "winter", cx);
+        let mut visual = drawn(&window, cx);
+        click(&mut visual, "palette-discover");
+        assert_eq!(screen(&window, cx), Screen::Discover);
+        cx.executor().advance_clock(SEARCH_AFTER);
+        cx.run_until_parked();
+        assert_eq!(seerr.state.lock().unwrap().record.searches, ["winter"]);
+        window
+            .update(cx, |shell, _, _| assert!(!shell.search_is_open()))
+            .unwrap();
     }
 
     #[gpui_kit::test]
