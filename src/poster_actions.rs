@@ -7,7 +7,9 @@
 
 use std::collections::HashMap;
 
-use bobine::provider::{Favourite, Film, ItemId, MediaServer, ProviderError, Series, Title};
+use bobine::provider::{
+    Favourite, Film, ItemId, MediaServer, ProviderError, Series, SeriesHit, Title,
+};
 
 use crate::favourite;
 
@@ -165,6 +167,12 @@ impl Said for Series {
         self.season
             .is_none()
             .then_some((&self.id, self.favourite, self.watched))
+    }
+}
+
+impl Said for SeriesHit {
+    fn said(&self) -> Option<(&ItemId, bool, bool)> {
+        Some((&self.id, self.favourite?, self.watched?))
     }
 }
 

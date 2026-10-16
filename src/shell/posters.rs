@@ -771,4 +771,24 @@ mod tests {
             "the refusal was not shown on the page"
         );
     }
+
+    #[gpui_kit::test]
+    fn a_series_of_a_person_page_has_my_list_and_watched(cx: &mut TestAppContext) {
+        let (server, window, cx) = home(cx);
+        let person = server.state.lock().unwrap().people[0].clone();
+        window
+            .update(cx, |shell, _, cx| shell.open_person(person, cx))
+            .unwrap();
+        cx.run_until_parked();
+        let id = ElementId::from(("person-series", 0_usize));
+        let series = quick(&window, cx, &id).item;
+        assert!(!quick(&window, cx, &id).watched.now);
+        click(cx, "card-watched", &id);
+        assert!(quick(&window, cx, &id).watched.now);
+        assert_eq!(
+            server.state.lock().unwrap().record.watched,
+            [(series, true)]
+        );
+        assert_eq!(screen(&window, cx), Screen::Person, "the page was opened");
+    }
 }

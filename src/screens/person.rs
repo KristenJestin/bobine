@@ -7,7 +7,7 @@ use std::rc::Rc;
 
 use gpui_kit::{Context, Div, FontWeight, IntoElement, Stateful, Window, div, px};
 
-use super::card::{Offer, Open, Play};
+use super::card::{Offer, Open, Play, Quick};
 use super::{card, note, picture, poster, row_heading};
 use crate::film_page;
 use crate::home_page::PlayTarget;
@@ -198,7 +198,11 @@ fn series_card(
     let offer = Offer {
         open: Open::Series(series.id.clone(), None),
         play: Play::Target(PlayTarget::Series(series.id.clone())),
-        quick: None,
+        // A series found through one of the person's episodes says nothing of its state.
+        quick: series
+            .favourite
+            .zip(series.watched)
+            .map(|(in_list, watched)| Quick::new(&shell.marks, &series.id, in_list, watched)),
         draw: Rc::new(draw),
     };
     card(shell, ("person-series", index).into(), offer, cx)
