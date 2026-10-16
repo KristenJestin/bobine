@@ -28,8 +28,8 @@ pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -
     grid_screen(
         shell,
         Grid {
-            title: "Films",
-            empty: "No films in this library.",
+            title: "Movies",
+            empty: "No movies in this library.",
             page: |shell| &mut shell.library,
             ask: Shell::ask_films,
             cell: |shell, film, width, index, cx| {

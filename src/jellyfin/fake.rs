@@ -47,6 +47,7 @@ fn fixture(name: &str) -> Value {
         "boxset_sea_stories" => include_str!("fixtures/boxset_sea_stories.json"),
         "boxset_lone_wolves" => include_str!("fixtures/boxset_lone_wolves.json"),
         "boxset_harbour_trilogy" => include_str!("fixtures/boxset_harbour_trilogy.json"),
+        "boxset_tide_tales" => include_str!("fixtures/boxset_tide_tales.json"),
         "similar" => include_str!("fixtures/similar.json"),
         "resume" => include_str!("fixtures/resume.json"),
         "search_series" => include_str!("fixtures/search_series.json"),
@@ -507,6 +508,13 @@ fn answer(state: &State, seen: &Seen) -> Answer {
                 200,
                 limited(
                     with_images(of_types(fixture("boxset_lone_wolves"), seen), seen),
+                    seen,
+                ),
+            ),
+            (Some("b0000000000000000000000000000005"), _) => Answer::Json(
+                200,
+                limited(
+                    with_images(of_types(fixture("boxset_tide_tales"), seen), seen),
                     seen,
                 ),
             ),

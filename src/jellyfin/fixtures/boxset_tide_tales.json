@@ -1,0 +1,8 @@
+{
+  "Items": [
+    { "Name": "Tide Tales: Ebb", "Id": "50000000000000000000000000000011", "Type": "Series", "ProductionYear": 2018, "UserData": { "Played": false }, "ImageTags": {} },
+    { "Name": "Tide Tales: Flow", "Id": "50000000000000000000000000000012", "Type": "Series", "ProductionYear": 2021, "UserData": { "Played": false }, "ImageTags": { "Primary": "poster-tf" } }
+  ],
+  "TotalRecordCount": 2,
+  "StartIndex": 0
+}
