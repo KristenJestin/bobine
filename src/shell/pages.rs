@@ -601,6 +601,8 @@ impl Shell {
     fn reset_session(&mut self, cx: &mut Context<Self>) {
         self.account_menu.close();
         self.settings_page.menus.close();
+        // Their keyring entries stay: the next session of the same user finds them again.
+        self.settings_page.secrets.clear();
         self.home = HomePage::default();
         self.library = LibraryPage::default();
         self.series = LibraryPage::default();

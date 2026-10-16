@@ -591,6 +591,13 @@ impl FakeServer {
         }
     }
 
+    /// The same server under another id, as a second server would be.
+    #[cfg(test)]
+    pub fn on_server(mut self, id: &str) -> Self {
+        self.info.id = id.into();
+        self
+    }
+
     fn state(&self) -> std::sync::MutexGuard<'_, State> {
         self.state.lock().unwrap()
     }
@@ -688,7 +695,9 @@ impl Connector for FakeServer {
     }
 
     fn restore(&self) -> Result<Option<Arc<dyn MediaServer>>, ProviderError> {
-        Ok(self.state().kept.then(|| self.session()))
+        // The guard is let go before `session` takes the state again.
+        let kept = self.state().kept;
+        Ok(kept.then(|| self.session()))
     }
 
     fn last_address(&self) -> Option<String> {

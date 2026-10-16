@@ -13,7 +13,7 @@ use crate::config::Quality;
 use crate::menu::Menus;
 use crate::motion::{self, Presence};
 use crate::navigation::Screen;
-use crate::secret_field::SecretField;
+use crate::secret_field::{self, SecretField};
 
 /// The one menu of the screen: the choices of the default quality.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -110,20 +110,23 @@ impl Shell {
         cx.notify();
     }
 
-    /// A field for a secret the settings keep in the keyring under `key`, at the end of the
-    /// Integrations section.
+    /// A field for a secret the settings keep in the keyring under `key`, for the signed-in user
+    /// of this server, at the end of the Integrations section. None without a session: the
+    /// secret belongs to someone.
     #[cfg_attr(not(any(test, feature = "harness")), allow(dead_code))]
     pub fn add_secret_field(
         &mut self,
         label: &'static str,
         key: &str,
         cx: &mut Context<Self>,
-    ) -> Entity<SecretField> {
+    ) -> Option<Entity<SecretField>> {
+        let server = self.server.as_ref()?;
+        let account = secret_field::account(&server.server().id, server.user_id(), key);
         let store: Arc<dyn TokenStore> = self.secrets.clone();
-        let field = cx.new(|cx| SecretField::new(label, key, store, cx));
+        let field = cx.new(|cx| SecretField::new(label, account, store, cx));
         self.settings_page.secrets.push(field.clone());
         cx.notify();
-        field
+        Some(field)
     }
 }
 
@@ -137,7 +140,7 @@ mod tests {
 
     use super::*;
     use crate::config::{Quality, Settings};
-    use crate::fake::{FakeServer, MemoryKeyring};
+    use crate::fake::{FakeServer, MemoryKeyring, PASSWORD, USER};
     use crate::navigation::Screen;
 
     /// A shell on a kept session, its settings at `path`, its keyring in memory.
@@ -283,7 +286,8 @@ mod tests {
                 shell.open_settings(cx);
                 shell.add_secret_field("Demo key", "demo-key", cx)
             })
-            .unwrap();
+            .unwrap()
+            .expect("signed in");
         // The keyring is asked first whether it already holds one.
         cx.run_until_parked();
         field.update(cx, |field, cx| {
@@ -295,13 +299,160 @@ mod tests {
         window
             .update(cx, |shell, _, cx| shell.set_quality(Quality::Cap(4), cx))
             .unwrap();
-        assert_eq!(keyring.secret("setting/demo-key").as_deref(), Some(secret));
+        assert_eq!(
+            keyring
+                .secret("setting/server-1/user-1/demo-key")
+                .as_deref(),
+            Some(secret)
+        );
         let files = files_in(dir.path());
         assert!(!files.is_empty(), "the settings were not written");
         for file in files {
             let text = std::fs::read_to_string(&file).unwrap();
             assert!(!text.contains(secret), "{}", file.display());
         }
+    }
+
+    /// A secret field of the signed-in session, with `secret` saved in it.
+    fn save_a_secret(
+        window: &WindowHandle<Shell>,
+        secret: &str,
+        cx: &mut TestAppContext,
+    ) -> Entity<SecretField> {
+        let field = add_field(window, cx);
+        field.update(cx, |field, cx| {
+            field.type_in(secret, cx);
+            field.save(cx);
+        });
+        cx.run_until_parked();
+        field
+    }
+
+    fn add_field(window: &WindowHandle<Shell>, cx: &mut TestAppContext) -> Entity<SecretField> {
+        let field = window
+            .update(cx, |shell, _, cx| {
+                shell.add_secret_field("Demo key", "demo-key", cx)
+            })
+            .unwrap()
+            .expect("signed in");
+        cx.run_until_parked();
+        field
+    }
+
+    /// Signs out and signs in again through the form, as `user`.
+    fn sign_out_and_in_as(
+        window: &WindowHandle<Shell>,
+        user_id: &str,
+        server: &FakeServer,
+        cx: &mut TestAppContext,
+    ) {
+        server.state.lock().unwrap().user_id = user_id.into();
+        window
+            .update(cx, |shell, window, cx| shell.sign_out(window, cx))
+            .unwrap();
+        cx.run_until_parked();
+        window
+            .update(cx, |shell, _, cx| {
+                let form = shell.login.as_ref().expect("the login shows");
+                form.user.update(cx, |field, cx| field.set_text(USER, cx));
+                form.password
+                    .update(cx, |field, cx| field.set_text(PASSWORD, cx));
+                shell.submit_login(cx);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        window
+            .update(cx, |shell, _, _| {
+                assert!(shell.server.is_some(), "signed in")
+            })
+            .unwrap();
+    }
+
+    fn start_on(
+        server: &FakeServer,
+        keyring: &Arc<MemoryKeyring>,
+        cx: &mut TestAppContext,
+    ) -> WindowHandle<Shell> {
+        let connector: Arc<dyn Connector> = Arc::new(server.clone());
+        let secrets: Arc<dyn TokenStore> = keyring.clone();
+        let window = cx.add_window(|_, cx| {
+            Shell::new(None, Box::new(move || Ok(connector)), None, secrets, cx)
+        });
+        cx.run_until_parked();
+        window
+    }
+
+    #[gpui_kit::test]
+    fn a_secret_is_not_shown_to_another_user_of_the_server(cx: &mut TestAppContext) {
+        let keyring = Arc::new(MemoryKeyring::default());
+        let server = FakeServer::new(6, true);
+        let window = start_on(&server, &keyring, cx);
+        save_a_secret(&window, "k3y-A", cx);
+        sign_out_and_in_as(&window, "user-2", &server, cx);
+        let field = add_field(&window, cx);
+        field.read_with(cx, |field, _| assert!(!field.is_saved()));
+        assert_eq!(keyring.secret("setting/server-1/user-2/demo-key"), None);
+    }
+
+    #[gpui_kit::test]
+    fn a_secret_is_not_shown_on_another_server(cx: &mut TestAppContext) {
+        let keyring = Arc::new(MemoryKeyring::default());
+        let server = FakeServer::new(6, true);
+        let window = start_on(&server, &keyring, cx);
+        save_a_secret(&window, "k3y-A", cx);
+        let other = FakeServer::new(6, true).on_server("server-2");
+        let window = start_on(&other, &keyring, cx);
+        let field = add_field(&window, cx);
+        field.read_with(cx, |field, _| assert!(!field.is_saved()));
+    }
+
+    #[gpui_kit::test]
+    fn signing_out_keeps_the_secret_for_the_user_who_signs_back_in(cx: &mut TestAppContext) {
+        let keyring = Arc::new(MemoryKeyring::default());
+        let server = FakeServer::new(6, true);
+        let window = start_on(&server, &keyring, cx);
+        save_a_secret(&window, "k3y-A", cx);
+        sign_out_and_in_as(&window, "user-1", &server, cx);
+        assert_eq!(
+            keyring
+                .secret("setting/server-1/user-1/demo-key")
+                .as_deref(),
+            Some("k3y-A")
+        );
+        let field = add_field(&window, cx);
+        field.read_with(cx, |field, _| assert!(field.is_saved()));
+    }
+
+    #[gpui_kit::test]
+    fn signing_out_drops_the_secret_fields_of_the_settings_page(cx: &mut TestAppContext) {
+        let keyring = Arc::new(MemoryKeyring::default());
+        let server = FakeServer::new(6, true);
+        let window = start_on(&server, &keyring, cx);
+        save_a_secret(&window, "k3y-A", cx);
+        window
+            .update(cx, |shell, _, _| {
+                assert_eq!(shell.settings_page.secrets.len(), 1)
+            })
+            .unwrap();
+        sign_out_and_in_as(&window, "user-2", &server, cx);
+        window
+            .update(cx, |shell, _, _| {
+                assert!(shell.settings_page.secrets.is_empty())
+            })
+            .unwrap();
+    }
+
+    #[gpui_kit::test]
+    fn a_secret_field_cannot_be_added_without_a_session(cx: &mut TestAppContext) {
+        let keyring = Arc::new(MemoryKeyring::default());
+        let server = FakeServer::new(6, false);
+        let window = start_on(&server, &keyring, cx);
+        let added = window
+            .update(cx, |shell, _, cx| {
+                shell.add_secret_field("Demo key", "demo-key", cx)
+            })
+            .unwrap();
+        assert!(added.is_none());
     }
 
     #[gpui_kit::test]

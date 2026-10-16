@@ -4,7 +4,6 @@
 //! before the keyring is asked, and a failure says nothing of what was typed.
 //!
 //! The first integration (#63) draws one; until then only the tests and the harness do.
-#![cfg_attr(not(any(test, feature = "harness")), allow(dead_code))]
 
 use std::sync::Arc;
 
@@ -23,9 +22,11 @@ use crate::theme;
 /// What a saved secret shows instead of itself.
 const DOTS: &str = "••••";
 
-/// Where the keyring keeps the secret of `key`: apart from the accounts' tokens.
-fn account(key: &str) -> String {
-    format!("setting/{key}")
+/// Where the keyring keeps the secret of `key`: apart from the accounts' tokens, and for one
+/// user of one server, so that another user, or the same name on another server, never reads it.
+/// It outlives a sign-out: the same user who signs back in finds it.
+pub fn account(server_id: &str, user_id: &str, key: &str) -> String {
+    format!("setting/{server_id}/{user_id}/{key}")
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -50,15 +51,14 @@ pub struct SecretField {
 }
 
 impl SecretField {
-    /// A field for the secret kept under `key`. It looks in the keyring, off the window's
-    /// thread, whether one is already there.
+    /// A field for the secret kept under `account` (see `account()`). It looks in the keyring,
+    /// off the window's thread, whether one is already there.
     pub fn new(
         label: &'static str,
-        key: &str,
+        account: String,
         store: Arc<dyn TokenStore>,
         cx: &mut Context<Self>,
     ) -> Self {
-        let account = account(key);
         let input = cx.new(|cx| TextInput::new("Paste it here", true, cx));
         let (asked, name) = (store.clone(), account.clone());
         let task = cx
@@ -99,11 +99,13 @@ impl SecretField {
         self.state == State::Saved
     }
 
-    /// The dots of a saved secret, never the secret.
+    /// The dots of a saved secret, never the secret. #63 reads it; until then only tests do.
+    #[cfg_attr(not(any(test, feature = "harness")), allow(dead_code))]
     pub fn shown(&self) -> Option<&'static str> {
         self.is_saved().then_some(DOTS)
     }
 
+    #[cfg_attr(not(any(test, feature = "harness")), allow(dead_code))]
     pub fn error(&self) -> Option<&'static str> {
         self.error
     }
@@ -282,14 +284,16 @@ mod tests {
     use super::*;
     use crate::fake::MemoryKeyring;
 
-    const KEY: &str = "demo-key";
+    fn key() -> String {
+        account("server-1", "user-1", "demo-key")
+    }
 
     fn field(
         keyring: &Arc<MemoryKeyring>,
         cx: &mut gpui_kit::TestAppContext,
     ) -> Entity<SecretField> {
         let store: Arc<dyn bobine::provider::TokenStore> = keyring.clone();
-        let field = cx.new(|cx| SecretField::new("Demo key", KEY, store, cx));
+        let field = cx.new(|cx| SecretField::new("Demo key", key(), store, cx));
         cx.run_until_parked();
         field
     }
@@ -311,7 +315,7 @@ mod tests {
         let field = field(&keyring, cx);
         type_in(&field, "abc-123", cx);
         save(&field, cx);
-        assert_eq!(keyring.secret(&account(KEY)).as_deref(), Some("abc-123"));
+        assert_eq!(keyring.secret(&key()).as_deref(), Some("abc-123"));
         field.read_with(cx, |field, cx| {
             assert!(field.is_saved());
             assert_eq!(field.input.read(cx).text(), "", "the field keeps nothing");
@@ -346,7 +350,7 @@ mod tests {
         save(&field, cx);
         field.update(cx, |field, cx| field.clear(cx));
         cx.run_until_parked();
-        assert_eq!(keyring.secret(&account(KEY)), None);
+        assert_eq!(keyring.secret(&key()), None);
         field.read_with(cx, |field, _| assert!(!field.is_saved()));
     }
 
@@ -356,7 +360,7 @@ mod tests {
         let field = field(&keyring, cx);
         type_in(&field, "   ", cx);
         save(&field, cx);
-        assert_eq!(keyring.secret(&account(KEY)), None);
+        assert_eq!(keyring.secret(&key()), None);
         field.read_with(cx, |field, _| assert!(!field.is_saved()));
     }
 
@@ -381,7 +385,10 @@ mod tests {
     }
 
     #[test]
-    fn the_secret_is_kept_apart_from_the_account_tokens() {
-        assert_eq!(account("demo-key"), "setting/demo-key");
+    fn the_secret_is_kept_apart_from_the_account_tokens_and_per_server_and_user() {
+        assert_eq!(
+            account("server-1", "user-1", "demo-key"),
+            "setting/server-1/user-1/demo-key"
+        );
     }
 }
