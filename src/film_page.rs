@@ -9,6 +9,7 @@ use bobine::provider::{
 };
 
 use crate::player::{self, FirstSubtitle, Media, Stream, Track, TrackKind, tracks};
+use crate::track_choice::{self, Remembered, Rules};
 
 /// The version and the tracks the chips show. Tracks are named by their index in the file, as
 /// the server names them.
@@ -18,37 +19,85 @@ pub struct Choices {
     pub audio: Option<i32>,
     /// `None`: no subtitles.
     pub subtitle: Option<i32>,
+    /// Which tracks the viewer picked on a chip since the version was chosen.
+    by_hand: ByHand,
+    /// What chooses the tracks of a version before the viewer does.
+    rules: Rules,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct ByHand {
+    audio: bool,
+    subtitle: bool,
 }
 
 impl Choices {
-    /// The first version, with its default audio track and its default subtitle, if any.
+    /// The first version, with the tracks the file flags: its default audio track and its
+    /// default subtitle, if any.
     pub fn new(versions: &[MediaSource]) -> Self {
+        Self::with_rules(versions, Rules::default())
+    }
+
+    /// The first version, with the tracks `rules` choose.
+    pub fn with_rules(versions: &[MediaSource], rules: Rules) -> Self {
         let mut choices = Self {
             version: 0,
             audio: None,
             subtitle: None,
+            by_hand: ByHand::default(),
+            rules,
         };
         choices.set_version(versions, 0);
         choices
     }
 
-    /// Another version has its own tracks: they go back to its defaults.
+    /// Another version has its own tracks: they go back to what the rules choose.
     pub fn set_version(&mut self, versions: &[MediaSource], version: usize) {
         let Some(source) = versions.get(version) else {
             return;
         };
         self.version = version;
-        self.audio = source
-            .audio
-            .iter()
-            .find(|track| track.default)
-            .or(source.audio.first())
-            .map(|track| track.index);
-        self.subtitle = source
-            .subtitles
-            .iter()
-            .find(|track| track.default)
-            .map(|track| track.index);
+        (self.audio, self.subtitle) = track_choice::pick(source, &self.rules);
+        self.by_hand = ByHand::default();
+    }
+
+    /// An audio track picked on the chip: it wins for this playback.
+    pub fn choose_audio(&mut self, track: Option<i32>) {
+        self.audio = track;
+        self.by_hand.audio = true;
+    }
+
+    /// A subtitle track picked on the chip, or none.
+    pub fn choose_subtitle(&mut self, track: Option<i32>) {
+        self.subtitle = track;
+        self.by_hand.subtitle = true;
+    }
+
+    /// The languages the next episode keeps: those picked on the chips for this one, else those
+    /// kept from the episodes before.
+    pub fn remembered(&self, versions: &[MediaSource]) -> Remembered {
+        let mut remembered = self.rules.remembered.clone();
+        let Some(source) = self.source(versions) else {
+            return remembered;
+        };
+        if self.by_hand.audio
+            && let Some(track) = source.audio.iter().find(|t| Some(t.index) == self.audio)
+            && track.language.is_some()
+        {
+            remembered.audio = track.language.clone();
+        }
+        if self.by_hand.subtitle {
+            match self.subtitle {
+                None => remembered.subtitle = Some(None),
+                Some(index) => {
+                    let track = source.subtitles.iter().find(|t| t.index == index);
+                    if let Some(language) = track.and_then(|t| t.language.clone()) {
+                        remembered.subtitle = Some(Some(language));
+                    }
+                }
+            }
+        }
+        remembered
     }
 
     pub fn source<'a>(&self, versions: &'a [MediaSource]) -> Option<&'a MediaSource> {
@@ -355,6 +404,7 @@ mod tests {
     use crate::fake::{FILM, FakeServer, PLAY_SESSION};
     use crate::player::Player;
     use crate::player::fake::{Call, FakePlayer};
+    use bobine::provider::{SubtitleMode, TrackPreferences};
 
     fn detail() -> FilmDetail {
         FakeServer::new(3, false)
@@ -422,14 +472,114 @@ mod tests {
     #[test]
     fn the_defaults_are_the_first_version_its_default_audio_and_no_subtitles() {
         let detail = detail();
+        let choices = Choices::new(&detail.versions);
         assert_eq!(
-            Choices::new(&detail.versions),
-            Choices {
-                version: 0,
-                audio: Some(1),
-                subtitle: None
+            (choices.version, choices.audio, choices.subtitle),
+            (0, Some(1), None)
+        );
+    }
+
+    fn english_with_subtitles() -> Rules {
+        Rules {
+            preferences: Some(TrackPreferences {
+                audio_language: Some("eng".into()),
+                play_default_audio: false,
+                subtitle_language: Some("fra".into()),
+                subtitle_mode: SubtitleMode::Always,
+                remember_audio: true,
+                remember_subtitle: true,
+            }),
+            remembered: Remembered::default(),
+        }
+    }
+
+    #[test]
+    fn the_preferences_choose_the_tracks_the_chips_show_and_the_player_gets() {
+        let detail = detail();
+        let choices = Choices::with_rules(&detail.versions, english_with_subtitles());
+        assert_eq!((choices.audio, choices.subtitle), (Some(2), Some(4)));
+        let plan = plan(&detail.film, &detail.versions, &choices, From::Resume).unwrap();
+        let Call::Load {
+            audio, subtitle, ..
+        } = load(&plan)
+        else {
+            panic!("not a load");
+        };
+        assert_eq!(audio, Some(2));
+        assert_eq!(subtitle, FirstSubtitle::Track(2));
+    }
+
+    #[test]
+    fn a_choice_made_on_the_chips_wins_over_the_preferences_for_that_playback() {
+        let detail = detail();
+        let mut choices = Choices::with_rules(&detail.versions, english_with_subtitles());
+        choices.choose_audio(Some(1));
+        choices.choose_subtitle(None);
+        let plan = plan(&detail.film, &detail.versions, &choices, From::Resume).unwrap();
+        assert_eq!((plan.audio_index, plan.subtitle_index), (Some(1), None));
+        let Call::Load {
+            audio, subtitle, ..
+        } = load(&plan)
+        else {
+            panic!("not a load");
+        };
+        assert_eq!((audio, subtitle), (Some(1), FirstSubtitle::Off));
+    }
+
+    #[test]
+    fn another_version_gets_the_tracks_the_preferences_choose_in_its_file() {
+        let detail = detail();
+        let mut choices = Choices::with_rules(&detail.versions, english_with_subtitles());
+        choices.choose_audio(Some(1));
+        choices.set_version(&detail.versions, 1);
+        // The 1080p file has French audio only: the viewer's pick goes, the settings stay.
+        assert_eq!((choices.audio, choices.subtitle), (Some(1), Some(2)));
+        choices.set_version(&detail.versions, 0);
+        assert_eq!(
+            choices.audio,
+            Some(2),
+            "not the pick made for the other file"
+        );
+    }
+
+    #[test]
+    fn what_the_viewer_picked_on_the_chips_is_what_the_next_episode_keeps() {
+        let detail = detail();
+        let mut choices = Choices::with_rules(&detail.versions, english_with_subtitles());
+        assert_eq!(
+            choices.remembered(&detail.versions),
+            Remembered::default(),
+            "nothing picked, nothing to keep"
+        );
+        choices.choose_audio(Some(1));
+        choices.choose_subtitle(Some(5));
+        assert_eq!(
+            choices.remembered(&detail.versions),
+            Remembered {
+                audio: Some("fre".into()),
+                subtitle: Some(Some("eng".into())),
             }
         );
+        choices.choose_subtitle(None);
+        assert_eq!(
+            choices.remembered(&detail.versions).subtitle,
+            Some(None),
+            "subtitles turned off are kept too"
+        );
+    }
+
+    #[test]
+    fn an_episode_the_viewer_did_not_touch_passes_on_what_was_kept_before() {
+        let detail = detail();
+        let rules = Rules {
+            remembered: Remembered {
+                audio: Some("eng".into()),
+                subtitle: Some(Some("fra".into())),
+            },
+            ..english_with_subtitles()
+        };
+        let choices = Choices::with_rules(&detail.versions, rules.clone());
+        assert_eq!(choices.remembered(&detail.versions), rules.remembered);
     }
 
     #[test]

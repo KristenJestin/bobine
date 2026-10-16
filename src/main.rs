@@ -29,6 +29,7 @@ mod series_page;
 mod shell;
 mod start;
 mod theme;
+mod track_choice;
 mod video;
 
 use std::sync::Arc;
