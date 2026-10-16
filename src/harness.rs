@@ -12,7 +12,7 @@
 //! `bobine --screen login|home|home-rows|home-list-resume|home-list-next|home-list-latest|home-list-empty|library|detail|
 //! detail-rows|detail-cast|playing|series|series-page|series-rows|up-next|collections|collection-page|
 //! my-list|my-list-empty|film-list|series-list [--films N]
-//! [--media FILE] [--segments SECONDS] [--direct-fails] [--image-delay-ms N] [--photos-fail-once] [--scenario menu|scroll|select|panel|blackout|search|search-slow|search-keys|tools|tools-keys|home-rotate|home-hover|home-jump|home-scroll|home-lists|home-play|home-poster-hover|grid-poster-hover|cast-hover|genre-hover|episode-hover|skip|settings|settings-screen|long-tracks|segment-marks]
+//! [--media FILE] [--segments SECONDS] [--direct-fails] [--trailer] [--image-delay-ms N] [--photos-fail-once] [--scenario menu|scroll|select|panel|blackout|search|search-slow|search-keys|tools|tools-keys|home-rotate|home-hover|home-jump|home-scroll|home-lists|home-play|home-poster-hover|grid-poster-hover|cast-hover|genre-hover|episode-hover|skip|settings|settings-screen|long-tracks|segment-marks]
 //! [--search-delay-ms N] [--favourite-delay-ms N] [--logout-delay-ms N] [--favourite-fails] [--slower N] --quit-at S`
 //!
 //! A scenario sends clicks, keys and scroll events to the window as the compositor would, at set
@@ -76,6 +76,8 @@ struct Args {
     /// The file played directly is missing: the player falls back on the server's conversion,
     /// which plays `media`.
     direct_fails: bool,
+    /// Every film and series of the fake server has a trailer file.
+    trailer: bool,
     /// How long each image of the fake server takes, in milliseconds.
     image_delay: u64,
     /// The fake server fails the first time it is asked each person's photo.
@@ -152,6 +154,7 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Option<Args>, String>
             "--segments" => parsed.segments = Some(seconds(args.next())?),
             "--photos-fail-once" => parsed.photos_fail_once = true,
             "--direct-fails" => parsed.direct_fails = true,
+            "--trailer" => parsed.trailer = true,
             "--search-delay-ms" => {
                 parsed.search_delay = args
                     .next()
@@ -253,6 +256,9 @@ impl Harness {
             }
             if args.direct_fails {
                 state.stream = "file:///nowhere-direct-play.mkv".into();
+            }
+            if args.trailer {
+                state.trailers.local = true;
             }
             if let Some(length) = args.segments {
                 state.segments = segments_of(length);
