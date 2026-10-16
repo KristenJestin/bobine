@@ -2920,4 +2920,129 @@ mod tests {
         assert_eq!(genre.as_deref(), Some("Aventure"));
         assert_ne!(epoch, before, "the list was not asked again");
     }
+
+    /// The series page of the tests, on its second season, where the series is begun: episode
+    /// 4 (the row at index 3) is stopped at 30 min. Playbacks are refused once asked, so that
+    /// no player starts.
+    fn series_page_of_tests(
+        cx: &mut gpui_kit::TestAppContext,
+    ) -> (
+        FakeServer,
+        gpui_kit::WindowHandle<Shell>,
+        gpui_kit::VisualTestContext,
+    ) {
+        let (server, window) = signed_in_window(cx);
+        server.state.lock().unwrap().play_error =
+            Some(ProviderError::Unreachable("refused".into()));
+        let visual = drawn_page(&window, cx, |shell, cx| {
+            shell.open_series(ItemId(crate::fake::SERIES.into()), cx)
+        });
+        (server, window, visual)
+    }
+
+    fn episode_still(index: usize) -> gpui_kit::ElementId {
+        gpui_kit::ElementId::from(("episode-still", index))
+    }
+
+    fn pointer_over(
+        visual: &mut gpui_kit::VisualTestContext,
+        what: &str,
+        id: &gpui_kit::ElementId,
+    ) {
+        let selector: &'static str = Box::leak(format!("{what} {id}").into_boxed_str());
+        let at = visual
+            .debug_bounds(selector)
+            .unwrap_or_else(|| panic!("{selector} was not drawn"))
+            .center();
+        visual.simulate_mouse_move(at, None, gpui_kit::Modifiers::none());
+        visual.run_until_parked();
+    }
+
+    #[gpui_kit::test]
+    fn hovering_an_episode_shows_the_play_button_over_its_picture(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        let (_server, _window, mut visual) = series_page_of_tests(cx);
+        let id = episode_still(3);
+        let play: &'static str = Box::leak(format!("card-play {id}").into_boxed_str());
+        assert!(
+            visual.debug_bounds(play).is_none(),
+            "drawn before the pointer"
+        );
+        pointer_over(&mut visual, "card-hover", &id);
+        let play = visual.debug_bounds(play).expect("the play button");
+        let still = visual
+            .debug_bounds(Box::leak(format!("card-hover {id}").into_boxed_str()))
+            .expect("the still");
+        assert!(
+            still.contains(&play.center()),
+            "the button is over the picture"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn a_click_on_the_play_button_of_an_episode_plays_it_from_where_it_stopped(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        let (server, window, mut visual) = series_page_of_tests(cx);
+        let id = episode_still(3);
+        pointer_over(&mut visual, "card-hover", &id);
+        let play: &'static str = Box::leak(format!("card-play {id}").into_boxed_str());
+        click_on(&mut visual, play);
+        let asked = server.state.lock().unwrap().record.plays.clone();
+        let stopped = {
+            let state = server.state.lock().unwrap();
+            let wanted = ItemId("series-0-s2-e4".into());
+            let found = state.episodes.iter().find(|e| e.item.id == wanted);
+            found.expect("episode 4 of season 2").clone()
+        };
+        assert!(stopped.item.resume.is_some(), "the episode was started");
+        assert_eq!(
+            asked
+                .iter()
+                .map(|(film, _)| film.clone())
+                .collect::<Vec<_>>(),
+            [stopped.item.id],
+            "once, and the episode that was clicked"
+        );
+        assert_eq!(current(&window, cx), Screen::SeriesDetail);
+    }
+
+    #[gpui_kit::test]
+    fn a_click_anywhere_on_an_episode_row_plays_it(cx: &mut gpui_kit::TestAppContext) {
+        let (server, _window, mut visual) = series_page_of_tests(cx);
+        // The title of the row, away from the picture and from the check.
+        let still = visual
+            .debug_bounds(Box::leak(
+                format!("card-hover {}", episode_still(3)).into_boxed_str(),
+            ))
+            .expect("the still");
+        let at = gpui_kit::point(still.right() + gpui_kit::px(120.), still.center().y);
+        visual.simulate_mouse_move(at, None, gpui_kit::Modifiers::none());
+        visual.simulate_click(at, gpui_kit::Modifiers::none());
+        visual.run_until_parked();
+        let asked = server.state.lock().unwrap().record.plays.clone();
+        assert_eq!(asked.len(), 1, "{asked:?}");
+    }
+
+    #[gpui_kit::test]
+    fn a_click_on_the_picture_of_an_episode_beside_the_button_plays_it_once(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        let (server, _window, mut visual) = series_page_of_tests(cx);
+        let id = episode_still(3);
+        pointer_over(&mut visual, "card-hover", &id);
+        let still = visual
+            .debug_bounds(Box::leak(format!("card-hover {id}").into_boxed_str()))
+            .expect("the still");
+        let at = gpui_kit::point(
+            still.left() + gpui_kit::px(10.),
+            still.top() + gpui_kit::px(10.),
+        );
+        visual.simulate_mouse_move(at, None, gpui_kit::Modifiers::none());
+        visual.simulate_click(at, gpui_kit::Modifiers::none());
+        visual.run_until_parked();
+        let asked = server.state.lock().unwrap().record.plays.clone();
+        assert_eq!(asked.len(), 1, "{asked:?}");
+    }
 }
