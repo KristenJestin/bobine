@@ -588,4 +588,63 @@ mod tests {
         assert_eq!(plays[0].0, next.item.id, "the series' next up plays");
         assert_eq!(screen(&window, cx), Screen::Home, "the page was opened");
     }
+
+    #[gpui_kit::test]
+    fn a_mark_then_a_refresh_with_another_server_truth_shows_the_servers_value(
+        cx: &mut TestAppContext,
+    ) {
+        let (server, window, cx) = home(cx);
+        let (id, film) = poster(&window, cx, film_with_resume(&server));
+        click(cx, "card-watched", &id);
+        assert!(quick(&window, cx, &id).watched.now);
+        // Unmarked since, from another device.
+        {
+            let mut state = server.state.lock().unwrap();
+            state
+                .films
+                .iter_mut()
+                .find(|f| f.id == film)
+                .unwrap()
+                .watched = false;
+        }
+        window
+            .update(cx, |shell, _, cx| shell.load_home(cx))
+            .unwrap();
+        cx.run_until_parked();
+        assert!(!quick(&window, cx, &id).watched.now);
+    }
+
+    #[gpui_kit::test]
+    fn a_series_marked_watched_then_an_episode_unmarked_on_its_page_is_unwatched_on_its_poster(
+        cx: &mut TestAppContext,
+    ) {
+        let (server, window, cx) = home(cx);
+        let (id, series) = poster(&window, cx, a_series);
+        click(cx, "card-watched", &id);
+        assert!(quick(&window, cx, &id).watched.now);
+        window
+            .update(cx, |shell, _, cx| shell.open_series(series.clone(), cx))
+            .unwrap();
+        cx.run_until_parked();
+        let episode = server
+            .state
+            .lock()
+            .unwrap()
+            .episodes
+            .iter()
+            .find(|e| e.series == series)
+            .cloned()
+            .unwrap();
+        window
+            .update(cx, |shell, _, cx| shell.toggle_episode_watched(episode, cx))
+            .unwrap();
+        cx.run_until_parked();
+        window.update(cx, |shell, _, cx| shell.go_back(cx)).unwrap();
+        cx.run_until_parked();
+        assert_eq!(screen(&window, cx), Screen::Home);
+        assert!(
+            !quick(&window, cx, &id).watched.now,
+            "the poster still says watched"
+        );
+    }
 }

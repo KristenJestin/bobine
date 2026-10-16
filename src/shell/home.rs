@@ -260,6 +260,7 @@ impl Shell {
     /// Asks everything the Home shows. What is drawn stays drawn until the new answer comes.
     pub fn load_home(&mut self, cx: &mut Context<Self>) {
         let asked = self.home.begin_load();
+        let stamp = self.marks.stamp();
 
         self.ask(
             cx,
@@ -285,7 +286,10 @@ impl Shell {
                     return;
                 }
                 let started = match started {
-                    Ok(started) => Loadable::Ready(Rc::from(started)),
+                    Ok(started) => {
+                        shell.marks.listed(stamp, &started);
+                        Loadable::Ready(Rc::from(started))
+                    }
                     Err(error) => Loadable::Failed(shell.failed(error, cx)),
                 };
                 shell.home.resume_landed(asked, started);
@@ -313,7 +317,7 @@ impl Shell {
                     return;
                 }
                 match libraries {
-                    Ok(libraries) => shell.load_latest(libraries, asked, cx),
+                    Ok(libraries) => shell.load_latest(libraries, (asked, stamp), cx),
                     Err(error) => {
                         let why = shell.failed(error, cx);
                         shell.home.libraries_failed(asked, why);
@@ -329,7 +333,12 @@ impl Shell {
     }
 
     /// One row for each library of films or of series.
-    fn load_latest(&mut self, libraries: Vec<Library>, asked: u64, cx: &mut Context<Self>) {
+    fn load_latest(
+        &mut self,
+        libraries: Vec<Library>,
+        (asked, stamp): (u64, u64),
+        cx: &mut Context<Self>,
+    ) {
         for id in self.home.libraries_landed(asked, libraries) {
             self.ask(
                 cx,
@@ -342,7 +351,13 @@ impl Shell {
                         return;
                     }
                     let titles = match titles {
-                        Ok(titles) => Loadable::Ready(Rc::from(titles)),
+                        Ok(titles) => {
+                            // A series of the latest may stand for a new season or a lone
+                            // episode of it, which say nothing of the series: films only.
+                            let films = titles.iter().filter(|t| matches!(t, Title::Film(_)));
+                            shell.marks.listed(stamp, films);
+                            Loadable::Ready(Rc::from(titles))
+                        }
                         Err(error) => Loadable::Failed(shell.failed(error, cx)),
                     };
                     shell.home.latest_landed(asked, &id, titles);
@@ -589,6 +604,7 @@ impl Shell {
         };
         let kind = list.kind.clone();
         let epoch = list.grid.epoch();
+        let stamp = self.marks.stamp();
         for page in list.grid.pages_to_ask(items.clone(), Instant::now()) {
             let kind = kind.clone();
             self.ask(
@@ -597,7 +613,7 @@ impl Shell {
                     let kind = kind.clone();
                     move |server| home_page::fetch(server, &kind, page)
                 },
-                move |shell, found, cx| shell.listed(&kind, (epoch, page), found, cx),
+                move |shell, found, cx| shell.listed(&kind, (epoch, page), stamp, found, cx),
             );
         }
     }
@@ -606,6 +622,7 @@ impl Shell {
         &mut self,
         kind: &ListKind,
         (epoch, page): (u64, u32),
+        stamp: u64,
         found: Result<bobine::provider::Page<Title>, ProviderError>,
         cx: &mut Context<Self>,
     ) {
@@ -615,6 +632,7 @@ impl Shell {
         }
         match found {
             Ok(found) => {
+                self.marks.listed(stamp, &found.items);
                 if let Some(list) = &mut self.list {
                     list.grid.loaded(epoch, page, found);
                 }
@@ -641,6 +659,7 @@ impl Shell {
         }
         let kind = list.kind.clone();
         let epoch = list.grid.epoch();
+        let stamp = self.marks.stamp();
         self.ask(
             cx,
             {
@@ -651,6 +670,7 @@ impl Shell {
                 if let (Ok(found), Some(list)) = (found, &mut shell.list)
                     && list.kind == kind
                 {
+                    shell.marks.listed(stamp, &found.items);
                     list.grid.loaded(epoch, 0, found);
                 }
             },

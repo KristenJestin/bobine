@@ -17,6 +17,7 @@ use crate::film_page::{self, Carried, Choices, From};
 use crate::menu::Menus;
 use crate::motion::{self, Presence};
 use crate::navigation::Screen;
+use crate::poster_actions::Action;
 use crate::scroll;
 use crate::series_page::{self, Refreshes};
 
@@ -157,6 +158,7 @@ impl Shell {
         let asked = id.clone();
         let generation = page.generation;
         let read_at = page.favourite.changes();
+        let stamp = self.marks.stamp();
         self.ask(
             cx,
             move |server| {
@@ -184,6 +186,11 @@ impl Shell {
                     }
                 };
                 shell.series.grid.update(&fresh.detail.series);
+                // Its episodes marked on this page change whether all of it is watched.
+                let (series, marks) = (&fresh.detail.series, &mut shell.marks);
+                marks.heard(stamp, &series.id, Action::MyList, fresh.detail.favourite);
+                marks.heard(stamp, &series.id, Action::Watched, series.watched);
+                marks.listed(stamp, &fresh.detail.similar);
                 let Some(page) = shell
                     .series_numbered(depth, generation)
                     .filter(|page| page.refreshes.is_newest(refresh))

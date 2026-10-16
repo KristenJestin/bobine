@@ -31,7 +31,7 @@ use crate::menu::Menus;
 use crate::motion::{self, Fade, Glide, Presence};
 use crate::navigation::{NavEntry, Screen};
 use crate::player::libmpv::Libmpv;
-use crate::poster_actions::Action;
+use crate::poster_actions::{Action, Said};
 use crate::reports::Reporting;
 use crate::scroll::{self, Move, Phase, Wheel};
 use crate::start::{self, Start};
@@ -854,13 +854,14 @@ impl Shell {
         );
     }
 
-    fn ask_pages<T: Listed + Send + 'static>(
+    fn ask_pages<T: Listed + Said + Send + 'static>(
         &mut self,
         items: std::ops::Range<usize>,
         page_of: fn(&mut Shell) -> &mut LibraryPage<T>,
         fetch: Fetch<T>,
         cx: &mut Context<Self>,
     ) {
+        let stamp = self.marks.stamp();
         let shown = page_of(self);
         let Some(Loadable::Ready(library)) = &shown.library else {
             return;
@@ -873,7 +874,10 @@ impl Shell {
                 cx,
                 move |server| fetch(server, &library, &tools.query(page)),
                 move |shell, items, cx| match items {
-                    Ok(items) => page_of(shell).loaded(epoch, page, items),
+                    Ok(items) => {
+                        shell.marks.listed(stamp, &items.items);
+                        page_of(shell).loaded(epoch, page, items);
+                    }
                     Err(error) => {
                         let shown = page_of(shell);
                         shown.grid.failed(epoch, page, Instant::now());
@@ -1083,6 +1087,7 @@ impl Shell {
         let asked = id.clone();
         let generation = self.details[depth].generation;
         let read_at = self.details[depth].favourite.changes();
+        let stamp = self.marks.stamp();
         self.ask(
             cx,
             move |server| server.film(&asked),
@@ -1098,6 +1103,14 @@ impl Shell {
                     }
                 };
                 shell.library.grid.update(&detail.film);
+                let film = &detail.film;
+                shell
+                    .marks
+                    .heard(stamp, &film.id, Action::MyList, detail.favourite);
+                shell
+                    .marks
+                    .heard(stamp, &film.id, Action::Watched, film.watched);
+                shell.marks.listed(stamp, &detail.similar);
                 let Some(page) = shell.detail_numbered(depth, generation) else {
                     return;
                 };
