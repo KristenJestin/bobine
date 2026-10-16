@@ -11,6 +11,7 @@ use gpui_kit::{
 
 use super::empty_screen;
 use crate::icons::{IconName, icon};
+use crate::motion;
 use crate::player::controls::SKIP_SECONDS;
 use crate::player::session::{Choice, Session};
 use crate::player::time;
@@ -19,6 +20,10 @@ use crate::theme;
 
 /// The margin of the controls from the edges of the window, after the design.
 const EDGE: f32 = 40.;
+/// The "Black out other screens" switch: its track, and the gap around its knob.
+const SWITCH_WIDTH: f32 = 34.;
+const SWITCH_HEIGHT: f32 = 20.;
+const SWITCH_GAP: f32 = 2.;
 
 /// The player screen with no film to play.
 pub fn empty(_cx: &mut Context<Shell>) -> impl IntoElement {
@@ -31,6 +36,9 @@ pub struct Shown {
     pub panel: f32,
     /// "Conversion par le serveur".
     pub notice: f32,
+    /// Where the "Black out other screens" switch is, from off (0) to on (1); `None` when the
+    /// compositor cannot cover a monitor, and the switch is not offered.
+    pub blackout: Option<f32>,
 }
 
 pub fn render(
@@ -51,7 +59,7 @@ pub fn render(
     });
     // Only an open panel closes on a click outside; one fading out is just drawn.
     let outside = session.panel_open().then(|| outside_panel(cx));
-    let panel = (shown.panel > 0.).then(|| panel(session, shown.panel, window, cx));
+    let panel = (shown.panel > 0.).then(|| panel(session, shown.panel, shown.blackout, window, cx));
     let notice = (shown.notice > 0.).then(|| conversion_notice(shown.notice));
     div()
         .id("player")
@@ -350,6 +358,7 @@ fn outside_panel(cx: &mut Context<Shell>) -> Stateful<Div> {
 fn panel(
     session: &Session,
     shown: f32,
+    blackout: Option<f32>,
     window: &mut Window,
     cx: &mut Context<Shell>,
 ) -> Stateful<Div> {
@@ -400,6 +409,52 @@ fn panel(
         .child(audio.mb(px(26.)))
         .child(section_title("SOUS-TITRES"))
         .child(subtitles)
+        .when_some(blackout, |panel, on| {
+            panel.child(blackout_switch(on, open, window, cx))
+        })
+}
+
+/// "Black out other screens", under the tracks: a line with a switch, `on` of the way to on.
+fn blackout_switch(
+    on: f32,
+    open: bool,
+    window: &mut Window,
+    cx: &mut Context<Shell>,
+) -> Stateful<Div> {
+    let track = motion::mix(rgba(0xffffff33), theme::accent(), on);
+    theme::eased("player-blackout", theme::Shades::line(), window, cx)
+        .mt(px(18.))
+        .px(px(12.))
+        .py(px(9.))
+        .rounded(px(8.))
+        .when(open, |line| {
+            line.cursor_pointer()
+                .on_click(cx.listener(|shell, _, window, cx| {
+                    shell.toggle_blackout(window, cx);
+                }))
+        })
+        .flex()
+        .items_center()
+        .justify_between()
+        .text_size(px(14.))
+        .child("Black out other screens")
+        .child(
+            div()
+                .relative()
+                .w(px(SWITCH_WIDTH))
+                .h(px(SWITCH_HEIGHT))
+                .rounded_full()
+                .bg(track)
+                .child(
+                    div()
+                        .absolute()
+                        .top(px(SWITCH_GAP))
+                        .left(px(SWITCH_GAP + on * (SWITCH_WIDTH - SWITCH_HEIGHT)))
+                        .size(px(SWITCH_HEIGHT - 2. * SWITCH_GAP))
+                        .rounded_full()
+                        .bg(rgb(0xffffff)),
+                ),
+        )
 }
 
 fn section_title(label: &'static str) -> Div {

@@ -76,8 +76,15 @@ fn main() {
             };
             #[cfg(not(feature = "harness"))]
             let open: shell::OpenConnector = Box::new(open_jellyfin);
+            let settings = config::settings_path(
+                std::env::var_os("XDG_CONFIG_HOME"),
+                std::env::var_os("HOME"),
+            );
+            // Nor the real settings.
+            #[cfg(feature = "harness")]
+            let settings = settings.filter(|_| harness.connector().is_none());
             let opened = cx.open_window(options, move |window, cx| {
-                let shell = cx.new(|cx| shell::Shell::new(font, open, cx));
+                let shell = cx.new(|cx| shell::Shell::new(font, open, settings, cx));
                 // The video surface and mpv go before the window's surface does.
                 let closing = shell.downgrade();
                 window.on_window_should_close(cx, move |_, cx| {
