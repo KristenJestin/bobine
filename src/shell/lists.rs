@@ -8,7 +8,7 @@ use gpui_kit::{Context, ScrollHandle, UniformListScrollHandle};
 
 use super::Shell;
 use super::pages::Loadable;
-use crate::favourite::{self, ListPage};
+use crate::favourite::{self, ListPage, Toggle};
 use crate::lists::PosterQueue;
 use crate::navigation::Screen;
 use crate::series_page::Refreshes;
@@ -55,6 +55,27 @@ impl MyListPage {
     }
 }
 
+/// The "My list" button of the player: the film playing, or the series of the episode.
+pub struct PlayerList {
+    pub item: ItemId,
+    generation: u64,
+    pub toggle: Toggle,
+    /// Why the last press did not take.
+    pub error: Option<&'static str>,
+}
+
+impl ListPage for PlayerList {
+    fn item(&self) -> &ItemId {
+        &self.item
+    }
+    fn generation(&self) -> u64 {
+        self.generation
+    }
+    fn button(&mut self) -> (&mut Toggle, &mut Option<&'static str>) {
+        (&mut self.toggle, &mut self.error)
+    }
+}
+
 impl<T> Loadable<T> {
     /// What shows while the server is asked again: what was drawn stays, a first or a failed
     /// load shows the wait.
@@ -66,10 +87,14 @@ impl<T> Loadable<T> {
 }
 
 impl Shell {
-    /// The "My list" button of the film or series page shown: the button changes at once, the
-    /// server is asked, and a failure puts the button back and says so on the page.
+    /// The "My list" button of the film or series page shown, or of the player: the button
+    /// changes at once, the server is asked, and a failure puts the button back and says so.
     pub fn toggle_favourite(&mut self, cx: &mut Context<Self>) {
         let page: &mut dyn ListPage = match self.navigator.current() {
+            Screen::Player => match self.playback.as_mut().and_then(|p| p.list.as_mut()) {
+                Some(list) => list,
+                None => return,
+            },
             Screen::FilmDetail => match self.details.last_mut() {
                 Some(page) => page,
                 None => return,
@@ -103,6 +128,13 @@ impl Shell {
                             .series_pages
                             .iter_mut()
                             .map(|page| page as &mut dyn ListPage),
+                    )
+                    .chain(
+                        shell
+                            .playback
+                            .as_mut()
+                            .and_then(|playback| playback.list.as_mut())
+                            .map(|list| list as &mut dyn ListPage),
                     );
                 let current = shell.navigator.current();
                 if favourite::answered(pages, current, &pressed, &answer) {
@@ -113,6 +145,47 @@ impl Shell {
                 if let Some(page) = favourite::reread(&pressed, &answer) {
                     shell.read_again(page, cx);
                 }
+                cx.notify();
+            },
+        );
+    }
+
+    /// The player's "My list" button is for `item`: whether it is in the list is asked of the
+    /// server.
+    pub(super) fn follow_list(&mut self, item: ItemId, cx: &mut Context<Self>) {
+        let generation = self.next_generation();
+        let Some(playback) = &mut self.playback else {
+            return;
+        };
+        let list = PlayerList {
+            item,
+            generation,
+            toggle: Toggle::default(),
+            error: None,
+        };
+        let read_at = list.toggle.changes();
+        playback.list = Some(list);
+        self.ask(
+            cx,
+            |server| server.favourites(),
+            move |shell, found, cx| {
+                // The list failing to load leaves the button out of the list: a press still works.
+                let Ok(found) = found else {
+                    return;
+                };
+                let Some(list) = shell
+                    .playback
+                    .as_mut()
+                    .and_then(|playback| playback.list.as_mut())
+                    .filter(|list| list.generation == generation)
+                else {
+                    return;
+                };
+                let listed = found.iter().any(|favourite| match favourite {
+                    Favourite::Film(film) => film.id == list.item,
+                    Favourite::Series(series) => series.id == list.item,
+                });
+                list.toggle.sync(listed, read_at);
                 cx.notify();
             },
         );

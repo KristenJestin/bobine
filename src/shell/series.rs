@@ -403,6 +403,7 @@ impl Shell {
         let playing = Playing {
             title,
             subtitle: Some(subtitle),
+            list: Some(page.id.clone()),
         };
         let source = plan.source.clone();
         let task = cx

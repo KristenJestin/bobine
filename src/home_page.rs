@@ -62,6 +62,8 @@ pub struct Started {
     /// What the player shows: the title, and the line under it.
     pub title: String,
     pub subtitle: String,
+    /// What the player's "My list" button puts in the list: the film, or the series.
+    pub list: ItemId,
     pub opened: Result<Playback, ProviderError>,
 }
 
@@ -88,6 +90,7 @@ pub fn start(server: &dyn MediaServer, target: &PlayTarget) -> Result<Started, S
             Ok(Started {
                 title: plan.title.clone(),
                 subtitle: parts.join(" · "),
+                list: plan.film.clone(),
                 opened: server.play(&plan.film, &plan.source),
                 plan,
             })
@@ -117,6 +120,7 @@ pub fn start(server: &dyn MediaServer, target: &PlayTarget) -> Result<Started, S
                 plan,
                 title,
                 subtitle,
+                list: episode.series.clone(),
             })
         }
     }

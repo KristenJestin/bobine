@@ -9,7 +9,7 @@ mod series;
 mod skip;
 
 pub use home::{HomePage, ListPage};
-pub use lists::{CollectionPage, CollectionsPage, MyListPage};
+pub use lists::{CollectionPage, CollectionsPage, MyListPage, PlayerList};
 pub use pages::{Chip, DetailPage, GONE, LibraryPage, Loadable, LoginForm, OpenConnector, Tool};
 pub use palette::{PersonPage, SearchState};
 pub use series::SeriesPage;
@@ -236,6 +236,8 @@ pub struct Playback {
     fallback: Option<Fallback>,
     notice_fade: Fade,
     notice_shown: bool,
+    /// The "My list" button of the player.
+    pub list: Option<PlayerList>,
     _ticker: Task<()>,
     _bounds: Subscription,
 }
@@ -244,6 +246,9 @@ pub struct Playback {
 pub struct Film {
     pub title: String,
     pub subtitle: Option<String>,
+    /// What the player's "My list" button puts in the list: the film, or the series of the
+    /// episode; `None` for a file of no server.
+    pub list: Option<bobine::provider::ItemId>,
 }
 
 impl Shell {
@@ -408,6 +413,7 @@ impl Shell {
             fallback: None,
             notice_fade: Fade::new(motion::quick()),
             notice_shown: false,
+            list: None,
             _ticker: ticker,
             _bounds: bounds,
         });
