@@ -213,6 +213,7 @@ impl Shell {
     }
 
     pub fn open_collection(&mut self, id: ItemId, cx: &mut Context<Self>) {
+        self.forward.clear();
         self.collection_pages.push(CollectionPage {
             id,
             detail: Loadable::Loading,

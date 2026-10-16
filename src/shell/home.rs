@@ -566,6 +566,7 @@ impl Shell {
 
     /// "See all" on a row.
     pub fn open_list(&mut self, kind: ListKind, library: Option<String>, cx: &mut Context<Self>) {
+        self.forward.clear();
         self.list = Some(ListPage {
             kind,
             library,

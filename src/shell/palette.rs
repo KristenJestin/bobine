@@ -213,6 +213,7 @@ impl Shell {
     }
 
     pub fn open_person(&mut self, person: PersonHit, cx: &mut Context<Self>) {
+        self.forward.clear();
         let id = person.id.clone();
         self.people.push(PersonPage {
             id: person.id,

@@ -10,12 +10,13 @@ use std::time::{Duration, Instant};
 
 use bobine::provider::{
     Collection, Connector, Episode, FilmDetail, FilmQuery, FilterChoices, ItemId, LibraryKind,
-    MediaServer, MediaSource, Page, PlayMethod, Playback as Opened, PlaybackReport, ProviderError,
+    MediaServer, MediaSource, Page, PersonHit, PlayMethod, Playback as Opened, PlaybackReport,
+    ProviderError,
 };
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    Bounds, Context, Entity, Image, Pixels, Point, RenderImage, ScrollHandle, ScrollWheelEvent,
-    Subscription, Task, TouchPhase, UniformListScrollHandle, Window, point, px,
+    Bounds, Context, Entity, Image, NavigationDirection, Pixels, Point, RenderImage, ScrollHandle,
+    ScrollWheelEvent, Subscription, Task, TouchPhase, UniformListScrollHandle, Window, point, px,
 };
 
 use super::{Film as Playing, HomePage, Shell};
@@ -24,6 +25,7 @@ use crate::fallback::Fallback;
 use crate::favourite::{self, ListPage, Toggle};
 use crate::film_page::{self, Choices, From, Plan};
 use crate::grid::{Grid, Listed, RETRY_AFTER};
+use crate::home_page::ListKind;
 use crate::images::{self, Key};
 use crate::input::TextInput;
 use crate::library_tools::{Sort, Tools};
@@ -34,6 +36,15 @@ use crate::player::libmpv::Libmpv;
 use crate::reports::Reporting;
 use crate::scroll::{self, Move, Phase, Wheel};
 use crate::start::{self, Start};
+
+/// A page gone back from, for the mouse's forward button to open again.
+pub(super) enum Reopen {
+    Film(ItemId),
+    Series(ItemId),
+    Person(PersonHit),
+    List(ListKind, Option<String>),
+    Collection(ItemId),
+}
 
 /// How long the address must stay unchanged before the server is asked who it is.
 const PROBE_AFTER: Duration = Duration::from_millis(600);
@@ -494,6 +505,7 @@ impl Shell {
         self.people.clear();
         self.list = None;
         self.collection_pages.clear();
+        self.forward.clear();
         self.search = None;
         self.navigator.switch_root(Screen::Login);
         cx.notify();
@@ -596,6 +608,7 @@ impl Shell {
         self.people.clear();
         self.list = None;
         self.collection_pages.clear();
+        self.forward.clear();
         self.search = None;
         self.hero_view.update(cx, |hero, cx| {
             hero.forget_logos();
@@ -720,6 +733,7 @@ impl Shell {
         if !self.navigator.select(entry) {
             return;
         }
+        self.forward.clear();
         self.details.clear();
         self.series_pages.clear();
         self.up_next.cancel();
@@ -730,23 +744,77 @@ impl Shell {
         cx.notify();
     }
 
-    /// Escape or the back link.
+    /// Escape, the back link or the mouse's back button.
     pub fn go_back(&mut self, cx: &mut Context<Self>) -> bool {
-        match self.navigator.current() {
-            Screen::FilmDetail => drop(self.details.pop()),
-            Screen::SeriesDetail => drop(self.series_pages.pop()),
-            Screen::Person => drop(self.people.pop()),
-            Screen::HomeList => self.list = None,
-            Screen::CollectionDetail => drop(self.collection_pages.pop()),
-            _ => {}
-        }
+        let gone = match self.navigator.current() {
+            Screen::FilmDetail => self.details.pop().map(|page| Reopen::Film(page.id)),
+            Screen::SeriesDetail => self.series_pages.pop().map(|page| Reopen::Series(page.id)),
+            Screen::Person => self.people.pop().map(|page| {
+                Reopen::Person(PersonHit {
+                    id: page.id,
+                    name: page.name,
+                    photo: page.photo,
+                })
+            }),
+            Screen::HomeList => self
+                .list
+                .take()
+                .map(|list| Reopen::List(list.kind, list.library)),
+            Screen::CollectionDetail => self
+                .collection_pages
+                .pop()
+                .map(|page| Reopen::Collection(page.id)),
+            _ => None,
+        };
         self.up_next.cancel();
         if !self.navigator.back() {
             return false;
         }
+        self.forward.extend(gone);
         self.arrived(cx);
         cx.notify();
         true
+    }
+
+    /// The mouse's forward button: the page last gone back from opens again, read afresh.
+    pub fn go_forward(&mut self, cx: &mut Context<Self>) -> bool {
+        // Opening a page forgets what was ahead: the rest is put back after.
+        let mut forward = std::mem::take(&mut self.forward);
+        let Some(page) = forward.pop() else {
+            return false;
+        };
+        match page {
+            Reopen::Film(id) => self.open_film(id, cx),
+            Reopen::Series(id) => self.open_series(id, cx),
+            Reopen::Person(person) => self.open_person(person, cx),
+            Reopen::List(kind, library) => self.open_list(kind, library, cx),
+            Reopen::Collection(id) => self.open_collection(id, cx),
+        }
+        self.forward = forward;
+        true
+    }
+
+    /// A side button of the mouse, wherever the pointer is. Not on the login nor in the player,
+    /// where a film would stop on a stray press.
+    pub fn navigate(
+        &mut self,
+        direction: NavigationDirection,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.navigator.current().shows_pill_bar() {
+            return;
+        }
+        if self.search_is_open() {
+            if direction == NavigationDirection::Back {
+                self.close_search(window, cx);
+            }
+            return;
+        }
+        match direction {
+            NavigationDirection::Back => self.go_back(cx),
+            NavigationDirection::Forward => self.go_forward(cx),
+        };
     }
 
     /// A root screen shows: what it lists may have changed since (a film watched, resumed).
@@ -1049,6 +1117,7 @@ impl Shell {
     }
 
     pub fn open_film(&mut self, id: ItemId, cx: &mut Context<Self>) {
+        self.forward.clear();
         let generation = self.next_generation();
         self.details.push(DetailPage::new(id, generation));
         self.navigator.open(Screen::FilmDetail);
@@ -1547,7 +1616,6 @@ impl Shell {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::home_page::ListKind;
     use bobine::provider::Film;
 
     #[test]
@@ -2260,6 +2328,7 @@ mod tests {
             })
             .unwrap();
     }
+
     /// The window as last drawn: where things are, and what the mouse reaches.
     fn drawn(
         window: &gpui_kit::WindowHandle<Shell>,
@@ -2308,5 +2377,55 @@ mod tests {
             visual.simulate_keystrokes("escape");
             assert_eq!(current(&window, cx), screen);
         }
+    }
+
+    #[gpui_kit::test]
+    fn the_mouse_back_button_goes_back_and_the_forward_button_goes_forward(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        use gpui_kit::{Modifiers, MouseButton, NavigationDirection};
+
+        let (_server, window) = signed_in_window(cx);
+        let film = ItemId(crate::fake::FILM.into());
+        window
+            .update(cx, |shell, _, cx| shell.open_film(film.clone(), cx))
+            .unwrap();
+        let mut visual = drawn(&window, cx);
+        // Over the bar, which lets no click through to the page: the side buttons still work.
+        let at = visual.debug_bounds("pill-bar").expect("the bar").center();
+        let mut press = |direction, cx: &mut gpui_kit::TestAppContext| {
+            let button = MouseButton::Navigate(direction);
+            visual.simulate_mouse_down(at, button, Modifiers::none());
+            visual.simulate_mouse_up(at, button, Modifiers::none());
+            drawn(&window, cx);
+        };
+        press(NavigationDirection::Back, cx);
+        assert_eq!(current(&window, cx), Screen::Home);
+        press(NavigationDirection::Forward, cx);
+        assert_eq!(current(&window, cx), Screen::FilmDetail);
+        let shown = window
+            .update(cx, |shell, _, _| {
+                shell
+                    .details
+                    .iter()
+                    .map(|page| page.id.clone())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap();
+        assert_eq!(shown, [film]);
+        // Nothing further to go forward to.
+        press(NavigationDirection::Forward, cx);
+        assert_eq!(current(&window, cx), Screen::FilmDetail);
+        // A page opened after going back leaves nothing to go forward to.
+        press(NavigationDirection::Back, cx);
+        window
+            .update(cx, |shell, _, cx| {
+                shell.open_series(ItemId(crate::fake::SERIES.into()), cx)
+            })
+            .unwrap();
+        press(NavigationDirection::Forward, cx);
+        assert_eq!(current(&window, cx), Screen::SeriesDetail);
+        press(NavigationDirection::Back, cx);
+        assert_eq!(current(&window, cx), Screen::Home);
     }
 }

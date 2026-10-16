@@ -87,6 +87,7 @@ struct Fresh {
 
 impl Shell {
     pub fn open_series(&mut self, id: ItemId, cx: &mut Context<Self>) {
+        self.forward.clear();
         // The card belongs to the page under: it does not play over this one.
         self.cancel_up_next(cx);
         let generation = self.next_generation();
