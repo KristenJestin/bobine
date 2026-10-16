@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::time::Instant;
 
-use bobine::provider::ItemId;
+use bobine::provider::{Episode, ItemId};
 use gpui_kit::prelude::*;
 use gpui_kit::{
     AnyElement, App, Context, Div, ElementId, Entity, IntoElement, Render, Rgba, SharedString,
@@ -31,13 +31,19 @@ pub enum Open {
     Series(ItemId, Option<ItemId>),
     /// The title is read where the card's row holds it, when the card is clicked.
     Pick(Pick),
+    /// The row around the card takes the click: nothing opens here. The episode tells this card
+    /// from the one before it in the same place.
+    Row(ItemId),
 }
 
 impl Open {
     /// The title the card stands for.
     fn item(&self) -> Option<&ItemId> {
         match self {
-            Open::Film(id) | Open::Series(id, _) | Open::Pick(Pick::Listed(_, id)) => Some(id),
+            Open::Film(id)
+            | Open::Series(id, _)
+            | Open::Row(id)
+            | Open::Pick(Pick::Listed(_, id)) => Some(id),
             Open::Pick(Pick::Row(titles, at)) => titles.get(*at).map(|title| title.id()),
         }
     }
@@ -49,6 +55,8 @@ pub enum Play {
     /// The title is read where the card's row holds it, when the button is pressed.
     Pick(Pick),
     Target(PlayTarget),
+    /// An episode of the series page, which plays as the page does and comes back to it.
+    Episode(Box<Episode>),
 }
 
 /// A button of the corner: what the title's list says, and what the button shows now.
@@ -239,6 +247,7 @@ impl Render for Card {
                                 shell.open_title(&title, cx);
                             }
                         }
+                        Open::Row(_) => {}
                     })
                     .ok();
             })
@@ -279,6 +288,7 @@ impl Card {
             shell
                 .update(cx, |shell, cx| {
                     let target = match play {
+                        Play::Episode(episode) => return shell.play_episode(*episode, window, cx),
                         Play::Target(target) => Some(target),
                         Play::Pick(pick) => pick
                             .title(shell.list.as_ref().map(|list| &list.grid))

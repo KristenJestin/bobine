@@ -371,8 +371,8 @@ pub fn series() -> Vec<Series> {
                 end_year: (n % 3 != 1).then_some(year),
                 community_rating: Some(6.5 + (n * 3 % 20) as f32 / 10.),
                 unwatched: 0,
-                watched: false,
-                favourite: false,
+                watched: Some(false),
+                favourite: Some(false),
                 poster: image(&id, ImageKind::Primary),
                 backdrop: image(&id, ImageKind::Backdrop),
                 season: None,
@@ -389,8 +389,8 @@ fn hit(series: &Series) -> SeriesHit {
         title: series.title.clone(),
         year: series.year,
         poster: series.poster.clone(),
-        favourite: Some(series.favourite),
-        watched: Some(series.watched),
+        favourite: series.favourite,
+        watched: series.watched,
     }
 }
 
@@ -495,7 +495,7 @@ impl FakeServer {
         }
         let mut series = series();
         for series in &mut series {
-            series.favourite = favourites.contains(&series.id);
+            series.favourite = Some(favourites.contains(&series.id));
         }
         Self {
             state: Arc::new(Mutex::new(State {
@@ -547,7 +547,7 @@ impl FakeServer {
         let unwatched = episodes().filter(|e| !e.item.watched).count() as u32;
         Series {
             unwatched,
-            watched: unwatched == 0 && episodes().next().is_some(),
+            watched: Some(unwatched == 0 && episodes().next().is_some()),
             ..series.clone()
         }
     }
@@ -1189,7 +1189,7 @@ impl MediaServer for FakeServer {
             found.favourite = favourite;
         }
         for found in state.series.iter_mut().filter(|s| &s.id == item) {
-            found.favourite = favourite;
+            found.favourite = Some(favourite);
         }
         Ok(())
     }
@@ -1360,10 +1360,10 @@ mod tests {
         server.set_watched(&series, true).unwrap();
         assert_eq!(
             (shown(&server).unwatched, shown(&server).watched),
-            (0, true)
+            (0, Some(true))
         );
         server.set_watched(&series, false).unwrap();
-        assert!(!shown(&server).watched);
+        assert_eq!(shown(&server).watched, Some(false));
         assert!(shown(&server).unwatched > 0);
     }
 

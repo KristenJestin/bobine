@@ -3,6 +3,7 @@
 //! or how far); below, the cast and similar series. The page scrolls; over it, after an episode
 //! ended, the "Next episode" card counts down.
 
+use std::rc::Rc;
 use std::time::Instant;
 
 use bobine::provider::{Episode, Season, SeriesDetail};
@@ -12,15 +13,17 @@ use gpui_kit::{
     div, px, rgb, rgba,
 };
 
+use super::card::{Offer, Open, Play};
 use super::film_detail::{
-    EDGE, MenuState, ROW_POSTER, TEXT_WIDTH, cast_row, chips_row, hero_frame, hero_text,
-    list_button, meta_line, row,
+    EDGE, MenuState, ROW_POSTER, TEXT_WIDTH, cast_row, chips_row, facts_line, hero_frame,
+    hero_text, list_button, row,
 };
-use super::{centered, note, picture, progress_bar, row_heading, series_poster};
+use super::{card, centered, note, picture, progress_bar, row_heading, series_poster};
 use crate::film_page::{self, Choices};
 use crate::icons::{IconName, icon};
 use crate::images;
 use crate::motion;
+use crate::navigation::NavEntry;
 use crate::series_page;
 use crate::shell::{Loadable, SeriesPage, Shell};
 use crate::theme;
@@ -56,7 +59,7 @@ pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -
     let seasons = seasons(shell, &shown, window, cx);
     let mut rows: Vec<AnyElement> = Vec::new();
     if !detail.cast.is_empty() {
-        rows.push(cast_row(shell, &detail.cast, &cast_scroll, cx).into_any_element());
+        rows.push(cast_row(shell, &detail.cast, &cast_scroll, window, cx).into_any_element());
     }
     if !detail.similar.is_empty() {
         let cards: Vec<Stateful<Div>> = detail
@@ -170,7 +173,12 @@ fn hero(
         .map(|(next, choices)| chips_row(&next.versions, choices, menu, &shown.chips, window, cx));
     hero_frame(backdrop, height).child(
         hero_text(series.title.clone())
-            .child(meta_line(series_page::meta(detail, shown.seasons.len())))
+            .child(facts_line(
+                series_page::meta(detail, shown.seasons.len()),
+                NavEntry::Series,
+                window,
+                cx,
+            ))
             .children(detail.overview.clone().map(|overview| {
                 div()
                     .text_size(px(15.))
@@ -333,6 +341,35 @@ fn episode_row(
     };
     let played = episode.clone();
     let marked = episode.clone();
+    // The pointer over the picture brings the veil and the play button of the cards; the click
+    // anywhere on the row, the picture included, plays.
+    let progress = film_page::progress(item);
+    let draw = move |layer: Stateful<Div>| {
+        div()
+            .relative()
+            .flex_none()
+            .w(px(STILL_WIDTH))
+            .h(px(STILL_HEIGHT))
+            .rounded(px(theme::RADIUS))
+            .overflow_hidden()
+            .bg(theme::panel())
+            .children(picture(still.clone(), theme::RADIUS))
+            .children(progress.map(|fraction| {
+                div()
+                    .absolute()
+                    .left(px(8.))
+                    .bottom(px(8.))
+                    .child(progress_bar(fraction, STILL_WIDTH - 16.))
+            }))
+            .child(layer)
+    };
+    let offer = Offer {
+        open: Open::Row(item.id.clone()),
+        play: Play::Episode(Box::new(episode.clone())),
+        quick: None,
+        draw: Rc::new(draw),
+    };
+    let still = card(shell, ("episode-still", index).into(), offer, cx);
     let shades = theme::Shades {
         rest: if is_next {
             rgb(0x16161a)
@@ -388,23 +425,7 @@ fn episode_row(
         .on_click(
             cx.listener(move |shell, _, window, cx| shell.play_episode(played.clone(), window, cx)),
         )
-        .child(
-            div()
-                .relative()
-                .flex_none()
-                .w(px(STILL_WIDTH))
-                .h(px(STILL_HEIGHT))
-                .rounded(px(theme::RADIUS))
-                .bg(theme::panel())
-                .children(picture(still, theme::RADIUS))
-                .children(film_page::progress(item).map(|fraction| {
-                    div()
-                        .absolute()
-                        .left(px(8.))
-                        .bottom(px(8.))
-                        .child(progress_bar(fraction, STILL_WIDTH - 16.))
-                })),
-        )
+        .child(still)
         .child(
             div()
                 .flex_1()

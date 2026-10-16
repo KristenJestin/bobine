@@ -120,9 +120,15 @@ impl Navigator {
         *self.stack.last().expect("the stack is never empty")
     }
 
-    /// The screen the stack started from: its entry of the pill bar is the one highlighted.
+    /// The screen of the pill bar the stack stands in: its entry is the one highlighted. The
+    /// last one opened counts, so a library pushed over a film page lights its own pill.
     pub fn section(&self) -> Screen {
-        self.stack[0]
+        self.stack
+            .iter()
+            .rev()
+            .find(|screen| NavEntry::ALL.iter().any(|entry| entry.is_current(**screen)))
+            .copied()
+            .unwrap_or(self.stack[0])
     }
 
     /// Goes deeper (a film from a library, the player from a film): `back` returns here.
@@ -238,6 +244,18 @@ mod tests {
         let mut nav = Navigator::new();
         nav.switch_root(Screen::Home);
         nav.open(Screen::HomeList);
+        assert_eq!(nav.section(), Screen::Home);
+    }
+
+    #[test]
+    fn a_library_pushed_over_a_page_lights_its_own_pill_and_back_returns_to_the_page() {
+        let mut nav = Navigator::new();
+        nav.switch_root(Screen::Home);
+        nav.open(Screen::FilmDetail);
+        nav.open(Screen::Library);
+        assert_eq!(nav.section(), Screen::Library);
+        assert!(nav.back());
+        assert_eq!(nav.current(), Screen::FilmDetail);
         assert_eq!(nav.section(), Screen::Home);
     }
 

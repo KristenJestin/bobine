@@ -190,7 +190,9 @@ impl Shell {
                 // Its episodes marked on this page change whether all of it is watched.
                 let (series, marks) = (&fresh.detail.series, &mut shell.marks);
                 marks.heard(stamp, &series.id, Action::MyList, fresh.detail.favourite);
-                marks.heard(stamp, &series.id, Action::Watched, series.watched);
+                if let Some(watched) = series.watched {
+                    marks.heard(stamp, &series.id, Action::Watched, watched);
+                }
                 marks.listed(stamp, &fresh.detail.similar);
                 let Some(page) = shell
                     .series_numbered(depth, generation)

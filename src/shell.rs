@@ -184,6 +184,10 @@ pub struct Shell {
     pub search: Option<SearchState>,
     /// The pages gone back from, the last one on top: the mouse's forward button opens them again.
     forward: Vec<pages::Reopen>,
+    /// Each film and start position a playback was asked with, even when the server refused it:
+    /// no player starts in a test, so this is what the player would have been given.
+    #[cfg(test)]
+    planned: Vec<(bobine::provider::ItemId, Duration)>,
     /// The highlight of each entry of the pill bar eases from one section to the next.
     nav_pills: [Fade; NavEntry::ALL.len()],
     pub images: Images,
@@ -329,6 +333,8 @@ impl Shell {
             my_list: Default::default(),
             search: None,
             forward: Vec::new(),
+            #[cfg(test)]
+            planned: Vec::new(),
             nav_pills: [Fade::new(motion::quick()); NavEntry::ALL.len()],
             images: Images::default(),
             cards: Default::default(),
