@@ -114,6 +114,57 @@ impl fmt::Display for PlayerError {
     }
 }
 
+/// How the picture fills the window.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Aspect {
+    /// The film's own shape, black bars where it does not fill.
+    Auto,
+    /// The film's shape, cropped to fill the window.
+    Fill,
+    Wide,
+    Standard,
+    Scope,
+}
+
+impl Aspect {
+    pub const ALL: [Aspect; 5] = [
+        Self::Auto,
+        Self::Fill,
+        Self::Wide,
+        Self::Standard,
+        Self::Scope,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Auto => "Auto",
+            Self::Fill => "Fill",
+            Self::Wide => "16:9",
+            Self::Standard => "4:3",
+            Self::Scope => "2.35:1",
+        }
+    }
+}
+
+/// What the player says of the film it plays, for "Playback info". `None` where it cannot
+/// say yet.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PlaybackInfo {
+    /// As mpv names it: `matroska,webm`, `hls`…
+    pub container: Option<String>,
+    /// `hevc`, `h264`…
+    pub video_codec: Option<String>,
+    /// `eac3`, `aac`…
+    pub audio_codec: Option<String>,
+    pub size: Option<(u32, u32)>,
+    /// Bits per second.
+    pub video_bitrate: Option<f64>,
+    /// Frames dropped by the output and by the decoder, together.
+    pub dropped_frames: Option<u64>,
+    /// `vaapi`, `nvdec`…; `None` when the processor decodes.
+    pub hardware_decoder: Option<String>,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum PlayerEvent {
     /// The file is open and what `load` chose is applied: the film is playing.
@@ -168,6 +219,12 @@ pub trait Player {
     /// Moves the subtitles up: `percent` of the window's height from its top, 100 being their
     /// own place (mpv's `sub-pos`).
     fn set_subtitle_position(&mut self, percent: f64);
+    /// 1 is the film's own speed.
+    fn set_speed(&mut self, speed: f64);
+    /// Seconds the subtitles come later (earlier when negative).
+    fn set_subtitle_delay(&mut self, seconds: f64);
+    fn set_aspect(&mut self, aspect: Aspect);
+    fn info(&self) -> PlaybackInfo;
     /// What happened since the last call, oldest first. Never waits.
     fn events(&mut self) -> Vec<PlayerEvent>;
 }
@@ -197,12 +254,17 @@ pub mod fake {
         Subtitle(Option<i64>),
         AddSubtitle(String),
         SubtitlePosition(f64),
+        Speed(f64),
+        SubtitleDelay(f64),
+        Aspect(Aspect),
     }
 
     #[derive(Default)]
     pub struct FakePlayer {
         pub calls: std::rc::Rc<std::cell::RefCell<Vec<Call>>>,
         pub queued: std::rc::Rc<std::cell::RefCell<Vec<PlayerEvent>>>,
+        /// What `info` answers.
+        pub info: std::rc::Rc<std::cell::RefCell<PlaybackInfo>>,
     }
 
     impl FakePlayer {
@@ -250,6 +312,18 @@ pub mod fake {
         }
         fn set_subtitle_position(&mut self, percent: f64) {
             self.record(Call::SubtitlePosition(percent));
+        }
+        fn set_speed(&mut self, speed: f64) {
+            self.record(Call::Speed(speed));
+        }
+        fn set_subtitle_delay(&mut self, seconds: f64) {
+            self.record(Call::SubtitleDelay(seconds));
+        }
+        fn set_aspect(&mut self, aspect: Aspect) {
+            self.record(Call::Aspect(aspect));
+        }
+        fn info(&self) -> PlaybackInfo {
+            self.info.borrow().clone()
         }
         fn events(&mut self) -> Vec<PlayerEvent> {
             std::mem::take(&mut *self.queued.borrow_mut())

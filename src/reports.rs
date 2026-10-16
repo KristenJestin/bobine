@@ -189,6 +189,7 @@ mod tests {
                 Box::new(FakePlayer {
                     calls: player.calls.clone(),
                     queued: player.queued.clone(),
+                    info: player.info.clone(),
                 }),
                 Box::new(FakeDisplay::default()),
                 "Le Dernier Hiver".into(),
