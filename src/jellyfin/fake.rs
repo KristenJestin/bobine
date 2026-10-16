@@ -77,7 +77,17 @@ pub struct State {
     pub account_disabled: bool,
     /// How long an image takes to be answered (a server converting a person's photo).
     pub image_delay: std::time::Duration,
+    /// How many search requests are held until they have all arrived (0: none held), to tell
+    /// requests sent at the same time from requests sent one after another.
+    pub search_gate: usize,
+    /// Search requests arrived at the gate so far.
+    gate_arrivals: usize,
+    /// For each held search request, whether all the others had arrived when it was let go.
+    pub gate_met: Vec<bool>,
 }
+
+/// How long a held search request waits for the others before it is let go anyway.
+const GATE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// A person with more titles than one page holds.
 pub const PERSON_WITH_MANY_TITLES: &str = "9e000000000000000000000000000004";
@@ -287,6 +297,39 @@ fn answer(state: &State, seen: &Seen) -> Answer {
     }
 }
 
+/// Waits until every held search request has arrived; false if they did not all come in time.
+fn wait_at_gate(state: &Mutex<State>) -> bool {
+    let started = std::time::Instant::now();
+    loop {
+        {
+            let state = state.lock().unwrap();
+            if state.gate_arrivals >= state.search_gate {
+                return true;
+            }
+        }
+        if started.elapsed() > GATE_TIMEOUT {
+            return false;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
+fn respond(request: tiny_http::Request, answer: Answer, delay: std::time::Duration) {
+    let json = Header::from_bytes("Content-Type", "application/json").unwrap();
+    let _ = match answer {
+        Answer::Json(code, value) => request.respond(
+            Response::from_string(value.to_string())
+                .with_status_code(code)
+                .with_header(json),
+        ),
+        Answer::Bytes(bytes) => {
+            std::thread::sleep(delay);
+            request.respond(Response::from_data(bytes))
+        }
+        Answer::Empty(code) => request.respond(Response::empty(code)),
+    };
+}
+
 impl FakeServer {
     pub fn start() -> Self {
         let server = Arc::new(Server::http("127.0.0.1:0").unwrap());
@@ -312,24 +355,26 @@ impl FakeServer {
                         authorization,
                         body,
                     };
-                    let (answer, delay) = {
+                    let (answer, delay, gated) = {
                         let mut state = state.lock().unwrap();
                         state.seen.push(seen.clone());
-                        (answer(&state, &seen), state.image_delay)
-                    };
-                    let json = Header::from_bytes("Content-Type", "application/json").unwrap();
-                    let _ = match answer {
-                        Answer::Json(code, value) => request.respond(
-                            Response::from_string(value.to_string())
-                                .with_status_code(code)
-                                .with_header(json),
-                        ),
-                        Answer::Bytes(bytes) => {
-                            std::thread::sleep(delay);
-                            request.respond(Response::from_data(bytes))
+                        let gated = state.search_gate > 0
+                            && (seen.path == "/Persons" || seen.param("SearchTerm").is_some());
+                        if gated {
+                            state.gate_arrivals += 1;
                         }
-                        Answer::Empty(code) => request.respond(Response::empty(code)),
+                        (answer(&state, &seen), state.image_delay, gated)
                     };
+                    if gated {
+                        let state = Arc::clone(&state);
+                        std::thread::spawn(move || {
+                            let met = wait_at_gate(&state);
+                            state.lock().unwrap().gate_met.push(met);
+                            respond(request, answer, delay);
+                        });
+                    } else {
+                        respond(request, answer, delay);
+                    }
                 }
             })
         };

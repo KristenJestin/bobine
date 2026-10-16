@@ -444,7 +444,8 @@ impl MediaServer for Jellyfin {
     }
 
     /// One request per group, so that a group with many matches never crowds out the others
-    /// (search hints share a single limit between the three).
+    /// (search hints share a single limit between the three). The three go out at the same
+    /// time: a search costs one round trip, not three.
     fn search(&self, query: &str, per_group: u32) -> Result<SearchResults, ProviderError> {
         let titles = |kind: &str| {
             self.items(
@@ -459,19 +460,27 @@ impl MediaServer for Jellyfin {
                 ],
             )
         };
-        let films = titles("Movie")?;
-        let series = titles("Series")?;
-        let people: QueryResult = self.http.get(
-            "search people",
-            "/Persons",
-            &[
-                ("searchTerm", query.to_string()),
-                ("limit", per_group.to_string()),
-                ("imageTypeLimit", "1".into()),
-                ("enableImageTypes", "Primary".into()),
-                self.user(),
-            ],
-        )?;
+        let (films, series, people) = std::thread::scope(|scope| {
+            let films = scope.spawn(|| titles("Movie"));
+            let series = scope.spawn(|| titles("Series"));
+            let people = self.http.get::<QueryResult>(
+                "search people",
+                "/Persons",
+                &[
+                    ("searchTerm", query.to_string()),
+                    ("limit", per_group.to_string()),
+                    ("imageTypeLimit", "1".into()),
+                    ("enableImageTypes", "Primary".into()),
+                    self.user(),
+                ],
+            );
+            (
+                films.join().expect("the films request panicked"),
+                series.join().expect("the series request panicked"),
+                people,
+            )
+        });
+        let (films, series, people) = (films?, series?, people?);
         Ok(SearchResults {
             films: films.items.iter().map(Item::film).collect(),
             series: series.items.iter().map(Item::series_hit).collect(),

@@ -1021,6 +1021,28 @@ fn a_series_seen_both_whole_and_in_episodes_counts_once() {
 }
 
 #[test]
+fn the_three_groups_are_asked_at_the_same_time() {
+    let s = Setup::new();
+    let server = s.signed_in();
+    let alone = server.search("harbour", 5).unwrap();
+    s.fake.state.lock().unwrap().search_gate = 3;
+    let found = server.search("harbour", 5).unwrap();
+    // The fake holds each request until the three have arrived: sent one after another, the
+    // first would be let go alone.
+    assert_eq!(s.fake.state.lock().unwrap().gate_met, [true, true, true]);
+    assert_eq!(found, alone);
+    assert!(!found.films.is_empty() && !found.series.is_empty() && !found.people.is_empty());
+}
+
+#[test]
+fn a_search_still_fails_whole_when_one_group_fails() {
+    let s = Setup::new();
+    let server = s.signed_in();
+    s.fake.state.lock().unwrap().forbidden = true;
+    assert!(server.search("harbour", 5).is_err());
+}
+
+#[test]
 fn the_token_never_in_debug_or_error_output() {
     let s = Setup::new();
     let server = s.signed_in();
