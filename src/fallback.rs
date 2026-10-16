@@ -1,7 +1,7 @@
 //! Direct play first; when the file does not play, once, the server's conversion. A file does
 //! not play when its load ends with an error, or when no picture comes within a few seconds of
-//! the start of its playback, even if the player never says it is open. A file that showed a
-//! picture plays: an error later is not one a conversion mends, and is shown as it is.
+//! its opening, or when it never opens within a longer limit. A file that showed a picture
+//! plays: an error later is not one a conversion mends, and is shown as it is.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -15,13 +15,21 @@ use crate::film_page::Plan;
 use crate::player::PlayerError;
 use crate::player::session::Session;
 
-/// How long a file may go without a picture from the start of its playback: the seek to a
-/// resume point over a slow network comes first.
+/// How long an open file may go without a picture: the seek to a resume point over a slow
+/// network comes first.
 pub const FIRST_PICTURE_WAIT: Duration = Duration::from_secs(20);
 
 /// The same for a conversion: a slow server encodes its first segment after the resume point,
 /// a 4K one to H.264 at that, before any picture comes.
 pub const FIRST_CONVERTED_PICTURE_WAIT: Duration = Duration::from_secs(60);
+
+/// How long a file may stay without saying it is open, from when it is given to the player:
+/// a spinning disk or a remote link opens slowly, but not for ever.
+pub const OPEN_WAIT: Duration = Duration::from_secs(60);
+
+/// The same for a conversion: the server answers the playlist once it has started to encode, and
+/// the verdict that follows is final (the film cannot play), so it is given more room.
+pub const OPEN_CONVERTED_WAIT: Duration = Duration::from_secs(90);
 
 /// How long the conversion notice stays once the converted picture shows.
 pub const NOTICE_FOR: Duration = Duration::from_secs(5);
@@ -43,13 +51,16 @@ fn step(method: PlayMethod, session: &Session, planned: Duration, now: Instant) 
         return Step::Nothing;
     }
     let failed = session.error().is_some();
-    let wait = match method {
-        PlayMethod::DirectPlay => FIRST_PICTURE_WAIT,
-        PlayMethod::Transcode => FIRST_CONVERTED_PICTURE_WAIT,
+    let (picture_wait, open_wait) = match method {
+        PlayMethod::DirectPlay => (FIRST_PICTURE_WAIT, OPEN_WAIT),
+        PlayMethod::Transcode => (FIRST_CONVERTED_PICTURE_WAIT, OPEN_CONVERTED_WAIT),
     };
-    let late = session
-        .opened_at()
-        .is_some_and(|opened| now.duration_since(opened) >= wait);
+    // The picture is waited for from `Loaded`; a file that never says it, from its opening.
+    let late = match (session.loaded_at(), session.opened_at()) {
+        (Some(loaded), _) => now.duration_since(loaded) >= picture_wait,
+        (None, Some(opened)) => now.duration_since(opened) >= open_wait,
+        (None, None) => false,
+    };
     match method {
         PlayMethod::DirectPlay if failed || late => Step::Convert {
             from: if session.position_known() {
@@ -341,7 +352,16 @@ mod tests {
     fn a_file_that_never_opens_and_never_fails_is_converted_after_the_wait() {
         let mut f = Fixture::new();
         assert_eq!(f.after(1, vec![]), Step::Nothing);
-        assert_eq!(f.after(19, vec![]), Step::Nothing, "still within the wait");
+        assert_eq!(
+            f.after(20, vec![]),
+            Step::Nothing,
+            "a slow open is waited for"
+        );
+        assert_eq!(
+            f.after(39, vec![]),
+            Step::Nothing,
+            "still within the long wait"
+        );
         let Step::Convert { from } = f.after(1, vec![]) else {
             panic!("a black screen for ever");
         };
@@ -349,11 +369,30 @@ mod tests {
     }
 
     #[test]
+    fn a_slow_open_that_shows_its_picture_late_is_not_converted() {
+        let mut f = Fixture::new();
+        assert_eq!(f.after(1, vec![]), Step::Nothing);
+        assert_eq!(f.after(15, vec![PlayerEvent::Loaded]), Step::Nothing);
+        assert_eq!(
+            f.after(10, vec![]),
+            Step::Nothing,
+            "25 s in, 10 s after Loaded"
+        );
+        assert_eq!(f.after(1, vec![PlayerEvent::FirstFrame]), Step::Nothing);
+        assert_eq!(f.after(600, vec![]), Step::Nothing);
+    }
+
+    #[test]
     fn a_conversion_that_never_opens_cannot_play_after_the_wait() {
         let mut f = Fixture::new();
         f.convert(Duration::from_secs(60));
         assert_eq!(f.after(1, vec![]), Step::Nothing);
-        assert_eq!(f.after(59, vec![]), Step::Nothing);
+        assert_eq!(
+            f.after(60, vec![]),
+            Step::Nothing,
+            "a slow server's playlist"
+        );
+        assert_eq!(f.after(29, vec![]), Step::Nothing);
         assert_eq!(f.after(1, vec![]), Step::CannotPlay);
     }
 

@@ -55,8 +55,10 @@ pub struct Session {
     ended: bool,
     /// The file is open and playing: the server may be told.
     loaded: bool,
-    /// When the player was first heard of for this file, and when its first picture came.
+    /// When the player was first heard of for this file, when it said `Loaded`, and when its
+    /// first picture came.
     opened_at: Option<Instant>,
+    loaded_at: Option<Instant>,
     first_frame_at: Option<Instant>,
     /// How many seeks the viewer asked for, so a seek can be told to the server.
     seeks: u64,
@@ -99,6 +101,7 @@ impl Session {
             ended: false,
             loaded: false,
             opened_at: None,
+            loaded_at: None,
             first_frame_at: None,
             seeks: 0,
             segments: Vec::new(),
@@ -116,6 +119,7 @@ impl Session {
         self.error = None;
         self.loaded = false;
         self.opened_at = None;
+        self.loaded_at = None;
         self.first_frame_at = None;
         self.ended = false;
         self.tracks.clear();
@@ -136,6 +140,11 @@ impl Session {
     /// `Loaded` nor fails is waited for from here.
     pub fn opened_at(&self) -> Option<Instant> {
         self.opened_at
+    }
+
+    /// When the player said the file was open: the wait for its first picture counts from here.
+    pub fn loaded_at(&self) -> Option<Instant> {
+        self.loaded_at
     }
 
     pub fn first_frame_at(&self) -> Option<Instant> {
@@ -326,6 +335,7 @@ impl Session {
                 PlayerEvent::Error(error) => self.error = Some(error),
                 PlayerEvent::Loaded => {
                     self.loaded = true;
+                    self.loaded_at = Some(now);
                 }
                 PlayerEvent::FirstFrame => {
                     self.first_frame_at.get_or_insert(now);
