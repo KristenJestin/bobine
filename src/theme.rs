@@ -36,8 +36,9 @@ pub fn dim() -> Rgba {
     rgb(0x6b6b73)
 }
 
+/// Near-white: the interface is monochrome, only `danger` has a colour.
 pub fn accent() -> Rgba {
-    rgb(0x4ade80)
+    rgb(0xe5e5e5)
 }
 
 /// What went wrong.
@@ -155,7 +156,7 @@ pub fn primary_button(
 ) -> Stateful<Div> {
     let shades = Shades {
         rest: rgb(0xffffff),
-        hover: rgb(0xe4e4e7),
+        hover: rgb(0xe5e5e5),
         press: rgb(0xd4d4d8),
     };
     eased(id, shades, window, cx)
@@ -221,4 +222,34 @@ pub fn ghost_button_with(
         .cursor_pointer()
         .children(leading)
         .child(label.into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_accent_is_a_light_neutral_so_the_interface_stays_monochrome() {
+        let accent = accent();
+        assert_eq!(
+            (accent.r, accent.g),
+            (accent.b, accent.b),
+            "grey, not tinted"
+        );
+        assert!(accent.r >= 0.85, "near-white on the dark theme");
+    }
+
+    #[test]
+    fn the_accent_reads_against_the_dark_background_and_its_own_marks() {
+        // A watched mark is the accent with the background drawn on it, a progress bar is the
+        // accent over a clear veil: both need contrast.
+        let (accent, background) = (accent(), background());
+        assert!(accent.r - background.r > 0.7);
+    }
+
+    #[test]
+    fn the_danger_stays_red() {
+        let danger = danger();
+        assert!(danger.r > danger.g + 0.3 && danger.r > danger.b + 0.3);
+    }
 }
