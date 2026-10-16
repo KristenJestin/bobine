@@ -9,6 +9,9 @@ use std::path::{Path, PathBuf};
 pub struct AccountFile {
     pub device_id: String,
     pub login: Option<Login>,
+    /// The address of the server of the last login, kept after a logout to prefill the next one.
+    #[serde(default)]
+    pub last_address: Option<String>,
 }
 
 /// The signed-in user and their server; the token is in the keyring.
@@ -50,6 +53,7 @@ impl AccountFile {
                 let account = Self {
                     device_id: new_device_id()?,
                     login: None,
+                    last_address: None,
                 };
                 account.save(path)?;
                 Ok(account)

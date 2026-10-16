@@ -13,7 +13,7 @@
 //! detail-rows|detail-cast|playing|series|series-page|series-rows|up-next|collections|collection-page|
 //! my-list|my-list-empty|film-list|series-list [--films N]
 //! [--media FILE] [--segments SECONDS] [--direct-fails] [--image-delay-ms N] [--photos-fail-once] [--scenario menu|scroll|select|panel|blackout|search|search-slow|search-keys|tools|tools-keys|home-rotate|home-hover|home-jump|home-scroll|home-lists|home-play|skip]
-//! [--search-delay-ms N] [--favourite-delay-ms N] [--favourite-fails] [--slower N] --quit-at S`
+//! [--search-delay-ms N] [--favourite-delay-ms N] [--logout-delay-ms N] [--favourite-fails] [--slower N] --quit-at S`
 //!
 //! A scenario sends clicks, keys and scroll events to the window as the compositor would, at set
 //! times, and prints what they did (`MENU`, `SCROLL`, `SELECT`, `PANEL` lines) and the frame times
@@ -32,6 +32,7 @@ use gpui_kit::{
     TouchPhase, WeakEntity, Window, point, px,
 };
 
+use crate::chrome::{MENU_HEADER, MENU_RULE};
 use crate::fake::{FILM, FakeServer, SERIES};
 use crate::film_page::From;
 use crate::home_page::ListKind;
@@ -85,6 +86,7 @@ struct Args {
     scenario: Option<String>,
     /// How long the fake server takes to change the user's list, in milliseconds.
     favourite_delay: u64,
+    logout_delay: u64,
     /// The fake server fails when the user's list is changed.
     favourite_fails: bool,
     /// JPEG files the fake server's trickplay tiles are, in turn.
@@ -180,6 +182,12 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Option<Args>, String>
                     .and_then(|n| n.parse().ok())
                     .ok_or("--favourite-delay-ms needs a number")?;
             }
+            "--logout-delay-ms" => {
+                parsed.logout_delay = args
+                    .next()
+                    .and_then(|n| n.parse().ok())
+                    .ok_or("--logout-delay-ms needs a number")?;
+            }
             "--slower" => {
                 let times: u32 = args
                     .next()
@@ -253,6 +261,7 @@ impl Harness {
             state.photos_fail_once = args.photos_fail_once;
             state.search_delay = Duration::from_millis(args.search_delay);
             state.favourite_delay = Duration::from_millis(args.favourite_delay);
+            state.logout_delay = Duration::from_millis(args.logout_delay);
             state.favourite_fails = args.favourite_fails;
             state.tile_delay = Duration::from_millis(args.tile_delay);
             state.tiles = args
@@ -620,6 +629,10 @@ enum Target {
     Letter(char),
     /// The empty top left, over no chip and no poster.
     Corner,
+    /// The account button of the pill bar.
+    Account,
+    /// "Sign out" in the account menu.
+    SignOut,
     /// The player's seek bar, this far along it (0 to 1).
     SeekBar(f32),
 }
@@ -692,6 +705,20 @@ impl Acts {
                 (4.5, "open audio", Click(Chip(crate::shell::Chip::Audio))),
                 (5.5, "click outside", Click(Blank)),
                 (6.5, "escape goes back", Key("escape")),
+            ],
+            // The account menu of the pill bar: it closes by Escape and by a click outside, and
+            // "Sign out" brings the login back with the address filled in.
+            "account" => vec![
+                (0.5, "open the menu", Click(Account)),
+                (1.5, "escape closes the menu", Key("escape")),
+                (2.5, "open the menu", Click(Account)),
+                (3.5, "click outside", Click(Corner)),
+                (4.5, "open the menu", Click(Account)),
+                (5.5, "click the button again", Click(Account)),
+                (6.5, "open the menu", Click(Account)),
+                (7.5, "sign out", Click(SignOut)),
+                (7.7, "the login waits for the server", Mark),
+                (9.5, "the login is usable", Mark),
             ],
             "scroll" => vec![
                 (0.5, "wheel down over the cast", wheel(false)),
@@ -1093,6 +1120,15 @@ fn position(target: Target, shell: &Shell, window: &Window) -> Point<Pixels> {
             )
         }),
         Target::Corner => Some(point(px(40.), px(30.))),
+        Target::Account => center(shell.account_button_bounds()),
+        // The menu opens under the button, its right edge on the button's: a gap, a border and
+        // a padding, the header, the rule, then the line.
+        Target::SignOut => shell.account_button_bounds().map(|button| {
+            point(
+                button.right() - px(100.),
+                button.bottom() + px(menu::GAP + 7. + MENU_HEADER + MENU_RULE + menu::LINE / 2.),
+            )
+        }),
         Target::Blank => Some(point(size.width * 0.75, size.height * 0.3)),
         Target::TracksButton => Some(point(size.width - px(127.), px(48.))),
         Target::Picture => Some(point(size.width * 0.3, size.height * 0.5)),
@@ -1262,7 +1298,13 @@ fn state(label: &str, shell: &Shell, cx: &App) -> String {
     if let Some(form) = &shell.login
         && screen == Screen::Login
     {
-        return format!("SELECT {label}: {:?}", form.address.read(cx).selected());
+        return format!(
+            "SELECT {label}: {:?} address={:?} busy={} error={:?}",
+            form.address.read(cx).selected(),
+            form.address.read(cx).text(),
+            form.busy,
+            form.error,
+        );
     }
     if let Some(search) = &shell.search {
         return format!(

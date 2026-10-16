@@ -31,10 +31,11 @@ use bobine::provider::{
     TranscodeRequest,
 };
 
-use crate::chrome::{back_link, pill_bar};
+use crate::chrome::{Account, AccountView, ButtonBounds, back_link, pill_bar};
 use crate::config::Settings;
 use crate::fallback::Fallback;
 use crate::images::Images;
+use crate::menu::Menus;
 use crate::motion::{self, Fade, Presence};
 use crate::navigation::{Navigator, Screen};
 use crate::player::libmpv::Libmpv;
@@ -137,6 +138,11 @@ pub struct Shell {
     connector: Option<Arc<dyn Connector>>,
     server: Option<Arc<dyn MediaServer>>,
     pub login: Option<LoginForm>,
+    /// The menu of the account button in the pill bar, which fades in and out; where the button
+    /// was drawn.
+    account_menu: Menus<Account>,
+    account_fade: Presence<Account>,
+    account_button: ButtonBounds,
     /// The login was just shown: its address field takes the focus at the next draw.
     login_focus_due: bool,
     pub home: HomePage,
@@ -271,6 +277,9 @@ impl Shell {
             connector: None,
             server: None,
             login: None,
+            account_menu: Menus::default(),
+            account_fade: Presence::new(motion::quick()),
+            account_button: Default::default(),
             login_focus_due: false,
             home: Default::default(),
             list: None,
@@ -357,6 +366,18 @@ impl Shell {
             film.title,
             film.subtitle,
         );
+        self.begin_playback(session, reporting, window, cx);
+        Ok(())
+    }
+
+    /// Puts `session` on the window: the player screen opens on it.
+    fn begin_playback(
+        &mut self,
+        session: Session,
+        reporting: Option<Reporting>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let ticker = cx.spawn_in(window, async move |this, cx| {
             loop {
                 cx.background_executor().timer(PLAYER_TICK).await;
@@ -394,7 +415,6 @@ impl Shell {
         self.lay_out_video(window);
         self.navigator.open(Screen::Player);
         cx.notify();
-        Ok(())
     }
 
     /// Closes the player: the video surface and mpv go before anything else does. The server is
@@ -423,6 +443,12 @@ impl Shell {
         }
         self.screens = None;
         self.wayland = None;
+    }
+
+    /// Where the account button was last drawn.
+    #[cfg(feature = "harness")]
+    pub fn account_button_bounds(&self) -> Option<gpui_kit::Bounds<Pixels>> {
+        self.account_button.get()
     }
 
     /// The "Black out other screens" switch is offered: the compositor can cover a monitor.
@@ -559,6 +585,24 @@ impl Shell {
         }
     }
 
+    /// What the account button of the bar shows now: who is signed in, and how much of its menu.
+    fn account_view(&mut self, window: &mut Window) -> Option<AccountView> {
+        let server = self.server.clone()?;
+        let now = Instant::now();
+        let open = self.account_menu.open();
+        let drawn = self.account_fade.follow(open, now);
+        if self.account_fade.moving(now) {
+            window.request_animation_frame();
+        }
+        Some(AccountView {
+            user: server.user_name().to_string(),
+            server: server.server().name.clone(),
+            open: open.is_some(),
+            shown: drawn.map(|(_, shown)| shown),
+            bounds: self.account_button.clone(),
+        })
+    }
+
     /// The film of the server does not play as it is: the server is asked to convert it. The
     /// playback that did not play is told stopped first.
     fn convert(&mut self, request: TranscodeRequest, cx: &mut Context<Self>) {
@@ -678,6 +722,7 @@ impl Render for Shell {
             }
             self.library.menus.close();
             self.series.menus.close();
+            self.account_menu.close();
         }
         #[cfg(feature = "harness")]
         self.note_frame();
@@ -705,6 +750,15 @@ impl Render for Shell {
         }
         let screen = self.navigator.current();
         let back_label = self.navigator.back_label();
+        // The menu belongs to the pill bar: it does not wait for the bar to come back.
+        if !screen.shows_pill_bar() {
+            self.account_menu.close();
+        }
+        let account = if screen.shows_pill_bar() {
+            self.account_view(window)
+        } else {
+            None
+        };
         let playing = screen == Screen::Player && self.playback.is_some();
         // The next episode playing keeps the fullscreen; anything else gives it back.
         match kept_fullscreen(
@@ -826,7 +880,7 @@ impl Render for Shell {
                 root.children(screens::up_next_card(self, window, cx))
             })
             .when(screen.shows_pill_bar(), |root| {
-                root.child(pill_bar(screen, window, cx))
+                root.child(pill_bar(screen, account, window, cx))
             })
             .when_some(
                 back_label.filter(|_| screen.shows_back_link()),

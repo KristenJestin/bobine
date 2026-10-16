@@ -253,7 +253,7 @@ impl Logos {
     }
 
     #[cfg(test)]
-    fn len(&self) -> usize {
+    pub fn len(&self) -> usize {
         self.0.len()
     }
 }

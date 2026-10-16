@@ -19,6 +19,7 @@ use gpui_kit::{
 };
 
 use super::{Film as Playing, HomePage, Shell};
+use crate::chrome::Account;
 use crate::fallback::Fallback;
 use crate::favourite::{self, ListPage, Toggle};
 use crate::film_page::{self, Choices, From, Plan};
@@ -53,6 +54,8 @@ pub struct LoginForm {
     probing: Option<Task<()>>,
     pub error: Option<&'static str>,
     pub busy: bool,
+    /// The busy form is waiting for the server to say it signed the user out, not for a login.
+    pub signing_out: bool,
     _address_changed: Subscription,
 }
 
@@ -480,6 +483,7 @@ impl Shell {
             probing: None,
             error: why,
             busy: false,
+            signing_out: false,
             _address_changed: address_changed,
         });
         self.login_focus_due = true;
@@ -574,6 +578,14 @@ impl Shell {
     fn signed_in(&mut self, server: Arc<dyn MediaServer>, cx: &mut Context<Self>) {
         self.server = Some(server);
         self.login = None;
+        self.reset_session(cx);
+        self.navigator.switch_root(Screen::Home);
+        self.load_home(cx);
+    }
+
+    /// Forgets what the session before showed: the pages, the images, the menus.
+    fn reset_session(&mut self, cx: &mut Context<Self>) {
+        self.account_menu.close();
         self.home = HomePage::default();
         self.library = LibraryPage::default();
         self.series = LibraryPage::default();
@@ -585,13 +597,89 @@ impl Shell {
         self.list = None;
         self.collection_pages.clear();
         self.search = None;
+        self.hero_view.update(cx, |hero, cx| {
+            hero.forget_logos();
+            cx.notify();
+        });
         // The atlas holds the old images until they are dropped from it.
         for gone in self.images.cache.drain() {
             cx.drop_image(gone, None);
         }
         self.images = images::Images::default();
-        self.navigator.switch_root(Screen::Home);
-        self.load_home(cx);
+    }
+
+    pub fn toggle_account_menu(&mut self, cx: &mut Context<Self>) {
+        self.account_menu.toggle(Account);
+        cx.notify();
+    }
+
+    /// The mouse went down outside the open account menu, maybe on its button.
+    pub fn pressed_outside_account_menu(
+        &mut self,
+        position: Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        let on = self
+            .account_button
+            .get()
+            .is_some_and(|bounds| bounds.contains(&position))
+            .then_some(Account);
+        self.account_menu.pressed_outside(on);
+        cx.notify();
+    }
+
+    /// Leaves the account. A film playing stops first: its last reports need the token. The
+    /// old session is out of reach from this call on, and the login shows at once, from the
+    /// server's address, busy until the server was told and the token left the keyring (the HTTP
+    /// timeout bounds it). A login made meanwhile would meet a late logout.
+    pub fn sign_out(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let (Some(server), Some(connector)) = (self.server.take(), self.connector.clone()) else {
+            return;
+        };
+        if self.playback.is_some() {
+            if window.is_fullscreen() {
+                window.toggle_fullscreen();
+            }
+            self.release_tiles(window, cx);
+        }
+        let reports = self.stop_playback();
+        self.follow_blackout(window, cx);
+        let address = connector.last_address();
+        self.reset_session(cx);
+        self.show_login(None, cx);
+        if let Some(form) = &mut self.login {
+            form.busy = true;
+            form.signing_out = true;
+            if let Some(address) = address {
+                form.address
+                    .update(cx, |field, cx| field.set_text(&address, cx));
+            }
+        }
+        let task = cx
+            .background_executor()
+            .spawn(async move { start::sign_out(&*server, reports) });
+        cx.spawn(async move |this, cx| {
+            let why = task.await;
+            this.update(cx, |shell, cx| shell.signed_out(why, cx)).ok();
+        })
+        .detach();
+        cx.notify();
+    }
+
+    /// The server was told and the token left the keyring: the form becomes usable, with why the
+    /// local sign out was incomplete if it was. Only the form that waited for it is touched: one
+    /// the user is typing in, or a session signed in meanwhile, is left alone.
+    fn signed_out(&mut self, why: Option<&'static str>, cx: &mut Context<Self>) {
+        if self.server.is_some() {
+            return;
+        }
+        let Some(form) = self.login.as_mut().filter(|form| form.signing_out) else {
+            return;
+        };
+        form.busy = false;
+        form.signing_out = false;
+        form.error = why;
+        cx.notify();
     }
 
     /// What the user is told; an expired session brings the login back.
@@ -1112,6 +1200,10 @@ impl Shell {
     /// Escape cancels the next episode's card, else closes the open menu, else goes back.
     pub fn escape(&mut self, cx: &mut Context<Self>) {
         if self.cancel_up_next(cx) {
+            return;
+        }
+        if self.account_menu.escape() {
+            cx.notify();
             return;
         }
         if let Some((menus, _)) = self.chip_menus()
@@ -1937,5 +2029,234 @@ mod tests {
     #[test]
     fn the_header_has_the_count_when_the_list_stands() {
         assert_eq!(films_page().header_count(), Some(1284));
+    }
+
+    /// A shell started on a kept session, the fake server behind it.
+    fn signed_in_window(
+        cx: &mut gpui_kit::TestAppContext,
+    ) -> (FakeServer, gpui_kit::WindowHandle<Shell>) {
+        let server = FakeServer::new(6, true);
+        let connector: Arc<dyn bobine::provider::Connector> = Arc::new(server.clone());
+        let window =
+            cx.add_window(|_, cx| Shell::new(None, Box::new(move || Ok(connector)), None, cx));
+        cx.run_until_parked();
+        window
+            .update(cx, |shell, _, _| {
+                assert_eq!(shell.navigator.current(), Screen::Home);
+                assert!(shell.server.is_some());
+            })
+            .unwrap();
+        (server, window)
+    }
+
+    /// A film playing on the shell, its "started" report sent, its "stopped" one slow to arrive.
+    fn play_a_film(
+        server: &FakeServer,
+        window: &gpui_kit::WindowHandle<Shell>,
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        use crate::player::PlayerEvent;
+        use crate::player::fake::FakePlayer;
+        use crate::player::session::Session;
+        use crate::reports::Reporting;
+        use crate::video::fake::FakeDisplay;
+        use bobine::provider::{MediaSourceId, PlaySessionId};
+
+        server.state.lock().unwrap().stop_delay = Duration::from_millis(150);
+        window
+            .update(cx, |shell, window, cx| {
+                let player = FakePlayer::default();
+                player.queued.borrow_mut().push(PlayerEvent::Loaded);
+                let mut session = Session::new(
+                    Box::new(player),
+                    Box::new(FakeDisplay::default()),
+                    "Le Dernier Hiver".into(),
+                    None,
+                );
+                let mut reporting = Reporting::start(
+                    Arc::new(server.clone()),
+                    PlaybackReport {
+                        session: PlaySessionId("session-1".into()),
+                        film: ItemId(crate::fake::FILM.into()),
+                        source: MediaSourceId("source-4k".into()),
+                        position: Duration::ZERO,
+                        paused: false,
+                        audio_track: None,
+                        subtitle_track: None,
+                        method: PlayMethod::DirectPlay,
+                    },
+                );
+                let ended = session.update(Instant::now());
+                reporting.tick(Instant::now(), &session, ended);
+                shell.begin_playback(session, Some(reporting), window, cx);
+                assert!(shell.playback.is_some());
+            })
+            .unwrap();
+    }
+
+    fn sign_out(window: &gpui_kit::WindowHandle<Shell>, cx: &mut gpui_kit::TestAppContext) {
+        window
+            .update(cx, |shell, window, cx| shell.sign_out(window, cx))
+            .unwrap();
+    }
+
+    /// Signing out: the old session is out of reach at once, and the login waits, busy, for the
+    /// server to answer.
+    #[gpui_kit::test]
+    fn signing_out_shows_the_login_at_once_with_the_address_in_its_field(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        let (server, window) = signed_in_window(cx);
+        sign_out(&window, cx);
+        window
+            .update(cx, |shell, _, cx| {
+                assert_eq!(shell.navigator.current(), Screen::Login);
+                assert!(shell.server.is_none(), "the old session is still reachable");
+                let form = shell.login.as_ref().expect("the login must show at once");
+                assert_eq!(form.address.read(cx).text(), crate::fake::SERVER_ADDRESS);
+                assert!(form.busy);
+                assert!(form.signing_out);
+                assert!(shell.home.featured().is_empty());
+                assert_eq!(shell.images.cache.len(), 0);
+                assert!(shell.details.is_empty() && shell.series_pages.is_empty());
+                assert_eq!(shell.hero_view.read(cx).logos_len(), 0);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        window
+            .update(cx, |shell, _, _| {
+                let form = shell.login.as_ref().unwrap();
+                assert!(!form.busy && !form.signing_out, "the form must be usable");
+                assert_eq!(form.error, None);
+            })
+            .unwrap();
+        assert_eq!(server.state.lock().unwrap().record.logouts.len(), 1);
+    }
+
+    #[gpui_kit::test]
+    fn two_sign_out_clicks_send_one_logout(cx: &mut gpui_kit::TestAppContext) {
+        let (server, window) = signed_in_window(cx);
+        sign_out(&window, cx);
+        sign_out(&window, cx);
+        cx.run_until_parked();
+        sign_out(&window, cx);
+        cx.run_until_parked();
+        assert_eq!(server.state.lock().unwrap().record.logouts.len(), 1);
+    }
+
+    #[gpui_kit::test]
+    fn a_playback_present_when_signing_out_is_stopped_before_the_logout(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        let (server, window) = signed_in_window(cx);
+        play_a_film(&server, &window, cx);
+        sign_out(&window, cx);
+        window
+            .update(cx, |shell, _, _| {
+                assert!(shell.playback.is_none(), "the film is still playing");
+            })
+            .unwrap();
+        cx.run_until_parked();
+        let state = server.state.lock().unwrap();
+        assert!(matches!(
+            state.record.reports.last(),
+            Some(crate::fake::Report::Stopped(_))
+        ));
+        assert_eq!(state.record.logouts, [state.record.reports.len()]);
+    }
+
+    /// The server answered "play" just before the sign out: the film must not start behind the
+    /// login.
+    #[gpui_kit::test]
+    fn a_film_opened_during_the_sign_out_never_starts(cx: &mut gpui_kit::TestAppContext) {
+        let (server, window) = signed_in_window(cx);
+        let id = ItemId(crate::fake::FILM.into());
+        let detail = server.film(&id).unwrap();
+        let choices = crate::film_page::Choices::new(&detail.versions);
+        let plan =
+            crate::film_page::plan(&detail.film, &detail.versions, &choices, From::Resume).unwrap();
+        let opened = server.play(&plan.film, &plan.source);
+        sign_out(&window, cx);
+        window
+            .update(cx, |shell, window, cx| {
+                let playing = super::super::Film {
+                    title: plan.title.clone(),
+                    subtitle: None,
+                };
+                shell.start_playback(Origin::Home, plan, opened, playing, None, window, cx);
+                assert!(shell.playback.is_none());
+                assert_eq!(shell.navigator.current(), Screen::Login);
+            })
+            .unwrap();
+    }
+
+    #[gpui_kit::test]
+    fn a_sign_out_that_could_not_empty_the_keyring_says_so_once_the_form_is_usable(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        let (server, window) = signed_in_window(cx);
+        server.state.lock().unwrap().logout_error = Some(ProviderError::Keyring(String::new()));
+        sign_out(&window, cx);
+        cx.run_until_parked();
+        window
+            .update(cx, |shell, _, _| {
+                let form = shell.login.as_ref().unwrap();
+                assert!(!form.busy);
+                assert_eq!(
+                    form.error,
+                    Some("The saved token could not be removed from the system keyring.")
+                );
+            })
+            .unwrap();
+    }
+
+    /// The answer of a sign out comes after the form was built again, and something is typed in
+    /// it: it stays as it is.
+    #[gpui_kit::test]
+    fn a_late_sign_out_answer_never_wipes_the_form_being_typed_in(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        let (server, window) = signed_in_window(cx);
+        server.state.lock().unwrap().logout_error = Some(ProviderError::Storage(String::new()));
+        sign_out(&window, cx);
+        window
+            .update(cx, |shell, _, cx| {
+                shell.show_login(None, cx);
+                let form = shell.login.as_ref().unwrap();
+                form.user
+                    .update(cx, |field, cx| field.set_text("camille", cx));
+            })
+            .unwrap();
+        cx.run_until_parked();
+        window
+            .update(cx, |shell, _, cx| {
+                let form = shell.login.as_ref().unwrap();
+                assert_eq!(form.user.read(cx).text(), "camille");
+                assert_eq!(form.error, None);
+            })
+            .unwrap();
+    }
+
+    /// The user signed in again before the answer came: that session stays.
+    #[gpui_kit::test]
+    fn a_late_sign_out_answer_never_kicks_out_a_session_signed_in_meanwhile(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        let (server, window) = signed_in_window(cx);
+        sign_out(&window, cx);
+        window
+            .update(cx, |shell, _, cx| {
+                shell.signed_in(Arc::new(server.clone()), cx);
+                shell.signed_out(Some("The account file cannot be written."), cx);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        window
+            .update(cx, |shell, _, _| {
+                assert!(shell.server.is_some());
+                assert!(shell.login.is_none());
+                assert_eq!(shell.navigator.current(), Screen::Home);
+            })
+            .unwrap();
     }
 }
