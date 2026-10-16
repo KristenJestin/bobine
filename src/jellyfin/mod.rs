@@ -364,12 +364,12 @@ impl Jellyfin {
             "MediaSourceId": report.source.0,
             "PlaySessionId": report.session.0,
             "PositionTicks": dto::ticks(report.position),
-            "PlayMethod": match report.method {
-                PlayMethod::DirectPlay => "DirectPlay",
-                PlayMethod::Transcode => "Transcode",
-            },
         });
         if playing {
+            body["PlayMethod"] = json!(match report.method {
+                PlayMethod::DirectPlay => "DirectPlay",
+                PlayMethod::Transcode => "Transcode",
+            });
             body["IsPaused"] = json!(report.paused);
             body["CanSeek"] = json!(true);
             body["AudioStreamIndex"] = json!(report.audio_track);

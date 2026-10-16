@@ -1333,6 +1333,7 @@ fn start_progress_and_stopped_reports_with_the_right_body() {
     assert_eq!(stopped["MediaSourceId"], SOURCE);
     assert_eq!(stopped["PlaySessionId"], PLAY_SESSION);
     assert_eq!(stopped["PositionTicks"], 13_000_000_000_i64);
+    assert!(stopped.get("PlayMethod").is_none(), "{stopped}");
 
     for path in [
         "/Sessions/Playing",
@@ -1520,7 +1521,7 @@ fn a_version_the_server_cannot_convert_says_so() {
 }
 
 #[test]
-fn the_play_method_is_reported_in_every_report() {
+fn the_play_method_is_reported_while_playing_and_not_when_stopped() {
     let s = Setup::new();
     let server = s.signed_in();
     let transcoded = PlaybackReport {
@@ -1530,20 +1531,14 @@ fn the_play_method_is_reported_in_every_report() {
     server.report_started(&transcoded).unwrap();
     server.report_progress(&transcoded).unwrap();
     server.report_stopped(&transcoded).unwrap();
-    for path in [
-        "/Sessions/Playing",
-        "/Sessions/Playing/Progress",
-        "/Sessions/Playing/Stopped",
-    ] {
+    for path in ["/Sessions/Playing", "/Sessions/Playing/Progress"] {
         let body = s.fake.last("POST", path).json();
         assert_eq!(body["PlayMethod"], "Transcode", "{path}");
         assert_eq!(body["PlaySessionId"], PLAY_SESSION, "{path}");
     }
-    server
-        .report_stopped(&report(Duration::from_secs(1300), false))
-        .unwrap();
     let stopped = s.fake.last("POST", "/Sessions/Playing/Stopped").json();
-    assert_eq!(stopped["PlayMethod"], "DirectPlay");
+    assert_eq!(stopped["PlaySessionId"], PLAY_SESSION);
+    assert!(stopped.get("PlayMethod").is_none(), "{stopped}");
 }
 
 #[test]
