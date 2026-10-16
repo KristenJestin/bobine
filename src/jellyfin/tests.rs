@@ -355,7 +355,7 @@ fn films_are_sorted_by_date_added() {
     );
     let asked = s.fake.last("GET", "/Items");
     assert_eq!(asked.param("SortBy"), Some("DateCreated,SortName"));
-    assert_eq!(asked.param("SortOrder"), Some("Descending"));
+    assert_eq!(asked.param("SortOrder"), Some("Descending,Ascending"));
 }
 
 #[test]
@@ -373,7 +373,7 @@ fn films_are_sorted_by_release_year() {
     );
     let asked = s.fake.last("GET", "/Items");
     assert_eq!(asked.param("SortBy"), Some("ProductionYear,SortName"));
-    assert_eq!(asked.param("SortOrder"), Some("Ascending"));
+    assert_eq!(asked.param("SortOrder"), Some("Ascending,Ascending"));
 }
 
 fn filtered(sort: FilmSort, descending: bool, filters: Filters) -> FilmQuery {
@@ -498,7 +498,24 @@ fn films_are_sorted_by_rating_best_first() {
     );
     let asked = s.fake.last("GET", "/Items");
     assert_eq!(asked.param("SortBy"), Some("CommunityRating,SortName"));
-    assert_eq!(asked.param("SortOrder"), Some("Descending"));
+    assert_eq!(asked.param("SortOrder"), Some("Descending,Ascending"));
+}
+
+#[test]
+fn titles_that_tie_in_a_descending_sort_still_read_a_to_z() {
+    // "Gale" and "Éclipse" are both from 2016: the newest year first, and between them the
+    // titles in their own order, as one order per sorted field asks.
+    let s = Setup::new();
+    let server = s.signed_in();
+    let page = server
+        .films(&letters(), &query(FilmSort::ReleaseYear, true, 0, 100))
+        .unwrap();
+    let years: Vec<Option<i32>> = page.items.iter().map(|f| f.year).collect();
+    assert_eq!(years[3..6], [Some(2017), Some(2016), Some(2016)]);
+    assert_eq!(titles(&page)[4..6], ["Gale", "Éclipse"]);
+    let asked = s.fake.last("GET", "/Items");
+    assert_eq!(asked.param("SortBy"), Some("ProductionYear,SortName"));
+    assert_eq!(asked.param("SortOrder"), Some("Descending,Ascending"));
 }
 
 #[test]

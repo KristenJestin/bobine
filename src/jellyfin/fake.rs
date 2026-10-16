@@ -214,19 +214,24 @@ fn films(seen: &Seen, fixture_name: &str) -> Value {
     films.retain(|item| passes(item, seen));
     let by = seen.param("SortBy").unwrap_or("SortName");
     let fields: Vec<&str> = by.split(',').collect();
+    // One order per field, the way Jellyfin reads them; a field without one goes up.
+    let orders: Vec<&str> = seen.param("SortOrder").unwrap_or("").split(',').collect();
     films.sort_by(|a, b| {
         fields
             .iter()
-            .fold(std::cmp::Ordering::Equal, |order, field| {
+            .enumerate()
+            .fold(std::cmp::Ordering::Equal, |order, (index, field)| {
                 order.then_with(|| {
                     let (ka, kb) = (sort_key(a, field), sort_key(b, field));
-                    ka.partial_cmp(&kb).unwrap()
+                    let by = ka.partial_cmp(&kb).unwrap();
+                    if orders.get(index) == Some(&"Descending") {
+                        by.reverse()
+                    } else {
+                        by
+                    }
                 })
             })
     });
-    if seen.param("SortOrder") == Some("Descending") {
-        films.reverse();
-    }
     let total = films.len();
     let start: usize = seen.param("StartIndex").map_or(0, |s| s.parse().unwrap());
     let limit = seen

@@ -196,17 +196,26 @@ impl Jellyfin {
             FilmSort::ReleaseYear => "ProductionYear,SortName",
             FilmSort::Rating => "CommunityRating,SortName",
         };
-        let order = if query.descending {
-            "Descending"
-        } else {
-            "Ascending"
-        };
+        // One order per sorted field: the first goes the way asked, the title that breaks its
+        // ties always reads A to Z.
+        let order = sort
+            .split(',')
+            .enumerate()
+            .map(|(field, _)| {
+                if field == 0 && query.descending {
+                    "Descending"
+                } else {
+                    "Ascending"
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(",");
         let mut asked = vec![
             ("parentId", library.0.clone()),
             ("includeItemTypes", kind.into()),
             ("recursive", "true".into()),
             ("sortBy", sort.into()),
-            ("sortOrder", order.into()),
+            ("sortOrder", order),
             ("startIndex", query.start.to_string()),
             // Never 0: Jellyfin reads it as no limit at all.
             ("limit", query.limit.max(1).to_string()),
