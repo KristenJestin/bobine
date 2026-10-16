@@ -45,6 +45,8 @@ fn fixture(name: &str) -> Value {
         "seasons" => include_str!("fixtures/seasons.json"),
         "episodes" => include_str!("fixtures/episodes.json"),
         "next_up" => include_str!("fixtures/next_up.json"),
+        "next_up_across" => include_str!("fixtures/next_up_across.json"),
+        "featured" => include_str!("fixtures/featured.json"),
         _ => panic!("no fixture {name}"),
     };
     serde_json::from_str(text).unwrap()
@@ -232,6 +234,17 @@ fn generated_films(count: usize) -> Vec<Value> {
         .collect()
 }
 
+/// An item list cut to the `Limit` asked.
+fn limited(mut list: Value, seen: &Seen) -> Value {
+    if let Some(limit) = seen.param("Limit") {
+        list["Items"]
+            .as_array_mut()
+            .unwrap()
+            .truncate(limit.parse().unwrap());
+    }
+    list
+}
+
 fn answer(state: &State, seen: &Seen) -> Answer {
     if state.not_jellyfin {
         return Answer::Json(404, json!({ "error": "not here" }));
@@ -280,6 +293,7 @@ fn answer(state: &State, seen: &Seen) -> Answer {
             (Some(FILMS_LIBRARY), _) => Answer::Json(200, films(seen, "films")),
             (Some(SERIES_LIBRARY), Some("Series")) => Answer::Json(200, films(seen, "series")),
             (None, Some("BoxSet")) => Answer::Json(200, fixture("boxsets")),
+            (None, Some("Movie,Series")) => Answer::Json(200, limited(fixture("featured"), seen)),
             (Some("b0000000000000000000000000000001"), _) => {
                 Answer::Json(200, fixture("boxset_sea_stories"))
             }
@@ -325,8 +339,30 @@ fn answer(state: &State, seen: &Seen) -> Answer {
         }
         ("GET", "/Shows/NextUp") => match seen.param("SeriesId") {
             Some(SERIES) if !state.all_watched => Answer::Json(200, fixture("next_up")),
+            None if !state.all_watched => {
+                Answer::Json(200, limited(fixture("next_up_across"), seen))
+            }
             _ => Answer::Json(200, json!({ "Items": [], "TotalRecordCount": 0 })),
         },
+        // Not an item list: the newest of a library, as a bare array, `Limit` of them.
+        ("GET", "/Items/Latest") => {
+            let name = match seen.param("ParentId") {
+                Some(FILMS_LIBRARY) => "films",
+                Some(SERIES_LIBRARY) => "series",
+                _ => return Answer::Empty(404),
+            };
+            let limit: usize = seen
+                .param("Limit")
+                .map_or(usize::MAX, |s| s.parse().unwrap());
+            let items: Vec<Value> = fixture(name)
+                .as_array()
+                .unwrap()
+                .iter()
+                .take(limit)
+                .cloned()
+                .collect();
+            Answer::Json(200, Value::Array(items))
+        }
         ("POST" | "DELETE", path)
             if [FILM, SEASON, EPISODE]
                 .iter()

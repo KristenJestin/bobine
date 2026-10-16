@@ -1,0 +1,9 @@
+{
+  "Items": [
+    { "Name": "The Quiet Harbour", "Id": "f0000000000000000000000000000001", "Type": "Movie", "ProductionYear": 1998, "CommunityRating": 7.4, "OfficialRating": "PG-13", "RunTimeTicks": 66000000000, "Overview": "A lighthouse keeper finds the tide no longer goes out.", "UserData": { "PlaybackPositionTicks": 12000000000, "Played": false }, "ImageTags": { "Primary": "poster-qh", "Logo": "logo-qh" }, "BackdropImageTags": ["backdrop-qh"] },
+    { "Name": "Tidewater", "Id": "50000000000000000000000000000001", "Type": "Series", "ProductionYear": 2021, "EndDate": "2024-05-12T00:00:00.0000000Z", "CommunityRating": 8.4, "OfficialRating": "TV-MA", "Overview": "A ferry crew runs a road that should not be there.", "UserData": { "UnplayedItemCount": 7, "Played": false }, "ImageTags": { "Primary": "poster-tw" }, "BackdropImageTags": ["backdrop-tw"] },
+    { "Name": "Copper Sky", "Id": "f0000000000000000000000000000004", "Type": "Movie", "ProductionYear": 1987, "RunTimeTicks": 61800000000, "UserData": { "PlaybackPositionTicks": 0, "Played": false }, "ImageTags": { "Primary": "poster-cs" }, "BackdropImageTags": ["backdrop-cs"] }
+  ],
+  "TotalRecordCount": 3,
+  "StartIndex": 0
+}

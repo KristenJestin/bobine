@@ -1,0 +1,27 @@
+{
+  "Items": [
+    {
+      "Name": "Low Water", "Id": "e0000000000000000000000000000021", "Type": "Episode",
+      "IndexNumber": 1, "ParentIndexNumber": 2,
+      "SeasonId": "5e000000000000000000000000000002", "SeriesId": "50000000000000000000000000000001", "SeriesName": "Tidewater",
+      "RunTimeTicks": 31200000000,
+      "UserData": { "PlaybackPositionTicks": 7200000000, "Played": false },
+      "ImageTags": { "Primary": "still-lw" },
+      "MediaSources": [
+        { "Id": "5a000000000000000000000000000021", "Name": "Tidewater S02E01", "Container": "mkv", "MediaStreams": [] }
+      ]
+    },
+    {
+      "Name": "The Long Table", "Id": "e0000000000000000000000000000031", "Type": "Episode",
+      "IndexNumber": 4, "ParentIndexNumber": 1,
+      "SeasonId": "5e000000000000000000000000000003", "SeriesId": "50000000000000000000000000000002", "SeriesName": "Glass Orchard",
+      "RunTimeTicks": 27000000000,
+      "UserData": { "PlaybackPositionTicks": 0, "Played": false },
+      "ImageTags": { "Primary": "still-lt" },
+      "MediaSources": [
+        { "Id": "5a000000000000000000000000000031", "Name": "Glass Orchard S01E04", "Container": "mkv", "MediaStreams": [] }
+      ]
+    }
+  ],
+  "TotalRecordCount": 2
+}

@@ -1,9 +1,9 @@
 //! Jellyfin's JSON, as much of it as Bobine reads, and its translation into the port's types.
 
 use crate::provider::{
-    AudioTrack, CastMember, Episode, Film, ImageKind, ImageRef, ItemId, Library, LibraryKind,
-    MediaSource, MediaSourceId, PersonHit, PersonTitles, Season, Series, SeriesHit, ServerInfo,
-    SubtitleTrack, VideoRange, VideoTrack,
+    AudioTrack, CastMember, Episode, Feature, FeatureKind, Film, ImageKind, ImageRef, ItemId,
+    Library, LibraryKind, MediaSource, MediaSourceId, PersonHit, PersonTitles, Season, Series,
+    SeriesHit, ServerInfo, SubtitleTrack, Title, VideoRange, VideoTrack,
 };
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -247,6 +247,42 @@ impl Item {
                 .into_iter()
                 .map(MediaSourceInfo::into_source)
                 .collect(),
+        }
+    }
+
+    /// What a row of the Home lists: an episode, a series, else a film.
+    pub fn title(self) -> Title {
+        match self.kind.as_deref() {
+            Some("Episode") => Title::Episode(self.episode()),
+            Some("Series") => Title::Series(self.series()),
+            _ => Title::Film(self.film()),
+        }
+    }
+
+    /// What the top of the Home says of a film or a series.
+    pub fn feature(&self) -> Feature {
+        let film = self.film();
+        let series = self.kind.as_deref() == Some("Series");
+        Feature {
+            kind: if series {
+                FeatureKind::Series
+            } else {
+                FeatureKind::Film
+            },
+            id: film.id,
+            title: film.title,
+            year: film.year,
+            community_rating: film.community_rating,
+            official_rating: self.official_rating.clone(),
+            runtime: film.runtime.filter(|_| !series),
+            overview: self.overview.clone().filter(|text| !text.is_empty()),
+            backdrop: film.backdrop,
+            logo: self.image_tags.get("Logo").map(|tag| ImageRef {
+                item: ItemId(self.id.clone()),
+                kind: ImageKind::Logo,
+                tag: tag.clone(),
+            }),
+            resume: film.resume.filter(|_| !series),
         }
     }
 

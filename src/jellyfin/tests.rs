@@ -415,15 +415,179 @@ fn a_film_in_a_list_has_poster_rating_runtime_watched_and_resume() {
 }
 
 #[test]
-fn continue_watching() {
+fn what_the_user_started_is_films_and_episodes() {
     let s = Setup::new();
-    let films = s.signed_in().continue_watching().unwrap();
-    assert_eq!(films.len(), 1);
-    assert_eq!(films[0].id, film());
-    assert_eq!(films[0].resume, Some(Duration::from_secs(20 * 60)));
+    let started = s.signed_in().continue_watching().unwrap();
+    assert_eq!(started.len(), 2);
+    let Title::Film(film) = &started[0] else {
+        panic!("a film first: {started:?}");
+    };
+    assert_eq!(film.id, self::film());
+    assert_eq!(film.resume, Some(Duration::from_secs(20 * 60)));
+    let Title::Episode(episode) = &started[1] else {
+        panic!("an episode second: {started:?}");
+    };
+    assert_eq!(episode.item.id, ItemId(EPISODE.into()));
+    assert_eq!(episode.series_title, "Tidewater");
+    assert_eq!(episode.item.resume, Some(Duration::from_secs(12 * 60)));
+    // An episode played from Home needs its versions, without another request.
+    assert_eq!(episode.versions.len(), 1);
     let asked = s.fake.last("GET", "/UserItems/Resume");
     assert_eq!(asked.param("userId"), Some(USER_ID));
-    assert_eq!(asked.param("IncludeItemTypes"), Some("Movie"));
+    assert_eq!(asked.param("IncludeItemTypes"), Some("Movie,Episode"));
+    assert!(asked.param("Fields").unwrap().contains("MediaSources"));
+}
+
+#[test]
+fn next_up_across_all_series_is_asked_for_the_user_with_a_limit() {
+    let s = Setup::new();
+    let next = s.signed_in().next_episodes(12).unwrap();
+    let titles: Vec<&str> = next.iter().map(|e| e.item.title.as_str()).collect();
+    assert_eq!(titles, ["Low Water", "The Long Table"]);
+    assert_eq!(next[1].series_title, "Glass Orchard");
+    assert_eq!(next[1].season_number, Some(1));
+    assert_eq!(next[1].number, Some(4));
+    assert_eq!(next[1].versions.len(), 1);
+    let asked = s.fake.last("GET", "/Shows/NextUp");
+    assert_eq!(asked.param("SeriesId"), None);
+    assert_eq!(asked.param("userId"), Some(USER_ID));
+    assert_eq!(asked.param("Limit"), Some("12"));
+    assert_eq!(asked.param("EnableResumable"), Some("true"));
+    assert!(asked.param("Fields").unwrap().contains("MediaSources"));
+}
+
+#[test]
+fn no_series_in_progress_has_no_next_episode() {
+    let s = Setup::new();
+    s.fake.state.lock().unwrap().all_watched = true;
+    assert_eq!(s.signed_in().next_episodes(12).unwrap(), Vec::new());
+}
+
+#[test]
+fn the_latest_of_a_films_library_are_films() {
+    let s = Setup::new();
+    let latest = s
+        .signed_in()
+        .latest(&ItemId(FILMS_LIBRARY.into()), 3)
+        .unwrap();
+    assert_eq!(latest.len(), 3);
+    assert!(latest.iter().all(|title| matches!(title, Title::Film(_))));
+    let Title::Film(first) = &latest[0] else {
+        unreachable!()
+    };
+    assert_eq!(first.title, "The Quiet Harbour");
+    assert_eq!(
+        first.poster.as_ref().map(|p| p.tag.as_str()),
+        Some("poster-qh")
+    );
+    let asked = s.fake.last("GET", "/Items/Latest");
+    assert_eq!(asked.param("ParentId"), Some(FILMS_LIBRARY));
+    assert_eq!(asked.param("userId"), Some(USER_ID));
+    assert_eq!(asked.param("Limit"), Some("3"));
+}
+
+#[test]
+fn the_latest_of_a_series_library_are_series() {
+    let s = Setup::new();
+    let latest = s
+        .signed_in()
+        .latest(&ItemId(SERIES_LIBRARY.into()), 10)
+        .unwrap();
+    let names: Vec<&str> = latest
+        .iter()
+        .map(|title| match title {
+            Title::Series(series) => series.title.as_str(),
+            other => panic!("a series: {other:?}"),
+        })
+        .collect();
+    assert_eq!(names, ["Tidewater", "Glass Orchard", "Bramble Line"]);
+}
+
+#[test]
+fn the_featured_titles_are_recent_unwatched_ones_with_a_backdrop() {
+    let s = Setup::new();
+    let featured = s.signed_in().featured(5).unwrap();
+    assert_eq!(featured.len(), 3);
+    let asked = s.fake.last("GET", "/Items");
+    assert_eq!(asked.param("userId"), Some(USER_ID));
+    assert_eq!(asked.param("IncludeItemTypes"), Some("Movie,Series"));
+    assert_eq!(asked.param("Recursive"), Some("true"));
+    assert_eq!(asked.param("SortBy"), Some("DateCreated"));
+    assert_eq!(asked.param("SortOrder"), Some("Descending"));
+    assert_eq!(asked.param("IsPlayed"), Some("false"));
+    assert_eq!(asked.param("ImageTypes"), Some("Backdrop"));
+    assert_eq!(asked.param("Limit"), Some("5"));
+    let fields = asked.param("Fields").unwrap();
+    assert!(
+        fields.contains("Overview") && fields.contains("OfficialRating"),
+        "{fields}"
+    );
+}
+
+#[test]
+fn a_featured_film_says_what_the_header_shows() {
+    let s = Setup::new();
+    let featured = s.signed_in().featured(5).unwrap();
+    let film = &featured[0];
+    assert_eq!(film.kind, FeatureKind::Film);
+    assert_eq!(film.id, self::film());
+    assert_eq!(film.title, "The Quiet Harbour");
+    assert_eq!(film.year, Some(1998));
+    assert_eq!(film.community_rating, Some(7.4));
+    assert_eq!(film.official_rating.as_deref(), Some("PG-13"));
+    assert_eq!(film.runtime, Some(Duration::from_secs(110 * 60)));
+    assert_eq!(film.resume, Some(Duration::from_secs(20 * 60)));
+    assert_eq!(
+        film.overview.as_deref(),
+        Some("A lighthouse keeper finds the tide no longer goes out.")
+    );
+    assert_eq!(
+        film.backdrop.as_ref().map(|b| b.tag.as_str()),
+        Some("backdrop-qh")
+    );
+}
+
+#[test]
+fn a_featured_series_is_a_series_with_no_runtime() {
+    let s = Setup::new();
+    let featured = s.signed_in().featured(5).unwrap();
+    let series = &featured[1];
+    assert_eq!(series.kind, FeatureKind::Series);
+    assert_eq!(series.id, ItemId(SERIES.into()));
+    assert_eq!(series.runtime, None);
+    assert_eq!(series.resume, None);
+    assert_eq!(series.official_rating.as_deref(), Some("TV-MA"));
+}
+
+#[test]
+fn a_featured_title_has_its_logo_when_the_server_has_one() {
+    let s = Setup::new();
+    let featured = s.signed_in().featured(5).unwrap();
+    assert_eq!(
+        featured[0].logo,
+        Some(ImageRef {
+            item: film(),
+            kind: ImageKind::Logo,
+            tag: "logo-qh".into(),
+        })
+    );
+    // The title is drawn in text for the ones without.
+    assert_eq!(featured[1].logo, None);
+    assert_eq!(featured[2].logo, None);
+}
+
+#[test]
+fn a_logo_is_asked_of_the_server_as_a_logo() {
+    let s = Setup::new();
+    let logo = ImageRef {
+        item: film(),
+        kind: ImageKind::Logo,
+        tag: "logo-qh".into(),
+    };
+    assert_eq!(s.signed_in().image(&logo, 600).unwrap(), IMAGE);
+    let asked = s.fake.last("GET", &format!("/Items/{FILM}/Images/Logo"));
+    assert_eq!(asked.param("tag"), Some("logo-qh"));
+    assert_eq!(asked.param("maxWidth"), Some("600"));
 }
 
 #[test]

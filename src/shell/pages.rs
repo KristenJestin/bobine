@@ -433,7 +433,16 @@ impl Shell {
             |server| server.continue_watching(),
             |shell, films, cx| {
                 shell.home.resume = Some(match films {
-                    Ok(films) => Loadable::Ready(films),
+                    // Temporary: films only until the Home shows episodes too.
+                    Ok(titles) => Loadable::Ready(
+                        titles
+                            .into_iter()
+                            .filter_map(|title| match title {
+                                bobine::provider::Title::Film(film) => Some(film),
+                                _ => None,
+                            })
+                            .collect(),
+                    ),
                     Err(error) => Loadable::Failed(shell.failed(error, cx)),
                 });
             },
