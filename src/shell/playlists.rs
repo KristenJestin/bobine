@@ -30,6 +30,11 @@ pub struct PlaylistPage {
     /// The entries taken out whose answer has not come: a read that lands meanwhile, asked
     /// before the server took them out, leaves them out all the same.
     removing: Vec<EntryId>,
+    /// The number of the newest read asked.
+    read: u64,
+    /// A removal was refused, or the newest read was dropped for a removal asked after it:
+    /// the playlist is read again once no removal waits for its answer.
+    owed: bool,
 }
 
 impl PlaylistPage {
@@ -42,6 +47,8 @@ impl PlaylistPage {
             busy: false,
             asked: Refreshes::default(),
             removing: Vec::new(),
+            read: 0,
+            owed: false,
         }
     }
 
@@ -49,6 +56,10 @@ impl PlaylistPage {
     /// is being taken out stays out. A failed read leaves what was drawn.
     fn landed(&mut self, number: u64, read: Result<Vec<PlaylistEntry>, &'static str>) -> bool {
         if !self.asked.is_newest(number) {
+            // Only a removal came after it: no read is on its way to show what it missed.
+            if number == self.read {
+                self.owed = true;
+            }
             return false;
         }
         self.entries = match read {
@@ -60,6 +71,11 @@ impl PlaylistPage {
             Err(why) => Loadable::Failed(why),
         };
         true
+    }
+
+    /// Whether the playlist must be read again now: a read is owed and every removal answered.
+    fn owes_read(&self) -> bool {
+        self.owed && self.removing.is_empty()
     }
 }
 
@@ -289,6 +305,8 @@ impl Shell {
         let page = &mut self.playlist_pages[depth];
         let id = page.id.clone();
         let number = page.asked.ask(&mut self.refreshes_asked);
+        page.read = number;
+        page.owed = false;
         let asked = id.clone();
         let stamp = self.marks.stamp();
         self.ask(
@@ -306,6 +324,9 @@ impl Shell {
                 };
                 if let Some(page) = shell.playlist_page(depth, &id) {
                     page.landed(number, read);
+                    if page.owes_read() {
+                        shell.load_playlist_page(depth, cx);
+                    }
                 }
                 cx.notify();
             },
@@ -415,8 +436,9 @@ impl Shell {
     }
 
     /// Takes `entry` out of the playlist on top: it leaves the page at once. If the server
-    /// refuses, the page reads the playlist again, as the server holds it, and says why: other
-    /// changes may have moved the entries since, so it is not put back at its old place.
+    /// refuses, the page says why and reads the playlist again, as the server holds it, once
+    /// every removal asked was answered: other changes may have moved the entries since, so it
+    /// is not put back at its old place.
     pub fn remove_entry(&mut self, entry: EntryId, cx: &mut Context<Self>) {
         let depth = self.playlist_pages.len().wrapping_sub(1);
         let Some(page) = self.playlist_pages.last_mut() else {
@@ -443,9 +465,14 @@ impl Shell {
                     return;
                 };
                 page.removing.retain(|removing| removing != &entry);
+                if answer.is_err() {
+                    page.owed = true;
+                }
+                if page.owes_read() {
+                    shell.load_playlist_page(depth, cx);
+                }
                 if let Err(error) = answer {
                     shell.failed(error.clone(), cx);
-                    shell.load_playlist_page(depth, cx);
                     shell.show_notice(playlists::refusal(&error), cx);
                 }
                 cx.notify();
@@ -764,6 +791,84 @@ mod tests {
         let on_server = server.playlist(&ItemId(WATCHLIST.into())).unwrap();
         assert_eq!(on_server, before[1..]);
         assert_eq!(shown(&window, cx), on_server);
+    }
+
+    /// Runs the window's tasks one at a time until `reached` holds of the playlist's page.
+    fn run_until(
+        window: &WindowHandle<Shell>,
+        cx: &mut TestAppContext,
+        reached: impl Fn(&PlaylistPage) -> bool,
+    ) {
+        let held = |cx: &mut TestAppContext| {
+            window
+                .read_with(cx, |shell, _| reached(shell.playlist_pages.last().unwrap()))
+                .unwrap()
+        };
+        while !held(cx) {
+            assert!(cx.executor().tick(), "never reached");
+        }
+    }
+
+    #[gpui_kit::test]
+    fn a_refusal_then_a_second_removal_before_the_reload_still_shows_what_the_server_holds(
+        cx: &mut TestAppContext,
+    ) {
+        let (server, window) = on_watchlist(cx, |_| {});
+        let before = shown(&window, cx);
+        server.state.lock().unwrap().refused_entries = vec![before[1].id.clone()];
+        window
+            .update(cx, |shell, _, cx| {
+                shell.remove_entry(before[1].id.clone(), cx)
+            })
+            .unwrap();
+        // The refusal came and asked the playlist again; that read has not landed yet.
+        run_until(&window, cx, |page| page.removing.is_empty());
+        window
+            .update(cx, |shell, _, cx| {
+                shell.remove_entry(before[0].id.clone(), cx)
+            })
+            .unwrap();
+        cx.run_until_parked();
+        let on_server = server.playlist(&ItemId(WATCHLIST.into())).unwrap();
+        assert_eq!(on_server, before[1..]);
+        assert_eq!(shown(&window, cx), on_server, "the refused entry is back");
+    }
+
+    #[gpui_kit::test]
+    fn a_reload_after_playback_then_a_removal_before_it_lands_still_shows_what_the_server_holds(
+        cx: &mut TestAppContext,
+    ) {
+        let (server, window) = on_watchlist(cx, |_| {});
+        let before = shown(&window, cx);
+        let asked = |window: &WindowHandle<Shell>, cx: &mut TestAppContext| {
+            window
+                .read_with(cx, |shell, _| shell.playlist_pages[0].asked.newest())
+                .unwrap()
+        };
+        let read_before = asked(&window, cx);
+        // The title watched to its end, as the server holds it once "stopped" reached it.
+        let watched = before[0].title.id().clone();
+        for film in server.state.lock().unwrap().films.iter_mut() {
+            if film.id == watched {
+                film.watched = true;
+            }
+        }
+        window
+            .update(cx, |shell, _, cx| {
+                shell.after_playback(std::thread::spawn(|| {}), cx)
+            })
+            .unwrap();
+        // The reload after the playback is asked; it has not landed yet.
+        run_until(&window, cx, |page| page.asked.newest() != read_before);
+        window
+            .update(cx, |shell, _, cx| {
+                shell.remove_entry(before[1].id.clone(), cx)
+            })
+            .unwrap();
+        cx.run_until_parked();
+        let on_server = server.playlist(&ItemId(WATCHLIST.into())).unwrap();
+        assert!(matches!(&on_server[0].title, Title::Film(film) if film.watched));
+        assert_eq!(shown(&window, cx), on_server, "the watched mark shows");
     }
 
     fn page() -> PlaylistPage {
