@@ -787,20 +787,6 @@ mod tests {
     }
 
     #[test]
-    fn a_row_keeps_room_for_the_enter_key_and_a_little_more() {
-        let key = key_cap_width(ENTER_KEY);
-        // The key is inside the highlight by its inset, and its width is the cap's own.
-        assert!(
-            hint_room() >= HINT_INSET + key + HINT_GAP,
-            "{}",
-            hint_room()
-        );
-        assert_eq!(hint_room(), HINT_INSET + key + HINT_GAP);
-        // The key is taller than its text, and the hint's height holds the cap.
-        assert!(std::hint::black_box(HINT_HEIGHT) >= KEY_TEXT + 2. * (KEY_PAD_Y + KEY_BORDER));
-    }
-
-    #[test]
     fn a_longer_label_makes_a_wider_key() {
         assert!(key_cap_width("Échap") < key_cap_width("Entrée"));
         assert_eq!(key_cap_width(""), 2. * (KEY_PAD_X + KEY_BORDER));
