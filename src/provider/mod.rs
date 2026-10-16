@@ -70,7 +70,7 @@ pub trait MediaServer: Send + Sync {
     fn report_started(&self, report: &PlaybackReport) -> Result<(), ProviderError>;
     fn report_progress(&self, report: &PlaybackReport) -> Result<(), ProviderError>;
     fn report_stopped(&self, report: &PlaybackReport) -> Result<(), ProviderError>;
-    /// Marks a film or an episode watched, or no longer; a season, all its episodes.
+    /// Marks a film or an episode watched, or no longer; a season or a series, all its episodes.
     fn set_watched(&self, film: &ItemId, watched: bool) -> Result<(), ProviderError>;
 
     /// An image at the width asked for (the server scales it down, keeping its proportions).
@@ -215,6 +215,10 @@ pub struct Series {
     pub community_rating: Option<f32>,
     /// How many of its episodes the user has not watched.
     pub unwatched: u32,
+    /// Every one of its episodes is watched.
+    pub watched: bool,
+    /// In the user's list.
+    pub favourite: bool,
     pub poster: Option<ImageRef>,
     pub backdrop: Option<ImageRef>,
     /// The season the server handed in place of the series (a new season in Recently added):
@@ -272,6 +276,10 @@ pub struct SeriesHit {
     pub title: String,
     pub year: Option<i32>,
     pub poster: Option<ImageRef>,
+    /// In the user's list, and all watched: unknown for a series found through one of its
+    /// episodes, which says nothing of it.
+    pub favourite: Option<bool>,
+    pub watched: Option<bool>,
 }
 
 /// A person as a search shows them: cast or crew, whatever the title.
@@ -407,6 +415,8 @@ pub struct Film {
     pub watched: bool,
     /// Where the viewer stopped, when they did not finish it.
     pub resume: Option<Duration>,
+    /// In the user's list.
+    pub favourite: bool,
     pub poster: Option<ImageRef>,
     pub backdrop: Option<ImageRef>,
 }

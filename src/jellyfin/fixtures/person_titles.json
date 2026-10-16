@@ -5,5 +5,5 @@
   { "Name": "Undated Reel", "SortName": "undated reel", "Id": "f0000000000000000000000000000007", "Type": "Movie", "UserData": { "PlaybackPositionTicks": 0, "Played": false }, "ImageTags": {}, "BackdropImageTags": [] },
   { "Name": "amber Coast", "SortName": "amber coast", "Id": "f0000000000000000000000000000008", "Type": "Movie", "ProductionYear": 1998, "UserData": { "PlaybackPositionTicks": 0, "Played": false }, "ImageTags": {}, "BackdropImageTags": [] },
   { "Name": "Pilot", "SortName": "pilot", "Id": "e0000000000000000000000000000001", "Type": "Episode", "ProductionYear": 2016, "SeriesId": "5e000000000000000000000000000001", "SeriesName": "Harbour Lights", "SeriesPrimaryImageTag": "poster-hl", "UserData": { "PlaybackPositionTicks": 0, "Played": false }, "ImageTags": {}, "BackdropImageTags": [] },
-  { "Name": "Dockside", "SortName": "dockside", "Id": "5e000000000000000000000000000009", "Type": "Series", "ProductionYear": 2016, "UserData": { "PlaybackPositionTicks": 0, "Played": false }, "ImageTags": {}, "BackdropImageTags": [] }
+  { "Name": "Dockside", "SortName": "dockside", "Id": "5e000000000000000000000000000009", "Type": "Series", "ProductionYear": 2016, "UserData": { "PlaybackPositionTicks": 0, "Played": true, "IsFavorite": true }, "ImageTags": {}, "BackdropImageTags": [] }
 ]

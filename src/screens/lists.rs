@@ -131,7 +131,7 @@ fn empty(
     let width = f32::from(window.viewport_size().width);
     let row = suggestion_row(shell, None, scroll, width, window, cx);
     let page = page_under_the_bar().child(heading(title, None, None));
-    empty_page(page, reason, row, shell.home.error)
+    empty_page(page, reason, row)
 }
 
 fn grid_screen(cells: Cells, window: &mut Window, cx: &mut Context<Shell>) -> impl IntoElement {
@@ -214,7 +214,7 @@ fn collection_poster(
     let opened = card.id.clone();
     let id: ElementId = ("collection", index).into();
     div()
-        .id(id)
+        .id(id.clone())
         .w(px(width))
         .flex_none()
         .flex()
@@ -224,6 +224,13 @@ fn collection_poster(
         .on_click(cx.listener(move |shell, _, _, cx| {
             shell.open_collection(opened.clone(), cx);
         }))
-        .child(poster_image(image, None, Corner::Nothing, width, false))
+        .child(poster_image(
+            &id,
+            image,
+            None,
+            Corner::Nothing,
+            width,
+            false,
+        ))
         .child(poster_caption(card.name.clone(), lists::card_caption(card)))
 }

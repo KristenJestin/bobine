@@ -12,7 +12,7 @@
 //! `bobine --screen login|home|home-rows|home-list-resume|home-list-next|home-list-latest|home-list-empty|library|detail|
 //! detail-rows|detail-cast|playing|series|series-page|series-rows|up-next|collections|collection-page|
 //! my-list|my-list-empty|film-list|series-list [--films N]
-//! [--media FILE] [--segments SECONDS] [--direct-fails] [--image-delay-ms N] [--photos-fail-once] [--scenario menu|scroll|select|panel|blackout|search|search-slow|search-keys|tools|tools-keys|home-rotate|home-hover|home-jump|home-scroll|home-lists|home-play|skip]
+//! [--media FILE] [--segments SECONDS] [--direct-fails] [--image-delay-ms N] [--photos-fail-once] [--scenario menu|scroll|select|panel|blackout|search|search-slow|search-keys|tools|tools-keys|home-rotate|home-hover|home-jump|home-scroll|home-lists|home-play|home-poster-hover|grid-poster-hover|skip]
 //! [--search-delay-ms N] [--favourite-delay-ms N] [--logout-delay-ms N] [--favourite-fails] [--slower N] --quit-at S`
 //!
 //! A scenario sends clicks, keys and scroll events to the window as the compositor would, at set
@@ -641,6 +641,8 @@ enum Target {
     SignOut,
     /// The player's seek bar, this far along it (0 to 1).
     SeekBar(f32),
+    /// A point of the window, in pixels from its top left.
+    At(f32, f32),
 }
 
 #[derive(Clone, Debug)]
@@ -932,6 +934,21 @@ impl Acts {
                 ),
                 (12.0, "the pointer leaves the bar", Hover(Bottom)),
             ],
+            // The pointer over the second poster of the Home's first row of posters, the Home
+            // scrolled to its foot (`--screen home-rows`, a window of 1440 × 810): the veil and the buttons
+            // come, then go when it leaves.
+            "home-poster-hover" => vec![
+                (0.0, "", Hover(Bottom)),
+                // Once the Home is scrolled to its foot.
+                (3.0, "the pointer over a poster", Hover(At(281., 600.))),
+                (6.0, "the pointer leaves it", Hover(Bottom)),
+            ],
+            // The same over the second poster of the Films grid (`--screen library`).
+            "grid-poster-hover" => vec![
+                (0.0, "", Hover(Bottom)),
+                (1.0, "the pointer over a poster", Hover(At(290., 300.))),
+                (3.0, "the pointer leaves it", Hover(Bottom)),
+            ],
             // The header's "Play" plays the first title, Escape leaves, the Home is asked anew.
             "home-play" => vec![
                 // Before any move the window takes the pointer for being at its corner, over
@@ -1169,6 +1186,7 @@ fn position(target: Target, shell: &Shell, window: &Window) -> Point<Pixels> {
                 bounds.top() + px(width * 9. / 32.),
             )
         }),
+        Target::At(x, y) => Some(point(px(x), px(y))),
         // The login card is centred; its address field's text starts 152 pixels left of the
         // middle, 38 pixels above it.
         Target::Address(x) => Some(point(

@@ -1,6 +1,7 @@
 //! The screens, and the pieces several of them show: posters, the rows under a heading, the
 //! messages of a page that is loading or failed.
 
+mod card;
 mod collection_detail;
 mod film_detail;
 mod home;
@@ -14,9 +15,12 @@ pub mod search;
 mod series_detail;
 pub mod skip;
 
+pub use card::{Card, Cards, Offer, Open, Play, Quick};
 pub use home::HeroView;
+pub use home::pill as notice_pill;
 pub use series_detail::up_next_card;
 
+use std::rc::Rc;
 use std::sync::Arc;
 
 use bobine::provider::{Film, Series};
@@ -27,9 +31,11 @@ use gpui_kit::{
 };
 
 use crate::film_page;
+use crate::home_page::PlayTarget;
 use crate::icons::{IconName, icon, with_stars};
 use crate::images;
 use crate::navigation::Screen;
+use crate::poster_actions::Marks;
 use crate::series_page;
 use crate::shell::Shell;
 use crate::theme;
@@ -125,6 +131,7 @@ fn badge(text: impl Into<gpui_kit::SharedString>) -> Div {
 }
 
 /// What a poster shows top right.
+#[derive(Clone)]
 enum Corner {
     Nothing,
     /// A check: the film is watched.
@@ -133,8 +140,183 @@ enum Corner {
     Count(String),
 }
 
+/// A poster as it is drawn, read out of its title once per draw of the page.
+#[derive(Clone)]
+struct Look {
+    name: ElementId,
+    image: Option<Arc<RenderImage>>,
+    rating: Option<String>,
+    corner: Corner,
+    width: f32,
+    /// The film of the page, in its collection.
+    outlined: bool,
+    /// How far the viewer went, over the foot of the poster.
+    progress: Option<f32>,
+    title: String,
+    caption: String,
+}
+
+impl Look {
+    /// The poster, with `layer` over its picture.
+    fn draw(&self, layer: Option<Stateful<Div>>) -> Div {
+        let width = self.width;
+        div()
+            .w(px(width))
+            .flex()
+            .flex_col()
+            .gap(px(8.))
+            .child(
+                poster_image(
+                    &self.name,
+                    self.image.clone(),
+                    self.rating.clone(),
+                    self.corner.clone(),
+                    width,
+                    self.outlined,
+                )
+                .children(self.progress.map(|fraction| {
+                    div()
+                        .absolute()
+                        .left(px(8.))
+                        .bottom(px(8.))
+                        .child(progress_bar(fraction, width - 20.))
+                }))
+                .children(layer),
+            )
+            .child(poster_caption(self.title.clone(), self.caption.clone()))
+    }
+}
+
 /// A film as the grid and the rows show it: the poster, its rating top left, a check when
-/// watched, the title and the year below. `outlined`: the film of the page, in its collection.
+/// watched, the title and the year below. `with_progress`: how far the viewer went, over the
+/// foot of the poster, when it is started.
+fn film_look(
+    film: &Film,
+    image: Option<Arc<RenderImage>>,
+    width: f32,
+    name: &ElementId,
+    outlined: bool,
+    with_progress: bool,
+    watched: bool,
+) -> Look {
+    let mut caption: Vec<String> = film.year.iter().map(i32::to_string).collect();
+    if outlined {
+        caption.push("this film".into());
+    }
+    Look {
+        name: name.clone(),
+        image,
+        rating: film_page::rating(film),
+        corner: if watched {
+            Corner::Watched
+        } else {
+            Corner::Nothing
+        },
+        width,
+        outlined,
+        // A film marked watched has no progress left to show.
+        progress: (with_progress && !watched)
+            .then(|| film_page::progress(film))
+            .flatten(),
+        title: film.title.clone(),
+        caption: caption.join(" · "),
+    }
+}
+
+/// A series as its grid and rows show it: like a film, with the episodes left to watch top
+/// right (a check once all are watched) and its years below. `fresh` is for the Recently added
+/// row, where a season handed for its series says which one is new.
+fn series_look(
+    series: &Series,
+    image: Option<Arc<RenderImage>>,
+    width: f32,
+    name: &ElementId,
+    watched: bool,
+    fresh: bool,
+) -> Look {
+    Look {
+        name: name.clone(),
+        image,
+        rating: series
+            .community_rating
+            .map(|rating| format!("★ {rating:.1}")),
+        corner: if watched {
+            Corner::Watched
+        } else {
+            series_page::badge(series).map_or(Corner::Nothing, Corner::Count)
+        },
+        width,
+        outlined: false,
+        progress: None,
+        title: series.title.clone(),
+        caption: series_page::card_detail(series, fresh).unwrap_or_default(),
+    }
+}
+
+/// The card of a film poster: a click opens the film, its layer plays it, puts it in the list
+/// and marks it watched.
+fn film_offer(
+    marks: &Marks,
+    film: &Film,
+    image: Option<Arc<RenderImage>>,
+    width: f32,
+    name: &ElementId,
+    with_progress: bool,
+) -> Offer {
+    let quick = Quick::new(marks, &film.id, film.favourite, film.watched);
+    let look = film_look(
+        film,
+        image,
+        width,
+        name,
+        false,
+        with_progress,
+        quick.watched.now,
+    );
+    Offer {
+        open: Open::Film(film.id.clone()),
+        play: Play::Target(PlayTarget::Film(film.id.clone())),
+        quick: Some(quick),
+        draw: Rc::new(move |layer| look.draw(Some(layer))),
+    }
+}
+
+/// The card of a series poster: a click opens the series (on its new season, for a card of
+/// one), its layer plays its next episode, puts it in the list and marks all of it watched. A
+/// card of a new season knows the season, not whether its series is in the list or watched: it
+/// has no button for them.
+fn series_offer(
+    marks: &Marks,
+    series: &Series,
+    image: Option<Arc<RenderImage>>,
+    width: f32,
+    name: &ElementId,
+    fresh: bool,
+) -> Offer {
+    let quick = series
+        .season
+        .is_none()
+        .then(|| Quick::new(marks, &series.id, series.favourite, series.watched));
+    let watched = quick.as_ref().is_some_and(|quick| quick.watched.now);
+    let look = series_look(series, image, width, name, watched, fresh);
+    Offer {
+        open: Open::Series(
+            series.id.clone(),
+            series.season.as_ref().map(|season| season.id.clone()),
+        ),
+        play: Play::Target(PlayTarget::Series(series.id.clone())),
+        quick,
+        draw: Rc::new(move |layer| look.draw(Some(layer))),
+    }
+}
+
+/// The card `id`, a view of its own, in its place on the page.
+fn card(shell: &mut Shell, id: ElementId, offer: Offer, cx: &mut Context<Shell>) -> Stateful<Div> {
+    let view = shell.card(&id, offer, cx);
+    div().id(id).flex_none().child(view)
+}
+
+/// A film poster; `outlined`: the film of the page, in its collection, which opens nothing.
 fn poster(
     shell: &mut Shell,
     film: &Film,
@@ -144,17 +326,6 @@ fn poster(
     cx: &mut Context<Shell>,
 ) -> Stateful<Div> {
     film_card(shell, film, width, id, outlined, false, cx)
-}
-
-/// `poster`, its picture already asked: see `film_card_with`.
-fn poster_with(
-    film: &Film,
-    image: Option<Arc<RenderImage>>,
-    width: f32,
-    id: impl Into<ElementId>,
-    cx: &mut Context<Shell>,
-) -> Stateful<Div> {
-    film_card_with(film, image, width, id, false, false, cx)
 }
 
 /// A film with, over the foot of its poster, how far the viewer went when it is started.
@@ -178,62 +349,16 @@ fn film_card(
     cx: &mut Context<Shell>,
 ) -> Stateful<Div> {
     let image = shell.image(film.poster.as_ref(), images::POSTER, cx);
-    film_card_with(film, image, width, id, outlined, with_progress, cx)
-}
-
-/// A film poster whose picture is already asked: drawing it needs no shell, so a caller that
-/// holds the film borrowed from the shell does not copy it at every frame.
-fn film_card_with(
-    film: &Film,
-    image: Option<Arc<RenderImage>>,
-    width: f32,
-    id: impl Into<ElementId>,
-    outlined: bool,
-    with_progress: bool,
-    cx: &mut Context<Shell>,
-) -> Stateful<Div> {
-    let opened = film.id.clone();
-    let mut caption: Vec<String> = film.year.iter().map(i32::to_string).collect();
+    let id = id.into();
     if outlined {
-        caption.push("this film".into());
+        // It opens nothing and plays nothing.
+        let look = film_look(film, image, width, &id, true, with_progress, film.watched);
+        return div().id(id).flex_none().child(look.draw(None));
     }
-    let corner = if film.watched {
-        Corner::Watched
-    } else {
-        Corner::Nothing
-    };
-    div()
-        .id(id)
-        .w(px(width))
-        .flex_none()
-        .flex()
-        .flex_col()
-        .gap(px(8.))
-        .cursor_pointer()
-        .when(!outlined, |card| {
-            card.on_click(cx.listener(move |shell, _, _, cx| {
-                shell.open_film(opened.clone(), cx);
-            }))
-        })
-        .child(
-            poster_image(image, film_page::rating(film), corner, width, outlined).children(
-                with_progress
-                    .then(|| film_page::progress(film))
-                    .flatten()
-                    .map(|fraction| {
-                        div()
-                            .absolute()
-                            .left(px(8.))
-                            .bottom(px(8.))
-                            .child(progress_bar(fraction, width - 20.))
-                    }),
-            ),
-        )
-        .child(poster_caption(film.title.clone(), caption.join(" · ")))
+    let offer = film_offer(&shell.marks, film, image, width, &id, with_progress);
+    card(shell, id, offer, cx)
 }
 
-/// A series as its grid and rows show it: like a film, with the episodes left to watch top
-/// right and its years below.
 fn series_poster(
     shell: &mut Shell,
     series: &Series,
@@ -241,47 +366,27 @@ fn series_poster(
     id: impl Into<ElementId>,
     cx: &mut Context<Shell>,
 ) -> Stateful<Div> {
-    let image = shell.image(series.poster.as_ref(), images::POSTER, cx);
-    series_poster_with(series, image, width, false, id, cx)
+    series_card(shell, series, width, false, id, cx)
 }
 
-/// A series poster whose picture is already asked: see `film_card_with`. `fresh` is for the
-/// Recently added row, where a season handed for its series says which one is new.
-fn series_poster_with(
+/// A series poster; `fresh`: see `series_look`.
+fn series_card(
+    shell: &mut Shell,
     series: &Series,
-    image: Option<Arc<RenderImage>>,
     width: f32,
     fresh: bool,
     id: impl Into<ElementId>,
     cx: &mut Context<Shell>,
 ) -> Stateful<Div> {
-    let opened = (
-        series.id.clone(),
-        series.season.as_ref().map(|s| s.id.clone()),
-    );
-    let corner = series_page::badge(series).map_or(Corner::Nothing, Corner::Count);
-    let rating = series
-        .community_rating
-        .map(|rating| format!("★ {rating:.1}"));
-    div()
-        .id(id)
-        .w(px(width))
-        .flex_none()
-        .flex()
-        .flex_col()
-        .gap(px(8.))
-        .cursor_pointer()
-        .on_click(cx.listener(move |shell, _, _, cx| {
-            shell.open_series_on(opened.0.clone(), opened.1.clone(), cx);
-        }))
-        .child(poster_image(image, rating, corner, width, false))
-        .child(poster_caption(
-            series.title.clone(),
-            series_page::card_detail(series, fresh).unwrap_or_default(),
-        ))
+    let image = shell.image(series.poster.as_ref(), images::POSTER, cx);
+    let id = id.into();
+    let offer = series_offer(&shell.marks, series, image, width, &id, fresh);
+    card(shell, id, offer, cx)
 }
 
+/// The picture of the poster `id`, with its marks.
 fn poster_image(
+    id: &ElementId,
     image: Option<Arc<RenderImage>>,
     rating: Option<String>,
     corner: Corner,
@@ -319,7 +424,11 @@ fn poster_image(
         .children(rating.map(|rating| badge(rating).absolute().top(px(8.)).left(px(8.))))
         .children(match corner {
             Corner::Nothing => None,
-            Corner::Watched => Some(round(div()).child(icon(IconName::Check, 13.))),
+            Corner::Watched => Some(
+                round(div())
+                    .debug_selector(|| format!("watched-mark {id}"))
+                    .child(icon(IconName::Check, 13.)),
+            ),
             Corner::Count(count) => Some(
                 round(div())
                     .px(px(7.))
