@@ -201,10 +201,16 @@ impl Shell {
                     Ok(episodes) => Loadable::Ready(episodes),
                     Err(error) => Loadable::Failed(shell.failed(error, cx)),
                 };
-                if let Some(page) = shell.series_page(depth, &id)
-                    && page.refreshes.landed(refresh)
-                {
-                    page.episodes.insert(season, episodes);
+                if let Some(page) = shell.series_page(depth, &id) {
+                    // `again` is the refresh's own question; a tab click does not release.
+                    series_page::land_episodes(
+                        &mut page.episodes,
+                        &mut page.refreshes,
+                        refresh,
+                        again,
+                        season,
+                        episodes,
+                    );
                 }
             },
         );

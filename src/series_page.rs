@@ -2,6 +2,7 @@
 //! main button plays, the one after an episode, the end-of-episode countdown and the labels. The
 //! version and track chips and the playback plan are the film page's.
 
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use bobine::provider::{
@@ -152,6 +153,27 @@ pub fn following(
 /// tab chosen again tries again), or `again`.
 pub fn asks_episodes(shown: Option<&Loadable<Vec<Episode>>>, again: bool) -> bool {
     again || matches!(shown, None | Some(Loadable::Failed(_)))
+}
+
+/// The episodes of `season` came back for `refresh`. `own`: it is the refresh's own question,
+/// the only one whose answer releases the hold of a mark; a tab click asks under the newest
+/// refresh too, and may land before it.
+pub fn land_episodes(
+    episodes: &mut HashMap<ItemId, Loadable<Vec<Episode>>>,
+    refreshes: &mut Refreshes,
+    refresh: u64,
+    own: bool,
+    season: ItemId,
+    answer: Loadable<Vec<Episode>>,
+) {
+    let shown = if own {
+        refreshes.landed(refresh)
+    } else {
+        refreshes.is_newest(refresh)
+    };
+    if shown {
+        episodes.insert(season, answer);
+    }
 }
 
 /// The chips' choices once the episode the main button plays is known anew: kept while it stays
@@ -800,6 +822,42 @@ mod tests {
         assert!(!refreshes.landed(before));
         assert!(refreshes.holding());
         assert!(refreshes.landed(after));
+        assert!(!refreshes.holding());
+    }
+
+    fn some_episodes() -> Loadable<Vec<Episode>> {
+        Loadable::Ready(Vec::new())
+    }
+
+    #[test]
+    fn only_the_refresh_releases_the_hold() {
+        let (mut refreshes, mut counter) = (Refreshes::default(), 0);
+        let mut episodes = HashMap::new();
+        let season = ItemId("season-2".into());
+        // A mark landed: the page holds, and the refresh after it is asked.
+        refreshes.ask(&mut counter);
+        refreshes.hold();
+        let refresh = refreshes.ask(&mut counter);
+        // A tab click's answer, for the newest refresh, lands first: it shows, the hold stays.
+        land_episodes(
+            &mut episodes,
+            &mut refreshes,
+            refresh,
+            false,
+            season.clone(),
+            some_episodes(),
+        );
+        assert!(matches!(episodes.get(&season), Some(Loadable::Ready(_))));
+        assert!(refreshes.holding());
+        // The refresh's own answer releases it.
+        land_episodes(
+            &mut episodes,
+            &mut refreshes,
+            refresh,
+            true,
+            season,
+            some_episodes(),
+        );
         assert!(!refreshes.holding());
     }
 
