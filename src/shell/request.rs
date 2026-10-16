@@ -487,6 +487,22 @@ mod tests {
     }
 
     #[gpui_kit::test]
+    fn on_a_short_window_the_seasons_menu_opens_below_its_button(cx: &mut TestAppContext) {
+        let seerr = FakeSeerr::default();
+        let window = on_request(&seerr, MediaKind::Tv, COPPER_COAST, cx);
+        let mut visual = drawn(&window, cx);
+        visual.simulate_resize(gpui_kit::size(gpui_kit::px(1280.), gpui_kit::px(560.)));
+        visual.run_until_parked();
+        click(&mut visual, "request-button");
+        let menu = visual.debug_bounds("seasons-menu").unwrap();
+        let title = visual.debug_bounds("detail-title").unwrap();
+        assert!(menu.top() >= title.bottom(), "{menu:?} covers {title:?}");
+        assert!(menu.bottom() <= gpui_kit::px(560.));
+        // Its seasons scroll in what is left.
+        assert!(menu.size.height < gpui_kit::px(crate::menu::height(3) + 60.));
+    }
+
+    #[gpui_kit::test]
     fn the_seasons_menu_closes_on_escape_and_on_an_outside_click(cx: &mut TestAppContext) {
         let seerr = FakeSeerr::default();
         let window = on_request(&seerr, MediaKind::Tv, COPPER_COAST, cx);

@@ -244,10 +244,11 @@ fn seasons_menu(
         });
     let wanted = menu::height(lines.len()) + MENU_FOOT;
     let window_height = f32::from(window.viewport_size().height);
-    let (at, height) = menu::place(button, wanted, window_height);
+    // Under its button, never over the title above it: on a short window its seasons scroll.
+    let least = menu::height(1) + MENU_FOOT;
+    let (at, height) = menu::place_below(button, wanted, window_height, least);
     // It comes into place from a little nearer its button.
-    let toward = if at.y > button.top() { -8. } else { 8. };
-    let rise = point(px(0.), px(toward * (1. - shown)));
+    let rise = point(px(0.), px(-8. * (1. - shown)));
     deferred(
         anchored()
             .position(at + rise)
