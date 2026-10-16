@@ -8,12 +8,14 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use bobine::provider::{
-    MediaServer, PlayMethod, Playback, PlaybackReport, ProviderError, TranscodeRequest,
+    ItemId, MediaServer, MediaSourceId, PlayMethod, Playback, PlaybackReport, ProviderError,
+    TranscodeRequest,
 };
 
 use crate::film_page::Plan;
 use crate::player::PlayerError;
 use crate::player::session::Session;
+use crate::player::settings::Quality;
 
 /// How long an open file may go without a picture: the seek to a resume point over a slow
 /// network comes first.
@@ -82,18 +84,47 @@ fn restart(session: &mut Session, plan: &Plan, opened: &Playback) -> Result<(), 
 }
 
 /// The line under the title once the server converts: "direct play" becomes "converted
-/// by the server".
-fn said(subtitle: Option<String>) -> Option<String> {
-    subtitle.map(|line| line.replace("direct play", "converted by the server"))
+/// by the server", and back when the file plays as it is again.
+fn said(subtitle: Option<String>, method: PlayMethod) -> Option<String> {
+    let (from, to) = match method {
+        PlayMethod::Transcode => ("direct play", "converted by the server"),
+        PlayMethod::DirectPlay => ("converted by the server", "direct play"),
+    };
+    subtitle.map(|line| line.replace(from, to))
+}
+
+/// What the server is asked for a new playback of the film: its conversion, or the file as it
+/// is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Reopen {
+    Convert(TranscodeRequest),
+    Direct(ItemId, MediaSourceId),
+}
+
+impl Reopen {
+    /// Off the window's thread: it blocks on the server.
+    pub fn open(&self, server: &dyn MediaServer) -> Result<Playback, ProviderError> {
+        match self {
+            Self::Convert(request) => server.transcode(request),
+            Self::Direct(film, source) => server.play(film, source),
+        }
+    }
 }
 
 /// A film of the server, which the server may convert when it does not play as it is: once.
 pub struct Fallback {
     pub server: Arc<dyn MediaServer>,
     pub plan: Plan,
+    /// The plan of the file as it is, which every new playback starts from.
+    original: Plan,
     method: PlayMethod,
-    /// The server is being asked to convert from there.
+    /// The server is being asked for a new playback from there.
     asking: Option<Duration>,
+    /// What the viewer asked for, if they did, and how the film played before: a refusal
+    /// leaves it playing so.
+    chosen: Option<(Quality, PlayMethod)>,
+    /// The file did not play as it is: the server converts it whatever the quality.
+    direct_failed: bool,
     /// Names this playback, so an answer for one the viewer left is told apart.
     id: u64,
 }
@@ -103,9 +134,12 @@ impl Fallback {
         static PLAYBACKS: AtomicU64 = AtomicU64::new(0);
         Self {
             server,
+            original: plan.clone(),
             plan,
             method: PlayMethod::DirectPlay,
             asking: None,
+            chosen: None,
+            direct_failed: false,
             id: PLAYBACKS.fetch_add(1, Ordering::Relaxed),
         }
     }
@@ -124,9 +158,10 @@ impl Fallback {
             Step::Convert { from } => {
                 self.method = PlayMethod::Transcode;
                 self.asking = Some(from);
+                self.direct_failed = true;
                 // Its words go: the conversion says what it does instead.
                 session.forget_error();
-                Some(self.plan.transcode_request(from))
+                Some(self.original.transcode_request(from))
             }
             Step::CannotPlay => {
                 session.fail(PlayerError("no picture".into()));
@@ -149,16 +184,32 @@ impl Fallback {
             return None;
         }
         let from = self.asking.take()?;
-        let opened = match opened {
-            Ok(opened) => opened,
-            Err(error) => {
+        let chosen = self.chosen.take();
+        let opened = match (opened, chosen) {
+            (Ok(opened), _) => opened,
+            // The film the viewer was watching plays on as it did.
+            (Err(error), Some((_, before))) => {
+                eprintln!("bobine: the server does not give the quality asked: {error}");
+                self.method = before;
+                return None;
+            }
+            (Err(error), None) => {
                 eprintln!("bobine: the server does not convert the film: {error}");
                 session.fail(PlayerError("the server cannot convert it".into()));
                 return None;
             }
         };
-        self.plan = self.plan.converted(from, &opened);
-        session.subtitle = said(session.subtitle.take());
+        self.plan = match self.method {
+            PlayMethod::Transcode => self.original.converted(from, &opened),
+            PlayMethod::DirectPlay => {
+                let mut plan = self.original.clone();
+                plan.start = from;
+                plan
+            }
+        };
+        let quality = chosen.map_or(session.quality(), |(quality, _)| quality);
+        session.playing_as(quality, self.method == PlayMethod::Transcode);
+        session.subtitle = said(session.subtitle.take(), self.method);
         if let Err(error) = restart(session, &self.plan, &opened) {
             // mpv's error code in words: no address in it.
             eprintln!("bobine: the conversion does not play: {error}");
@@ -173,8 +224,38 @@ impl Fallback {
             paused: false,
             audio_track: self.plan.audio_index,
             subtitle_track: self.plan.subtitle_index,
-            method: PlayMethod::Transcode,
+            method: self.method,
         })
+    }
+
+    /// The viewer chose `quality` in the settings: what to ask the server, from where the film
+    /// is. Nothing while the server is already asked.
+    pub fn choose(&mut self, quality: Quality, session: &mut Session) -> Option<Reopen> {
+        if self.asking.is_some() {
+            return None;
+        }
+        let from = if session.position_known() {
+            Duration::from_secs_f64(session.position.max(0.))
+        } else {
+            self.plan.start
+        };
+        let reopen = match quality {
+            Quality::Original if !self.direct_failed => {
+                Reopen::Direct(self.original.film.clone(), self.original.source.clone())
+            }
+            Quality::Original => Reopen::Convert(self.original.transcode_request(from)),
+            Quality::Cap(bits) => Reopen::Convert(TranscodeRequest {
+                max_bitrate: Some(bits),
+                ..self.original.transcode_request(from)
+            }),
+        };
+        self.chosen = Some((quality, self.method));
+        self.method = match reopen {
+            Reopen::Convert(_) => PlayMethod::Transcode,
+            Reopen::Direct(..) => PlayMethod::DirectPlay,
+        };
+        self.asking = Some(from);
+        Some(reopen)
     }
 
     /// Whether "Conversion par le serveur" shows.
@@ -422,7 +503,7 @@ mod tests {
     fn the_line_under_the_title_says_the_server_converts() {
         let line = Some("2025 · 4K HDR10 · direct play".to_string());
         assert_eq!(
-            said(line).as_deref(),
+            said(line, PlayMethod::Transcode).as_deref(),
             Some("2025 · 4K HDR10 · converted by the server")
         );
     }
@@ -449,6 +530,160 @@ mod tests {
         f.convert(Duration::from_secs(60));
         f.after(1, vec![failed()]);
         assert!(!notice_shown(f.method, false, &f.session, f.now));
+    }
+
+    /// The film playing directly, its picture shown, at `seconds`.
+    fn playing_at(
+        server: &Arc<FakeServer>,
+        seconds: f64,
+    ) -> (Fallback, Session, FakePlayer, Instant) {
+        let (mut fallback, mut session, player) = playing(server);
+        session.offer_quality();
+        let mut now = Instant::now();
+        let events = vec![
+            PlayerEvent::Loaded,
+            PlayerEvent::FirstFrame,
+            PlayerEvent::Position(seconds),
+        ];
+        assert_eq!(
+            tick(&mut fallback, &mut session, &player, &mut now, 1, events),
+            None
+        );
+        (fallback, session, player, now)
+    }
+
+    fn loads(player: &FakePlayer) -> Vec<(String, f64)> {
+        player
+            .calls
+            .borrow()
+            .iter()
+            .filter_map(|call| match call {
+                Call::Load { url, start, .. } => Some((url.clone(), *start)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_quality_cap_restarts_the_conversion_at_the_same_position() {
+        let server = Arc::new(FakeServer::new(3, false));
+        let (mut fallback, mut session, player, _) = playing_at(&server, 4500.);
+        let cap = Quality::Cap(4_000_000);
+        let Some(Reopen::Convert(request)) = fallback.choose(cap, &mut session) else {
+            panic!("not converted");
+        };
+        assert_eq!(request.start, Duration::from_secs(4500));
+        assert_eq!(request.max_bitrate, Some(4_000_000));
+        assert_eq!(fallback.choose(cap, &mut session), None, "asked once");
+        let opened = Reopen::Convert(request).open(&*server);
+        let id = fallback.id();
+        let report = fallback.answered(id, &mut session, opened).expect("plays");
+        assert_eq!(report.method, PlayMethod::Transcode);
+        assert_eq!(report.position, Duration::from_secs(4500));
+        let converted = server.state.lock().unwrap().converted.clone();
+        assert_eq!(loads(&player), [(converted, 4500.)]);
+        assert_eq!(session.quality(), cap);
+        assert_eq!(
+            session.playback_info()[0],
+            ("Playback", "Converted by the server".to_string())
+        );
+        assert_eq!(
+            session.subtitle.as_deref(),
+            Some("2025 · 4K HDR10 · converted by the server")
+        );
+    }
+
+    #[test]
+    fn back_to_original_restarts_direct_play_at_the_same_position() {
+        let server = Arc::new(FakeServer::new(3, false));
+        let (mut fallback, mut session, player, mut now) = playing_at(&server, 4500.);
+        let reopen = fallback
+            .choose(Quality::Cap(4_000_000), &mut session)
+            .unwrap();
+        let id = fallback.id();
+        fallback.answered(id, &mut session, reopen.open(&*server));
+        let events = vec![
+            PlayerEvent::Loaded,
+            PlayerEvent::FirstFrame,
+            PlayerEvent::Position(4600.),
+        ];
+        tick(&mut fallback, &mut session, &player, &mut now, 1, events);
+
+        let reopen = fallback.choose(Quality::Original, &mut session);
+        let Some(Reopen::Direct(film, source)) = reopen.clone() else {
+            panic!("{reopen:?}");
+        };
+        assert_eq!(
+            (&film, &source),
+            (&fallback.plan.film, &fallback.plan.source)
+        );
+        let report = fallback
+            .answered(id, &mut session, reopen.unwrap().open(&*server))
+            .expect("plays");
+        assert_eq!(report.method, PlayMethod::DirectPlay);
+        assert_eq!(report.position, Duration::from_secs(4600));
+        let stream = server.state.lock().unwrap().stream.clone();
+        assert_eq!(loads(&player).last(), Some(&(stream, 4600.)));
+        assert_eq!(session.quality(), Quality::Original);
+        assert_eq!(
+            session.playback_info()[0],
+            ("Playback", "Direct play".to_string())
+        );
+        assert_eq!(
+            session.subtitle.as_deref(),
+            Some("2025 · 4K HDR10 · direct play")
+        );
+    }
+
+    #[test]
+    fn original_after_a_failed_direct_play_converts_without_a_cap() {
+        let server = Arc::new(FakeServer::new(3, false));
+        let (mut fallback, mut session, player) = playing(&server);
+        session.offer_quality();
+        let mut now = Instant::now();
+        let request = tick(
+            &mut fallback,
+            &mut session,
+            &player,
+            &mut now,
+            1,
+            vec![failed()],
+        )
+        .expect("converted");
+        let id = fallback.id();
+        fallback.answered(id, &mut session, server.transcode(&request));
+        let events = vec![PlayerEvent::Loaded, PlayerEvent::FirstFrame];
+        tick(&mut fallback, &mut session, &player, &mut now, 1, events);
+        let reopen = fallback.choose(Quality::Cap(2_000_000), &mut session);
+        fallback.answered(id, &mut session, reopen.unwrap().open(&*server));
+        let Some(Reopen::Convert(request)) = fallback.choose(Quality::Original, &mut session)
+        else {
+            panic!("the file does not play as it is");
+        };
+        assert_eq!(request.max_bitrate, None);
+    }
+
+    #[test]
+    fn a_quality_the_server_refuses_leaves_the_film_playing() {
+        let server = Arc::new(FakeServer::new(3, false));
+        let (mut fallback, mut session, player, _) = playing_at(&server, 4500.);
+        server.state.lock().unwrap().transcode_fails = true;
+        let reopen = fallback
+            .choose(Quality::Cap(4_000_000), &mut session)
+            .unwrap();
+        let id = fallback.id();
+        assert_eq!(
+            fallback.answered(id, &mut session, reopen.open(&*server)),
+            None
+        );
+        assert_eq!(session.error(), None);
+        assert!(loads(&player).is_empty());
+        assert_eq!(session.quality(), Quality::Original);
+        assert!(
+            fallback
+                .choose(Quality::Cap(2_000_000), &mut session)
+                .is_some()
+        );
     }
 
     /// The film resumed at 72 min, as the window plays it, on its own player.

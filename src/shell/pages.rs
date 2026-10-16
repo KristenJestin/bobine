@@ -1385,6 +1385,7 @@ impl Shell {
             Ok(()) => {
                 if let Some(playback) = &mut self.playback {
                     playback.fallback = Some(fallback);
+                    playback.session.offer_quality();
                 }
                 self.load_trickplay(opened.film.clone(), opened.source.clone(), cx);
                 self.playback_started(&opened.film, next, cx);
@@ -2163,6 +2164,109 @@ mod tests {
             Some(crate::fake::Report::Stopped(_))
         ));
         assert_eq!(state.record.logouts, [state.record.reports.len()]);
+    }
+
+    /// A quality chosen in the player: the film plays on until the server gives the conversion,
+    /// which starts where the film was; the direct playback is told stopped there.
+    #[gpui_kit::test]
+    fn a_quality_cap_restarts_the_playback_at_the_same_position(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        use crate::fallback::Fallback;
+        use crate::fake::Report;
+        use crate::player::PlayerEvent;
+        use crate::player::fake::{Call, FakePlayer};
+        use crate::player::session::Session;
+        use crate::player::settings::Quality;
+        use crate::reports::Reporting;
+        use crate::video::fake::FakeDisplay;
+
+        let (server, window) = signed_in_window(cx);
+        let id = ItemId(crate::fake::FILM.into());
+        let detail = server.film(&id).unwrap();
+        let choices = crate::film_page::Choices::new(&detail.versions);
+        let plan =
+            crate::film_page::plan(&detail.film, &detail.versions, &choices, From::Resume).unwrap();
+        let opened = server.play(&plan.film, &plan.source).unwrap();
+        let player = FakePlayer::default();
+        let calls = player.calls.clone();
+        player.queued.borrow_mut().extend([
+            PlayerEvent::Loaded,
+            PlayerEvent::FirstFrame,
+            PlayerEvent::Position(4500.),
+        ]);
+        let cap = Quality::Cap(4_000_000);
+        window
+            .update(cx, |shell, window, cx| {
+                let mut session = Session::new(
+                    Box::new(player),
+                    Box::new(FakeDisplay::default()),
+                    "Le Dernier Hiver".into(),
+                    None,
+                );
+                session.offer_quality();
+                let mut reporting = Reporting::start(
+                    Arc::new(server.clone()),
+                    PlaybackReport {
+                        session: opened.session.clone(),
+                        film: opened.film.clone(),
+                        source: opened.source.clone(),
+                        position: plan.start,
+                        paused: false,
+                        audio_track: None,
+                        subtitle_track: None,
+                        method: PlayMethod::DirectPlay,
+                    },
+                );
+                let ended = session.update(Instant::now());
+                reporting.tick(Instant::now(), &session, ended);
+                shell.begin_playback(session, Some(reporting), window, cx);
+                let playback = shell.playback.as_mut().unwrap();
+                playback.fallback = Some(Fallback::new(Arc::new(server.clone()), plan.clone()));
+                let request = playback.session.choose_quality(cap);
+                shell.player_request(request, window, cx);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        let transcodes = server.state.lock().unwrap().record.transcodes.clone();
+        assert_eq!(transcodes.len(), 1);
+        assert_eq!(transcodes[0].start, Duration::from_secs(4500));
+        assert_eq!(transcodes[0].max_bitrate, Some(4_000_000));
+        let converted = server.state.lock().unwrap().converted.clone();
+        let loads: Vec<(String, f64)> = calls
+            .borrow()
+            .iter()
+            .filter_map(|call| match call {
+                Call::Load { url, start, .. } => Some((url.clone(), *start)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(loads, [(converted, 4500.)]);
+        window
+            .update(cx, |shell, _, _| {
+                assert_eq!(shell.playback.as_ref().unwrap().session.quality(), cap);
+            })
+            .unwrap();
+        let stopped = (0..200).find_map(|_| {
+            let found = server
+                .state
+                .lock()
+                .unwrap()
+                .record
+                .reports
+                .iter()
+                .find_map(|report| match report {
+                    Report::Stopped(report) => Some(report.clone()),
+                    _ => None,
+                });
+            if found.is_none() {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            found
+        });
+        let stopped = stopped.expect("the direct playback is told stopped");
+        assert_eq!(stopped.method, PlayMethod::DirectPlay);
+        assert_eq!(stopped.position, Duration::from_secs(4500));
     }
 
     /// The server answered "play" just before the sign out: the film must not start behind the

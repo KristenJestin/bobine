@@ -28,12 +28,11 @@ use gpui_kit::{
 
 use bobine::provider::{
     Connector, Episode, Film as FilmItem, MediaServer, Playback as Opened, ProviderError, Series,
-    TranscodeRequest,
 };
 
 use crate::chrome::{Account, AccountView, ButtonBounds, back_link, pill_bar};
 use crate::config::Settings;
-use crate::fallback::Fallback;
+use crate::fallback::{Fallback, Reopen};
 use crate::images::Images;
 use crate::menu::Menus;
 use crate::motion::{self, Fade, Presence};
@@ -555,7 +554,7 @@ impl Shell {
             .as_mut()
             .and_then(|f| f.tick(&mut playback.session, now));
         if let Some(request) = ask {
-            self.convert(request, cx);
+            self.reopen(Reopen::Convert(request), true, cx);
         }
         let Some(playback) = &mut self.playback else {
             return;
@@ -603,22 +602,23 @@ impl Shell {
         })
     }
 
-    /// The film of the server does not play as it is: the server is asked to convert it. The
-    /// playback that did not play is told stopped first.
-    fn convert(&mut self, request: TranscodeRequest, cx: &mut Context<Self>) {
+    /// The server is asked for a new playback of the film: its conversion when the file does
+    /// not play as it is, which is told stopped first, or the quality the viewer chose, while
+    /// the film plays on until it comes.
+    fn reopen(&mut self, request: Reopen, stop_first: bool, cx: &mut Context<Self>) {
         let Some(playback) = &mut self.playback else {
             return;
         };
         let Some(fallback) = &playback.fallback else {
             return;
         };
-        if let Some(reporting) = playback.reporting.take() {
+        if stop_first && let Some(reporting) = playback.reporting.take() {
             playback.stopping = Some(reporting.finish(&playback.session));
         }
         let (server, id) = (fallback.server.clone(), fallback.id());
         let task = cx
             .background_executor()
-            .spawn(async move { server.transcode(&request) });
+            .spawn(async move { request.open(&*server) });
         cx.spawn(async move |this, cx| {
             let opened = task.await;
             this.update(cx, |shell, cx| shell.converted(id, opened, cx))
@@ -642,6 +642,10 @@ impl Shell {
             return;
         };
         if let Some(report) = fallback.answered(id, &mut playback.session, opened) {
+            // The playback the viewer left for another quality ends here.
+            if let Some(reporting) = playback.reporting.take() {
+                playback.stopping = Some(reporting.finish(&playback.session));
+            }
             playback.reporting = Some(Reporting::start_after(
                 fallback.server.clone(),
                 report,
@@ -700,7 +704,18 @@ impl Shell {
                 self.tick(window, cx);
                 self.play_up_next_now(window, cx);
             }
-            Some(WindowRequest::Quality(_)) => {}
+            Some(WindowRequest::Quality(quality)) => {
+                let Some(playback) = &mut self.playback else {
+                    return;
+                };
+                let reopen = playback
+                    .fallback
+                    .as_mut()
+                    .and_then(|fallback| fallback.choose(quality, &mut playback.session));
+                if let Some(reopen) = reopen {
+                    self.reopen(reopen, false, cx);
+                }
+            }
             None => {}
         }
     }
