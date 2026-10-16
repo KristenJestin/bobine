@@ -1293,6 +1293,7 @@ impl Shell {
                     playback.next = next;
                     playback.fallback = Some(fallback);
                 }
+                self.load_trickplay(opened.film.clone(), opened.source.clone(), cx);
             }
             Err(error) => {
                 // The words of the video surface or of mpv's error code: no address in them.

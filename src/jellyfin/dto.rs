@@ -3,7 +3,7 @@
 use crate::provider::{
     AudioTrack, CastMember, CollectionCard, Episode, Feature, FeatureKind, Film, ImageKind,
     ImageRef, ItemId, Library, LibraryKind, MediaSource, MediaSourceId, PersonHit, PersonTitles,
-    Season, Series, SeriesHit, ServerInfo, SubtitleTrack, Title, VideoRange, VideoTrack,
+    Season, Series, SeriesHit, ServerInfo, SubtitleTrack, Title, Trickplay, VideoRange, VideoTrack,
 };
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -113,6 +113,36 @@ pub struct Item {
     pub season_id: Option<String>,
     /// A collection's films, when asked for.
     pub child_count: Option<u32>,
+    /// The trickplay images, when asked for (`fields=Trickplay`): by version, then by width.
+    #[serde(default)]
+    pub trickplay: HashMap<String, HashMap<String, TrickplayInfo>>,
+}
+
+/// How one version's trickplay images are cut at one width. The interval is in milliseconds.
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "PascalCase", default)]
+pub struct TrickplayInfo {
+    pub width: u32,
+    pub height: u32,
+    pub tile_width: u32,
+    pub tile_height: u32,
+    pub thumbnail_count: u32,
+    pub interval: u64,
+}
+
+impl Item {
+    /// The trickplay to show for one version, if the server made any for it.
+    pub fn trickplay_of(&self, source: &str) -> Option<Trickplay> {
+        let sizes = self.trickplay.get(source)?;
+        Trickplay::choose(sizes.values().map(|info| Trickplay {
+            width: info.width,
+            height: info.height,
+            columns: info.tile_width,
+            rows: info.tile_height,
+            count: info.thumbnail_count,
+            interval: Duration::from_millis(info.interval),
+        }))
+    }
 }
 
 #[derive(Deserialize)]

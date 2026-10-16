@@ -11,7 +11,7 @@ use bobine::provider::{
     FilterChoices, ImageKind, ImageRef, ItemId, Library, LibraryKind, MediaServer, MediaSource,
     MediaSourceId, Page, PersonHit, PersonTitles, PlaySessionId, Playback, PlaybackReport,
     ProviderError, SearchResults, Season, Series, SeriesDetail, SeriesHit, ServerInfo, StreamUrl,
-    SubtitleTrack, Title, TranscodeRequest, VideoRange, VideoTrack,
+    SubtitleTrack, Title, TranscodeRequest, Trickplay, VideoRange, VideoTrack,
 };
 
 pub const USER: &str = "camille";
@@ -48,6 +48,8 @@ pub struct Record {
     pub favourite_calls: Vec<(ItemId, bool)>,
     /// How many times the list of favourites was asked.
     pub list_loads: u32,
+    /// The tiles of trickplay asked, in the order they came.
+    pub tiles: Vec<u32>,
     /// What the player asked the server to convert, in order.
     pub transcodes: Vec<TranscodeRequest>,
 }
@@ -81,6 +83,12 @@ pub struct State {
     pub favourite_fails: bool,
     /// How long changing the list takes, so that a double click or the optimistic state shows.
     pub favourite_delay: std::time::Duration,
+    /// The trickplay layout every version has; none: the server made no trickplay images.
+    pub trickplay: Option<Trickplay>,
+    /// The JPEGs the tiles are, in turn: tile 0 is the first, tile 3 the first again if three.
+    pub tiles: Vec<Vec<u8>>,
+    /// How long a tile takes to come.
+    pub tile_delay: std::time::Duration,
 }
 
 #[derive(Clone)]
@@ -465,6 +473,9 @@ impl FakeServer {
                     .to_vec(),
                 favourite_fails: false,
                 favourite_delay: std::time::Duration::ZERO,
+                trickplay: None,
+                tiles: Vec::new(),
+                tile_delay: std::time::Duration::ZERO,
             })),
             info: ServerInfo {
                 id: "server-1".into(),
@@ -1097,6 +1108,32 @@ impl MediaServer for FakeServer {
             state.favourites.push(item.clone());
         }
         Ok(())
+    }
+
+    fn trickplay(
+        &self,
+        _film: &ItemId,
+        _source: &MediaSourceId,
+    ) -> Result<Option<Trickplay>, ProviderError> {
+        Ok(self.state().trickplay)
+    }
+
+    fn trickplay_tile(
+        &self,
+        _film: &ItemId,
+        _source: &MediaSourceId,
+        trickplay: &Trickplay,
+        tile: u32,
+    ) -> Result<Vec<u8>, ProviderError> {
+        let delay = self.state().tile_delay;
+        std::thread::sleep(delay);
+        let mut state = self.state();
+        state.record.tiles.push(tile);
+        if tile >= trickplay.tiles() {
+            return Err(ProviderError::NotFound);
+        }
+        let at = tile as usize % state.tiles.len().max(1);
+        state.tiles.get(at).cloned().ok_or(ProviderError::NotFound)
     }
 
     fn transcode(&self, request: &TranscodeRequest) -> Result<Playback, ProviderError> {

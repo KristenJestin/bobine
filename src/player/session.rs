@@ -157,6 +157,13 @@ impl Session {
         self.player.seek(Seek::To(fraction * self.duration));
     }
 
+    /// The pointer drags along the seek bar: the film follows to the nearest keyframe, which is
+    /// quick, and no seek is counted. The seek the server is told of is the one on release.
+    pub fn scrub_to_fraction(&mut self, fraction: f32) {
+        let fraction = f64::from(fraction.clamp(0., 1.));
+        self.player.seek(Seek::Rough(fraction * self.duration));
+    }
+
     pub fn mouse_moved(&mut self, now: Instant) {
         self.controls.mouse_moved(now);
     }
@@ -428,6 +435,24 @@ mod tests {
             f.calls(),
             [Call::Seek(Seek::To(1500.)), Call::Seek(Seek::To(6000.))]
         );
+    }
+
+    #[test]
+    fn a_drag_along_the_seek_bar_moves_the_film_without_counting_a_seek() {
+        let mut f = fixture();
+        f.session.duration = 6000.;
+        f.session.scrub_to_fraction(0.25);
+        f.session.scrub_to_fraction(0.5);
+        f.session.scrub_to_fraction(1.5);
+        assert_eq!(
+            f.calls(),
+            [
+                Call::Seek(Seek::Rough(1500.)),
+                Call::Seek(Seek::Rough(3000.)),
+                Call::Seek(Seek::Rough(6000.))
+            ]
+        );
+        assert_eq!(f.session.seeks(), 0);
     }
 
     #[test]

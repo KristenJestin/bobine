@@ -22,7 +22,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use bobine::provider::{Connector, ItemId};
+use bobine::provider::{Connector, ItemId, Trickplay};
 use gpui_kit::{
     App, Bounds, Context, Entity, KeyDownEvent, Keystroke, Modifiers, MouseButton, MouseDownEvent,
     MouseMoveEvent, MouseUpEvent, Pixels, PlatformInput, Point, ScrollDelta, ScrollWheelEvent,
@@ -35,6 +35,7 @@ use crate::home_page::ListKind;
 use crate::library_tools::LETTERS;
 use crate::menu;
 use crate::navigation::{NavEntry, Screen};
+use crate::screens::player::EDGE;
 use crate::shell::{Chip, Tool};
 
 use crate::player::libmpv::Libmpv;
@@ -81,6 +82,12 @@ struct Args {
     favourite_delay: u64,
     /// The fake server fails when the user's list is changed.
     favourite_fails: bool,
+    /// JPEG files the fake server's trickplay tiles are, in turn.
+    tiles: Vec<String>,
+    /// The fake server's trickplay: how many thumbnails, one every so many milliseconds.
+    trickplay: Option<(u32, u64)>,
+    /// How long the fake server takes to answer each tile, in milliseconds.
+    tile_delay: u64,
 }
 
 fn parse(mut args: impl Iterator<Item = String>) -> Result<Option<Args>, String> {
@@ -144,6 +151,22 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Option<Args>, String>
                     .ok_or("--search-delay-ms needs a number")?;
             }
             "--scenario" => parsed.scenario = args.next(),
+            "--tile" => parsed.tiles.push(args.next().ok_or("--tile needs a file")?),
+            "--trickplay" => {
+                let value = args.next().ok_or("--trickplay needs COUNT:INTERVAL_MS")?;
+                parsed.trickplay = value.split_once(':').and_then(|(count, interval)| {
+                    Some((count.parse().ok()?, interval.parse().ok()?))
+                });
+                if parsed.trickplay.is_none() {
+                    return Err("--trickplay needs COUNT:INTERVAL_MS".into());
+                }
+            }
+            "--tile-delay-ms" => {
+                parsed.tile_delay = args
+                    .next()
+                    .and_then(|n| n.parse().ok())
+                    .ok_or("--tile-delay-ms needs a number")?;
+            }
             "--favourite-fails" => parsed.favourite_fails = true,
             "--favourite-delay-ms" => {
                 parsed.favourite_delay = args
@@ -222,6 +245,21 @@ impl Harness {
             state.search_delay = Duration::from_millis(args.search_delay);
             state.favourite_delay = Duration::from_millis(args.favourite_delay);
             state.favourite_fails = args.favourite_fails;
+            state.tile_delay = Duration::from_millis(args.tile_delay);
+            state.tiles = args
+                .tiles
+                .iter()
+                .map(|file| std::fs::read(file).expect("a tile file the harness can read"))
+                .collect();
+            // Thumbnails of the size Jellyfin makes by default, 10 by 10 to a tile.
+            state.trickplay = args.trickplay.map(|(count, interval)| Trickplay {
+                width: 320,
+                height: 180,
+                columns: 10,
+                rows: 10,
+                count,
+                interval: Duration::from_millis(interval),
+            });
             if args.screen.as_deref() == Some("my-list-empty") {
                 state.favourites.clear();
             }
@@ -455,6 +493,7 @@ fn show_screen(
                 println!("IMAGES asked={} persons={persons}", images.len());
                 let searches = fake.state.lock().unwrap().record.searches.clone();
                 println!("SEARCHES asked={searches:?}");
+                println!("TILES asked={:?}", fake.state.lock().unwrap().record.tiles);
                 let record = &fake.state.lock().unwrap().record;
                 println!(
                     "PLAYS asked={:?} reports={:?}",
@@ -543,6 +582,8 @@ enum Target {
     Letter(char),
     /// The empty top left, over no chip and no poster.
     Corner,
+    /// The player's seek bar, this far along it (0 to 1).
+    SeekBar(f32),
 }
 
 #[derive(Clone, Debug)]
@@ -788,6 +829,21 @@ impl Acts {
                 (10.0, "click the same card again", Click(Card(0, 0, 340.))),
                 (12.0, "escape back to the Home again", Key("escape")),
             ],
+            // The pointer over the player's seek bar: the preview follows it, stays inside the
+            // window at both ends, goes when the pointer leaves; a drag along the bar seeks.
+            "seek-bar" => vec![
+                (0.5, "", Hover(Bottom)),
+                (2.0, "the pointer on the seek bar", Hover(SeekBar(0.25))),
+                (4.0, "the pointer further along", Hover(SeekBar(0.5))),
+                (6.0, "the pointer at the far left", Hover(SeekBar(0.0))),
+                (8.0, "the pointer at the far right", Hover(SeekBar(0.995))),
+                (
+                    10.0,
+                    "a drag along the bar",
+                    Drag(SeekBar(0.2), SeekBar(0.75)),
+                ),
+                (12.0, "the pointer leaves the bar", Hover(Bottom)),
+            ],
             // The header's "Lecture" plays the first title, Escape leaves, the Home is asked anew.
             "home-play" => vec![
                 // Before any move the window takes the pointer for being at its corner, over
@@ -961,6 +1017,11 @@ fn position(target: Target, shell: &Shell, window: &Window) -> Point<Pixels> {
         Target::Picture => Some(point(size.width * 0.3, size.height * 0.5)),
         Target::Top => Some(point(size.width * 0.75, px(24.))),
         Target::Bottom => Some(point(size.width * 0.9, size.height * 0.97)),
+        // The bar runs between the edges, its strip 113 px up from the bottom.
+        Target::SeekBar(fraction) => Some(point(
+            px(EDGE) + (size.width - px(2. * EDGE)) * fraction,
+            size.height - px(113.5),
+        )),
         Target::Hero => Some(point(size.width * 0.7, hero_height(size) * 0.3)),
         Target::HeroMark(n) => {
             let count = shell.home.featured().len().max(1) as f32;
