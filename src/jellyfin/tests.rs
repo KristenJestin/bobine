@@ -3016,3 +3016,129 @@ fn the_library_is_indexed_by_tmdb_id_in_one_request() {
     assert_eq!(asked.param("Fields"), Some("ProviderIds"));
     assert_eq!(asked.param("userId"), Some(USER_ID));
 }
+
+fn with_local_trailer(s: &Setup) {
+    s.fake.state.lock().unwrap().local_trailer = true;
+}
+
+fn with_remote_trailers(s: &Setup, urls: &[&str]) {
+    s.fake.state.lock().unwrap().remote_trailers = urls.iter().map(|u| u.to_string()).collect();
+}
+
+#[test]
+fn a_film_without_a_trailer_says_so() {
+    let s = Setup::new();
+    let detail = s.signed_in().film(&film()).unwrap();
+    assert_eq!(detail.trailers, Trailers::default());
+}
+
+#[test]
+fn a_film_with_a_trailer_file_says_so() {
+    let s = Setup::new();
+    with_local_trailer(&s);
+    let detail = s.signed_in().film(&film()).unwrap();
+    assert_eq!(
+        detail.trailers,
+        Trailers {
+            local: true,
+            remote: None
+        }
+    );
+}
+
+#[test]
+fn a_film_gives_the_first_of_its_remote_trailers() {
+    let s = Setup::new();
+    with_remote_trailers(&s, &[REMOTE_TRAILER, OTHER_REMOTE_TRAILER]);
+    let detail = s.signed_in().film(&film()).unwrap();
+    assert_eq!(
+        detail.trailers,
+        Trailers {
+            local: false,
+            remote: Some(REMOTE_TRAILER.into())
+        }
+    );
+}
+
+#[test]
+fn a_series_says_which_trailers_it_has() {
+    let s = Setup::new();
+    let server = s.signed_in();
+    assert_eq!(
+        server.series_detail(&series()).unwrap().trailers,
+        Trailers::default()
+    );
+    with_local_trailer(&s);
+    with_remote_trailers(&s, &[REMOTE_TRAILER]);
+    assert_eq!(
+        server.series_detail(&series()).unwrap().trailers,
+        Trailers {
+            local: true,
+            remote: Some(REMOTE_TRAILER.into())
+        }
+    );
+}
+
+#[test]
+fn a_local_trailer_streams_from_its_own_file() {
+    let s = Setup::new();
+    with_local_trailer(&s);
+    let stream = s.signed_in().local_trailer(&film()).unwrap();
+
+    let url = stream.expose_for_player();
+    let prefix = format!("{}/Videos/{TRAILER}/stream?", s.fake.url);
+    assert!(url.starts_with(&prefix), "{url}");
+    for part in [
+        "static=true".to_string(),
+        format!("mediaSourceId={TRAILER_SOURCE}"),
+        format!("ApiKey={TOKEN}"),
+    ] {
+        assert!(url.contains(&part), "{part} missing");
+    }
+    let asked = s.fake.last("GET", &format!("/Items/{FILM}/LocalTrailers"));
+    assert_eq!(asked.param("userId"), Some(USER_ID));
+}
+
+#[test]
+fn a_series_trailer_file_is_found_through_the_series() {
+    let s = Setup::new();
+    with_local_trailer(&s);
+    let stream = s.signed_in().local_trailer(&series()).unwrap();
+    let prefix = format!("{}/Videos/{TRAILER}/stream?", s.fake.url);
+    assert!(stream.expose_for_player().starts_with(&prefix));
+}
+
+#[test]
+fn asking_for_the_trailer_file_of_a_title_without_one_is_not_found() {
+    let s = Setup::new();
+    assert_eq!(
+        s.signed_in().local_trailer(&film()).map(|_| ()),
+        Err(ProviderError::NotFound)
+    );
+}
+
+#[test]
+fn a_trailer_file_opens_no_playback_session() {
+    let s = Setup::new();
+    with_local_trailer(&s);
+    s.signed_in().local_trailer(&film()).unwrap();
+    let asked: Vec<String> = s
+        .fake
+        .seen()
+        .into_iter()
+        .map(|seen| seen.path)
+        .filter(|path| path.contains("PlaybackInfo") || path.starts_with("/Sessions/Playing"))
+        .collect();
+    assert!(asked.is_empty(), "{asked:?}");
+}
+
+#[test]
+fn a_remote_trailer_that_is_not_a_web_address_is_left_out() {
+    let s = Setup::new();
+    with_remote_trailers(&s, &["file:///etc/passwd", REMOTE_TRAILER]);
+    let detail = s.signed_in().film(&film()).unwrap();
+    assert_eq!(detail.trailers.remote.as_deref(), Some(REMOTE_TRAILER));
+    with_remote_trailers(&s, &["file:///etc/passwd"]);
+    let detail = s.signed_in().film(&film()).unwrap();
+    assert_eq!(detail.trailers.remote, None);
+}

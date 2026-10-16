@@ -26,6 +26,13 @@ pub const SERIES_LIBRARY: &str = "22222222222222222222222222222222";
 pub const SERIES: &str = "50000000000000000000000000000001";
 pub const SEASON: &str = "5e000000000000000000000000000002";
 pub const EPISODE: &str = "e0000000000000000000000000000021";
+/// The trailer file the server holds for the film and for the series.
+pub const TRAILER: &str = "7a000000000000000000000000000001";
+/// The version of that file: not its id, as it is on a real server for some files.
+pub const TRAILER_SOURCE: &str = "7b000000000000000000000000000001";
+/// A trailer hosted elsewhere.
+pub const REMOTE_TRAILER: &str = "https://www.youtube.com/watch?v=aBcDeFgHiJk";
+pub const OTHER_REMOTE_TRAILER: &str = "https://www.youtube.com/watch?v=zYxWvUtSrQp";
 
 fn fixture(name: &str) -> Value {
     let text = match name {
@@ -125,6 +132,10 @@ pub struct State {
     pub no_transcoding: bool,
     /// The extracted subtitle comes from another host, as an absolute address.
     pub absolute_delivery: bool,
+    /// The film and the series have a trailer file of their own.
+    pub local_trailer: bool,
+    /// The trailers hosted elsewhere that the film and the series list, in order.
+    pub remote_trailers: Vec<String>,
 }
 
 /// How long a held search request waits for the others before it is let go anyway.
@@ -400,6 +411,30 @@ fn favourite_of(state: &State, id: &str, mut item: Value) -> Value {
     item
 }
 
+/// The trailers the state gives a film or a series, as the server lists them on the item.
+fn trailers_of(state: &State, mut item: Value) -> Value {
+    item["LocalTrailerCount"] = json!(u32::from(state.local_trailer));
+    item["RemoteTrailers"] = state
+        .remote_trailers
+        .iter()
+        .map(|url| json!({ "Url": url }))
+        .collect();
+    item
+}
+
+/// What `/Items/{id}/LocalTrailers` answers: a bare array of the trailer items.
+fn local_trailers(state: &State) -> Value {
+    if !state.local_trailer {
+        return json!([]);
+    }
+    json!([{
+        "Id": TRAILER,
+        "Name": "Trailer",
+        "Type": "Trailer",
+        "MediaSources": [{ "Id": TRAILER_SOURCE, "Container": "mp4" }],
+    }])
+}
+
 fn answer(state: &State, seen: &Seen) -> Answer {
     if state.not_jellyfin {
         return Answer::Json(404, json!({ "error": "not here" }));
@@ -490,7 +525,7 @@ fn answer(state: &State, seen: &Seen) -> Answer {
             _ => Answer::Json(200, json!({ "Items": [], "TotalRecordCount": 0 })),
         },
         ("GET", path) if path == format!("/Items/{FILM}") => {
-            let mut item = favourite_of(state, FILM, fixture("film_detail"));
+            let mut item = trailers_of(state, favourite_of(state, FILM, fixture("film_detail")));
             if state.no_trickplay {
                 item.as_object_mut().unwrap().remove("Trickplay");
             }
@@ -529,8 +564,16 @@ fn answer(state: &State, seen: &Seen) -> Answer {
             "POST",
             "/Sessions/Playing" | "/Sessions/Playing/Progress" | "/Sessions/Playing/Stopped",
         ) => Answer::Empty(204),
-        ("GET", path) if path == format!("/Items/{SERIES}") => {
-            Answer::Json(200, favourite_of(state, SERIES, fixture("series_detail")))
+        ("GET", path) if path == format!("/Items/{SERIES}") => Answer::Json(
+            200,
+            trailers_of(state, favourite_of(state, SERIES, fixture("series_detail"))),
+        ),
+        ("GET", path)
+            if [FILM, SERIES]
+                .iter()
+                .any(|id| path == format!("/Items/{id}/LocalTrailers")) =>
+        {
+            Answer::Json(200, local_trailers(state))
         }
         ("GET", path) if path == format!("/Items/{SERIES}/Similar") => {
             Answer::Json(200, fixture("series_similar"))

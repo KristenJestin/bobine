@@ -144,6 +144,19 @@ pub trait MediaServer: Send + Sync {
     /// The films and series of every library that have a TMDb id, by that id: one call, for
     /// the request server's titles to be told in the library.
     fn tmdb_index(&self) -> Result<TmdbIndex, ProviderError>;
+    /// Where to stream the first trailer file the server holds for a film or a series. No
+    /// playback session is opened: a trailer is not watched, the server is told nothing of it.
+    /// `NotFound` when the title has none.
+    fn local_trailer(&self, item: &ItemId) -> Result<StreamUrl, ProviderError>;
+}
+
+/// The trailers of a film or a series, as its page learns them.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Trailers {
+    /// The server holds a trailer file of its own for it.
+    pub local: bool,
+    /// The first trailer hosted elsewhere (YouTube…). A public page address, no secret.
+    pub remote: Option<String>,
 }
 
 /// The library's films and series by their TMDb id.
@@ -254,6 +267,7 @@ pub struct SeriesDetail {
     pub favourite: bool,
     /// Its id on TMDb, when the server knows it.
     pub tmdb: Option<u64>,
+    pub trailers: Trailers,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -457,6 +471,7 @@ pub struct FilmDetail {
     /// Its id on TMDb, and the id of its TMDb collection, when the server knows them.
     pub tmdb: Option<u64>,
     pub tmdb_collection: Option<u64>,
+    pub trailers: Trailers,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

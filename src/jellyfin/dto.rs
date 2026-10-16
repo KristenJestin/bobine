@@ -3,8 +3,8 @@
 use crate::provider::{
     AudioTrack, CastMember, CollectionCard, Episode, Feature, FeatureKind, Film, ImageKind,
     ImageRef, ItemId, Library, LibraryKind, MediaSource, MediaSourceId, PersonHit, PersonTitles,
-    Season, Segment, SegmentKind, Series, SeriesHit, ServerInfo, SubtitleTrack, Title, Trickplay,
-    VideoRange, VideoTrack,
+    Season, Segment, SegmentKind, Series, SeriesHit, ServerInfo, SubtitleTrack, Title, Trailers,
+    Trickplay, VideoRange, VideoTrack,
 };
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -159,6 +159,15 @@ pub struct Item {
     /// Its ids elsewhere, `Tmdb`, `TmdbCollection`, `Imdb`…
     #[serde(default)]
     pub provider_ids: HashMap<String, String>,
+    pub local_trailer_count: Option<u32>,
+    #[serde(default)]
+    pub remote_trailers: Vec<RemoteTrailer>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "PascalCase", default)]
+pub struct RemoteTrailer {
+    pub url: Option<String>,
 }
 
 /// How one version's trickplay images are cut at one width. The interval is in milliseconds.
@@ -515,6 +524,20 @@ impl Item {
             id: ItemId(self.id.clone()),
             name: self.name.clone(),
             photo: self.primary(),
+        }
+    }
+
+    /// Its trailers. A remote one is kept only when it is a web address: the player must never
+    /// be sent to a file of this machine by a server.
+    pub fn trailers(&self) -> Trailers {
+        Trailers {
+            local: self.local_trailer_count.is_some_and(|count| count > 0),
+            remote: self
+                .remote_trailers
+                .iter()
+                .filter_map(|trailer| trailer.url.as_deref())
+                .find(|url| super::is_absolute(url))
+                .map(str::to_string),
         }
     }
 

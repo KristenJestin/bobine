@@ -492,6 +492,7 @@ impl MediaServer for Jellyfin {
         Ok(FilmDetail {
             tmdb: item.provider_id("Tmdb"),
             tmdb_collection: item.provider_id("TmdbCollection"),
+            trailers: item.trailers(),
             film: item.film(),
             logo: item.logo(),
             directors: item.directors(),
@@ -758,6 +759,7 @@ impl MediaServer for Jellyfin {
         )?;
         Ok(SeriesDetail {
             tmdb: item.provider_id("Tmdb"),
+            trailers: item.trailers(),
             series: item.series(),
             favourite: item.user_data.as_ref().is_some_and(|u| u.is_favorite),
             cast: item.cast(),
@@ -1083,5 +1085,28 @@ impl MediaServer for Jellyfin {
             };
         }
         Ok(index)
+    }
+
+    fn local_trailer(&self, item: &ItemId) -> Result<StreamUrl, ProviderError> {
+        let found: Vec<Item> = self.http.get(
+            "trailer",
+            &format!("/Items/{}/LocalTrailers", encode(&item.0)),
+            &[self.user()],
+        )?;
+        let trailer = found.first().ok_or(ProviderError::NotFound)?;
+        // A file may have a version id of its own, apart from the item's.
+        let source = trailer
+            .media_sources
+            .first()
+            .map_or(trailer.id.as_str(), |source| source.id.as_str());
+        // Direct play, with no play session: nothing here is a playback the server follows.
+        Ok(StreamUrl::new(format!(
+            "{}/Videos/{}/stream?static=true&mediaSourceId={}&deviceId={}&ApiKey={}",
+            self.http.base(),
+            encode(&trailer.id),
+            encode(source),
+            encode(&self.http.device().id),
+            encode(self.token()),
+        )))
     }
 }

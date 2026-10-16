@@ -13,8 +13,8 @@ use bobine::provider::{
     FilterChoices, ImageKind, ImageRef, ItemId, Library, LibraryKind, MediaServer, MediaSource,
     MediaSourceId, Page, PersonHit, PersonTitles, PlaySessionId, Playback, PlaybackReport,
     ProviderError, SearchResults, Season, Segment, Series, SeriesDetail, SeriesHit, ServerInfo,
-    StreamUrl, SubtitleTrack, Title, TmdbIndex, Token, TokenStore, TranscodeRequest, Trickplay,
-    VideoRange, VideoTrack,
+    StreamUrl, SubtitleTrack, Title, TmdbIndex, Token, TokenStore, Trailers, TranscodeRequest,
+    Trickplay, VideoRange, VideoTrack,
 };
 
 pub const USER: &str = "camille";
@@ -115,6 +115,8 @@ pub struct Record {
     pub transcodes: Vec<TranscodeRequest>,
     /// Each logout, with how many playback reports the server had by then.
     pub logouts: Vec<usize>,
+    /// The titles whose trailer file was asked for, in order.
+    pub trailer_asks: Vec<ItemId>,
 }
 
 /// What the fake server holds, shared by the connector and its sessions.
@@ -172,6 +174,12 @@ pub struct State {
     pub logout_error: Option<ProviderError>,
     /// The id of the user the next login or restore gives a session to.
     pub user_id: String,
+    /// The trailers every film and every series has.
+    pub trailers: Trailers,
+    /// What `local_trailer` gives as the stream.
+    pub trailer_stream: String,
+    /// `local_trailer` fails with this once it was asked.
+    pub trailer_error: Option<ProviderError>,
     /// The TMDb ids of the films and series that have one.
     pub tmdb: Vec<(ItemId, u64)>,
     /// The TMDb collection of the films that have a TMDb id.
@@ -609,6 +617,9 @@ impl FakeServer {
                     (ItemId(SERIES.into()), IN_LIBRARY_SERIES),
                 ],
                 tmdb_collection: None,
+                trailers: Trailers::default(),
+                trailer_stream: "file:///nowhere-trailer.mp4".into(),
+                trailer_error: None,
             })),
             info: ServerInfo {
                 id: "server-1".into(),
@@ -801,6 +812,7 @@ impl MediaServer for FakeServer {
         self.state().record.film_pages.push(film.clone());
         let others = self.state().films.clone();
         let tmdb = state_tmdb(&self.state().tmdb, &found.id);
+        let trailers = self.state().trailers.clone();
         Ok(FilmDetail {
             tmdb,
             tmdb_collection: tmdb.and_then(|_| self.state().tmdb_collection),
@@ -833,6 +845,7 @@ impl MediaServer for FakeServer {
                 versions().split_off(1)
             },
             favourite: self.state().favourites.contains(&found.id),
+            trailers,
             // The first film of the tests is a logo, the others are written, as on the Home.
             logo: (found.id.0 == FILM)
                 .then(|| image(&found.id.0, ImageKind::Logo))
@@ -995,6 +1008,7 @@ impl MediaServer for FakeServer {
             tmdb: state_tmdb(&state.tmdb, series),
             series: Self::counted(&state, found),
             favourite: state.favourites.contains(series),
+            trailers: state.trailers.clone(),
             // As on the Home, the first series is a logo and the others are written.
             logo: (state.series.first().map(|s| &s.id) == Some(series))
                 .then(|| image(&series.0, ImageKind::Logo))
@@ -1380,6 +1394,15 @@ impl MediaServer for FakeServer {
             }
         }
         Ok(index)
+    }
+
+    fn local_trailer(&self, item: &ItemId) -> Result<StreamUrl, ProviderError> {
+        let mut state = self.state();
+        state.record.trailer_asks.push(item.clone());
+        if let Some(error) = state.trailer_error.clone() {
+            return Err(error);
+        }
+        Ok(StreamUrl::new(state.trailer_stream.clone()))
     }
 }
 
