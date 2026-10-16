@@ -12,7 +12,7 @@
 //! `bobine --screen login|home|home-rows|home-list-resume|home-list-next|home-list-latest|home-list-empty|library|detail|
 //! detail-rows|detail-cast|playing|series|series-page|series-rows|up-next|collections|collection-page|
 //! my-list|my-list-empty|film-list|series-list [--films N]
-//! [--media FILE] [--segments SECONDS] [--direct-fails] [--image-delay-ms N] [--photos-fail-once] [--scenario menu|scroll|select|panel|blackout|search|search-slow|search-keys|tools|tools-keys|home-rotate|home-hover|home-jump|home-scroll|home-lists|home-play|home-poster-hover|grid-poster-hover|skip|settings|long-tracks|segment-marks]
+//! [--media FILE] [--segments SECONDS] [--direct-fails] [--image-delay-ms N] [--photos-fail-once] [--scenario menu|scroll|select|panel|blackout|search|search-slow|search-keys|tools|tools-keys|home-rotate|home-hover|home-jump|home-scroll|home-lists|home-play|home-poster-hover|grid-poster-hover|cast-hover|genre-hover|episode-hover|skip|settings|long-tracks|segment-marks]
 //! [--search-delay-ms N] [--favourite-delay-ms N] [--logout-delay-ms N] [--favourite-fails] [--slower N] --quit-at S`
 //!
 //! A scenario sends clicks, keys and scroll events to the window as the compositor would, at set
@@ -956,6 +956,30 @@ impl Acts {
             "grid-poster-hover" => vec![
                 (0.0, "", Hover(Bottom)),
                 (1.0, "the pointer over a poster", Hover(At(290., 300.))),
+                (3.0, "the pointer leaves it", Hover(Bottom)),
+            ],
+            // The pointer over the second person of the cast (`--screen detail-cast`, a window of
+            // 1440 × 810): their cell lights up, then goes dark when it leaves.
+            "cast-hover" => vec![
+                (0.0, "", Hover(Bottom)),
+                (1.0, "the pointer over a person", Hover(At(232., 400.))),
+                (3.0, "the pointer leaves them", Hover(Bottom)),
+            ],
+            // The pointer over the second genre of the series page (`--screen series-page`).
+            "genre-hover" => vec![
+                (0.0, "", Hover(Bottom)),
+                (1.0, "the pointer over a genre", Hover(At(432., 252.))),
+                (3.0, "the pointer leaves it", Hover(Bottom)),
+            ],
+            // The pointer over the picture of the first episode (`--screen series-page`): the
+            // veil and the play button come, then go.
+            "episode-hover" => vec![
+                (0.0, "", Hover(Bottom)),
+                (
+                    1.0,
+                    "the pointer over an episode's picture",
+                    Hover(At(146., 675.)),
+                ),
                 (3.0, "the pointer leaves it", Hover(Bottom)),
             ],
             // The header's "Play" plays the first title, Escape leaves, the Home is asked anew.

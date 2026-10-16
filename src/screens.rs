@@ -283,8 +283,8 @@ fn film_offer(
 
 /// The card of a series poster: a click opens the series (on its new season, for a card of
 /// one), its layer plays its next episode, puts it in the list and marks all of it watched. A
-/// card of a new season knows the season, not whether its series is in the list or watched: it
-/// has no button for them.
+/// card of a new season, or of a lone episode, does not know whether its series is in the list
+/// or watched: it has no button for them.
 fn series_offer(
     marks: &Marks,
     series: &Series,
@@ -294,9 +294,9 @@ fn series_offer(
     fresh: bool,
 ) -> Offer {
     let quick = series
-        .season
-        .is_none()
-        .then(|| Quick::new(marks, &series.id, series.favourite, series.watched));
+        .favourite
+        .zip(series.watched)
+        .map(|(in_list, watched)| Quick::new(marks, &series.id, in_list, watched));
     let watched = quick.as_ref().is_some_and(|quick| quick.watched.now);
     let look = series_look(series, image, width, name, watched, fresh);
     Offer {

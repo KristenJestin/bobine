@@ -8,7 +8,7 @@ use std::cell::Cell;
 use std::rc::Rc;
 use std::time::Instant;
 
-use bobine::provider::{CastMember, Film, FilmDetail, ItemId, MediaSource};
+use bobine::provider::{CastMember, Film, FilmDetail, ItemId, MediaSource, PersonHit};
 use gpui_kit::prelude::*;
 use gpui_kit::{
     AnyElement, Bounds, Context, Div, FontWeight, IntoElement, MouseButton, MouseDownEvent, Pixels,
@@ -17,11 +17,12 @@ use gpui_kit::{
 };
 
 use super::{centered, note, picture, poster, progress_bar, row_heading};
-use crate::film_page::{self, Choices, From};
+use crate::film_page::{self, Choices, Fact, From};
 use crate::icons::{IconName, icon, with_stars};
 use crate::images;
 use crate::menu;
 use crate::motion::{self, Fade};
+use crate::navigation::NavEntry;
 use crate::shell::{Chip, Loadable, Shell};
 use crate::theme;
 
@@ -95,7 +96,7 @@ pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -
     );
     let mut rows: Vec<AnyElement> = Vec::new();
     if !detail.cast.is_empty() {
-        rows.push(cast_row(shell, &detail.cast, &cast_scroll, cx).into_any_element());
+        rows.push(cast_row(shell, &detail.cast, &cast_scroll, window, cx).into_any_element());
     }
     if let Some(collection) = collection {
         let mut films = collection.others.clone();
@@ -215,7 +216,7 @@ fn hero(
 
     let chips = chips_row(&detail.versions, choices, menu, chips, window, cx);
 
-    let meta_line = meta_line(film_page::meta(detail));
+    let meta_line = facts_line(film_page::meta(detail), NavEntry::Films, window, cx);
 
     hero_frame(backdrop, height).child(
         hero_text(film.title.clone())
@@ -343,6 +344,71 @@ pub(super) fn hero_text(title: String) -> Div {
 
 /// `2025 | ★ 6.0 | 2 h 11`: the facts under a title, apart.
 pub(super) fn meta_line(parts: Vec<String>) -> Div {
+    meta_row(
+        parts
+            .iter()
+            .map(|part| with_stars(part, 14.).into_any_element()),
+    )
+}
+
+/// The facts under a film's or a series' title, apart; each genre is a link to the library of
+/// that kind (`library`) filtered on it.
+pub(super) fn facts_line(
+    facts: Vec<Fact>,
+    library: NavEntry,
+    window: &mut Window,
+    cx: &mut Context<Shell>,
+) -> Div {
+    meta_row(facts.into_iter().map(|fact| match fact {
+        Fact::Text(text) => with_stars(&text, 14.).into_any_element(),
+        Fact::Genres(genres) => genre_links(genres, library, window, cx).into_any_element(),
+    }))
+}
+
+/// The genres, a comma after each but the last, each answering the pointer.
+fn genre_links(
+    genres: Vec<String>,
+    library: NavEntry,
+    window: &mut Window,
+    cx: &mut Context<Shell>,
+) -> Div {
+    let last = genres.len() - 1;
+    div()
+        .flex()
+        .items_center()
+        .children(genres.into_iter().enumerate().map(|(index, genre)| {
+            let selector = genre.clone();
+            let separator = (index < last).then(|| {
+                // Beside the link, so that neither its highlight nor its click take the comma.
+                div()
+                    .debug_selector({
+                        let genre = genre.clone();
+                        move || format!("genre-separator {genre}")
+                    })
+                    .mr(px(3.))
+                    .child(",")
+            });
+            div()
+                .flex()
+                .items_center()
+                .child(
+                    theme::eased(("genre", index), theme::Shades::veil(), window, cx)
+                        .debug_selector(move || format!("genre {selector}"))
+                        .pl(px(4.))
+                        .pr(px(1.))
+                        .rounded(px(4.))
+                        .cursor_pointer()
+                        .on_click(cx.listener({
+                            let genre = genre.clone();
+                            move |shell, _, _, cx| shell.open_genre(library, genre.clone(), cx)
+                        }))
+                        .child(genre),
+                )
+                .children(separator)
+        }))
+}
+
+fn meta_row(parts: impl IntoIterator<Item = AnyElement>) -> Div {
     let mut meta = parts.into_iter();
     div()
         .flex()
@@ -350,14 +416,14 @@ pub(super) fn meta_line(parts: Vec<String>) -> Div {
         .gap(px(10.))
         .text_size(px(14.))
         .text_color(theme::muted())
-        .children(meta.next().map(|part| with_stars(&part, 14.)))
+        .children(meta.next())
         .children(meta.map(|part| {
             div()
                 .flex()
                 .items_center()
                 .gap(px(10.))
                 .child(div().w(px(1.)).h(px(12.)).bg(theme::line()))
-                .child(with_stars(&part, 14.))
+                .child(part)
         }))
 }
 
@@ -609,11 +675,12 @@ fn menu<K: Copy + 'static>(
     )
 }
 
-/// Round photos, the name and the role.
+/// Round photos, the name and the role; a click on a person opens their page.
 pub(super) fn cast_row(
     shell: &mut Shell,
     cast: &[CastMember],
     scroll: &ScrollHandle,
+    window: &mut Window,
     cx: &mut Context<Shell>,
 ) -> Div {
     let people: Vec<Stateful<Div>> = cast
@@ -621,14 +688,23 @@ pub(super) fn cast_row(
         .enumerate()
         .map(|(index, person)| {
             let photo = shell.image(person.photo.as_ref(), images::PHOTO, cx);
-            div()
-                .id(("person", index))
+            let hit = PersonHit {
+                id: person.id.clone(),
+                name: person.name.clone(),
+                photo: person.photo.clone(),
+            };
+            theme::eased(("person", index), theme::Shades::line(), window, cx)
+                .debug_selector(|| format!("cast-member {index}"))
                 .w(px(PHOTO + 24.))
                 .flex_none()
                 .flex()
                 .flex_col()
                 .items_center()
                 .gap(px(8.))
+                .py(px(8.))
+                .rounded(px(theme::RADIUS))
+                .cursor_pointer()
+                .on_click(cx.listener(move |shell, _, _, cx| shell.open_person(hit.clone(), cx)))
                 .child(
                     div()
                         .relative()
