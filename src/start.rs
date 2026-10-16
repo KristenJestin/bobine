@@ -36,26 +36,26 @@ pub fn login(
 /// What the login screen says under the address once the server answered.
 pub fn server_line(info: &ServerInfo) -> String {
     let version: Vec<&str> = info.version.split('.').take(2).collect();
-    format!("Jellyfin {} · « {} »", version.join("."), info.name)
+    format!("Jellyfin {} · “{}”", version.join("."), info.name)
 }
 
-/// What the user is told, in French. The error's own words stay out: they may name what the
+/// What the user is told. The error's own words stay out: they may name what the
 /// user cannot act on.
 pub fn error_message(error: &ProviderError) -> &'static str {
     match error {
-        ProviderError::InvalidAddress => "L'adresse doit commencer par http:// ou https://.",
-        ProviderError::NotAMediaServer => "Aucun serveur Jellyfin ne répond à cette adresse.",
-        ProviderError::WrongCredentials => "Nom d'utilisateur ou mot de passe incorrect.",
-        ProviderError::AccountDisabled => "Ce compte est désactivé sur le serveur.",
-        ProviderError::SessionExpired => "La session a expiré : reconnectez-vous.",
-        ProviderError::Forbidden => "Le serveur refuse l'accès à ce contenu.",
-        ProviderError::NotFound => "Le serveur ne connaît pas ce contenu.",
-        ProviderError::Unreachable(_) => "Le serveur ne répond pas.",
+        ProviderError::InvalidAddress => "The address must start with http:// or https://.",
+        ProviderError::NotAMediaServer => "No Jellyfin server answers at this address.",
+        ProviderError::WrongCredentials => "Wrong username or password.",
+        ProviderError::AccountDisabled => "This account is disabled on the server.",
+        ProviderError::SessionExpired => "The session has expired: sign in again.",
+        ProviderError::Forbidden => "The server refuses access to this content.",
+        ProviderError::NotFound => "The server does not know this content.",
+        ProviderError::Unreachable(_) => "The server is not answering.",
         ProviderError::Server(_) | ProviderError::BadAnswer(_) => {
-            "Le serveur a répondu de façon inattendue."
+            "The server gave an unexpected answer."
         }
-        ProviderError::Keyring(_) => "Le trousseau de clés du système est inaccessible.",
-        ProviderError::Storage(_) => "Le fichier du compte ne peut pas être écrit.",
+        ProviderError::Keyring(_) => "The system keyring cannot be reached.",
+        ProviderError::Storage(_) => "The account file cannot be written.",
     }
 }
 
@@ -84,7 +84,7 @@ mod tests {
         assert!(!brings_the_login_back(&ProviderError::Forbidden, false));
     }
 
-    const ADDRESS: &str = "https://media.exemple.org";
+    const ADDRESS: &str = "https://media.example.org";
 
     #[test]
     fn first_start_shows_the_login_then_home() {
@@ -115,13 +115,10 @@ mod tests {
     }
 
     #[test]
-    fn a_wrong_password_is_said_in_french() {
+    fn a_wrong_password_is_said_in_english() {
         let server = FakeServer::new(3, false);
         let refused = login(&server, ADDRESS, USER, "faux".to_string());
-        assert_eq!(
-            refused.err(),
-            Some("Nom d'utilisateur ou mot de passe incorrect.")
-        );
+        assert_eq!(refused.err(), Some("Wrong username or password."));
         assert!(matches!(start(&server), Start::Login(None)));
     }
 
@@ -130,7 +127,7 @@ mod tests {
         let server = FakeServer::new(3, false);
         login(
             &server,
-            " https://media.exemple.org ",
+            " https://media.example.org ",
             " camille",
             PASSWORD.into(),
         )
@@ -146,14 +143,14 @@ mod tests {
             name: "Salon".into(),
             version: "10.11.2".into(),
         };
-        assert_eq!(server_line(&info), "Jellyfin 10.11 · « Salon »");
+        assert_eq!(server_line(&info), "Jellyfin 10.11 · “Salon”");
     }
 
     #[test]
     fn errors_never_carry_what_the_provider_said() {
         let said = error_message(&ProviderError::Unreachable(
-            "media.exemple.org: refused".into(),
+            "media.example.org: refused".into(),
         ));
-        assert!(!said.contains("media.exemple.org"), "{said}");
+        assert!(!said.contains("media.example.org"), "{said}");
     }
 }

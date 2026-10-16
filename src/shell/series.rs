@@ -20,7 +20,7 @@ use crate::navigation::Screen;
 use crate::scroll;
 use crate::series_page::{self, Refreshes};
 
-/// How often the "Épisode suivant" card checks its countdown.
+/// How often the "Next episode" card checks its countdown.
 const UP_NEXT_TICK: Duration = Duration::from_millis(250);
 
 pub struct SeriesPage {
@@ -368,7 +368,7 @@ impl Shell {
         let choices = series_page::choices_for(page.next.as_ref(), page.choices.as_ref(), &episode);
         let Some(plan) = film_page::plan(&episode.item, &episode.versions, &choices, From::Resume)
         else {
-            page.error = Some("Cet épisode n'a aucune version à lire.");
+            page.error = Some("This episode has no version to play.");
             cx.notify();
             return;
         };

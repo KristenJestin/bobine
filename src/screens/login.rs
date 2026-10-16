@@ -24,9 +24,9 @@ pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -
         form.password.clone(),
     ];
     let label = if form.busy {
-        "Connexion…"
+        "Signing in…"
     } else {
-        "Se connecter"
+        "Sign in"
     };
 
     centered().bg(theme::background()).child(
@@ -69,17 +69,17 @@ pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -
                         div()
                             .text_size(px(22.))
                             .font_weight(FontWeight::SEMIBOLD)
-                            .child("Connecter un serveur"),
+                            .child("Connect a server"),
                     )
                     .child(
                         div()
                             .text_size(px(13.))
                             .text_color(theme::muted())
-                            .child("Jellyfin pour commencer."),
+                            .child("Start with Jellyfin."),
                     ),
             )
             .child(
-                field("Adresse du serveur")
+                field("Server address")
                     .child(form.address.clone())
                     .children(server_line.map(|(line, dot, color)| {
                         div()
@@ -92,8 +92,8 @@ pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -
                             .child(line)
                     })),
             )
-            .child(field("Utilisateur").child(form.user.clone()))
-            .child(field("Mot de passe").child(form.password.clone()))
+            .child(field("Username").child(form.user.clone()))
+            .child(field("Password").child(form.password.clone()))
             .children(form.error.map(|why| {
                 div()
                     .text_size(px(13.))

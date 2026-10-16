@@ -8,7 +8,7 @@ use bobine::provider::{ItemId, MediaServer, ProviderError};
 use crate::navigation::Screen;
 
 /// What the page says when the server did not take the change.
-pub const FAILED: &str = "Ma liste n'a pas pu être modifiée.";
+pub const FAILED: &str = "My list could not be changed.";
 
 /// Whether the item is in the list, and whether the server is being asked to change it.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

@@ -206,7 +206,7 @@ impl<T: Listed> LibraryPage<T> {
         self.grid.total.is_none() && self.grid.gave_up(0)
     }
 
-    /// "Réessayer": the first page is asked anew, as many times as the first time.
+    /// "Retry": the first page is asked anew, as many times as the first time.
     pub fn retry(&mut self) {
         self.grid.forget_failures();
         self.error = None;
@@ -465,9 +465,9 @@ impl Shell {
     }
 
     pub fn show_login(&mut self, why: Option<&'static str>, cx: &mut Context<Self>) {
-        let address = cx.new(|cx| TextInput::new("https://media.exemple.org", false, cx));
-        let user = cx.new(|cx| TextInput::new("Nom d'utilisateur", false, cx));
-        let password = cx.new(|cx| TextInput::new("Mot de passe", true, cx));
+        let address = cx.new(|cx| TextInput::new("https://media.example.org", false, cx));
+        let user = cx.new(|cx| TextInput::new("Username", false, cx));
+        let password = cx.new(|cx| TextInput::new("Password", true, cx));
         let address_changed = cx.observe(&address, |shell, _, cx| shell.probe_soon(cx));
         self.login = Some(LoginForm {
             address,
@@ -536,7 +536,7 @@ impl Shell {
             return;
         }
         let Some(connector) = self.connector.clone() else {
-            form.error = Some("Le fichier du compte ne peut pas être écrit.");
+            form.error = Some("The account file cannot be written.");
             cx.notify();
             return;
         };
@@ -693,9 +693,9 @@ impl Shell {
                 let loaded = match found {
                     Ok(Some(library)) => Loadable::Ready(library),
                     Ok(None) if kind == LibraryKind::Series => {
-                        Loadable::Failed("Aucune bibliothèque de séries sur ce serveur.")
+                        Loadable::Failed("No series library on this server.")
                     }
-                    Ok(None) => Loadable::Failed("Aucune bibliothèque de films sur ce serveur."),
+                    Ok(None) => Loadable::Failed("No film library on this server."),
                     Err(error) => Loadable::Failed(shell.failed(error, cx)),
                 };
                 let library = match &loaded {
@@ -819,7 +819,7 @@ impl Shell {
         cx.notify();
     }
 
-    /// "Réessayer", when the first page of the list was given up: it is asked again.
+    /// "Retry", when the first page of the list was given up: it is asked again.
     pub fn retry_list(&mut self, cx: &mut Context<Self>) {
         match self.navigator.current() {
             Screen::Library => {
@@ -1165,7 +1165,7 @@ impl Shell {
         );
     }
 
-    /// "▶ Reprendre" or "↺ Depuis le début": the server opens a playback, then the player starts.
+    /// "▶ Resume" or "↺ From the start": the server opens a playback, then the player starts.
     pub fn play_film(&mut self, from: From, window: &mut Window, cx: &mut Context<Self>) {
         let depth = self.details.len().wrapping_sub(1);
         let Some(page) = self.details.last_mut() else {
@@ -1178,7 +1178,7 @@ impl Shell {
             return;
         }
         let Some(plan) = film_page::plan(&detail.film, &detail.versions, choices, from) else {
-            page.error = Some("Ce film n'a aucune version à lire.");
+            page.error = Some("This film has no version to play.");
             cx.notify();
             return;
         };
@@ -1191,7 +1191,7 @@ impl Shell {
                 .source(&detail.versions)
                 .map(film_page::version_label),
         );
-        parts.push("lecture directe".into());
+        parts.push("direct play".into());
         let playing = Playing {
             title: plan.title.clone(),
             subtitle: Some(parts.join(" · ")),
@@ -1267,7 +1267,7 @@ impl Shell {
             Ok(mpv) => Arc::new(mpv),
             Err(error) => {
                 eprintln!("bobine: the player cannot start: {error}");
-                self.tried(&origin, Some("Le lecteur ne peut pas démarrer."));
+                self.tried(&origin, Some("The player cannot start."));
                 return;
             }
         };
@@ -1298,7 +1298,7 @@ impl Shell {
             Err(error) => {
                 // The words of the video surface or of mpv's error code: no address in them.
                 eprintln!("bobine: the film does not play: {error}");
-                self.tried(&origin, Some("Lecture impossible."));
+                self.tried(&origin, Some("Cannot play."));
             }
         }
     }
