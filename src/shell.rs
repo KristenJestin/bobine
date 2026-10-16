@@ -520,8 +520,8 @@ impl Shell {
             }
         };
         conversion.plan = conversion.plan.converted(from);
-        playback.method = opened.method;
-        playback.session.subtitle = fallback::said(playback.session.subtitle.take(), opened.method);
+        playback.method = PlayMethod::Transcode;
+        playback.session.subtitle = fallback::said(playback.session.subtitle.take());
         if let Err(error) = fallback::restart(&mut playback.session, &conversion.plan, &opened) {
             // mpv's error code in words: no address in it.
             eprintln!("bobine: the conversion does not play: {error}");
@@ -539,7 +539,7 @@ impl Shell {
                 paused: false,
                 audio_track: plan.audio_index,
                 subtitle_track: plan.subtitle_index,
-                method: opened.method,
+                method: PlayMethod::Transcode,
             },
         ));
     }

@@ -58,15 +58,10 @@ pub fn restart(session: &mut Session, plan: &Plan, opened: &Playback) -> Result<
     session.restart(plan.media(opened, &externals))
 }
 
-/// The line under the title, saying how the film comes now: "lecture directe" becomes
-/// "conversion par le serveur".
-pub fn said(subtitle: Option<String>, method: PlayMethod) -> Option<String> {
-    match method {
-        PlayMethod::DirectPlay => subtitle,
-        PlayMethod::Transcode => {
-            subtitle.map(|line| line.replace("lecture directe", "conversion par le serveur"))
-        }
-    }
+/// The line under the title once the server converts: "lecture directe" becomes "conversion
+/// par le serveur".
+pub fn said(subtitle: Option<String>) -> Option<String> {
+    subtitle.map(|line| line.replace("lecture directe", "conversion par le serveur"))
 }
 
 /// Whether "Conversion par le serveur" shows: while the server is asked, then until a moment
@@ -150,7 +145,7 @@ mod tests {
                 .server
                 .transcode(&self.plan.transcode_request(from))
                 .unwrap();
-            self.method = opened.method;
+            self.method = PlayMethod::Transcode;
             self.plan = self.plan.converted(from);
             restart(&mut self.session, &self.plan, &opened).unwrap();
         }
@@ -254,10 +249,9 @@ mod tests {
     fn the_line_under_the_title_says_the_server_converts() {
         let line = Some("2025 · 4K HDR10 · lecture directe".to_string());
         assert_eq!(
-            said(line.clone(), PlayMethod::Transcode).as_deref(),
+            said(line).as_deref(),
             Some("2025 · 4K HDR10 · conversion par le serveur")
         );
-        assert_eq!(said(line.clone(), PlayMethod::DirectPlay), line);
     }
 
     #[test]

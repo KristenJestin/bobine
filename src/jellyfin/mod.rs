@@ -18,7 +18,8 @@ use crate::provider::{
 };
 use account::{AccountFile, Login};
 use dto::{
-    AuthenticationResult, Item, PlaybackInfoResponse, PublicSystemInfo, QueryFilters, QueryResult,
+    AuthenticationResult, Item, MediaSourceInfo, PlaybackInfoResponse, PublicSystemInfo,
+    QueryFilters, QueryResult,
 };
 use http::{Device, Http, encode, normalize_address};
 use serde_json::json;
@@ -159,10 +160,9 @@ pub struct Jellyfin {
 /// limit on the server still applies.
 const MAX_STREAMING_BITRATE: u64 = 1_000_000_000;
 
-/// What the player plays, for the server to choose between the file as it is and a conversion.
-/// mpv plays nearly every container and codec: a direct play profile that names none of them
-/// covers them all, so the server converts only what it is asked to. The conversion is the
-/// most common one: H.264 and AAC in MPEG-TS segments, over HLS.
+/// What the player plays, sent only when it asks for a conversion. mpv plays nearly every
+/// container and codec: a direct play profile that names none of them covers them all. The
+/// conversion is the most common one: H.264 and AAC in MPEG-TS segments, over HLS.
 fn device_profile() -> serde_json::Value {
     json!({
         "Name": "Bobine",
@@ -177,13 +177,20 @@ fn device_profile() -> serde_json::Value {
             "Context": "Streaming",
             "MaxAudioChannels": "6",
         }],
-        "SubtitleProfiles": [
-            { "Format": "srt", "Method": "External" },
-            { "Format": "ass", "Method": "External" },
-            { "Format": "ssa", "Method": "External" },
-            { "Format": "vtt", "Method": "External" },
-        ],
+        "SubtitleProfiles": subtitle_profiles(),
     })
+}
+
+/// A text subtitle comes as a file beside the converted picture when the server can extract it;
+/// the server draws into the picture only what the HLS stream cannot carry.
+fn subtitle_profiles() -> Vec<serde_json::Value> {
+    let external = ["srt", "ass", "ssa", "vtt"]
+        .map(|format| json!({ "Format": format, "Method": "External" }));
+    let embedded = [
+        "subrip", "srt", "ass", "ssa", "webvtt", "vtt", "mov_text", "pgssub", "dvdsub", "dvbsub",
+    ]
+    .map(|format| json!({ "Format": format, "Method": "Embed" }));
+    external.into_iter().chain(embedded).collect()
 }
 
 /// The format a subtitle file is asked in, from its codec as Jellyfin names it.
@@ -275,30 +282,19 @@ impl Jellyfin {
         self.items(what, &asked)
     }
 
-    /// Asks the server how to play a version, with what the player plays (`ask` adds to the
-    /// request): the file as it is when the server allows it, else what the server converts.
-    fn playback(
+    /// Asks the server how a version plays, `body` saying how it may: its play session and
+    /// what it says of the version.
+    fn playback_info(
         &self,
         film: &ItemId,
         source: &MediaSourceId,
-        ask: serde_json::Value,
-    ) -> Result<Playback, ProviderError> {
-        let mut body = json!({
-            "UserId": self.login.user_id,
-            "MediaSourceId": source.0,
-            "EnableTranscoding": true,
-            "AutoOpenLiveStream": false,
-            "MaxStreamingBitrate": MAX_STREAMING_BITRATE,
-            "DeviceProfile": device_profile(),
-        });
-        if let (Some(body), Some(ask)) = (body.as_object_mut(), ask.as_object()) {
-            body.extend(ask.clone());
-        }
+        body: &serde_json::Value,
+    ) -> Result<(String, MediaSourceInfo), ProviderError> {
         let info: PlaybackInfoResponse = self.http.post(
             "playback",
             &format!("/Items/{}/PlaybackInfo", encode(&film.0)),
             &[self.user()],
-            &body,
+            body,
         )?;
         let session = info
             .play_session_id
@@ -308,30 +304,21 @@ impl Jellyfin {
             .into_iter()
             .find(|s| s.id == source.0)
             .ok_or_else(|| ProviderError::BadAnswer("playback: no such version".into()))?;
+        Ok((session, found))
+    }
 
+    /// The playback of the version `found`, streamed from `stream`, with its subtitle files.
+    fn opened(
+        &self,
+        film: &ItemId,
+        source: &MediaSourceId,
+        session: String,
+        found: &MediaSourceInfo,
+        stream: String,
+    ) -> Playback {
         let base = self.http.base();
         let (film_id, source_id) = (encode(&film.0), encode(&source.0));
-        // `ApiKey`, not the older `api_key`: Jellyfin 10.11 keeps that one behind a legacy setting.
         let api_key = encode(self.token());
-        let (stream, method) = if found.supports_direct_play && body["EnableDirectPlay"] == true {
-            let url = format!(
-                "{base}/Videos/{film_id}/stream?static=true&mediaSourceId={source_id}\
-                 &playSessionId={}&deviceId={}&ApiKey={api_key}",
-                encode(&session),
-                encode(&self.http.device().id),
-            );
-            (url, PlayMethod::DirectPlay)
-        } else {
-            let path = found.transcoding_url.as_deref().ok_or_else(|| {
-                ProviderError::BadAnswer("playback: the server converts nothing for it".into())
-            })?;
-            // The server puts the token in it; an older one may not.
-            let mut url = format!("{base}{path}");
-            if !path.contains("ApiKey=") && !path.contains("api_key=") {
-                url += &format!("&ApiKey={api_key}");
-            }
-            (url, PlayMethod::Transcode)
-        };
         let external_subtitles = found
             .media_streams
             .iter()
@@ -345,14 +332,13 @@ impl Jellyfin {
                 )),
             })
             .collect();
-        Ok(Playback {
+        Playback {
             session: PlaySessionId(session),
             film: film.clone(),
             source: source.clone(),
             stream: StreamUrl::new(stream),
             external_subtitles,
-            method,
-        })
+        }
     }
 
     fn report(
@@ -534,14 +520,29 @@ impl MediaServer for Jellyfin {
     }
 
     fn play(&self, film: &ItemId, source: &MediaSourceId) -> Result<Playback, ProviderError> {
-        self.playback(
-            film,
-            source,
-            json!({
-                "EnableDirectPlay": true,
-                "EnableDirectStream": false,
-            }),
-        )
+        // No device profile: the file is played as it is whatever the server thinks of it; a
+        // conversion is asked only once the player could not play it.
+        let body = json!({
+            "UserId": self.login.user_id,
+            "MediaSourceId": source.0,
+            "EnableDirectPlay": true,
+            "EnableDirectStream": false,
+            "EnableTranscoding": false,
+            "AutoOpenLiveStream": false,
+        });
+        let (session, found) = self.playback_info(film, source, &body)?;
+        // `ApiKey`, not the older `api_key`: Jellyfin 10.11 keeps that one behind a legacy setting.
+        let stream = format!(
+            "{}/Videos/{}/stream?static=true&mediaSourceId={}\
+             &playSessionId={}&deviceId={}&ApiKey={}",
+            self.http.base(),
+            encode(&film.0),
+            encode(&source.0),
+            encode(&session),
+            encode(&self.http.device().id),
+            encode(self.token()),
+        );
+        Ok(self.opened(film, source, session, &found, stream))
     }
 
     fn report_started(&self, report: &PlaybackReport) -> Result<(), ProviderError> {
@@ -897,16 +898,29 @@ impl MediaServer for Jellyfin {
     }
 
     fn transcode(&self, request: &TranscodeRequest) -> Result<Playback, ProviderError> {
-        self.playback(
-            &request.film,
-            &request.source,
-            json!({
-                "EnableDirectPlay": false,
-                "EnableDirectStream": false,
-                "StartTimeTicks": dto::ticks(request.start),
-                "AudioStreamIndex": request.audio_track,
-                "SubtitleStreamIndex": request.subtitle_track,
-            }),
-        )
+        let (film, source) = (&request.film, &request.source);
+        let body = json!({
+            "UserId": self.login.user_id,
+            "MediaSourceId": source.0,
+            "EnableDirectPlay": false,
+            "EnableDirectStream": false,
+            "EnableTranscoding": true,
+            "AutoOpenLiveStream": false,
+            "MaxStreamingBitrate": MAX_STREAMING_BITRATE,
+            "DeviceProfile": device_profile(),
+            "StartTimeTicks": dto::ticks(request.start),
+            "AudioStreamIndex": request.audio_track,
+            "SubtitleStreamIndex": request.subtitle_track,
+        });
+        let (session, found) = self.playback_info(film, source, &body)?;
+        let path = found.transcoding_url.as_deref().ok_or_else(|| {
+            ProviderError::BadAnswer("playback: the server converts nothing for it".into())
+        })?;
+        // The server puts the token in it; an older one may not.
+        let mut stream = format!("{}{path}", self.http.base());
+        if !path.contains("ApiKey=") && !path.contains("api_key=") {
+            stream += &format!("&ApiKey={}", encode(self.token()));
+        }
+        Ok(self.opened(film, source, session, &found, stream))
     }
 }

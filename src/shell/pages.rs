@@ -19,7 +19,6 @@ use gpui_kit::{
 };
 
 use super::{Conversion, Film as Playing, HomePage, Shell};
-use crate::fallback;
 use crate::favourite::{self, ListPage, Toggle};
 use crate::film_page::{self, Choices, From, Plan};
 use crate::grid::{Grid, Listed, RETRY_AFTER};
@@ -1259,11 +1258,6 @@ impl Shell {
             }
         };
         self.tried(&origin, None);
-        // A version the server only converts holds the tracks the server chose, not the file's.
-        let plan = match opened.method {
-            PlayMethod::DirectPlay => plan,
-            PlayMethod::Transcode => plan.converted(plan.start),
-        };
         let options = self.mpv_options.clone();
         let Some(server) = self.server.clone() else {
             return;
@@ -1286,15 +1280,11 @@ impl Shell {
                 paused: false,
                 audio_track: plan.audio_index,
                 subtitle_track: plan.subtitle_index,
-                method: opened.method,
+                method: PlayMethod::DirectPlay,
             },
         );
         let externals = plan.externals(&opened);
         let media = plan.media(&opened, &externals);
-        let playing = Playing {
-            subtitle: fallback::said(playing.subtitle, opened.method),
-            ..playing
-        };
         let conversion = Conversion {
             server: server.clone(),
             plan: plan.clone(),
@@ -1303,7 +1293,6 @@ impl Shell {
             Ok(()) => {
                 if let Some(playback) = &mut self.playback {
                     playback.next = next;
-                    playback.method = opened.method;
                     playback.conversion = Some(conversion);
                 }
             }

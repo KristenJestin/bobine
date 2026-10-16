@@ -483,7 +483,6 @@ pub struct Playback {
     pub source: MediaSourceId,
     pub stream: StreamUrl,
     pub external_subtitles: Vec<ExternalSubtitle>,
-    pub method: PlayMethod,
 }
 
 /// What the server converts: a version, from where the viewer was, with the tracks they chose.

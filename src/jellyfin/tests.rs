@@ -1259,7 +1259,7 @@ fn direct_play_stream() {
     let body = asked.json();
     assert_eq!(body["MediaSourceId"], SOURCE);
     assert_eq!(body["EnableDirectPlay"], true);
-    assert_eq!(body["EnableDirectStream"], false);
+    assert_eq!(body["EnableTranscoding"], false);
 }
 
 #[test]
@@ -1362,55 +1362,34 @@ fn device_id(s: &Setup) -> String {
 }
 
 #[test]
-fn the_device_profile_sent_lets_the_server_play_every_file_directly() {
+fn the_first_play_asks_as_before_without_a_device_profile() {
     let s = Setup::new();
-    let playback = s
-        .signed_in()
+    s.signed_in()
         .play(&film(), &MediaSourceId(SOURCE.into()))
         .unwrap();
-    assert_eq!(playback.method, PlayMethod::DirectPlay);
-
     let body = s
         .fake
         .last("POST", &format!("/Items/{FILM}/PlaybackInfo"))
         .json();
     assert_eq!(body["EnableDirectPlay"], true);
-    assert_eq!(body["EnableTranscoding"], true);
+    assert_eq!(body["EnableDirectStream"], false);
+    assert_eq!(body["EnableTranscoding"], false);
     assert_eq!(body["AutoOpenLiveStream"], false);
-    assert!(body["MaxStreamingBitrate"].as_u64().unwrap() >= 400_000_000);
-    let profile = &body["DeviceProfile"];
-    // No container nor codec named: Jellyfin reads that as every one of them.
-    let direct = profile["DirectPlayProfiles"].as_array().unwrap();
-    assert!(direct.iter().any(|p| p["Type"] == "Video"
-        && p.get("Container").is_none()
-        && p.get("VideoCodec").is_none()
-        && p.get("AudioCodec").is_none()));
-    let transcoding = &profile["TranscodingProfiles"][0];
-    assert_eq!(transcoding["Type"], "Video");
-    assert_eq!(transcoding["Container"], "ts");
-    assert_eq!(transcoding["Protocol"], "hls");
-    assert_eq!(transcoding["VideoCodec"], "h264");
-    assert_eq!(transcoding["AudioCodec"], "aac");
+    assert!(body.get("DeviceProfile").is_none(), "{body}");
+    assert!(body.get("MaxStreamingBitrate").is_none(), "{body}");
 }
 
 #[test]
-fn a_version_the_server_can_only_transcode_plays_its_transcoding_url() {
+fn the_first_play_plays_the_file_whatever_the_server_says() {
     let s = Setup::new();
     s.fake.state.lock().unwrap().transcode_only = true;
     let playback = s
         .signed_in()
         .play(&film(), &MediaSourceId(SOURCE.into()))
         .unwrap();
-    assert_eq!(playback.method, PlayMethod::Transcode);
-    assert_eq!(playback.session, PlaySessionId(TRANSCODE_SESSION.into()));
     let url = playback.stream.expose_for_player();
-    let prefix = format!("{}/videos/{FILM}/master.m3u8?", s.fake.url);
+    let prefix = format!("{}/Videos/{FILM}/stream?static=true&", s.fake.url);
     assert!(url.starts_with(&prefix), "{url}");
-    assert!(
-        url.contains(&format!("PlaySessionId={TRANSCODE_SESSION}")),
-        "{url}"
-    );
-    assert_eq!(url.matches(&format!("ApiKey={TOKEN}")).count(), 1, "{url}");
 }
 
 #[test]
@@ -1426,7 +1405,6 @@ fn transcoding_asks_the_server_without_direct_play_from_the_position() {
             subtitle_track: Some(4),
         })
         .unwrap();
-    assert_eq!(playback.method, PlayMethod::Transcode);
     assert_eq!(playback.session, PlaySessionId(TRANSCODE_SESSION.into()));
     assert_eq!(
         (playback.film.clone(), playback.source.0.as_str()),
@@ -1450,6 +1428,43 @@ fn transcoding_asks_the_server_without_direct_play_from_the_position() {
     assert_eq!(body["StartTimeTicks"], 12_000_000_000_i64);
     assert_eq!(body["AudioStreamIndex"], 2);
     assert_eq!(body["SubtitleStreamIndex"], 4);
+}
+
+#[test]
+fn the_transcode_request_carries_the_device_profile_with_the_embedded_subtitles() {
+    let s = Setup::new();
+    s.signed_in()
+        .transcode(&TranscodeRequest {
+            film: film(),
+            source: MediaSourceId(SOURCE.into()),
+            start: Duration::ZERO,
+            audio_track: None,
+            subtitle_track: None,
+        })
+        .unwrap();
+    let body = s
+        .fake
+        .last("POST", &format!("/Items/{FILM}/PlaybackInfo"))
+        .json();
+    assert!(body["MaxStreamingBitrate"].as_u64().unwrap() >= 400_000_000);
+    let profile = &body["DeviceProfile"];
+    let transcoding = &profile["TranscodingProfiles"][0];
+    assert_eq!(transcoding["Type"], "Video");
+    assert_eq!(transcoding["Container"], "ts");
+    assert_eq!(transcoding["Protocol"], "hls");
+    assert_eq!(transcoding["VideoCodec"], "h264");
+    assert_eq!(transcoding["AudioCodec"], "aac");
+    let subtitles = profile["SubtitleProfiles"].as_array().unwrap();
+    for format in [
+        "subrip", "srt", "ass", "ssa", "webvtt", "vtt", "mov_text", "pgssub", "dvdsub", "dvbsub",
+    ] {
+        assert!(
+            subtitles
+                .iter()
+                .any(|p| p["Format"] == format && p["Method"] == "Embed"),
+            "{format} is not embedded"
+        );
+    }
 }
 
 #[test]

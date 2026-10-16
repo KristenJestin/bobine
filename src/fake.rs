@@ -9,9 +9,9 @@ use bobine::provider::{
     AudioTrack, CastMember, Collection, CollectionCard, CollectionDetail, Connector, Episode,
     ExternalSubtitle, Favourite, Feature, FeatureKind, Film, FilmDetail, FilmQuery, FilmSort,
     FilterChoices, ImageKind, ImageRef, ItemId, Library, LibraryKind, MediaServer, MediaSource,
-    MediaSourceId, Page, PersonHit, PersonTitles, PlayMethod, PlaySessionId, Playback,
-    PlaybackReport, ProviderError, SearchResults, Season, Series, SeriesDetail, SeriesHit,
-    ServerInfo, StreamUrl, SubtitleTrack, Title, TranscodeRequest, VideoRange, VideoTrack,
+    MediaSourceId, Page, PersonHit, PersonTitles, PlaySessionId, Playback, PlaybackReport,
+    ProviderError, SearchResults, Season, Series, SeriesDetail, SeriesHit, ServerInfo, StreamUrl,
+    SubtitleTrack, Title, TranscodeRequest, VideoRange, VideoTrack,
 };
 
 pub const USER: &str = "camille";
@@ -686,7 +686,6 @@ impl MediaServer for FakeServer {
             source: source.clone(),
             stream: StreamUrl::new(state.stream.clone()),
             external_subtitles,
-            method: PlayMethod::DirectPlay,
         })
     }
 
@@ -1107,7 +1106,6 @@ impl MediaServer for FakeServer {
             source: request.source.clone(),
             stream: StreamUrl::new(state.converted.clone()),
             external_subtitles,
-            method: PlayMethod::Transcode,
         })
     }
 }
