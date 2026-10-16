@@ -2785,4 +2785,58 @@ mod tests {
         sign_out(&window, cx);
         assert_eq!(pages_ahead(&window, cx), 0);
     }
+
+    /// The window of a page opened by `open`, drawn in a window tall enough for all of it.
+    fn drawn_page(
+        window: &gpui_kit::WindowHandle<Shell>,
+        cx: &mut gpui_kit::TestAppContext,
+        open: impl FnOnce(&mut Shell, &mut Context<Shell>),
+    ) -> gpui_kit::VisualTestContext {
+        window.update(cx, |shell, _, cx| open(shell, cx)).unwrap();
+        let mut visual = drawn(window, cx);
+        visual.simulate_resize(gpui_kit::size(px(1600.), px(3000.)));
+        visual.run_until_parked();
+        visual
+    }
+
+    fn click_on(visual: &mut gpui_kit::VisualTestContext, what: &'static str) {
+        let at = visual
+            .debug_bounds(what)
+            .unwrap_or_else(|| panic!("{what} was not drawn"))
+            .center();
+        visual.simulate_mouse_move(at, None, gpui_kit::Modifiers::none());
+        visual.simulate_click(at, gpui_kit::Modifiers::none());
+        visual.run_until_parked();
+    }
+
+    #[gpui_kit::test]
+    fn a_click_on_a_cast_member_opens_their_page(cx: &mut gpui_kit::TestAppContext) {
+        let pages: [fn(&mut Shell, &mut Context<Shell>); 2] = [
+            |shell, cx| shell.open_film(ItemId(crate::fake::FILM.into()), cx),
+            |shell, cx| shell.open_series(ItemId(crate::fake::SERIES.into()), cx),
+        ];
+        for open in pages {
+            let (server, window) = signed_in_window(cx);
+            let mut visual = drawn_page(&window, cx, open);
+            let screen = current(&window, cx);
+            click_on(&mut visual, "cast-member 1");
+            assert_eq!(current(&window, cx), Screen::Person, "from {screen:?}");
+            let cast = match screen {
+                Screen::FilmDetail => server.film(&ItemId(crate::fake::FILM.into())).unwrap().cast,
+                _ => {
+                    server
+                        .series_detail(&ItemId(crate::fake::SERIES.into()))
+                        .unwrap()
+                        .cast
+                }
+            };
+            let opened = window
+                .update(cx, |shell, _, _| {
+                    let page = shell.people.last().expect("the person page");
+                    (page.id.clone(), page.name.clone())
+                })
+                .unwrap();
+            assert_eq!(opened, (cast[1].id.clone(), cast[1].name.clone()));
+        }
+    }
 }

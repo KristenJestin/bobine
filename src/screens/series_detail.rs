@@ -56,7 +56,7 @@ pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -
     let seasons = seasons(shell, &shown, window, cx);
     let mut rows: Vec<AnyElement> = Vec::new();
     if !detail.cast.is_empty() {
-        rows.push(cast_row(shell, &detail.cast, &cast_scroll, cx).into_any_element());
+        rows.push(cast_row(shell, &detail.cast, &cast_scroll, window, cx).into_any_element());
     }
     if !detail.similar.is_empty() {
         let cards: Vec<Stateful<Div>> = detail

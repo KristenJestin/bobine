@@ -8,7 +8,7 @@ use std::cell::Cell;
 use std::rc::Rc;
 use std::time::Instant;
 
-use bobine::provider::{CastMember, Film, FilmDetail, ItemId, MediaSource};
+use bobine::provider::{CastMember, Film, FilmDetail, ItemId, MediaSource, PersonHit};
 use gpui_kit::prelude::*;
 use gpui_kit::{
     AnyElement, Bounds, Context, Div, FontWeight, IntoElement, MouseButton, MouseDownEvent, Pixels,
@@ -95,7 +95,7 @@ pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -
     );
     let mut rows: Vec<AnyElement> = Vec::new();
     if !detail.cast.is_empty() {
-        rows.push(cast_row(shell, &detail.cast, &cast_scroll, cx).into_any_element());
+        rows.push(cast_row(shell, &detail.cast, &cast_scroll, window, cx).into_any_element());
     }
     if let Some(collection) = collection {
         let mut films = collection.others.clone();
@@ -609,11 +609,12 @@ fn menu<K: Copy + 'static>(
     )
 }
 
-/// Round photos, the name and the role.
+/// Round photos, the name and the role; a click on a person opens their page.
 pub(super) fn cast_row(
     shell: &mut Shell,
     cast: &[CastMember],
     scroll: &ScrollHandle,
+    window: &mut Window,
     cx: &mut Context<Shell>,
 ) -> Div {
     let people: Vec<Stateful<Div>> = cast
@@ -621,14 +622,23 @@ pub(super) fn cast_row(
         .enumerate()
         .map(|(index, person)| {
             let photo = shell.image(person.photo.as_ref(), images::PHOTO, cx);
-            div()
-                .id(("person", index))
+            let hit = PersonHit {
+                id: person.id.clone(),
+                name: person.name.clone(),
+                photo: person.photo.clone(),
+            };
+            theme::eased(("person", index), theme::Shades::line(), window, cx)
+                .debug_selector(|| format!("cast-member {index}"))
                 .w(px(PHOTO + 24.))
                 .flex_none()
                 .flex()
                 .flex_col()
                 .items_center()
                 .gap(px(8.))
+                .py(px(8.))
+                .rounded(px(theme::RADIUS))
+                .cursor_pointer()
+                .on_click(cx.listener(move |shell, _, _, cx| shell.open_person(hit.clone(), cx)))
                 .child(
                     div()
                         .relative()
