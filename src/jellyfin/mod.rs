@@ -14,7 +14,7 @@ use crate::provider::{
     Feature, Film, FilmDetail, FilmQuery, FilmSort, FilterChoices, ImageKind, ImageRef, ItemId,
     Library, MediaServer, MediaSourceId, Page, PersonTitles, PlayMethod, PlaySessionId, Playback,
     PlaybackReport, ProviderError, SearchResults, Season, Series, SeriesDetail, ServerInfo,
-    StreamUrl, Title, Token, TokenStore, TranscodeRequest,
+    StreamUrl, Title, Token, TokenStore, TranscodeRequest, Trickplay,
 };
 use account::{AccountFile, Login};
 use dto::{
@@ -906,6 +906,38 @@ impl MediaServer for Jellyfin {
             self.http
                 .delete("take out of the list", &path, &[self.user()])
         }
+    }
+
+    fn trickplay(
+        &self,
+        film: &ItemId,
+        source: &MediaSourceId,
+    ) -> Result<Option<Trickplay>, ProviderError> {
+        let item: Item = self.http.get(
+            "trickplay",
+            &format!("/Items/{}", encode(&film.0)),
+            &[self.user(), ("fields", "Trickplay".into())],
+        )?;
+        Ok(item.trickplay_of(&source.0))
+    }
+
+    fn trickplay_tile(
+        &self,
+        film: &ItemId,
+        source: &MediaSourceId,
+        trickplay: &Trickplay,
+        tile: u32,
+    ) -> Result<Vec<u8>, ProviderError> {
+        // The token goes in the header, as for every image: the address carries none.
+        self.http.get_bytes(
+            "trickplay tile",
+            &format!(
+                "/Videos/{}/Trickplay/{}/{tile}.jpg",
+                encode(&film.0),
+                trickplay.width
+            ),
+            &[("mediaSourceId", source.0.clone())],
+        )
     }
 
     fn transcode(&self, request: &TranscodeRequest) -> Result<Playback, ProviderError> {

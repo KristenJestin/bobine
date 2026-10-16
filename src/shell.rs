@@ -4,6 +4,7 @@ mod home;
 mod lists;
 mod pages;
 mod palette;
+mod preview;
 mod series;
 
 pub use home::{HomePage, ListPage};
@@ -47,6 +48,7 @@ use crate::theme;
 use crate::video::Rect;
 use crate::video::blackout::{self, layer::Screens};
 use crate::video::subsurface::{VideoSurface, Wayland};
+use preview::SeekPreview;
 
 /// How often the player is asked what changed, and the controls checked for hiding.
 const PLAYER_TICK: Duration = Duration::from_millis(100);
@@ -197,6 +199,8 @@ pub struct Playback {
     reporting: Option<Reporting>,
     /// The episode after the one playing: the card offers it at the end.
     next: Option<Episode>,
+    /// The pointer over the seek bar: the time under it and the thumbnail of that moment.
+    seek: SeekPreview,
     /// What the server converts when the file does not play; `None` for a local file.
     fallback: Option<Fallback>,
     notice_fade: Fade,
@@ -347,6 +351,7 @@ impl Shell {
             had_error: false,
             reporting,
             next: None,
+            seek: SeekPreview::new(),
             fallback: None,
             notice_fade: Fade::new(motion::quick()),
             notice_shown: false,
@@ -429,6 +434,7 @@ impl Shell {
         if window.is_fullscreen() && !self.fullscreen_kept {
             window.toggle_fullscreen();
         }
+        self.release_tiles(window, cx);
         let reports = self.stop_playback();
         self.follow_blackout(window, cx);
         self.navigator.back();
@@ -486,6 +492,9 @@ impl Shell {
         };
         let shown = playback.session.controls_visible(now);
         let has_error = playback.session.error().is_some();
+        if preview::bar_is_left(playback.controls_shown, shown) {
+            playback.seek.scrub.left_bar();
+        }
         let notice = playback
             .fallback
             .as_ref()
@@ -698,6 +707,7 @@ impl Render for Shell {
                         .controls_fade
                         .set(session.controls_visible(now), now);
                     playback.panel_fade.set(session.panel_open(), now);
+                    let preview = playback.seek.draw(session.duration, now);
                     let notice = playback
                         .fallback
                         .as_ref()
@@ -706,6 +716,7 @@ impl Render for Shell {
                     if playback.controls_fade.moving(now)
                         || playback.panel_fade.moving(now)
                         || playback.notice_fade.moving(now)
+                        || playback.seek.moving(now)
                     {
                         window.request_animation_frame();
                     }
@@ -717,6 +728,7 @@ impl Render for Shell {
                     let shown = screens::player::Shown {
                         controls: playback.controls_fade.level(now),
                         panel: playback.panel_fade.level(now),
+                        preview,
                         notice: playback.notice_fade.level(now),
                         blackout: self.screens.is_some().then(|| switch.level(now)),
                     };

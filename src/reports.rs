@@ -248,6 +248,30 @@ mod tests {
     }
 
     #[test]
+    fn a_drag_along_the_seek_bar_sends_one_progress_report_at_release() {
+        let mut f = Fixture::new();
+        f.session.duration = 6000.;
+        f.after(0, vec![PlayerEvent::Loaded, PlayerEvent::Position(100.)]);
+        // The pointer is dragged along the bar, a tick every 100 ms.
+        for step in 1..=20 {
+            f.session.scrub_to_fraction(step as f32 / 40.);
+            f.now += Duration::from_millis(100);
+            f.reporting.tick(f.now, &f.session, false);
+        }
+        // The button is let go: the exact seek is the one the server hears of.
+        f.session.seek_to_fraction(0.5);
+        f.after(0, vec![PlayerEvent::Position(3000.)]);
+        assert_eq!(
+            summary(&f.finish()),
+            [
+                ("started", 100, false),
+                ("progress", 3000, false),
+                ("stopped", 3000, false),
+            ]
+        );
+    }
+
+    #[test]
     fn progress_is_reported_every_ten_seconds() {
         let mut f = Fixture::new();
         f.after(0, vec![PlayerEvent::Loaded, PlayerEvent::Position(0.)]);

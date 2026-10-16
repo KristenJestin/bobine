@@ -19,6 +19,8 @@ pub const PLAY_SESSION: &str = "9c0ffee09c0ffee09c0ffee09c0ffee0";
 /// The play session of a playback the server converts.
 pub const TRANSCODE_SESSION: &str = "7e57c0de7e57c0de7e57c0de7e57c0de";
 pub const IMAGE: &[u8] = b"\x89PNG fake image";
+/// What a trickplay tile answers: a JPEG's first bytes, then nothing a decoder reads.
+pub const TILE: &[u8] = b"\xff\xd8\xff fake tile";
 pub const LETTERS_LIBRARY: &str = "33333333333333333333333333333333";
 pub const SERIES_LIBRARY: &str = "22222222222222222222222222222222";
 pub const SERIES: &str = "50000000000000000000000000000001";
@@ -97,6 +99,8 @@ pub struct State {
     pub account_disabled: bool,
     /// How long an image takes to be answered (a server converting a person's photo).
     pub image_delay: std::time::Duration,
+    /// The server made no trickplay images: its items carry no `Trickplay`.
+    pub no_trickplay: bool,
     /// Every episode of every series is watched: Next Up has nothing.
     pub all_watched: bool,
     /// The films and series the user put in their list: the film and the series of the pages
@@ -445,7 +449,14 @@ fn answer(state: &State, seen: &Seen) -> Answer {
             _ => Answer::Json(200, json!({ "Items": [], "TotalRecordCount": 0 })),
         },
         ("GET", path) if path == format!("/Items/{FILM}") => {
-            Answer::Json(200, favourite_of(state, FILM, fixture("film_detail")))
+            let mut item = favourite_of(state, FILM, fixture("film_detail"));
+            if state.no_trickplay {
+                item.as_object_mut().unwrap().remove("Trickplay");
+            }
+            Answer::Json(200, item)
+        }
+        ("GET", path) if path.starts_with(&format!("/Videos/{FILM}/Trickplay/320/")) => {
+            Answer::Bytes(TILE.to_vec())
         }
         ("GET", path) if path.starts_with("/Items/b000") => fixture("boxsets")["Items"]
             .as_array()

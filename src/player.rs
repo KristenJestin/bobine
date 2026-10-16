@@ -5,7 +5,9 @@
 pub mod controls;
 pub mod libmpv;
 pub mod mpv;
+pub mod scrub;
 pub mod session;
+pub mod thumbnails;
 pub mod time;
 pub mod tracks;
 
@@ -74,6 +76,8 @@ pub enum Seek {
     By(f64),
     /// Seconds from the start.
     To(f64),
+    /// Seconds from the start, to the nearest keyframe: quick, for the film to follow a drag.
+    Rough(f64),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
