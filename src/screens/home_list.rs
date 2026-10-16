@@ -143,7 +143,16 @@ fn card(
             let picture = card_picture(title).cloned();
             let image = shell.image(picture.as_ref(), images::CARD, cx);
             let title = listed(shell, index).expect("the card was just found");
-            wide_card(title, image, Pick::Listed(index), width, id, window, cx).into_any_element()
+            wide_card(
+                title,
+                image,
+                Pick::Listed(index, title.id().clone()),
+                width,
+                id,
+                window,
+                cx,
+            )
+            .into_any_element()
         }
     }
 }

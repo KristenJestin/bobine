@@ -7,7 +7,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Instant;
 
-use bobine::provider::{Feature, ImageRef, Title};
+use bobine::provider::{Feature, ImageRef, ItemId, Title};
 use gpui_kit::prelude::*;
 use gpui_kit::{
     Animation, AnimationExt, AnyElement, App, Context, Div, ElementId, Entity, FontWeight,
@@ -730,15 +730,16 @@ struct Over(Fade);
 pub(super) enum Pick {
     /// The `at`th title of a row of the Home.
     Row(Rc<[Title]>, usize),
-    /// The `at`th title of the full list.
-    Listed(usize),
+    /// The `at`th title of the full list, which must still be `id`: the list may have been
+    /// refreshed since the card was drawn.
+    Listed(usize, ItemId),
 }
 
 impl Pick {
     pub(super) fn title(&self, list: Option<&Grid<Title>>) -> Option<Title> {
         match self {
             Self::Row(titles, at) => titles.get(*at).cloned(),
-            Self::Listed(at) => list?.film(*at).cloned(),
+            Self::Listed(at, id) => list?.film(*at).filter(|title| title.id() == id).cloned(),
         }
     }
 }
@@ -947,8 +948,28 @@ mod tests {
                 total: 3,
             },
         );
-        assert_eq!(Pick::Listed(2).title(Some(&grid)), Some(all[2].clone()));
-        assert_eq!(Pick::Listed(3).title(Some(&grid)), None);
-        assert_eq!(Pick::Listed(0).title(None), None);
+        let pick = |at: usize| Pick::Listed(at, all[at].id().clone());
+        assert_eq!(pick(2).title(Some(&grid)), Some(all[2].clone()));
+        assert_eq!(
+            Pick::Listed(3, all[2].id().clone()).title(Some(&grid)),
+            None
+        );
+        assert_eq!(pick(0).title(None), None);
+    }
+
+    #[test]
+    fn a_click_on_a_card_whose_place_now_holds_another_title_opens_nothing() {
+        let mut grid: Grid<Title> = Grid::default();
+        let all = titles(3);
+        grid.loaded(
+            grid.epoch(),
+            0,
+            Page {
+                items: all.clone(),
+                total: 3,
+            },
+        );
+        let drawn = Pick::Listed(1, all[2].id().clone());
+        assert_eq!(drawn.title(Some(&grid)), None);
     }
 }
