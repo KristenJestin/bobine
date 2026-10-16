@@ -201,6 +201,8 @@ pub struct Playback {
     had_error: bool,
     /// What the server is told; `None` for a local file.
     reporting: Option<Reporting>,
+    /// The attempt that failed is being told stopped: the conversion's reports wait for it.
+    stopping: Option<std::thread::JoinHandle<()>>,
     /// The episode after the one playing: the card offers it at the end.
     next: Option<Episode>,
     /// Told apart from every other playback: an answer on its way for one already left is
@@ -361,6 +363,7 @@ impl Shell {
             controls_shown: false,
             had_error: false,
             reporting,
+            stopping: None,
             next: None,
             generation: 0,
             skip_fade: Presence::new(motion::quick()),
@@ -547,7 +550,7 @@ impl Shell {
             return;
         };
         if let Some(reporting) = playback.reporting.take() {
-            drop(reporting.finish(&playback.session));
+            playback.stopping = Some(reporting.finish(&playback.session));
         }
         let (server, id) = (fallback.server.clone(), fallback.id());
         let task = cx
@@ -576,7 +579,11 @@ impl Shell {
             return;
         };
         if let Some(report) = fallback.answered(id, &mut playback.session, opened) {
-            playback.reporting = Some(Reporting::start(fallback.server.clone(), report));
+            playback.reporting = Some(Reporting::start_after(
+                fallback.server.clone(),
+                report,
+                playback.stopping.take(),
+            ));
         }
         cx.notify();
     }

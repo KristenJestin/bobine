@@ -32,8 +32,22 @@ pub struct Reporting {
 
 impl Reporting {
     pub fn start(server: Arc<dyn MediaServer>, base: PlaybackReport) -> Self {
+        Self::start_after(server, base, None)
+    }
+
+    /// Reports another playback of the same film, once `previous` has sent all of its own: the
+    /// "stopped" of an attempt that failed must not reach the server after the first report of
+    /// the conversion that replaces it.
+    pub fn start_after(
+        server: Arc<dyn MediaServer>,
+        base: PlaybackReport,
+        previous: Option<JoinHandle<()>>,
+    ) -> Self {
         let (sender, receiver) = channel::<(Kind, PlaybackReport)>();
         let worker = std::thread::spawn(move || {
+            if let Some(previous) = previous {
+                let _ = previous.join();
+            }
             for (kind, report) in receiver {
                 let sent = match kind {
                     Kind::Started => server.report_started(&report),
@@ -396,6 +410,53 @@ mod tests {
         assert_eq!(
             summary(&server.reports()),
             [("started", 4400, false), ("stopped", 4400, false)]
+        );
+    }
+
+    #[test]
+    fn the_reports_of_a_conversion_follow_the_stopped_of_the_attempt_that_failed() {
+        let mut f = Fixture::new();
+        f.server.state.lock().unwrap().stop_delay = Duration::from_millis(200);
+        f.after(0, vec![PlayerEvent::Loaded]);
+        let stopping = f.reporting.finish(&f.session);
+        let mut conversion = Reporting::start_after(
+            Arc::new(f.server.clone()),
+            PlaybackReport {
+                session: PlaySessionId("session-2".into()),
+                film: ItemId(FILM.into()),
+                source: MediaSourceId("source-4k".into()),
+                position: Duration::ZERO,
+                paused: false,
+                audio_track: None,
+                subtitle_track: None,
+                method: bobine::provider::PlayMethod::Transcode,
+            },
+            Some(stopping),
+        );
+        conversion.tick(f.now, &f.session, false);
+        conversion.finish(&f.session).join().unwrap();
+        assert_eq!(
+            summary(&f.server.reports()),
+            [
+                ("started", 0, false),
+                ("stopped", 0, false),
+                ("started", 0, false),
+                ("stopped", 0, false),
+            ]
+        );
+        let sessions: Vec<_> = f
+            .server
+            .reports()
+            .iter()
+            .map(|report| match report {
+                Report::Started(r) | Report::Progress(r) | Report::Stopped(r) => {
+                    r.session.0.clone()
+                }
+            })
+            .collect();
+        assert_eq!(
+            sessions,
+            ["session-1", "session-1", "session-2", "session-2"]
         );
     }
 
