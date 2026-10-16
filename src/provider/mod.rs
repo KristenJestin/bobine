@@ -101,8 +101,9 @@ pub trait MediaServer: Send + Sync {
     /// Every collection of the user, by name. One call, not pages: a server holds tens of them.
     fn collections(&self) -> Result<Vec<CollectionCard>, ProviderError>;
     /// The poster of the earliest film of a collection that has one, to wear for a card with no
-    /// picture of its own. None when no film has a poster, and when the server does not answer:
-    /// a bare card is no failure.
+    /// picture of its own. None when no film has a poster, and on any failure (the server not
+    /// answering, an expired session included): a bare card is no failure, and the next call
+    /// that needs the session says so.
     fn collection_poster(&self, collection: &ItemId) -> Option<ImageRef>;
     /// A collection and its films, oldest release first.
     fn collection(&self, collection: &ItemId) -> Result<CollectionDetail, ProviderError>;
