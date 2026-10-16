@@ -33,6 +33,7 @@ use crate::player::libmpv::Libmpv;
 use crate::reports::Reporting;
 use crate::scroll::{self, Move, Phase, Wheel};
 use crate::start::{self, Start};
+use crate::track_choice::{Remembered, Rules};
 
 /// How long the address must stay unchanged before the server is asked who it is.
 const PROBE_AFTER: Duration = Duration::from_millis(600);
@@ -996,8 +997,17 @@ impl Shell {
         let read_at = self.details[depth].favourite.changes();
         self.ask(
             cx,
-            move |server| server.film(&asked),
-            move |shell, detail, cx| {
+            move |server| {
+                let detail = server.film(&asked);
+                // Read before the page shows, so the chips never change under the viewer; the
+                // session reads it once.
+                let preferences = detail
+                    .as_ref()
+                    .ok()
+                    .and_then(|_| server.track_preferences());
+                (detail, preferences)
+            },
+            move |shell, (detail, preferences), cx| {
                 let detail = match detail {
                     Ok(detail) => detail,
                     Err(error) => {
@@ -1018,7 +1028,11 @@ impl Shell {
                     .as_ref()
                     .is_none_or(|c| c.source(&detail.versions).is_none())
                 {
-                    page.choices = Some(Choices::new(&detail.versions));
+                    let rules = Rules {
+                        preferences,
+                        remembered: Remembered::default(),
+                    };
+                    page.choices = Some(Choices::with_rules(&detail.versions, rules));
                 }
                 page.favourite.sync(detail.favourite, read_at);
                 page.detail = Loadable::Ready(detail);

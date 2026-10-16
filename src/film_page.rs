@@ -33,7 +33,8 @@ struct ByHand {
 
 impl Choices {
     /// The first version, with the tracks the file flags: its default audio track and its
-    /// default subtitle, if any.
+    /// default subtitle, if any. What the program does when the server gave no preferences.
+    #[cfg(test)]
     pub fn new(versions: &[MediaSource]) -> Self {
         Self::with_rules(versions, Rules::default())
     }
