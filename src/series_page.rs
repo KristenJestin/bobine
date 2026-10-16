@@ -55,6 +55,30 @@ pub fn years(series: &Series) -> Option<String> {
     })
 }
 
+/// The line under a series' name on a card: the years, or for a season the server handed in
+/// its place, which season.
+pub fn card_detail(series: &Series) -> Option<String> {
+    match &series.season {
+        Some(season) => Some(format!("{} · new", season_label(season))),
+        None => years(series),
+    }
+}
+
+/// The season a series page opens on: the one asked for (from a card of a new season), else
+/// the one of the episode to play next, else the first.
+pub fn opening_season(
+    seasons: &[Season],
+    wanted: Option<&ItemId>,
+    next: Option<&Episode>,
+) -> usize {
+    let of_next = next.map(|next| &next.season);
+    wanted
+        .into_iter()
+        .chain(of_next)
+        .find_map(|id| seasons.iter().position(|s| &s.id == id))
+        .unwrap_or(0)
+}
+
 /// The line under the title: years, rating, seasons, genres, age rating.
 pub fn meta(detail: &SeriesDetail, seasons: usize) -> Vec<String> {
     let series = &detail.series;
@@ -410,6 +434,52 @@ mod tests {
             .unwrap();
         found.item.watched = watched;
         found.item.resume = resume.map(Duration::from_secs);
+    }
+
+    fn seasons() -> Vec<Season> {
+        (1..=3)
+            .map(|number| Season {
+                id: ItemId(format!("season-{number}")),
+                name: format!("Season {number}"),
+                number: Some(number),
+                unwatched: 0,
+            })
+            .collect()
+    }
+
+    fn episode_of(season: &str, server: &FakeServer) -> Episode {
+        Episode {
+            season: ItemId(season.into()),
+            ..episode(server, 1, 1)
+        }
+    }
+
+    #[test]
+    fn a_series_page_opens_on_the_season_asked_for() {
+        let server = FakeServer::new(1, true);
+        let next = episode_of("season-1", &server);
+        let wanted = ItemId("season-3".into());
+        assert_eq!(opening_season(&seasons(), Some(&wanted), Some(&next)), 2);
+    }
+
+    #[test]
+    fn a_series_page_opens_on_the_season_of_the_next_episode_when_none_is_asked() {
+        let server = FakeServer::new(1, true);
+        let next = episode_of("season-2", &server);
+        assert_eq!(opening_season(&seasons(), None, Some(&next)), 1);
+    }
+
+    #[test]
+    fn a_series_page_opens_on_the_first_season_when_the_one_asked_for_is_gone() {
+        let wanted = ItemId("season-9".into());
+        assert_eq!(opening_season(&seasons(), Some(&wanted), None), 0);
+    }
+
+    #[test]
+    fn a_season_card_says_which_season_is_new() {
+        let mut series = crate::fake::series().remove(0);
+        series.season = Some(seasons().remove(2));
+        assert_eq!(card_detail(&series).as_deref(), Some("Season 3 · new"));
     }
 
     fn next(server: &FakeServer) -> ItemId {

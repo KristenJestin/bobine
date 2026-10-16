@@ -253,7 +253,10 @@ fn series_poster_with(
     id: impl Into<ElementId>,
     cx: &mut Context<Shell>,
 ) -> Stateful<Div> {
-    let opened = series.id.clone();
+    let opened = (
+        series.id.clone(),
+        series.season.as_ref().map(|s| s.id.clone()),
+    );
     let corner = series_page::badge(series).map_or(Corner::Nothing, Corner::Count);
     let rating = series
         .community_rating
@@ -267,12 +270,12 @@ fn series_poster_with(
         .gap(px(8.))
         .cursor_pointer()
         .on_click(cx.listener(move |shell, _, _, cx| {
-            shell.open_series(opened.clone(), cx);
+            shell.open_series_on(opened.0.clone(), opened.1.clone(), cx);
         }))
         .child(poster_image(image, rating, corner, width, false))
         .child(poster_caption(
             series.title.clone(),
-            series_page::years(series).unwrap_or_default(),
+            series_page::card_detail(series).unwrap_or_default(),
         ))
 }
 

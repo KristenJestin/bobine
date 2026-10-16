@@ -228,7 +228,7 @@ pub fn next_up_row(next: Vec<Episode>, started: &[Title]) -> Vec<Episode> {
 pub fn card_lines(title: &Title) -> (String, Option<String>) {
     match title {
         Title::Film(film) => (film.title.clone(), film.year.map(|year| year.to_string())),
-        Title::Series(series) => (series.title.clone(), series_page::years(series)),
+        Title::Series(series) => (series.title.clone(), series_page::card_detail(series)),
         Title::Episode(episode) => (
             episode.series_title.clone(),
             Some(
@@ -615,6 +615,24 @@ mod tests {
         let (heading, detail) = card_lines(&title);
         assert_eq!(heading, "Station Nord");
         assert_eq!(detail.as_deref(), Some("2023 – 2025"));
+    }
+
+    #[test]
+    fn a_new_season_card_says_its_series_then_which_season() {
+        let server = server();
+        let page = server
+            .series(&ItemId("series".into()), &Tools::default().query(0))
+            .unwrap();
+        let mut series = page.items[0].clone();
+        series.season = Some(bobine::provider::Season {
+            id: ItemId("series-0-season-3".into()),
+            name: "Season 3".into(),
+            number: Some(3),
+            unwatched: 0,
+        });
+        let (heading, detail) = card_lines(&Title::Series(series));
+        assert_eq!(heading, "Station Nord");
+        assert_eq!(detail.as_deref(), Some("Season 3 · new"));
     }
 
     #[test]

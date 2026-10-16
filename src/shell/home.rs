@@ -468,7 +468,11 @@ impl Shell {
     pub fn open_title(&mut self, title: &Title, cx: &mut Context<Self>) {
         match title {
             Title::Film(film) => self.open_film(film.id.clone(), cx),
-            Title::Series(series) => self.open_series(series.id.clone(), cx),
+            Title::Series(series) => self.open_series_on(
+                series.id.clone(),
+                series.season.as_ref().map(|season| season.id.clone()),
+                cx,
+            ),
             // An episode has no page: its series has, with where it resumes.
             Title::Episode(episode) => self.open_series(episode.series.clone(), cx),
         }

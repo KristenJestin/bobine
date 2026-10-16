@@ -31,6 +31,8 @@ pub struct SeriesPage {
     pub seasons: Vec<Season>,
     /// The season whose episodes show.
     pub season: usize,
+    /// The season the page was opened for, to land on once the seasons are known.
+    wanted_season: Option<ItemId>,
     /// The episodes of each season asked, by the season's id.
     pub episodes: HashMap<ItemId, Loadable<Vec<Episode>>>,
     /// What the main button plays, and the version and tracks its chips chose.
@@ -87,6 +89,11 @@ struct Fresh {
 
 impl Shell {
     pub fn open_series(&mut self, id: ItemId, cx: &mut Context<Self>) {
+        self.open_series_on(id, None, cx);
+    }
+
+    /// The page of a series, opened on `season` (a card of a new season) when it has it.
+    pub fn open_series_on(&mut self, id: ItemId, season: Option<ItemId>, cx: &mut Context<Self>) {
         // The card belongs to the page under: it does not play over this one.
         self.cancel_up_next(cx);
         let generation = self.next_generation();
@@ -96,6 +103,7 @@ impl Shell {
             detail: Loadable::Loading,
             seasons: Vec::new(),
             season: 0,
+            wanted_season: season,
             episodes: HashMap::new(),
             next: None,
             choices: None,
@@ -189,11 +197,11 @@ impl Shell {
                     &page.carried,
                 );
                 if first {
-                    page.season = fresh
-                        .next
-                        .as_ref()
-                        .and_then(|next| fresh.seasons.iter().position(|s| s.id == next.season))
-                        .unwrap_or(0);
+                    page.season = series_page::opening_season(
+                        &fresh.seasons,
+                        page.wanted_season.take().as_ref(),
+                        fresh.next.as_ref(),
+                    );
                 }
                 page.season = page.season.min(fresh.seasons.len().saturating_sub(1));
                 page.next = fresh.next;
