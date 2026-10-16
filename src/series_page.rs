@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 use bobine::provider::{Episode, ItemId, MediaServer, ProviderError, Season, Series, SeriesDetail};
 
 use crate::film_page;
+use crate::shell::Loadable;
 
 /// How long the "Épisode suivant" card counts down before the next episode plays.
 pub const COUNTDOWN: Duration = Duration::from_secs(10);
@@ -142,6 +143,12 @@ pub fn following(
         .episodes(&episode.series, &next_season.id)?
         .into_iter()
         .next())
+}
+
+/// Whether a season's episodes are asked of the server: when never asked, when they failed (its
+/// tab chosen again tries again), or `again`.
+pub fn asks_episodes(shown: Option<&Loadable<Vec<Episode>>>, again: bool) -> bool {
+    again || matches!(shown, None | Some(Loadable::Failed(_)))
 }
 
 /// Whether the player stopped at the end of the episode, and not on a stream cut short.
@@ -728,6 +735,18 @@ mod tests {
         assert!(refreshes.holding());
         assert!(refreshes.landed(after));
         assert!(!refreshes.holding());
+    }
+
+    #[test]
+    fn a_failed_season_is_asked_again_when_its_tab_is_chosen() {
+        assert!(asks_episodes(None, false));
+        assert!(asks_episodes(
+            Some(&Loadable::Failed("Le serveur ne répond pas.")),
+            false
+        ));
+        assert!(!asks_episodes(Some(&Loadable::Loading), false));
+        assert!(!asks_episodes(Some(&Loadable::Ready(Vec::new())), false));
+        assert!(asks_episodes(Some(&Loadable::Ready(Vec::new())), true));
     }
 
     #[test]

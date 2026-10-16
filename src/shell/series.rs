@@ -172,7 +172,7 @@ impl Shell {
         );
     }
 
-    /// The episodes of the season shown, when not asked yet, or `again`.
+    /// The episodes of the season shown, when not asked yet or failed, or `again`.
     fn load_episodes(&mut self, depth: usize, again: bool, cx: &mut Context<Self>) {
         let Some(page) = self.series_pages.get_mut(depth) else {
             return;
@@ -183,12 +183,13 @@ impl Shell {
             page.refreshes.landed(newest);
             return;
         };
-        if page.episodes.contains_key(&season) && !again {
+        if !series_page::asks_episodes(page.episodes.get(&season), again) {
             return;
         }
-        page.episodes
-            .entry(season.clone())
-            .or_insert(Loadable::Loading);
+        // The list shown stays drawn until the new one comes; a failed one shows loading.
+        if !matches!(page.episodes.get(&season), Some(Loadable::Ready(_))) {
+            page.episodes.insert(season.clone(), Loadable::Loading);
+        }
         let id = page.id.clone();
         // Episodes asked for an older refresh would show what was before it.
         let refresh = page.refreshes.newest();
@@ -216,7 +217,8 @@ impl Shell {
         let Some(page) = self.series_pages.last_mut() else {
             return;
         };
-        if season >= page.seasons.len() || season == page.season {
+        // The tab shown chosen again asks its episodes again if they failed.
+        if season >= page.seasons.len() {
             return;
         }
         page.season = season;
