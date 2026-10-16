@@ -85,6 +85,13 @@ pub struct Grid<T> {
     asked: HashSet<u32>,
     /// How many times a page failed, and when it last did.
     failures: HashMap<u32, (u32, Instant)>,
+    /// The list before the last restart, kept on screen until the new one takes its place.
+    stale: Option<Stale<T>>,
+}
+
+struct Stale<T> {
+    total: u32,
+    pages: HashMap<u32, Vec<T>>,
 }
 
 impl<T> Default for Grid<T> {
@@ -95,6 +102,7 @@ impl<T> Default for Grid<T> {
             pages: HashMap::new(),
             asked: HashSet::new(),
             failures: HashMap::new(),
+            stale: None,
         }
     }
 }
@@ -104,10 +112,49 @@ impl<T: Listed> Grid<T> {
     /// and the answers still on their way for it will not be taken.
     pub fn restart(&mut self) {
         self.epoch += 1;
+        // What is on screen stays there, to fade out; if it is already leaving, it keeps leaving.
+        if let (Some(total), None) = (self.total.filter(|total| *total > 0), &self.stale) {
+            self.stale = Some(Stale {
+                total,
+                pages: std::mem::take(&mut self.pages),
+            });
+        }
         self.total = None;
         self.pages.clear();
         self.asked.clear();
         self.failures.clear();
+    }
+
+    /// Whether the list before the last restart is still the one on screen.
+    pub fn has_stale(&self) -> bool {
+        self.stale.is_some()
+    }
+
+    /// The new list takes the old one's place.
+    pub fn drop_stale(&mut self) {
+        self.stale = None;
+    }
+
+    /// The size of the list on screen: the old one while it leaves, else the current one.
+    pub fn shown_total(&self) -> Option<u32> {
+        self.stale
+            .as_ref()
+            .map_or(self.total, |old| Some(old.total))
+    }
+
+    pub fn shown_rows(&self, columns: usize) -> usize {
+        match &self.stale {
+            Some(old) => (old.total as usize).div_ceil(columns.max(1)),
+            None => self.rows(columns),
+        }
+    }
+
+    pub fn shown_film(&self, index: usize) -> Option<&T> {
+        let Some(old) = &self.stale else {
+            return self.film(index);
+        };
+        let page = (index / PAGE as usize) as u32;
+        old.pages.get(&page)?.get(index % PAGE as usize)
     }
 
     pub fn epoch(&self) -> u64 {
@@ -181,6 +228,75 @@ impl<T: Listed> Grid<T> {
 mod tests {
     use super::*;
     use crate::fake::FakeServer;
+
+    fn loaded_grid(total: u32) -> Grid<Film> {
+        let server = FakeServer::new(total as usize, true);
+        let mut grid = Grid::<Film>::default();
+        grid.pages_to_ask(0..8, Instant::now());
+        grid.loaded(grid.epoch(), 0, some(&server, 0));
+        grid
+    }
+
+    #[test]
+    fn the_old_list_stays_on_screen_when_the_grid_starts_over() {
+        let mut grid = loaded_grid(1284);
+        let first = grid.film(0).cloned().unwrap();
+        grid.restart();
+        assert_eq!(grid.total, None);
+        assert!(grid.has_stale());
+        assert_eq!(grid.shown_total(), Some(1284));
+        assert_eq!(grid.shown_rows(8), 161);
+        assert_eq!(grid.shown_film(0).map(|f| &f.id), Some(&first.id));
+        // What is asked and answered is the new list: nothing of the old one is in it.
+        assert!(grid.film(0).is_none());
+    }
+
+    #[test]
+    fn the_new_list_waits_to_take_the_place_of_the_old_one() {
+        let mut grid = loaded_grid(1284);
+        grid.restart();
+        grid.pages_to_ask(0..8, Instant::now());
+        grid.loaded(grid.epoch(), 0, some(&FakeServer::new(40, true), 0));
+        assert_eq!(grid.total, Some(40));
+        assert_eq!(grid.shown_total(), Some(1284));
+        grid.drop_stale();
+        assert!(!grid.has_stale());
+        assert_eq!(grid.shown_total(), Some(40));
+        assert_eq!(grid.shown_rows(8), 5);
+        assert!(grid.shown_film(0).is_some());
+    }
+
+    #[test]
+    fn starting_over_twice_keeps_showing_the_list_on_screen() {
+        let mut grid = loaded_grid(1284);
+        grid.restart();
+        grid.restart();
+        assert_eq!(grid.shown_total(), Some(1284));
+    }
+
+    #[test]
+    fn a_list_with_nothing_in_it_leaves_nothing_to_fade() {
+        let mut grid = Grid::<Film>::default();
+        grid.pages_to_ask(0..8, Instant::now());
+        grid.loaded(
+            grid.epoch(),
+            0,
+            Page {
+                items: Vec::new(),
+                total: 0,
+            },
+        );
+        grid.restart();
+        assert!(!grid.has_stale());
+    }
+
+    #[test]
+    fn a_grid_that_showed_nothing_has_nothing_to_keep() {
+        let mut grid = Grid::<Film>::default();
+        grid.restart();
+        assert!(!grid.has_stale());
+        assert_eq!(grid.shown_total(), None);
+    }
 
     #[test]
     fn the_top_row_is_the_scroll_over_one_rows_height() {

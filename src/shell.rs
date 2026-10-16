@@ -4,7 +4,7 @@ mod pages;
 mod palette;
 mod series;
 
-pub use pages::{Chip, DetailPage, LibraryPage, Loadable, LoginForm, OpenConnector, Tool};
+pub use pages::{Chip, DetailPage, GONE, LibraryPage, Loadable, LoginForm, OpenConnector, Tool};
 pub use palette::{PersonPage, SearchState};
 pub use series::SeriesPage;
 

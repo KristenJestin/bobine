@@ -18,7 +18,7 @@ use crate::grid::{self, GAP, Listed, MARGIN};
 use crate::icons::{IconName, icon};
 use crate::library_tools::{LETTERS, Sort, Tools, decade_label, letter_of};
 use crate::shell::LibraryPage;
-use crate::shell::{Loadable, Shell, Tool};
+use crate::shell::{GONE, Loadable, Shell, Tool};
 use crate::theme;
 
 pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -> impl IntoElement {
@@ -86,16 +86,12 @@ fn grid_screen<T: Listed + 'static>(
     } = kind;
     let now = Instant::now();
     let shown = page(shell);
-    let rows = shown.grid.rows(columns);
-    let total = shown.grid.total;
-    let epoch = shown.grid.epoch();
-    // A list that has just arrived, or a jump to a letter, comes in rather than appears.
-    if total.is_some() && shown.appeared != Some(epoch) {
-        shown.appeared = Some(epoch);
-        shown.appear.jump(0.);
-        shown.appear.set(1., now);
-    }
-    if let Some(index) = shown.jump.take() {
+    // The list on screen is the old one while the new one is awaited and the old one fades out.
+    shown.follow_list(now);
+    let leaving = shown.grid.has_stale();
+    let rows = shown.grid.shown_rows(columns);
+    let total = shown.grid.shown_total();
+    if let Some(index) = shown.jump.take().filter(|_| !leaving) {
         shown
             .scroll
             .scroll_to_item_strict(index / columns, ScrollStrategy::Top);
@@ -116,10 +112,12 @@ fn grid_screen<T: Listed + 'static>(
     if shown.appear.moving(now) || shown.letters.moving(now) || shown.menu_fade.moving(now) {
         window.request_animation_frame();
     }
+    let loading = shown.grid.total.is_none();
     let status = match &shown.library {
         Some(Loadable::Failed(why)) => Some(*why),
         _ if shown.error.is_some() => shown.error,
-        _ if total.is_none() => Some("Chargement…"),
+        // Not while the old list is still seen leaving: it says enough.
+        _ if loading && (!leaving || opacity <= GONE) => Some("Chargement…"),
         _ if rows == 0 && shown.tools.narrowed() => Some(NO_MATCH),
         _ if rows == 0 => Some(empty),
         _ => None,
@@ -141,18 +139,21 @@ fn grid_screen<T: Listed + 'static>(
     };
     let current = shown
         .grid
-        .film(top_row * columns)
+        .shown_film(top_row * columns)
         .map(|first| letter_of(first.title()));
 
     let list = uniform_list(
         title,
         rows,
         cx.processor(move |shell: &mut Shell, range: Range<usize>, _, cx| {
-            ask(shell, range.start * columns..range.end * columns, cx);
+            // The old list leaving is not the one to ask pages for.
+            if !page(shell).grid.has_stale() {
+                ask(shell, range.start * columns..range.end * columns, cx);
+            }
             range
                 .map(|row| {
                     let items = (row * columns..(row + 1) * columns).map(|index| {
-                        match page(shell).grid.film(index).cloned() {
+                        match page(shell).grid.shown_film(index).cloned() {
                             Some(item) => cell(shell, &item, poster_width, index, cx),
                             // Not here yet, or past the last one: the same room, empty.
                             None => div().w(px(poster_width)).flex_none().into_any_element(),

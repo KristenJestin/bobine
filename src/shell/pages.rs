@@ -120,6 +120,9 @@ impl<T> Default for LibraryPage<T> {
     }
 }
 
+/// An opacity this low is gone: the list leaving has left.
+pub const GONE: f32 = 0.02;
+
 impl<T: Listed> LibraryPage<T> {
     /// Changes the filters or the order. When they did change, the list starts over from the
     /// top: the pages of the old one are forgotten and its late answers will not be taken.
@@ -134,11 +137,6 @@ impl<T: Listed> LibraryPage<T> {
         self.jump = None;
         self.waiting_jump = None;
         self.menus.close();
-        self.scroll
-            .0
-            .borrow()
-            .base_handle
-            .set_offset(point(px(0.), px(0.)));
         true
     }
 
@@ -152,6 +150,28 @@ impl<T: Listed> LibraryPage<T> {
         match self.grid.total {
             Some(total) => self.jump = Some(index.min(total.saturating_sub(1)) as usize),
             None => self.waiting_jump = Some((epoch, index)),
+        }
+    }
+
+    /// Called at each draw, with the draw's instant: while a list is awaited the old one fades
+    /// out; once it is gone and the new one is there, the new one starts at the top and fades in.
+    pub fn follow_list(&mut self, now: Instant) {
+        if self.grid.has_stale() {
+            self.appear.set(0., now);
+            if self.grid.total.is_none() || self.appear.value(now) > GONE {
+                return;
+            }
+            self.grid.drop_stale();
+        }
+        if self.grid.total.is_some() && self.appeared != Some(self.grid.epoch()) {
+            self.appeared = Some(self.grid.epoch());
+            self.scroll
+                .0
+                .borrow()
+                .base_handle
+                .set_offset(point(px(0.), px(0.)));
+            self.appear.jump(0.);
+            self.appear.set(1., now);
         }
     }
 
@@ -1302,7 +1322,95 @@ mod tests {
         assert_eq!(page.tools.filters.genre.as_deref(), Some("Drame"));
         assert_eq!(page.grid.total, None);
         assert_eq!(page.jump, None);
+    }
+
+    fn at(start: Instant, ms: u64) -> Instant {
+        start + Duration::from_millis(ms)
+    }
+
+    fn opacity(page: &LibraryPage<Film>, now: Instant) -> f32 {
+        page.appear.value(now)
+    }
+
+    /// A films page showing its list, scrolled down, whose filter has just changed.
+    fn films_page_changed(start: Instant) -> LibraryPage<Film> {
+        let mut page = films_page();
+        page.follow_list(start);
+        page.scroll
+            .0
+            .borrow()
+            .base_handle
+            .set_offset(point(px(0.), px(-900.)));
+        let later = at(start, 1000);
+        assert_eq!(opacity(&page, later), 1.);
+        page.change(|tools| tools.filters.unwatched = true);
+        page
+    }
+
+    #[test]
+    fn the_old_list_fades_out_where_it_is_while_the_new_one_is_awaited() {
+        let t = Instant::now();
+        let mut page = films_page_changed(t);
+        let t = at(t, 1000);
+        page.follow_list(t);
+        assert!(page.grid.has_stale());
+        let halfway = opacity(&page, at(t, 60));
+        assert!(0. < halfway && halfway < 1., "{halfway}");
+        // Gone, and still waiting: the old list is kept under, invisible, not the blank.
+        page.follow_list(at(t, 400));
+        assert_eq!(opacity(&page, at(t, 400)), 0.);
+        assert!(page.grid.has_stale());
+        // It does not jump to the top before the new list is there.
+        assert_eq!(page.scroll.0.borrow().base_handle.offset().y, px(-900.));
+    }
+
+    #[test]
+    fn a_new_list_comes_in_once_the_old_one_is_gone() {
+        let t = Instant::now();
+        let mut page = films_page_changed(t);
+        let t = at(t, 1000);
+        page.follow_list(t);
+        // The answer is quick: the old list is still fading out.
+        page.loaded(page.grid.epoch(), 0, answer(&page, 0));
+        page.follow_list(at(t, 10));
+        assert!(
+            page.grid.has_stale(),
+            "swapped while the old list still showed"
+        );
+        assert_eq!(page.scroll.0.borrow().base_handle.offset().y, px(-900.));
+        // Faded out: the new list takes its place, at the top, and fades in from nothing.
+        page.follow_list(at(t, 400));
+        assert!(!page.grid.has_stale());
         assert_eq!(page.scroll.0.borrow().base_handle.offset().y, px(0.));
+        assert_eq!(opacity(&page, at(t, 400)), 0.);
+        let coming = opacity(&page, at(t, 500));
+        assert!(0. < coming && coming < 1., "{coming}");
+        assert_eq!(opacity(&page, at(t, 900)), 1.);
+        assert!(page.appear.moving(at(t, 500)));
+    }
+
+    #[test]
+    fn a_new_list_that_arrives_late_comes_in_after_the_old_one_is_gone() {
+        let t = Instant::now();
+        let mut page = films_page_changed(t);
+        let t = at(t, 1000);
+        page.follow_list(t);
+        page.follow_list(at(t, 500));
+        page.loaded(page.grid.epoch(), 0, answer(&page, 0));
+        page.follow_list(at(t, 600));
+        assert!(!page.grid.has_stale());
+        assert_eq!(opacity(&page, at(t, 600)), 0.);
+        assert!(opacity(&page, at(t, 700)) > 0.);
+    }
+
+    #[test]
+    fn a_first_list_comes_in_from_nothing() {
+        let t = Instant::now();
+        let mut page = films_page();
+        page.follow_list(t);
+        assert!(!page.grid.has_stale());
+        assert_eq!(opacity(&page, t), 0.);
+        assert_eq!(opacity(&page, at(t, 1000)), 1.);
     }
 
     #[test]
