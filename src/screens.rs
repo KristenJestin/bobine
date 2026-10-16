@@ -5,7 +5,9 @@ mod film_detail;
 mod home;
 mod library;
 mod login;
+mod person;
 pub mod player;
+pub mod search;
 
 use bobine::provider::Film;
 use gpui_kit::prelude::*;
@@ -32,6 +34,7 @@ pub fn render(
         Screen::Home => home::render(shell, cx).into_any_element(),
         Screen::Library => library::render(shell, window, cx).into_any_element(),
         Screen::FilmDetail => film_detail::render(shell, window, cx).into_any_element(),
+        Screen::Person => person::render(shell, window, cx).into_any_element(),
         Screen::Player => player::empty(cx).into_any_element(),
     }
 }

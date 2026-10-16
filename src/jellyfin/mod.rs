@@ -11,8 +11,9 @@ mod tests;
 
 use crate::provider::{
     Collection, Connector, ExternalSubtitle, Film, FilmDetail, FilmQuery, FilmSort, ImageKind,
-    ImageRef, ItemId, Library, MediaServer, MediaSourceId, Page, PlaySessionId, Playback,
-    PlaybackReport, ProviderError, ServerInfo, StreamUrl, Token, TokenStore,
+    ImageRef, ItemId, Library, MediaServer, MediaSourceId, Page, PersonTitles, PlaySessionId,
+    Playback, PlaybackReport, ProviderError, SearchResults, ServerInfo, StreamUrl, Token,
+    TokenStore,
 };
 use account::{AccountFile, Login};
 use dto::{AuthenticationResult, Item, PlaybackInfoResponse, PublicSystemInfo, QueryResult};
@@ -156,6 +157,10 @@ fn subtitle_format(codec: Option<&str>) -> String {
         Some(other) => other.to_string(),
     }
 }
+
+/// Titles of a person asked at once, and the most of them ever asked.
+const PERSON_TITLES_PAGE: usize = 100;
+const PERSON_TITLES_CAP: usize = 1000;
 
 impl Jellyfin {
     fn user(&self) -> (&'static str, String) {
@@ -436,6 +441,82 @@ impl MediaServer for Jellyfin {
                 ("quality", "90".into()),
             ],
         )
+    }
+
+    /// One request per group, so that a group with many matches never crowds out the others
+    /// (search hints share a single limit between the three). The three go out at the same
+    /// time: a search costs one round trip, not three.
+    fn search(&self, query: &str, per_group: u32) -> Result<SearchResults, ProviderError> {
+        let titles = |kind: &str| {
+            self.items(
+                "search",
+                &[
+                    ("searchTerm", query.to_string()),
+                    ("includeItemTypes", kind.into()),
+                    ("recursive", "true".into()),
+                    ("limit", per_group.to_string()),
+                    ("imageTypeLimit", "1".into()),
+                    ("enableImageTypes", "Primary,Backdrop".into()),
+                ],
+            )
+        };
+        let (films, series, people) = std::thread::scope(|scope| {
+            let films = scope.spawn(|| titles("Movie"));
+            let series = scope.spawn(|| titles("Series"));
+            let people = self.http.get::<QueryResult>(
+                "search people",
+                "/Persons",
+                &[
+                    ("searchTerm", query.to_string()),
+                    ("limit", per_group.to_string()),
+                    ("imageTypeLimit", "1".into()),
+                    ("enableImageTypes", "Primary".into()),
+                    self.user(),
+                ],
+            );
+            (
+                films.join().expect("the films request panicked"),
+                series.join().expect("the series request panicked"),
+                people,
+            )
+        });
+        let (films, series, people) = (films?, series?, people?);
+        Ok(SearchResults {
+            films: films.items.iter().map(Item::film).collect(),
+            series: series.items.iter().map(Item::series_hit).collect(),
+            people: people.items.iter().map(Item::person_hit).collect(),
+        })
+    }
+
+    /// Asked page by page, in a stable order so that no title is skipped or read twice between
+    /// two pages, up to `PERSON_TITLES_CAP` items: a person in thousands of episodes still gets
+    /// a page, with their first thousand titles.
+    fn person_titles(&self, person: &ItemId) -> Result<PersonTitles, ProviderError> {
+        let mut found: Vec<Item> = Vec::new();
+        while found.len() < PERSON_TITLES_CAP {
+            let page = self.items(
+                "person titles",
+                &[
+                    ("personIds", person.0.clone()),
+                    ("includeItemTypes", "Movie,Series,Episode".into()),
+                    ("recursive", "true".into()),
+                    ("sortBy", "SortName".into()),
+                    ("sortOrder", "Ascending".into()),
+                    ("startIndex", found.len().to_string()),
+                    ("limit", PERSON_TITLES_PAGE.to_string()),
+                    ("imageTypeLimit", "1".into()),
+                    ("enableImageTypes", "Primary,Backdrop".into()),
+                ],
+            )?;
+            let asked = found.len();
+            let total = page.total_record_count.map_or(usize::MAX, |t| t as usize);
+            let short = page.items.len() < PERSON_TITLES_PAGE;
+            found.extend(page.items);
+            if short || found.len() >= total || found.len() == asked {
+                break;
+            }
+        }
+        Ok(dto::person_titles(&found))
     }
 
     fn logout(&self) -> Result<(), ProviderError> {

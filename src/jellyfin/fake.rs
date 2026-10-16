@@ -30,6 +30,10 @@ fn fixture(name: &str) -> Value {
         "boxset_harbour_trilogy" => include_str!("fixtures/boxset_harbour_trilogy.json"),
         "similar" => include_str!("fixtures/similar.json"),
         "resume" => include_str!("fixtures/resume.json"),
+        "series" => include_str!("fixtures/series.json"),
+        "persons" => include_str!("fixtures/persons.json"),
+        "person_titles" => include_str!("fixtures/person_titles.json"),
+        "person_episodes" => include_str!("fixtures/person_episodes.json"),
         "playback_info" => include_str!("fixtures/playback_info.json"),
         _ => panic!("no fixture {name}"),
     };
@@ -73,7 +77,24 @@ pub struct State {
     pub account_disabled: bool,
     /// How long an image takes to be answered (a server converting a person's photo).
     pub image_delay: std::time::Duration,
+    /// How many search requests are held until they have all arrived (0: none held), to tell
+    /// requests sent at the same time from requests sent one after another.
+    pub search_gate: usize,
+    /// Search requests arrived at the gate so far.
+    gate_arrivals: usize,
+    /// For each held search request, whether all the others had arrived when it was let go.
+    pub gate_met: Vec<bool>,
 }
+
+/// How long a held search request waits for the others before it is let go anyway.
+const GATE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// A person with more titles than one page holds.
+pub const PERSON_WITH_MANY_TITLES: &str = "9e000000000000000000000000000004";
+/// A person with more titles than the program ever asks for.
+pub const PERSON_WITH_ENDLESS_TITLES: &str = "9e000000000000000000000000000005";
+/// A person seen only in episodes.
+pub const PERSON_IN_EPISODES: &str = "9e000000000000000000000000000002";
 
 pub struct FakeServer {
     pub url: String,
@@ -144,6 +165,61 @@ fn films(seen: &Seen) -> Value {
     json!({ "Items": page, "TotalRecordCount": total, "StartIndex": start })
 }
 
+/// The items of a fixture whose name holds the search term, at most `Limit` of them.
+fn matching(fixture_name: &str, seen: &Seen) -> Value {
+    let term = seen.param("SearchTerm").unwrap_or_default().to_lowercase();
+    let limit: usize = seen
+        .param("Limit")
+        .map_or(usize::MAX, |s| s.parse().unwrap());
+    let found: Vec<Value> = fixture(fixture_name)
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|item| {
+            item["Name"]
+                .as_str()
+                .unwrap()
+                .to_lowercase()
+                .contains(&term)
+        })
+        .take(limit)
+        .cloned()
+        .collect();
+    json!({ "Items": found, "TotalRecordCount": found.len() })
+}
+
+/// What a person took part in, as the server pages it: only the types asked, `Limit` of them
+/// from `StartIndex`, and the total of them all.
+fn person_titles(seen: &Seen) -> Value {
+    let person = seen.param("PersonIds").unwrap();
+    let mut items: Vec<Value> = match person {
+        PERSON_WITH_MANY_TITLES => generated_films(250),
+        PERSON_WITH_ENDLESS_TITLES => generated_films(2500),
+        PERSON_IN_EPISODES => fixture("person_episodes").as_array().unwrap().clone(),
+        _ => fixture("person_titles").as_array().unwrap().clone(),
+    };
+    let types = seen.param("IncludeItemTypes").unwrap_or_default();
+    items.retain(|item| types.split(',').any(|t| item["Type"] == t));
+    let total = items.len();
+    let start: usize = seen.param("StartIndex").map_or(0, |s| s.parse().unwrap());
+    let limit: usize = seen.param("Limit").map_or(total, |s| s.parse().unwrap());
+    let page: Vec<Value> = items.into_iter().skip(start).take(limit).collect();
+    json!({ "Items": page, "TotalRecordCount": total, "StartIndex": start })
+}
+
+fn generated_films(count: usize) -> Vec<Value> {
+    (0..count)
+        .map(|i| {
+            json!({
+                "Name": format!("Reel {i:04}"),
+                "Id": format!("f1{i:030}"),
+                "Type": "Movie",
+                "ProductionYear": 1950 + i % 70,
+            })
+        })
+        .collect()
+}
+
 fn answer(state: &State, seen: &Seen) -> Answer {
     if state.not_jellyfin {
         return Answer::Json(404, json!({ "error": "not here" }));
@@ -180,7 +256,15 @@ fn answer(state: &State, seen: &Seen) -> Answer {
         ("POST", "/Sessions/Logout") => Answer::Empty(204),
         ("GET", "/UserViews") => Answer::Json(200, fixture("user_views")),
         ("GET", "/UserItems/Resume") => Answer::Json(200, fixture("resume")),
+        ("GET", "/Persons") => Answer::Json(200, matching("persons", seen)),
         ("GET", "/Items") => match (seen.param("ParentId"), seen.param("IncludeItemTypes")) {
+            (_, Some("Movie")) if seen.param("SearchTerm").is_some() => {
+                Answer::Json(200, matching("films", seen))
+            }
+            (_, Some("Series")) if seen.param("SearchTerm").is_some() => {
+                Answer::Json(200, matching("series", seen))
+            }
+            _ if seen.param("PersonIds").is_some() => Answer::Json(200, person_titles(seen)),
             (Some(FILMS_LIBRARY), _) => Answer::Json(200, films(seen)),
             (None, Some("BoxSet")) => Answer::Json(200, fixture("boxsets")),
             (Some("b0000000000000000000000000000001"), _) => {
@@ -213,6 +297,39 @@ fn answer(state: &State, seen: &Seen) -> Answer {
     }
 }
 
+/// Waits until every held search request has arrived; false if they did not all come in time.
+fn wait_at_gate(state: &Mutex<State>) -> bool {
+    let started = std::time::Instant::now();
+    loop {
+        {
+            let state = state.lock().unwrap();
+            if state.gate_arrivals >= state.search_gate {
+                return true;
+            }
+        }
+        if started.elapsed() > GATE_TIMEOUT {
+            return false;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
+fn respond(request: tiny_http::Request, answer: Answer, delay: std::time::Duration) {
+    let json = Header::from_bytes("Content-Type", "application/json").unwrap();
+    let _ = match answer {
+        Answer::Json(code, value) => request.respond(
+            Response::from_string(value.to_string())
+                .with_status_code(code)
+                .with_header(json),
+        ),
+        Answer::Bytes(bytes) => {
+            std::thread::sleep(delay);
+            request.respond(Response::from_data(bytes))
+        }
+        Answer::Empty(code) => request.respond(Response::empty(code)),
+    };
+}
+
 impl FakeServer {
     pub fn start() -> Self {
         let server = Arc::new(Server::http("127.0.0.1:0").unwrap());
@@ -238,24 +355,26 @@ impl FakeServer {
                         authorization,
                         body,
                     };
-                    let (answer, delay) = {
+                    let (answer, delay, gated) = {
                         let mut state = state.lock().unwrap();
                         state.seen.push(seen.clone());
-                        (answer(&state, &seen), state.image_delay)
-                    };
-                    let json = Header::from_bytes("Content-Type", "application/json").unwrap();
-                    let _ = match answer {
-                        Answer::Json(code, value) => request.respond(
-                            Response::from_string(value.to_string())
-                                .with_status_code(code)
-                                .with_header(json),
-                        ),
-                        Answer::Bytes(bytes) => {
-                            std::thread::sleep(delay);
-                            request.respond(Response::from_data(bytes))
+                        let gated = state.search_gate > 0
+                            && (seen.path == "/Persons" || seen.param("SearchTerm").is_some());
+                        if gated {
+                            state.gate_arrivals += 1;
                         }
-                        Answer::Empty(code) => request.respond(Response::empty(code)),
+                        (answer(&state, &seen), state.image_delay, gated)
                     };
+                    if gated {
+                        let state = Arc::clone(&state);
+                        std::thread::spawn(move || {
+                            let met = wait_at_gate(&state);
+                            state.lock().unwrap().gate_met.push(met);
+                            respond(request, answer, delay);
+                        });
+                    } else {
+                        respond(request, answer, delay);
+                    }
                 }
             })
         };

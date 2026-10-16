@@ -8,8 +8,8 @@ use std::time::Duration;
 use bobine::provider::{
     AudioTrack, CastMember, Collection, Connector, ExternalSubtitle, Film, FilmDetail, FilmQuery,
     ImageKind, ImageRef, ItemId, Library, LibraryKind, MediaServer, MediaSource, MediaSourceId,
-    Page, PlaySessionId, Playback, PlaybackReport, ProviderError, ServerInfo, StreamUrl,
-    SubtitleTrack, VideoRange, VideoTrack,
+    Page, PersonHit, PersonTitles, PlaySessionId, Playback, PlaybackReport, ProviderError,
+    SearchResults, SeriesHit, ServerInfo, StreamUrl, SubtitleTrack, VideoRange, VideoTrack,
 };
 
 pub const USER: &str = "camille";
@@ -35,6 +35,8 @@ pub struct Record {
     pub plays: Vec<(ItemId, MediaSourceId)>,
     pub images: Vec<(ImageRef, u32)>,
     pub film_pages: Vec<ItemId>,
+    /// The queries searched, in the order they came.
+    pub searches: Vec<String>,
 }
 
 /// What the fake server holds, shared by the connector and its sessions.
@@ -50,6 +52,10 @@ pub struct State {
     /// The first time each person's photo is asked, the server fails (as a busy server that
     /// times out while it fetches the photo from elsewhere).
     pub photos_fail_once: bool,
+    pub series: Vec<SeriesHit>,
+    pub people: Vec<PersonHit>,
+    /// How long a search takes to answer: the headless harness shows the palette waiting.
+    pub search_delay: std::time::Duration,
 }
 
 #[derive(Clone)]
@@ -209,6 +215,54 @@ const CAST: [(&str, &str); 18] = [
     ("Zoé Marchand", "La mère"),
 ];
 
+const SERIES: [(&str, i32); 6] = [
+    ("Hivernage", 2022),
+    ("Station Nord", 2019),
+    ("Les Veilleurs", 2024),
+    ("Marée basse", 2016),
+    ("Hiver blanc", 2011),
+    ("La Passe", 2020),
+];
+
+/// Invented series; the last has no poster.
+pub fn series() -> Vec<SeriesHit> {
+    SERIES
+        .iter()
+        .enumerate()
+        .map(|(n, (title, year))| {
+            let id = format!("series-{n}");
+            SeriesHit {
+                title: (*title).into(),
+                year: Some(*year),
+                poster: (n + 1 < SERIES.len())
+                    .then(|| image(&id, ImageKind::Primary))
+                    .flatten(),
+                id: ItemId(id),
+            }
+        })
+        .collect()
+}
+
+/// The cast of the film of the tests, and its director (`person-18`).
+pub fn people() -> Vec<PersonHit> {
+    CAST.iter()
+        .map(|(name, _)| *name)
+        .chain(["Inès Vallard"])
+        .enumerate()
+        .map(|(n, name)| {
+            let id = format!("person-{n}");
+            PersonHit {
+                name: name.into(),
+                // Some people have no photo on the server.
+                photo: (n % 4 != 3)
+                    .then(|| image(&id, ImageKind::Primary))
+                    .flatten(),
+                id: ItemId(id),
+            }
+        })
+        .collect()
+}
+
 impl FakeServer {
     /// A server with `count` films; `kept` when a session is kept from an earlier start.
     pub fn new(count: usize, kept: bool) -> Self {
@@ -220,6 +274,9 @@ impl FakeServer {
                 record: Record::default(),
                 image_delay: std::time::Duration::ZERO,
                 photos_fail_once: false,
+                series: series(),
+                people: people(),
+                search_delay: std::time::Duration::ZERO,
             })),
             info: ServerInfo {
                 id: "server-1".into(),
@@ -479,6 +536,68 @@ impl MediaServer for FakeServer {
     fn logout(&self) -> Result<(), ProviderError> {
         self.state().kept = false;
         Ok(())
+    }
+
+    fn search(&self, query: &str, per_group: u32) -> Result<SearchResults, ProviderError> {
+        let delay = {
+            let mut state = self.state();
+            state.record.searches.push(query.to_string());
+            state.search_delay
+        };
+        std::thread::sleep(delay);
+        let state = self.state();
+        let needle = query.to_lowercase();
+        let matching = |name: &str| name.to_lowercase().contains(&needle);
+        let limit = per_group as usize;
+        Ok(SearchResults {
+            films: state
+                .films
+                .iter()
+                .filter(|f| matching(&f.title))
+                .take(limit)
+                .cloned()
+                .collect(),
+            series: state
+                .series
+                .iter()
+                .filter(|s| matching(&s.title))
+                .take(limit)
+                .cloned()
+                .collect(),
+            people: state
+                .people
+                .iter()
+                .filter(|p| matching(&p.name))
+                .take(limit)
+                .cloned()
+                .collect(),
+        })
+    }
+
+    fn person_titles(&self, person: &ItemId) -> Result<PersonTitles, ProviderError> {
+        let state = self.state();
+        let n = state
+            .people
+            .iter()
+            .position(|p| &p.id == person)
+            .ok_or(ProviderError::NotFound)?;
+        Ok(PersonTitles {
+            films: state
+                .films
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| i % 6 == n % 6)
+                .take(7)
+                .map(|(_, f)| f.clone())
+                .collect(),
+            series: state
+                .series
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| i % 2 == n % 2)
+                .map(|(_, s)| s.clone())
+                .collect(),
+        })
     }
 }
 

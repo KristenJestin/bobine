@@ -1,8 +1,10 @@
 //! The root view: the screen the navigator points at, framed by the pill bar or the back link.
 
 mod pages;
+mod palette;
 
 pub use pages::{Chip, DetailPage, Loadable, LoginForm, OpenConnector};
+pub use palette::{PersonPage, SERIES_PAGE, SearchState};
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -27,6 +29,7 @@ use crate::player::session::{Session, WindowRequest};
 use crate::player::{Media, Player};
 use crate::reports::{self, Reporting};
 use crate::screens;
+use crate::search;
 use crate::theme;
 use crate::video::Rect;
 use crate::video::subsurface::{VideoSurface, Wayland};
@@ -84,6 +87,10 @@ pub struct Shell {
     pub library: pages::LibraryPage,
     /// The film pages open, the last one on top: one per `Screen::FilmDetail` of the navigator.
     pub details: Vec<DetailPage>,
+    /// The person pages open, the last one on top: one per `Screen::Person` of the navigator.
+    pub people: Vec<PersonPage>,
+    /// The search palette, while it shows (it stays fading out after it closed).
+    pub search: Option<SearchState>,
     pub images: Images,
     /// The wake-up planned for an image to ask again, and when.
     image_wake: Option<(Instant, Task<()>)>,
@@ -137,6 +144,8 @@ impl Shell {
             home: Default::default(),
             library: Default::default(),
             details: Vec::new(),
+            people: Vec::new(),
+            search: None,
             images: Images::default(),
             image_wake: None,
             page: (Screen::Login, 0),
@@ -346,7 +355,11 @@ impl Render for Shell {
             window.focused(cx).is_none(),
         ) {
             FocusTo::Keep => {}
-            FocusTo::Root => window.focus(&self.focus, cx),
+            // The palette keeps the keys while it is open.
+            FocusTo::Root => match &self.search {
+                Some(search) if search.open => window.focus(&search.input.focus_handle(cx), cx),
+                _ => window.focus(&self.focus, cx),
+            },
             FocusTo::Address => {
                 if let Some(form) = &self.login {
                     window.focus(&form.address.focus_handle(cx), cx)
@@ -356,7 +369,7 @@ impl Render for Shell {
         let screen = self.navigator.current();
         let back_label = self.navigator.back_label();
         let playing = screen == Screen::Player && self.playback.is_some();
-        let page = (screen, self.details.len());
+        let page = (screen, self.details.len() + self.people.len());
         if page != self.page {
             self.turned_forward = page.1 > self.page.1;
             self.page = page;
@@ -373,6 +386,15 @@ impl Render for Shell {
             .track_focus(&self.focus)
             .on_key_down(cx.listener(|app, event: &KeyDownEvent, window, cx| {
                 let key = event.keystroke.key.as_str();
+                let held = &event.keystroke.modifiers;
+                let others = held.alt || held.shift || held.platform || held.function;
+                if search::is_shortcut(key, held.control, others) && app.open_search(window, cx) {
+                    return;
+                }
+                if app.search_is_open() {
+                    app.search_key(key, window, cx);
+                    return;
+                }
                 if app.navigator.current() == Screen::Player && app.playback.is_some() {
                     let held = &event.keystroke.modifiers;
                     let with_modifier = held.control || held.alt || held.platform || held.function;
@@ -418,12 +440,13 @@ impl Render for Shell {
                     .into_any_element(),
             })
             .when(screen.shows_pill_bar(), |root| {
-                root.child(pill_bar(screen, cx))
+                root.child(pill_bar(screen, window, cx))
             })
             .when_some(
                 back_label.filter(|_| screen.shows_back_link()),
                 |root, label| root.child(back_link(label, window, cx)),
             )
+            .children(screens::search::palette(self, window, cx))
     }
 }
 
