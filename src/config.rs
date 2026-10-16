@@ -33,8 +33,8 @@ pub struct Settings {
 }
 
 /// How much of the picture the viewer wants when the server converts a film.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(from = "String", into = "String")]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[serde(into = "String")]
 pub enum Quality {
     /// The file as it is, whatever its bitrate.
     #[default]
@@ -80,8 +80,17 @@ impl From<Quality> for String {
     }
 }
 
-/// A value the file holds that is not a quality is the original: the rest of the file still
-/// counts.
+/// A value the file holds that is not a quality, a number as much as an unknown word, is the
+/// original: the rest of the file still counts.
+impl<'de> Deserialize<'de> for Quality {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Ok(match toml::Value::deserialize(deserializer)? {
+            toml::Value::String(text) => Quality::from(text),
+            _ => Quality::Original,
+        })
+    }
+}
+
 impl From<String> for Quality {
     fn from(text: String) -> Quality {
         text.strip_suffix("mbps")
@@ -178,6 +187,20 @@ mod tests {
         std::fs::write(
             &path,
             "black_out_other_monitors = true\ndefault_quality = \"fast\"\n",
+        )
+        .unwrap();
+        let settings = Settings::read(&path);
+        assert_eq!(settings.default_quality, Quality::Original);
+        assert!(settings.black_out_other_monitors);
+    }
+
+    #[test]
+    fn a_quality_written_as_a_number_falls_back_to_original_and_keeps_the_rest() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.toml");
+        std::fs::write(
+            &path,
+            "black_out_other_monitors = true\ndefault_quality = 20\n",
         )
         .unwrap();
         let settings = Settings::read(&path);
