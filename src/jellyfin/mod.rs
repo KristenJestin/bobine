@@ -481,7 +481,7 @@ impl MediaServer for Jellyfin {
             &[self.user()],
         )?;
         let similar: QueryResult = self.http.get(
-            "similar films",
+            "similar movies",
             &format!("/Items/{}/Similar", encode(&film.0)),
             &[self.user(), ("limit", SIMILAR.to_string())],
         )?;
@@ -906,7 +906,7 @@ impl MediaServer for Jellyfin {
             &[self.user()],
         )?;
         let films = self.items(
-            "collection films",
+            "collection movies",
             &[
                 ("parentId", collection.0.clone()),
                 ("includeItemTypes", "Movie".into()),

@@ -258,11 +258,11 @@ impl Logos {
     }
 }
 
-/// `FILM` or `SERIES`, over the title.
+/// `Movie` or `Series`, over the title.
 pub fn kind_label(feature: &Feature) -> &'static str {
     match feature.kind {
-        FeatureKind::Film => "FILM",
-        FeatureKind::Series => "SERIES",
+        FeatureKind::Film => "Movie",
+        FeatureKind::Series => "Series",
     }
 }
 
@@ -665,9 +665,9 @@ mod tests {
     }
 
     #[test]
-    fn the_header_says_whether_it_is_a_film_or_a_series() {
-        assert_eq!(kind_label(&feature(FeatureKind::Film)), "FILM");
-        assert_eq!(kind_label(&feature(FeatureKind::Series)), "SERIES");
+    fn the_header_says_whether_it_is_a_movie_or_a_series() {
+        assert_eq!(kind_label(&feature(FeatureKind::Film)), "Movie");
+        assert_eq!(kind_label(&feature(FeatureKind::Series)), "Series");
     }
 
     #[test]

@@ -201,7 +201,7 @@ fn film_look(
 ) -> Look {
     let mut caption: Vec<String> = film.year.iter().map(i32::to_string).collect();
     if outlined {
-        caption.push("this film".into());
+        caption.push("this movie".into());
     }
     Look {
         name: name.clone(),

@@ -377,6 +377,85 @@ fn no_string_of_the_program_is_in_french() {
     );
 }
 
+/// The word of the interface for what Jellyfin calls a movie: "film" is the French word, and the
+/// interface says "movie", "Movies", "2 movies". Whole words only, so that `film-play` or
+/// `--films` is left alone; and a single lowercase word (`"film"`, `"films"`) is an id or a
+/// label of the code, not a text.
+fn film_in(literal: &str) -> Option<String> {
+    let words: Vec<&str> = literal
+        .split_whitespace()
+        .map(|word| word.trim_matches(|c: char| !c.is_alphanumeric() && c != '-'))
+        .collect();
+    let alone = words.len() == 1 && words[0] == words[0].to_lowercase();
+    words
+        .into_iter()
+        .filter(|_| !alone)
+        .find(|word| matches!(word.to_lowercase().as_str(), "film" | "films"))
+        .map(|word| format!("the word {word}"))
+}
+
+#[test]
+fn no_text_of_the_interface_says_film_where_it_means_movie() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut files = Vec::new();
+    sources(&root.join("src"), &mut files);
+    let mut found = Vec::new();
+    for file in files {
+        let name = file
+            .strip_prefix(root)
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        if SERVER_DATA.contains(&name.as_str()) {
+            continue;
+        }
+        let source = fs::read_to_string(&file).unwrap();
+        let lines: Vec<&str> = source.lines().collect();
+        for (line, literal) in literals(&source) {
+            // What goes to the terminal, a panic message and the reason of a lint are not the
+            // interface.
+            let written = lines.get(line - 1).copied().unwrap_or_default();
+            if ["eprintln!", "reason =", ".expect(", "panic!("]
+                .iter()
+                .any(|quiet| written.contains(quiet))
+            {
+                continue;
+            }
+            if let Some(why) = film_in(&literal) {
+                found.push(format!("{name}:{line}: {why} in {literal:?}"));
+            }
+        }
+    }
+    assert!(
+        found.is_empty(),
+        "\"film\" left in the interface, which says \"movie\":\n{}",
+        found.join("\n")
+    );
+}
+
+#[test]
+fn film_is_told_from_the_ids_that_hold_the_word() {
+    for said in [
+        "Films",
+        "No films in this library.",
+        "this film",
+        "2 films",
+        "Film",
+    ] {
+        assert!(film_in(said).is_some(), "{said}");
+    }
+    for fine in [
+        "Movies",
+        "film-play",
+        "--films",
+        "2 movies",
+        "filmstrip",
+        "film_detail",
+    ] {
+        assert_eq!(film_in(fine), None, "{fine}");
+    }
+}
+
 #[test]
 fn the_reader_of_literals_skips_comments_chars_and_lifetimes() {
     let code = "// été\nlet a = 'é'; let q = '\"'; fn f<'a>(x: &'a str) {} /* Lecture */\n\

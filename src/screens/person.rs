@@ -37,7 +37,7 @@ pub fn render(shell: &mut Shell, _: &mut Window, cx: &mut Context<Shell>) -> imp
             let mut sections: Vec<Div> = Vec::new();
             let counts = format!(
                 "{} · {}",
-                plural(titles.films.len(), "film", "films"),
+                plural(titles.films.len(), "movie", "movies"),
                 plural(titles.series.len(), "series", "series")
             );
             if !titles.films.is_empty() {
@@ -50,7 +50,7 @@ pub fn render(shell: &mut Shell, _: &mut Window, cx: &mut Context<Shell>) -> imp
                             .into_any_element()
                     })
                     .collect();
-                sections.push(section("Films", cards));
+                sections.push(section("Movies", cards));
             }
             if !titles.series.is_empty() {
                 let cards: Vec<_> = titles

@@ -545,7 +545,7 @@ fn title_text(title: String) -> Div {
         .child(title)
 }
 
-/// `● FILM` over the title.
+/// `● Movie` over the title.
 fn kind_chip(label: &'static str) -> Div {
     div().flex().child(
         div()

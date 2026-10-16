@@ -6,7 +6,7 @@ use bobine::provider::{CollectionCard, CollectionDetail, Film, ImageRef, ItemId}
 
 /// What the page says when the list holds nothing: where the list comes from.
 pub const EMPTY_LIST: &str =
-    "Your list is empty. Open a film or a series and choose “My list” to add it here.";
+    "Your list is empty. Open a movie or a series and choose “My list” to add it here.";
 
 /// What the page says when the server has no collection.
 pub const NO_COLLECTION: &str = "No collections on this server.";
@@ -81,9 +81,9 @@ pub fn plural(count: usize, one: &str, many: &str) -> String {
     format!("{count} {}", if count == 1 { one } else { many })
 }
 
-/// `0 films`, `1 film`, `3 films`.
+/// `0 movies`, `1 movie`, `3 movies`.
 pub fn films(count: u32) -> String {
-    plural(count as usize, "film", "films")
+    plural(count as usize, "movie", "movies")
 }
 
 /// `0 collections`, `1 collection`, `12 collections`.
@@ -146,11 +146,11 @@ mod tests {
     }
 
     #[test]
-    fn a_collection_counts_its_films_in_english() {
-        assert_eq!(films(1), "1 film");
-        assert_eq!(films(3), "3 films");
-        assert_eq!(films(0), "0 films");
-        assert_eq!(films(2), "2 films");
+    fn a_collection_counts_its_movies_in_english() {
+        assert_eq!(films(1), "1 movie");
+        assert_eq!(films(3), "3 movies");
+        assert_eq!(films(0), "0 movies");
+        assert_eq!(films(2), "2 movies");
         assert_eq!(collections(0), "0 collections");
         assert_eq!(collections(1), "1 collection");
         assert_eq!(collections(2), "2 collections");
@@ -177,7 +177,7 @@ mod tests {
         assert_eq!(years(&saga.films).as_deref(), Some("2019 – 2025"));
         assert_eq!(years(&saga.films[..1]).as_deref(), Some("2019"));
         assert_eq!(years(&[]), None);
-        assert_eq!(meta(&saga), ["2 films", "2019 – 2025"]);
+        assert_eq!(meta(&saga), ["2 movies", "2019 – 2025"]);
     }
 
     #[test]
@@ -348,7 +348,7 @@ mod tests {
     #[test]
     fn the_empty_list_says_how_to_add_a_title() {
         assert!(EMPTY_LIST.contains("My list"));
-        assert!(EMPTY_LIST.contains("film") && EMPTY_LIST.contains("series"));
+        assert!(EMPTY_LIST.contains("movie") && EMPTY_LIST.contains("series"));
     }
 
     #[test]

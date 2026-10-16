@@ -65,7 +65,7 @@ pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -
                 .px(px(EDGE))
                 .pt(px(12.))
                 .pb(px(64.))
-                .child(row_heading("Films"))
+                .child(row_heading("Movies"))
                 .child(
                     div()
                         .flex()

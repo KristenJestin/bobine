@@ -863,7 +863,7 @@ impl Shell {
                     Ok(None) if kind == LibraryKind::Series => {
                         Loadable::Failed("No series library on this server.")
                     }
-                    Ok(None) => Loadable::Failed("No film library on this server."),
+                    Ok(None) => Loadable::Failed("No movie library on this server."),
                     Err(error) => Loadable::Failed(shell.failed(error, cx)),
                 };
                 let library = match &loaded {
@@ -1382,7 +1382,7 @@ impl Shell {
             return;
         }
         let Some(plan) = film_page::plan(&detail.film, &detail.versions, choices, from) else {
-            page.error = Some("This film has no version to play.");
+            page.error = Some("This movie has no version to play.");
             cx.notify();
             return;
         };
@@ -2791,7 +2791,7 @@ mod tests {
         window
             .update(cx, |shell, _, cx| {
                 shell.select(NavEntry::Home, cx);
-                shell.open_list(films, Some("Films".into()), cx);
+                shell.open_list(films, Some("Movies".into()), cx);
             })
             .unwrap();
         assert_eq!(layout(&mut drawn(&window, cx)), library);

@@ -656,7 +656,7 @@ impl MediaServer for FakeServer {
             },
             Library {
                 id: ItemId(FILMS_LIBRARY.into()),
-                name: "Films".into(),
+                name: "Movies".into(),
                 kind: LibraryKind::Films,
             },
         ])
