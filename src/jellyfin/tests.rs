@@ -989,6 +989,20 @@ fn a_new_season_card_counts_the_episodes_left_in_that_season() {
 }
 
 #[test]
+fn a_series_and_its_own_new_season_in_the_latest_are_listed_once() {
+    let s = Setup::new();
+    let latest = s
+        .signed_in()
+        .latest(&ItemId(SERIES_LIBRARY.into()), 10)
+        .unwrap();
+    let reach = ItemId("5e000000000000000000000000000004".into());
+    assert_eq!(
+        latest.iter().filter(|title| title.id() == &reach).count(),
+        1
+    );
+}
+
+#[test]
 fn a_season_without_its_series_is_left_out_of_the_latest() {
     let s = Setup::new();
     let latest = s
