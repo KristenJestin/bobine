@@ -10,6 +10,7 @@
       "ImageTags": { "Primary": "still-lw" },
       "MediaSources": [
         { "Id": "5a000000000000000000000000000021", "Name": "Tidewater S02E01", "Container": "mkv",
+          "DefaultAudioStreamIndex": 1, "DefaultSubtitleStreamIndex": -1,
           "MediaStreams": [
             { "Type": "Video", "Index": 0, "Codec": "h264", "Width": 1920, "Height": 1080, "VideoRangeType": "SDR" },
             { "Type": "Audio", "Index": 1, "Codec": "aac", "Language": "eng", "Channels": 2, "IsDefault": true },

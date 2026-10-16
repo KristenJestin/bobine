@@ -206,6 +206,9 @@ pub struct MediaSourceInfo {
     pub media_streams: Vec<MediaStream>,
     /// Relative to the server, with its own play session and token.
     pub transcoding_url: Option<String>,
+    /// Chosen by the server from the settings of the user asked for; -1 for no subtitles.
+    pub default_audio_stream_index: Option<i32>,
+    pub default_subtitle_stream_index: Option<i32>,
 }
 
 #[derive(Deserialize)]
@@ -560,6 +563,10 @@ impl MediaSourceInfo {
             video,
             audio,
             subtitles,
+            default_audio: self.default_audio_stream_index,
+            default_subtitle: self
+                .default_subtitle_stream_index
+                .map(|index| (index >= 0).then_some(index)),
         }
     }
 }

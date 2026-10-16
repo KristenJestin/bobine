@@ -297,6 +297,9 @@ pub fn versions() -> Vec<MediaSource> {
                 subtitle(4, "fre", "ass", false, false),
                 subtitle(5, "eng", "subrip", false, true),
             ],
+            // The server's choice for the user: English audio, the full French subtitles.
+            default_audio: Some(2),
+            default_subtitle: Some(Some(4)),
         },
         MediaSource {
             id: MediaSourceId("source-1080".into()),
@@ -310,6 +313,8 @@ pub fn versions() -> Vec<MediaSource> {
             }),
             audio: vec![audio(1, "fre", "aac", 2, true)],
             subtitles: vec![subtitle(2, "fre", "subrip", false, false)],
+            default_audio: Some(1),
+            default_subtitle: Some(Some(2)),
         },
     ]
 }

@@ -13,7 +13,7 @@ use gpui_kit::{Bounds, Context, Pixels, ScrollHandle, ScrollWheelEvent, Task, Wi
 use super::pages::{Chip, Loadable, Origin, route_wheel};
 use super::{Film as Playing, Shell};
 use crate::favourite::{self, ListPage, Toggle};
-use crate::film_page::{self, Choices, From};
+use crate::film_page::{self, Carried, Choices, From};
 use crate::menu::Menus;
 use crate::motion::{self, Presence};
 use crate::navigation::Screen;
@@ -36,6 +36,8 @@ pub struct SeriesPage {
     /// What the main button plays, and the version and tracks its chips chose.
     pub next: Option<Episode>,
     pub choices: Option<Choices>,
+    /// The languages picked by hand for the last episode started here, for the next one.
+    pub carried: Carried,
     pub menus: Menus<Chip>,
     pub menu_fade: Presence<Chip>,
     pub chips: [Rc<Cell<Option<Bounds<Pixels>>>>; 3],
@@ -97,6 +99,7 @@ impl Shell {
             episodes: HashMap::new(),
             next: None,
             choices: None,
+            carried: Carried::default(),
             menus: Menus::default(),
             menu_fade: Presence::new(motion::quick()),
             chips: Default::default(),
@@ -183,6 +186,7 @@ impl Shell {
                     page.next.as_ref(),
                     page.choices.take(),
                     fresh.next.as_ref(),
+                    &page.carried,
                 );
                 if first {
                     page.season = fresh
@@ -365,7 +369,12 @@ impl Shell {
             return;
         }
         self.up_next_ticker = None;
-        let choices = series_page::choices_for(page.next.as_ref(), page.choices.as_ref(), &episode);
+        let choices = series_page::choices_for(
+            page.next.as_ref(),
+            page.choices.as_ref(),
+            &episode,
+            &page.carried,
+        );
         let Some(plan) = film_page::plan(&episode.item, &episode.versions, &choices, From::Resume)
         else {
             page.error = Some("This episode has no version to play.");
@@ -375,6 +384,7 @@ impl Shell {
         let Some(server) = self.server.clone() else {
             return;
         };
+        page.carried = choices.carried();
         page.busy = true;
         page.error = None;
         let origin = Origin::Series(depth, page.id.clone());

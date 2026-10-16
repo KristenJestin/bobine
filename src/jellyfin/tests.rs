@@ -1153,6 +1153,28 @@ fn detail_with_versions_and_tracks() {
 }
 
 #[test]
+fn the_server_says_which_tracks_each_version_starts_with_for_the_user() {
+    let s = Setup::new();
+    let detail = s.signed_in().film(&film()).unwrap();
+    assert_eq!(detail.versions[0].default_audio, Some(2));
+    assert_eq!(detail.versions[0].default_subtitle, Some(Some(4)));
+    // A version the server says nothing of.
+    assert_eq!(detail.versions[1].default_audio, None);
+    assert_eq!(detail.versions[1].default_subtitle, None);
+    // The server chooses for the user it is asked for.
+    let asked = s.fake.last("GET", &format!("/Items/{FILM}"));
+    assert_eq!(asked.param("userId"), Some(USER_ID));
+
+    let episodes = s
+        .signed_in()
+        .episodes(&series(), &ItemId(SEASON.into()))
+        .unwrap();
+    // -1: no subtitles.
+    assert_eq!(episodes[0].versions[0].default_audio, Some(1));
+    assert_eq!(episodes[0].versions[0].default_subtitle, Some(None));
+}
+
+#[test]
 fn detail_with_synopsis_genres_people_and_similar() {
     let s = Setup::new();
     let detail = s.signed_in().film(&film()).unwrap();

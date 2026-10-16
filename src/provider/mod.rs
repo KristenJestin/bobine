@@ -475,6 +475,11 @@ pub struct MediaSource {
     pub video: Option<VideoTrack>,
     pub audio: Vec<AudioTrack>,
     pub subtitles: Vec<SubtitleTrack>,
+    /// The audio track the server starts this version with for the user, from their settings;
+    /// none when it did not say.
+    pub default_audio: Option<i32>,
+    /// The subtitle track it starts with: `Some(None)` for none, `None` when it did not say.
+    pub default_subtitle: Option<Option<i32>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
