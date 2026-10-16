@@ -583,6 +583,11 @@ impl Shell {
                 session.duration,
             )
         });
+        self.leave_to(next, window, cx);
+    }
+
+    /// Back to the page the film was started from, the card offering `next` there.
+    fn leave_to(&mut self, next: Option<Episode>, window: &mut Window, cx: &mut Context<Self>) {
         self.fullscreen_kept = keeps_fullscreen(next.is_some(), window.is_fullscreen());
         if window.is_fullscreen() && !self.fullscreen_kept {
             window.toggle_fullscreen();
