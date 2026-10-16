@@ -464,6 +464,11 @@ impl Session {
             })
     }
 
+    /// What mpv lists, as it said last.
+    pub fn tracks(&self) -> &[Track] {
+        &self.tracks
+    }
+
     pub fn select_audio(&mut self, id: i64) {
         self.player.select_audio(Some(id));
     }

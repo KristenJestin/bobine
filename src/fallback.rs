@@ -125,6 +125,9 @@ pub struct Fallback {
     chosen: Option<(Quality, PlayMethod)>,
     /// The file did not play as it is: the server converts it whatever the quality.
     direct_failed: bool,
+    /// The server's indexes of the external subtitles of what plays, in the order the player
+    /// was given them.
+    externals: Vec<i32>,
     /// When the server last refused the quality the viewer chose.
     refused_at: Option<Instant>,
     /// Names this playback, so an answer for one the viewer left is told apart.
@@ -132,7 +135,8 @@ pub struct Fallback {
 }
 
 impl Fallback {
-    pub fn new(server: Arc<dyn MediaServer>, plan: Plan) -> Self {
+    /// `opened`: what the server gave for `plan`, which plays.
+    pub fn new(server: Arc<dyn MediaServer>, plan: Plan, opened: &Playback) -> Self {
         static PLAYBACKS: AtomicU64 = AtomicU64::new(0);
         Self {
             server,
@@ -142,6 +146,7 @@ impl Fallback {
             asking: None,
             chosen: None,
             direct_failed: false,
+            externals: opened.external_subtitles.iter().map(|e| e.index).collect(),
             refused_at: None,
             id: PLAYBACKS.fetch_add(1, Ordering::Relaxed),
         }
@@ -226,6 +231,7 @@ impl Fallback {
             session.fail(error);
             return None;
         }
+        self.externals = opened.external_subtitles.iter().map(|e| e.index).collect();
         let quality = chosen.map_or(session.quality(), |(quality, _)| quality);
         session.playing_as(quality, self.method == PlayMethod::Transcode);
         session.subtitle = said(session.subtitle.take(), self.method);
@@ -252,6 +258,12 @@ impl Fallback {
         } else {
             self.plan.start
         };
+        // The tracks the viewer picked in the panel go with them.
+        let converted = self.method == PlayMethod::Transcode;
+        let (audio, subtitle) = self
+            .plan
+            .shown(session.tracks(), &self.externals, converted);
+        self.original = self.original.with_tracks(audio, subtitle);
         self.refused_at = None;
         let reopen = match quality {
             Quality::Original if !self.direct_failed => {
@@ -306,8 +318,8 @@ mod tests {
     use super::*;
     use crate::fake::{FILM, FakeServer, TRANSCODE_SESSION};
     use crate::film_page::{Choices, From, plan};
-    use crate::player::PlayerEvent;
     use crate::player::fake::{Call, FakePlayer};
+    use crate::player::{PlayerEvent, Track, TrackKind};
     use crate::video::fake::FakeDisplay;
 
     struct Fixture {
@@ -735,7 +747,8 @@ mod tests {
             "Le Dernier Hiver".into(),
             Some("2025 · 4K HDR10 · direct play".into()),
         );
-        let fallback = Fallback::new(server.clone(), f.plan);
+        let opened = server.play(&f.plan.film, &f.plan.source).unwrap();
+        let fallback = Fallback::new(server.clone(), f.plan, &opened);
         (fallback, session, player)
     }
 
@@ -919,6 +932,107 @@ mod tests {
         let converted = server.state.lock().unwrap().converted.clone();
         assert_eq!(loads(&player), [(converted, 4620.)]);
         assert_eq!(report.position, Duration::from_secs(4620));
+    }
+
+    fn track(kind: TrackKind, id: i64, external: bool, selected: bool) -> Track {
+        Track {
+            id,
+            kind,
+            title: None,
+            language: None,
+            codec: None,
+            channels: None,
+            forced: false,
+            external,
+            selected,
+        }
+    }
+
+    #[test]
+    fn the_tracks_chosen_in_the_panel_survive_a_quality_change() {
+        let server = Arc::new(FakeServer::new(3, false));
+        let detail = server.film(&ItemId(FILM.into())).unwrap();
+        // French audio and the full French subtitles, as the film page started it.
+        let mut choices = Choices::new(&detail.versions);
+        choices.audio = Some(1);
+        choices.subtitle = Some(4);
+        let plan = plan(&detail.film, &detail.versions, &choices, From::Resume).unwrap();
+        let opened = server.play(&plan.film, &plan.source).unwrap();
+        let (_, mut session, player) = playing(&server);
+        let mut fallback = Fallback::new(server.clone(), plan, &opened);
+        session.offer_quality();
+        let mut now = Instant::now();
+        // English audio and the external English subtitles, picked by hand in the panel.
+        let picked = vec![
+            track(TrackKind::Video, 1, false, true),
+            track(TrackKind::Audio, 1, false, false),
+            track(TrackKind::Audio, 2, false, true),
+            track(TrackKind::Subtitle, 1, false, false),
+            track(TrackKind::Subtitle, 2, false, false),
+            track(TrackKind::Subtitle, 3, true, true),
+        ];
+        let events = vec![
+            PlayerEvent::Loaded,
+            PlayerEvent::FirstFrame,
+            PlayerEvent::Position(4500.),
+            PlayerEvent::Tracks(picked),
+        ];
+        tick(&mut fallback, &mut session, &player, &mut now, 1, events);
+
+        let Some(Reopen::Convert(request)) = fallback.choose(Quality::Cap(4_000_000), &mut session)
+        else {
+            panic!("not converted");
+        };
+        assert_eq!(request.audio_track, Some(2), "still English");
+        assert_eq!(
+            request.subtitle_track, None,
+            "an external file stays a file"
+        );
+        let id = fallback.id();
+        let report = fallback
+            .answered(
+                id,
+                &mut session,
+                Reopen::Convert(request).open(&*server),
+                now,
+            )
+            .expect("plays");
+        assert_eq!(
+            (report.audio_track, report.subtitle_track),
+            (Some(2), Some(5))
+        );
+        let Some(Call::Load { subtitle, .. }) = player.calls.borrow().last().cloned() else {
+            panic!("not loaded");
+        };
+        assert_eq!(subtitle, crate::player::FirstSubtitle::External(0));
+
+        // The conversion holds the one audio track asked; back to the file as it is.
+        let converted = vec![
+            track(TrackKind::Audio, 1, false, true),
+            track(TrackKind::Subtitle, 1, true, true),
+        ];
+        let events = vec![
+            PlayerEvent::Loaded,
+            PlayerEvent::FirstFrame,
+            PlayerEvent::Tracks(converted),
+        ];
+        tick(&mut fallback, &mut session, &player, &mut now, 1, events);
+        let reopen = fallback.choose(Quality::Original, &mut session).unwrap();
+        let report = fallback
+            .answered(id, &mut session, reopen.open(&*server), now)
+            .expect("plays");
+        assert_eq!(
+            (report.audio_track, report.subtitle_track),
+            (Some(2), Some(5))
+        );
+        let Some(Call::Load {
+            audio, subtitle, ..
+        }) = player.calls.borrow().last().cloned()
+        else {
+            panic!("not loaded");
+        };
+        assert_eq!(audio, Some(2), "mpv's second audio track: English");
+        assert_eq!(subtitle, crate::player::FirstSubtitle::External(0));
     }
 
     #[test]

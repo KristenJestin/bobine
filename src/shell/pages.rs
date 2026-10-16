@@ -1487,7 +1487,7 @@ impl Shell {
         );
         let externals = plan.externals(&opened);
         let media = plan.media(&opened, &externals);
-        let fallback = Fallback::new(server.clone(), plan.clone());
+        let fallback = Fallback::new(server.clone(), plan.clone(), &opened);
         let list = playing.list.clone();
         match self.play(mpv, media, playing, Some(reporting), window, cx) {
             Ok(()) => {
@@ -2411,7 +2411,11 @@ mod tests {
                 reporting.tick(Instant::now(), &session, ended);
                 shell.begin_playback(session, Some(reporting), window, cx);
                 let playback = shell.playback.as_mut().unwrap();
-                playback.fallback = Some(Fallback::new(Arc::new(server.clone()), plan.clone()));
+                playback.fallback = Some(Fallback::new(
+                    Arc::new(server.clone()),
+                    plan.clone(),
+                    &opened,
+                ));
                 let request = playback.session.choose_quality(cap);
                 shell.player_request(request, window, cx);
             })
