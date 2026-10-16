@@ -6,13 +6,15 @@ use std::ops::Range;
 use bobine::provider::{CollectionCard, Favourite};
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    AnyElement, Context, ElementId, FontWeight, IntoElement, Stateful, UniformListScrollHandle,
-    Window, div, px, uniform_list,
+    AnyElement, Context, ElementId, FontWeight, IntoElement, ScrollHandle, Stateful,
+    UniformListScrollHandle, Window, div, px, uniform_list,
 };
 
-use super::{Corner, centered, note, poster, poster_caption, poster_image, series_poster};
+use super::home::suggestion_row;
+use super::home_list::{empty_page, page_under_the_bar};
+use super::library::heading;
+use super::{Corner, note, poster, poster_caption, poster_image, series_poster};
 use crate::grid::{self, GAP, MARGIN};
-use crate::icons::{IconName, icon};
 use crate::images;
 use crate::lists;
 use crate::shell::{Loadable, Shell};
@@ -37,7 +39,17 @@ pub fn render_collections(
     cx: &mut Context<Shell>,
 ) -> impl IntoElement {
     let (len, status, count) = match &shell.collections.cards {
-        Some(Loadable::Ready(cards)) if cards.is_empty() => (0, Some(lists::NO_COLLECTION), None),
+        Some(Loadable::Ready(cards)) if cards.is_empty() => {
+            let scroll = shell.collections.suggestions.clone();
+            return empty(
+                shell,
+                "Collections",
+                lists::NO_COLLECTION,
+                &scroll,
+                window,
+                cx,
+            );
+        }
         Some(Loadable::Ready(cards)) => (cards.len(), None, Some(lists::collections(cards.len()))),
         Some(Loadable::Failed(why)) => (0, Some(*why), None),
         _ => (0, Some("Loading…"), None),
@@ -60,6 +72,7 @@ pub fn render_collections(
         window,
         cx,
     )
+    .into_any_element()
 }
 
 pub fn render_my_list(
@@ -69,7 +82,8 @@ pub fn render_my_list(
 ) -> impl IntoElement {
     let (len, status, count) = match &shell.my_list.items {
         Some(Loadable::Ready(items)) if items.is_empty() => {
-            return empty_list().into_any_element();
+            let scroll = shell.my_list.suggestions.clone();
+            return empty(shell, "My list", lists::EMPTY_LIST, &scroll, window, cx);
         }
         Some(Loadable::Ready(items)) => (items.len(), None, Some(grid::count(items.len() as u32))),
         Some(Loadable::Failed(why)) => (0, Some(*why), None),
@@ -104,26 +118,20 @@ pub fn render_my_list(
     .into_any_element()
 }
 
-/// The list holds nothing: where its titles come from.
-fn empty_list() -> impl IntoElement {
-    centered()
-        .text_color(theme::dim())
-        .child(icon(IconName::Plus, 40.))
-        .child(
-            div()
-                .text_size(px(22.))
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(theme::text())
-                .child("My list"),
-        )
-        .child(
-            div()
-                .max_w(px(420.))
-                .text_size(px(14.))
-                .line_height(px(22.))
-                .text_center()
-                .child(lists::EMPTY_LIST),
-        )
+/// The page holds nothing: the heading, why, and a row of the Home to watch instead, drawn
+/// like the empty full lists.
+fn empty(
+    shell: &mut Shell,
+    title: &'static str,
+    reason: &'static str,
+    scroll: &ScrollHandle,
+    window: &mut Window,
+    cx: &mut Context<Shell>,
+) -> AnyElement {
+    let width = f32::from(window.viewport_size().width);
+    let row = suggestion_row(shell, None, scroll, width, window, cx);
+    let page = page_under_the_bar().child(heading(title, None, None));
+    empty_page(page, reason, row, shell.home.error)
 }
 
 fn grid_screen(cells: Cells, window: &mut Window, cx: &mut Context<Shell>) -> impl IntoElement {

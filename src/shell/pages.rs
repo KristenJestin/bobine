@@ -2483,6 +2483,53 @@ mod tests {
         let mut visual = drawn(&window, cx);
         assert!(visual.debug_bounds("empty-reason").is_some());
         assert!(visual.debug_bounds("suggestions").is_some());
+        // What the Home still holds that was started is the row to watch instead; the list that
+        // is empty is never offered back.
+        assert!(visual.debug_bounds("suggested: Recently added").is_some());
+        assert!(
+            visual
+                .debug_bounds("suggested: Continue watching")
+                .is_none()
+        );
+    }
+
+    #[gpui_kit::test]
+    fn an_empty_my_list_and_an_empty_collections_page_show_their_reason_and_the_suggestion_row(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        let (server, window) = signed_in_window(cx);
+        server.state.lock().unwrap().favourites.clear();
+        window
+            .update(cx, |shell, _, cx| shell.select(NavEntry::MyList, cx))
+            .unwrap();
+        cx.run_until_parked();
+        let mut visual = drawn(&window, cx);
+        assert!(visual.debug_bounds("grid-heading").is_some());
+        assert!(visual.debug_bounds("empty-reason").is_some());
+        assert!(
+            visual
+                .debug_bounds("suggested: Continue watching")
+                .is_some()
+        );
+
+        window
+            .update(cx, |shell, _, cx| shell.select(NavEntry::Collections, cx))
+            .unwrap();
+        cx.run_until_parked();
+        window
+            .update(cx, |shell, _, cx| {
+                shell.collections.cards = Some(Loadable::Ready(Vec::new()));
+                cx.notify();
+            })
+            .unwrap();
+        let mut visual = drawn(&window, cx);
+        assert!(visual.debug_bounds("grid-heading").is_some());
+        assert!(visual.debug_bounds("empty-reason").is_some());
+        assert!(
+            visual
+                .debug_bounds("suggested: Continue watching")
+                .is_some()
+        );
     }
 
     /// A side button pressed at `at`, then released.

@@ -5,7 +5,9 @@ use std::ops::Range;
 
 use bobine::provider::Title;
 use gpui_kit::prelude::*;
-use gpui_kit::{AnyElement, Context, IntoElement, SharedString, Window, div, px, uniform_list};
+use gpui_kit::{
+    AnyElement, Context, Div, IntoElement, SharedString, Window, div, px, uniform_list,
+};
 
 use super::home::{Pick, card_picture, error_pill, suggestion_row, wide_card};
 use super::library::{GRID_TOP, heading, rows_frame};
@@ -48,31 +50,13 @@ pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -
     };
     let scroll = list.scroll.clone();
     let error = shell.home.error;
-    let page = div()
-        .size_full()
-        .relative()
-        .flex()
-        .flex_col()
-        .pt(px(GRID_TOP))
-        .child(heading(title, library, total.filter(|total| *total > 0)));
+    let page =
+        page_under_the_bar().child(heading(title, library, total.filter(|total| *total > 0)));
     if total == Some(0) {
         let kind = list.kind.clone();
-        let suggestions = suggestion_row(shell, &kind, width, window, cx);
-        return page
-            .child(
-                div()
-                    .debug_selector(|| "empty-reason".into())
-                    .px(px(MARGIN))
-                    .child(note(kind.empty_reason())),
-            )
-            .children(suggestions.map(|row| {
-                div()
-                    .debug_selector(|| "suggestions".into())
-                    .pt(px(40.))
-                    .child(row)
-            }))
-            .children(error.map(error_pill))
-            .into_any_element();
+        let suggestions = list.suggestions.clone();
+        let row = suggestion_row(shell, Some(&kind), &suggestions, width, window, cx);
+        return empty_page(page, kind.empty_reason(), row, error);
     }
 
     let rows_list = uniform_list(
@@ -101,6 +85,40 @@ pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -
         .child(rows_frame().child(rows_list))
         .children(error.map(error_pill))
         .into_any_element()
+}
+
+/// A page that holds nothing: its heading, why, and a row of the Home to watch instead. `page`
+/// is the page with its heading drawn. My list and Collections use it too.
+pub(super) fn empty_page(
+    page: Div,
+    reason: &'static str,
+    suggestions: Option<Div>,
+    error: Option<&'static str>,
+) -> AnyElement {
+    page.child(
+        div()
+            .debug_selector(|| "empty-reason".into())
+            .px(px(MARGIN))
+            .child(note(reason)),
+    )
+    .children(suggestions.map(|row| {
+        div()
+            .debug_selector(|| "suggestions".into())
+            .pt(px(40.))
+            .child(row)
+    }))
+    .children(error.map(error_pill))
+    .into_any_element()
+}
+
+/// The page every full-width screen starts from: under the bar, a column.
+pub(super) fn page_under_the_bar() -> Div {
+    div()
+        .size_full()
+        .relative()
+        .flex()
+        .flex_col()
+        .pt(px(GRID_TOP))
 }
 
 fn listed(shell: &Shell, index: usize) -> Option<&Title> {

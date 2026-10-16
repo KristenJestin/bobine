@@ -677,11 +677,13 @@ fn titles_row(
 /// The number of the suggestion row, apart from the Home's own rows.
 const SUGGESTION: usize = 1000;
 
-/// A row of the Home to watch instead, under a full list that holds nothing. It has no "See
-/// all": a full list does not open over another.
+/// A row of the Home to watch instead, under a page that holds nothing: the full list `empty`
+/// (never offered back), My list or Collections (`None`). It has no "See all": a full list does
+/// not open over another.
 pub(super) fn suggestion_row(
     shell: &mut Shell,
-    empty: &ListKind,
+    empty: Option<&ListKind>,
+    scroll: &ScrollHandle,
     width: f32,
     window: &mut Window,
     cx: &mut Context<Shell>,
@@ -690,10 +692,13 @@ pub(super) fn suggestion_row(
     specs.retain(|spec| !matches!(spec.body, Body::Failed(_)));
     let kinds: Vec<ListKind> = specs.iter().map(|spec| spec.list.clone()).collect();
     let spec = specs.swap_remove(home_page::suggested(empty, &kinds)?);
-    let scroll = shell.list.as_ref()?.suggestions.clone();
-    Some(titles_row(
-        shell, &spec, SUGGESTION, &scroll, true, width, false, window, cx,
-    ))
+    let heading = spec.list.heading();
+    Some(
+        titles_row(
+            shell, &spec, SUGGESTION, scroll, true, width, false, window, cx,
+        )
+        .debug_selector(move || format!("suggested: {heading}")),
+    )
 }
 
 /// The cards of a row near enough the window for their pictures to be asked.

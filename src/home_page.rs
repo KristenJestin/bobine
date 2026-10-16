@@ -152,11 +152,14 @@ impl ListKind {
     }
 }
 
-/// Which of the Home's rows `rows` is offered on the empty list `empty`: what was started when
-/// there is some, otherwise what a library gained; never the empty list itself.
-pub fn suggested(empty: &ListKind, rows: &[ListKind]) -> Option<usize> {
-    let offered =
-        |wanted: fn(&ListKind) -> bool| rows.iter().position(|row| row != empty && wanted(row));
+/// Which of the Home's rows `rows` is offered on an empty list: what was started when there is
+/// some, otherwise what a library gained; never `empty`, the full list that holds nothing (none
+/// on My list and Collections, which are not rows of the Home).
+pub fn suggested(empty: Option<&ListKind>, rows: &[ListKind]) -> Option<usize> {
+    let offered = |wanted: fn(&ListKind) -> bool| {
+        rows.iter()
+            .position(|row| Some(row) != empty && wanted(row))
+    };
     offered(|row| *row == ListKind::Resume)
         .or_else(|| offered(|row| matches!(row, ListKind::Latest(..))))
 }
@@ -345,19 +348,29 @@ mod tests {
     #[test]
     fn the_suggestion_is_continue_watching_when_it_is_not_empty_and_recently_added_otherwise() {
         let rows = [ListKind::NextUp, latest("films"), ListKind::Resume];
-        assert_eq!(suggested(&ListKind::NextUp, &rows), Some(2));
+        assert_eq!(suggested(Some(&ListKind::NextUp), &rows), Some(2));
         let rows = [ListKind::NextUp, latest("films"), latest("series")];
-        assert_eq!(suggested(&ListKind::NextUp, &rows), Some(1));
-        assert_eq!(suggested(&ListKind::NextUp, &[ListKind::NextUp]), None);
+        assert_eq!(suggested(Some(&ListKind::NextUp), &rows), Some(1));
+        assert_eq!(
+            suggested(Some(&ListKind::NextUp), &[ListKind::NextUp]),
+            None
+        );
+    }
+
+    #[test]
+    fn a_page_that_is_not_a_row_of_the_home_is_offered_any_row() {
+        let rows = [ListKind::Resume, latest("films")];
+        assert_eq!(suggested(None, &rows), Some(0));
+        assert_eq!(suggested(None, &[latest("films")]), Some(0));
     }
 
     #[test]
     fn an_empty_list_never_suggests_itself() {
         let rows = [ListKind::Resume, latest("films"), latest("series")];
-        assert_eq!(suggested(&ListKind::Resume, &rows), Some(1));
-        assert_eq!(suggested(&latest("films"), &rows), Some(0));
+        assert_eq!(suggested(Some(&ListKind::Resume), &rows), Some(1));
+        assert_eq!(suggested(Some(&latest("films")), &rows), Some(0));
         let rows = [latest("films"), latest("series")];
-        assert_eq!(suggested(&latest("films"), &rows), Some(1));
+        assert_eq!(suggested(Some(&latest("films")), &rows), Some(1));
     }
 
     // What is asked of the server, and when.
