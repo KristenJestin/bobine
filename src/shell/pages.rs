@@ -1280,6 +1280,7 @@ impl Shell {
                 paused: false,
                 audio_track: plan.audio_index,
                 subtitle_track: plan.subtitle_index,
+                method: opened.method,
             },
         );
         let externals = plan.externals(&opened);

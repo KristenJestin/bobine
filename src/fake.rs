@@ -9,9 +9,9 @@ use bobine::provider::{
     AudioTrack, CastMember, Collection, CollectionCard, CollectionDetail, Connector, Episode,
     ExternalSubtitle, Favourite, Feature, FeatureKind, Film, FilmDetail, FilmQuery, FilmSort,
     FilterChoices, ImageKind, ImageRef, ItemId, Library, LibraryKind, MediaServer, MediaSource,
-    MediaSourceId, Page, PersonHit, PersonTitles, PlaySessionId, Playback, PlaybackReport,
-    ProviderError, SearchResults, Season, Series, SeriesDetail, SeriesHit, ServerInfo, StreamUrl,
-    SubtitleTrack, Title, VideoRange, VideoTrack,
+    MediaSourceId, Page, PersonHit, PersonTitles, PlayMethod, PlaySessionId, Playback,
+    PlaybackReport, ProviderError, SearchResults, Season, Series, SeriesDetail, SeriesHit,
+    ServerInfo, StreamUrl, SubtitleTrack, Title, TranscodeRequest, VideoRange, VideoTrack,
 };
 
 pub const USER: &str = "camille";
@@ -20,6 +20,8 @@ pub const FILMS_LIBRARY: &str = "films";
 /// The film every page of the tests opens: started, with two versions and three subtitles.
 pub const FILM: &str = "film-0";
 pub const PLAY_SESSION: &str = "session-1";
+/// The play session of a playback the server converts.
+pub const TRANSCODE_SESSION: &str = "session-converted";
 /// The series every series page of the tests opens: three seasons, the first watched, the second
 /// stopped in its fourth episode.
 pub const SERIES: &str = "series-0";
@@ -46,6 +48,8 @@ pub struct Record {
     pub favourite_calls: Vec<(ItemId, bool)>,
     /// How many times the list of favourites was asked.
     pub list_loads: u32,
+    /// What the player asked the server to convert, in order.
+    pub transcodes: Vec<TranscodeRequest>,
 }
 
 /// What the fake server holds, shared by the connector and its sessions.
@@ -58,6 +62,8 @@ pub struct State {
     pub episodes: Vec<Episode>,
     /// What `play` gives as the stream: a local file in the harness.
     pub stream: String,
+    /// What `transcode` gives as the stream, as the server's conversion would be.
+    pub converted: String,
     pub record: Record,
     /// How long an image takes to come: a real server makes the fetches overlap.
     pub image_delay: std::time::Duration,
@@ -445,6 +451,7 @@ impl FakeServer {
                 series: series(),
                 episodes: episodes(),
                 stream: "file:///nowhere.mkv".into(),
+                converted: "file:///nowhere-converted.m3u8".into(),
                 record: Record::default(),
                 image_delay: std::time::Duration::ZERO,
                 photos_fail_once: false,
@@ -492,6 +499,31 @@ impl FakeServer {
             .iter()
             .find(|e| &e.item.id == id)
             .cloned()
+    }
+
+    /// The subtitle files beside a version of a film or an episode.
+    fn external_subtitles(
+        &self,
+        film: &ItemId,
+        source: &MediaSourceId,
+    ) -> Result<Vec<ExternalSubtitle>, ProviderError> {
+        let versions = match self.episode(film) {
+            Some(episode) => episode.versions,
+            None => self.film(film)?.versions,
+        };
+        let found = versions
+            .iter()
+            .find(|s| &s.id == source)
+            .ok_or(ProviderError::NotFound)?;
+        Ok(found
+            .subtitles
+            .iter()
+            .filter(|s| s.external)
+            .map(|s| ExternalSubtitle {
+                index: s.index,
+                url: StreamUrl::new(format!("file:///nowhere-{}.srt", s.index)),
+            })
+            .collect())
     }
 
     fn find(&self, film: &ItemId) -> Result<Film, ProviderError> {
@@ -645,14 +677,7 @@ impl MediaServer for FakeServer {
     }
 
     fn play(&self, film: &ItemId, source: &MediaSourceId) -> Result<Playback, ProviderError> {
-        let versions = match self.episode(film) {
-            Some(episode) => episode.versions,
-            None => self.film(film)?.versions,
-        };
-        let found = versions
-            .iter()
-            .find(|s| &s.id == source)
-            .ok_or(ProviderError::NotFound)?;
+        let external_subtitles = self.external_subtitles(film, source)?;
         let mut state = self.state();
         state.record.plays.push((film.clone(), source.clone()));
         Ok(Playback {
@@ -660,15 +685,8 @@ impl MediaServer for FakeServer {
             film: film.clone(),
             source: source.clone(),
             stream: StreamUrl::new(state.stream.clone()),
-            external_subtitles: found
-                .subtitles
-                .iter()
-                .filter(|s| s.external)
-                .map(|s| ExternalSubtitle {
-                    index: s.index,
-                    url: StreamUrl::new(format!("file:///nowhere-{}.srt", s.index)),
-                })
-                .collect(),
+            external_subtitles,
+            method: PlayMethod::DirectPlay,
         })
     }
 
@@ -1077,6 +1095,20 @@ impl MediaServer for FakeServer {
             state.favourites.push(item.clone());
         }
         Ok(())
+    }
+
+    fn transcode(&self, request: &TranscodeRequest) -> Result<Playback, ProviderError> {
+        let external_subtitles = self.external_subtitles(&request.film, &request.source)?;
+        let mut state = self.state();
+        state.record.transcodes.push(request.clone());
+        Ok(Playback {
+            session: PlaySessionId(TRANSCODE_SESSION.into()),
+            film: request.film.clone(),
+            source: request.source.clone(),
+            stream: StreamUrl::new(state.converted.clone()),
+            external_subtitles,
+            method: PlayMethod::Transcode,
+        })
     }
 }
 

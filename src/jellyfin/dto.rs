@@ -134,6 +134,15 @@ pub struct MediaSourceInfo {
     pub container: Option<String>,
     #[serde(default)]
     pub media_streams: Vec<MediaStream>,
+    /// Missing from older answers: a version is then played as it is.
+    #[serde(default = "yes")]
+    pub supports_direct_play: bool,
+    /// Relative to the server, with its own play session and token.
+    pub transcoding_url: Option<String>,
+}
+
+fn yes() -> bool {
+    true
 }
 
 #[derive(Deserialize)]

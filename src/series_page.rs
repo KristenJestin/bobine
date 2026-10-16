@@ -595,6 +595,7 @@ mod tests {
                 paused: false,
                 audio_track: None,
                 subtitle_track: None,
+                method: bobine::provider::PlayMethod::DirectPlay,
             },
         );
         let mut now = Instant::now();

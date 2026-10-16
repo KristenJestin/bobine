@@ -1259,7 +1259,7 @@ fn direct_play_stream() {
     let body = asked.json();
     assert_eq!(body["MediaSourceId"], SOURCE);
     assert_eq!(body["EnableDirectPlay"], true);
-    assert_eq!(body["EnableTranscoding"], false);
+    assert_eq!(body["EnableDirectStream"], false);
 }
 
 #[test]
@@ -1293,6 +1293,7 @@ fn report(position: Duration, paused: bool) -> PlaybackReport {
         paused,
         audio_track: Some(2),
         subtitle_track: None,
+        method: PlayMethod::DirectPlay,
     }
 }
 
@@ -1341,6 +1342,198 @@ fn start_progress_and_stopped_reports_with_the_right_body() {
         let header = s.fake.last("POST", path).authorization.unwrap();
         assert!(header.contains(&format!("Token=\"{TOKEN}\"")), "{path}");
     }
+}
+
+/// The device id the client sends in its authorization header.
+fn device_id(s: &Setup) -> String {
+    let header = s
+        .fake
+        .last("POST", "/Sessions/Playing/Stopped")
+        .authorization
+        .unwrap();
+    header
+        .split("DeviceId=\"")
+        .nth(1)
+        .unwrap()
+        .split('"')
+        .next()
+        .unwrap()
+        .to_string()
+}
+
+#[test]
+fn the_device_profile_sent_lets_the_server_play_every_file_directly() {
+    let s = Setup::new();
+    let playback = s
+        .signed_in()
+        .play(&film(), &MediaSourceId(SOURCE.into()))
+        .unwrap();
+    assert_eq!(playback.method, PlayMethod::DirectPlay);
+
+    let body = s
+        .fake
+        .last("POST", &format!("/Items/{FILM}/PlaybackInfo"))
+        .json();
+    assert_eq!(body["EnableDirectPlay"], true);
+    assert_eq!(body["EnableTranscoding"], true);
+    assert_eq!(body["AutoOpenLiveStream"], false);
+    assert!(body["MaxStreamingBitrate"].as_u64().unwrap() >= 400_000_000);
+    let profile = &body["DeviceProfile"];
+    // No container nor codec named: Jellyfin reads that as every one of them.
+    let direct = profile["DirectPlayProfiles"].as_array().unwrap();
+    assert!(direct.iter().any(|p| p["Type"] == "Video"
+        && p.get("Container").is_none()
+        && p.get("VideoCodec").is_none()
+        && p.get("AudioCodec").is_none()));
+    let transcoding = &profile["TranscodingProfiles"][0];
+    assert_eq!(transcoding["Type"], "Video");
+    assert_eq!(transcoding["Container"], "ts");
+    assert_eq!(transcoding["Protocol"], "hls");
+    assert_eq!(transcoding["VideoCodec"], "h264");
+    assert_eq!(transcoding["AudioCodec"], "aac");
+}
+
+#[test]
+fn a_version_the_server_can_only_transcode_plays_its_transcoding_url() {
+    let s = Setup::new();
+    s.fake.state.lock().unwrap().transcode_only = true;
+    let playback = s
+        .signed_in()
+        .play(&film(), &MediaSourceId(SOURCE.into()))
+        .unwrap();
+    assert_eq!(playback.method, PlayMethod::Transcode);
+    assert_eq!(playback.session, PlaySessionId(TRANSCODE_SESSION.into()));
+    let url = playback.stream.expose_for_player();
+    let prefix = format!("{}/videos/{FILM}/master.m3u8?", s.fake.url);
+    assert!(url.starts_with(&prefix), "{url}");
+    assert!(
+        url.contains(&format!("PlaySessionId={TRANSCODE_SESSION}")),
+        "{url}"
+    );
+    assert_eq!(url.matches(&format!("ApiKey={TOKEN}")).count(), 1, "{url}");
+}
+
+#[test]
+fn transcoding_asks_the_server_without_direct_play_from_the_position() {
+    let s = Setup::new();
+    let playback = s
+        .signed_in()
+        .transcode(&TranscodeRequest {
+            film: film(),
+            source: MediaSourceId(SOURCE.into()),
+            start: Duration::from_secs(1200),
+            audio_track: Some(2),
+            subtitle_track: Some(4),
+        })
+        .unwrap();
+    assert_eq!(playback.method, PlayMethod::Transcode);
+    assert_eq!(playback.session, PlaySessionId(TRANSCODE_SESSION.into()));
+    assert_eq!(
+        (playback.film.clone(), playback.source.0.as_str()),
+        (film(), SOURCE)
+    );
+    let url = playback.stream.expose_for_player();
+    assert!(
+        url.starts_with(&format!("{}/videos/{FILM}/master.m3u8?", s.fake.url)),
+        "{url}"
+    );
+    // The external subtitles still come as files beside the converted picture.
+    assert_eq!(playback.external_subtitles.len(), 2);
+
+    let asked = s.fake.last("POST", &format!("/Items/{FILM}/PlaybackInfo"));
+    assert_eq!(asked.param("userId"), Some(USER_ID));
+    let body = asked.json();
+    assert_eq!(body["MediaSourceId"], SOURCE);
+    assert_eq!(body["EnableDirectPlay"], false);
+    assert_eq!(body["EnableDirectStream"], false);
+    assert_eq!(body["EnableTranscoding"], true);
+    assert_eq!(body["StartTimeTicks"], 12_000_000_000_i64);
+    assert_eq!(body["AudioStreamIndex"], 2);
+    assert_eq!(body["SubtitleStreamIndex"], 4);
+}
+
+#[test]
+fn a_version_the_server_cannot_convert_says_so() {
+    let s = Setup::new();
+    s.fake.state.lock().unwrap().no_transcoding = true;
+    let error = s
+        .signed_in()
+        .transcode(&TranscodeRequest {
+            film: film(),
+            source: MediaSourceId(SOURCE.into()),
+            start: Duration::ZERO,
+            audio_track: None,
+            subtitle_track: None,
+        })
+        .unwrap_err();
+    assert!(matches!(error, ProviderError::BadAnswer(_)), "{error:?}");
+}
+
+#[test]
+fn the_play_method_is_reported_in_every_report() {
+    let s = Setup::new();
+    let server = s.signed_in();
+    let transcoded = PlaybackReport {
+        method: PlayMethod::Transcode,
+        ..report(Duration::from_secs(1200), false)
+    };
+    server.report_started(&transcoded).unwrap();
+    server.report_progress(&transcoded).unwrap();
+    server.report_stopped(&transcoded).unwrap();
+    for path in [
+        "/Sessions/Playing",
+        "/Sessions/Playing/Progress",
+        "/Sessions/Playing/Stopped",
+    ] {
+        let body = s.fake.last("POST", path).json();
+        assert_eq!(body["PlayMethod"], "Transcode", "{path}");
+        assert_eq!(body["PlaySessionId"], PLAY_SESSION, "{path}");
+    }
+    server
+        .report_stopped(&report(Duration::from_secs(1300), false))
+        .unwrap();
+    let stopped = s.fake.last("POST", "/Sessions/Playing/Stopped").json();
+    assert_eq!(stopped["PlayMethod"], "DirectPlay");
+}
+
+#[test]
+fn the_encoding_is_stopped_when_a_transcode_stops() {
+    let s = Setup::new();
+    let server = s.signed_in();
+    server
+        .report_stopped(&PlaybackReport {
+            method: PlayMethod::Transcode,
+            ..report(Duration::from_secs(1300), false)
+        })
+        .unwrap();
+    let seen = s.fake.seen();
+    let stopped = seen
+        .iter()
+        .position(|r| r.path == "/Sessions/Playing/Stopped")
+        .unwrap();
+    let deleted = seen
+        .iter()
+        .position(|r| r.method == "DELETE" && r.path == "/Videos/ActiveEncodings")
+        .expect("the encoding is stopped");
+    assert!(stopped < deleted, "told stopped first");
+    let delete = &seen[deleted];
+    assert_eq!(delete.param("playSessionId"), Some(PLAY_SESSION));
+    assert_eq!(delete.param("deviceId"), Some(device_id(&s).as_str()));
+}
+
+#[test]
+fn a_direct_play_stop_has_no_encoding_to_stop() {
+    let s = Setup::new();
+    let server = s.signed_in();
+    server
+        .report_stopped(&report(Duration::from_secs(1300), false))
+        .unwrap();
+    assert!(
+        !s.fake
+            .seen()
+            .iter()
+            .any(|r| r.path == "/Videos/ActiveEncodings")
+    );
 }
 
 #[test]
@@ -1658,6 +1851,16 @@ fn the_token_never_in_debug_or_error_output() {
     let playback = server.play(&film(), &MediaSourceId(SOURCE.into())).unwrap();
     let detail = server.film(&film()).unwrap();
     let mut shown = format!("{playback:?} {playback:#?} {detail:?}");
+    let transcoded = server
+        .transcode(&TranscodeRequest {
+            film: film(),
+            source: MediaSourceId(SOURCE.into()),
+            start: Duration::ZERO,
+            audio_track: None,
+            subtitle_track: None,
+        })
+        .unwrap();
+    shown += &format!("{transcoded:?} {transcoded:#?}");
 
     s.fake.state.lock().unwrap().revoked = true;
     let expired = server.libraries().unwrap_err();
