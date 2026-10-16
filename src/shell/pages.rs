@@ -1494,10 +1494,7 @@ impl Shell {
         let list = playing.list.clone();
         match self.play(mpv, media, playing, Some(reporting), window, cx) {
             Ok(()) => {
-                if let Some(playback) = &mut self.playback {
-                    playback.fallback = Some(fallback);
-                    playback.session.offer_quality();
-                }
+                self.arm_playback(fallback, window, cx);
                 self.load_trickplay(opened.film.clone(), opened.source.clone(), cx);
                 self.playback_started(&opened.film, next, cx);
                 if let Some(item) = list {
@@ -1510,6 +1507,21 @@ impl Shell {
                 self.tried(&origin, Some("Cannot play."), cx);
             }
         }
+    }
+
+    /// The playback that just began may fall back to the server's conversion and have its quality
+    /// chosen; it starts at the default quality of the settings, as the viewer would have chosen
+    /// it in the player's menu.
+    fn arm_playback(&mut self, fallback: Fallback, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(playback) = &mut self.playback else {
+            return;
+        };
+        playback.fallback = Some(fallback);
+        playback.session.offer_quality();
+        let request = playback
+            .session
+            .choose_quality(self.settings.default_quality.for_player());
+        self.player_request(request, window, cx);
     }
 
     /// Back from the player: once "stopped" reached the server, the film page shows where the
@@ -2365,6 +2377,78 @@ mod tests {
                 assert_eq!(list.error, Some(crate::favourite::FAILED));
             })
             .unwrap();
+    }
+
+    /// A film the server opened, playing on the shell with the default quality of the settings
+    /// set to `default`; the transcodes the server was asked for come back.
+    fn play_with_default_quality(
+        default: crate::config::Quality,
+        cx: &mut gpui_kit::TestAppContext,
+    ) -> (FakeServer, Vec<bobine::provider::TranscodeRequest>) {
+        use crate::fallback::Fallback;
+        use crate::player::PlayerEvent;
+        use crate::player::fake::FakePlayer;
+        use crate::player::session::Session;
+        use crate::reports::Reporting;
+        use crate::video::fake::FakeDisplay;
+
+        let (server, window) = signed_in_window(cx);
+        let id = ItemId(crate::fake::FILM.into());
+        let detail = server.film(&id).unwrap();
+        let choices = crate::film_page::Choices::new(&detail.versions);
+        let plan =
+            crate::film_page::plan(&detail.film, &detail.versions, &choices, From::Resume).unwrap();
+        let opened = server.play(&plan.film, &plan.source).unwrap();
+        let player = FakePlayer::default();
+        player
+            .queued
+            .borrow_mut()
+            .extend([PlayerEvent::Loaded, PlayerEvent::FirstFrame]);
+        window
+            .update(cx, |shell, window, cx| {
+                shell.settings.default_quality = default;
+                let session = Session::new(
+                    Box::new(player),
+                    Box::new(FakeDisplay::default()),
+                    "Le Dernier Hiver".into(),
+                    None,
+                );
+                let reporting = Reporting::start(
+                    Arc::new(server.clone()),
+                    PlaybackReport {
+                        session: opened.session.clone(),
+                        film: opened.film.clone(),
+                        source: opened.source.clone(),
+                        position: plan.start,
+                        paused: false,
+                        audio_track: None,
+                        subtitle_track: None,
+                        method: PlayMethod::DirectPlay,
+                    },
+                );
+                shell.begin_playback(session, Some(reporting), window, cx);
+                let fallback = Fallback::new(Arc::new(server.clone()), plan.clone(), &opened);
+                shell.arm_playback(fallback, window, cx);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        let transcodes = server.state.lock().unwrap().record.transcodes.clone();
+        (server, transcodes)
+    }
+
+    #[gpui_kit::test]
+    fn a_default_quality_cap_is_the_cap_a_film_starts_at(cx: &mut gpui_kit::TestAppContext) {
+        let (_, transcodes) = play_with_default_quality(crate::config::Quality::Cap(10), cx);
+        assert_eq!(transcodes.len(), 1);
+        assert_eq!(transcodes[0].max_bitrate, Some(10_000_000));
+    }
+
+    #[gpui_kit::test]
+    fn the_original_default_quality_leaves_the_film_playing_as_it_is(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        let (_, transcodes) = play_with_default_quality(crate::config::Quality::Original, cx);
+        assert!(transcodes.is_empty());
     }
 
     /// A quality chosen in the player: the film plays on until the server gives the conversion,

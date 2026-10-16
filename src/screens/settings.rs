@@ -43,7 +43,7 @@ pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -
 
     let playback = section("settings-playback", IconName::Play, "Playback").child(row(
         "Default quality",
-        Some("The most the server sends when it has to convert a film."),
+        Some("Where each film starts. The player's settings change it for that film."),
         quality_choice(shell, quality, open.is_some(), menu_shown, window, cx),
     ));
 

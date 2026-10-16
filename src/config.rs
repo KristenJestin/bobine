@@ -54,6 +54,15 @@ impl Quality {
         Quality::Cap(2),
     ];
 
+    /// The same choice, as the player's quality menu holds it (bits a second).
+    pub fn for_player(self) -> crate::player::settings::Quality {
+        use crate::player::settings::Quality as Player;
+        match self {
+            Quality::Original => Player::Original,
+            Quality::Cap(mbps) => Player::Cap(u64::from(mbps) * 1_000_000),
+        }
+    }
+
     pub fn label(self) -> String {
         match self {
             Quality::Original => "Original".to_string(),
