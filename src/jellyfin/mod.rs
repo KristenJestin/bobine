@@ -154,6 +154,10 @@ impl Connector for JellyfinConnector {
         let token = self.store.load(&login.keyring_account())?;
         Ok(token.map(|token| self.session(login, token)))
     }
+
+    fn last_address(&self) -> Option<String> {
+        AccountFile::open(&self.path).ok()?.last_address
+    }
 }
 
 /// A signed-in session on a Jellyfin server.
@@ -712,6 +716,8 @@ impl MediaServer for Jellyfin {
         self.store.delete(&self.login.keyring_account())?;
         let mut account = AccountFile::open(&self.path)?;
         account.login = None;
+        // The server stays: the login that follows starts from its address.
+        account.last_address = Some(self.login.address.clone());
         account.save(&self.path)
     }
 

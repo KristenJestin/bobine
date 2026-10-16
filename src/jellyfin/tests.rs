@@ -206,6 +206,33 @@ fn logout_without_the_server_still_forgets_the_token() {
 }
 
 #[test]
+fn signing_out_keeps_the_server_address_for_the_next_login() {
+    let s = Setup::new();
+    assert_eq!(s.connector.last_address(), None);
+    let server = s.signed_in();
+    server.logout().unwrap();
+    assert_eq!(s.connector.last_address(), Some(s.fake.url.clone()));
+    assert_eq!(s.restart().last_address(), Some(s.fake.url.clone()));
+    // The address is all the account file keeps of the login.
+    let text = s.account_text();
+    assert!(!text.contains(USER) && !text.contains(TOKEN), "{text}");
+}
+
+#[test]
+fn signing_out_while_the_server_is_unreachable_still_signs_out_locally() {
+    let s = Setup::new();
+    let server = s.signed_in();
+    let address = s.fake.url.clone();
+    let (path, store) = (s.account_path(), s.store.clone());
+    drop(s.fake);
+    server.logout().unwrap();
+    assert!(store.tokens.lock().unwrap().is_empty());
+    let next = JellyfinConnector::open(path, store).unwrap();
+    assert!(next.restore().unwrap().is_none());
+    assert_eq!(next.last_address(), Some(address));
+}
+
+#[test]
 fn the_device_id_is_stable_across_starts() {
     let s = Setup::new();
     let _ = s.signed_in();

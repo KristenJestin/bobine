@@ -54,12 +54,16 @@ pub struct Record {
     pub tiles: Vec<u32>,
     /// What the player asked the server to convert, in order.
     pub transcodes: Vec<TranscodeRequest>,
+    /// Each logout, with how many playback reports the server had by then.
+    pub logouts: Vec<usize>,
 }
 
 /// What the fake server holds, shared by the connector and its sessions.
 pub struct State {
     /// The token the "keyring" keeps: the session restored at the next start.
     pub kept: bool,
+    /// The address of the last session's server, kept after a logout.
+    pub last_address: Option<String>,
     pub films: Vec<Film>,
     pub series: Vec<Series>,
     /// Every episode of every series, in order: series, season, number.
@@ -96,7 +100,13 @@ pub struct State {
     /// How long a stopped report takes to reach the server, so that one sent later can overtake
     /// it.
     pub stop_delay: std::time::Duration,
+    /// The logout fails with this, after the server forgot the session (a keyring that cannot
+    /// be reached).
+    pub logout_error: Option<ProviderError>,
 }
+
+/// Where the fake server pretends to be.
+pub const SERVER_ADDRESS: &str = "https://media.example.org";
 
 #[derive(Clone)]
 pub struct FakeServer {
@@ -464,6 +474,7 @@ impl FakeServer {
         Self {
             state: Arc::new(Mutex::new(State {
                 kept,
+                last_address: None,
                 films: films(count),
                 series: series(),
                 episodes: episodes(),
@@ -485,6 +496,7 @@ impl FakeServer {
                 tiles: Vec::new(),
                 tile_delay: std::time::Duration::ZERO,
                 stop_delay: std::time::Duration::ZERO,
+                logout_error: None,
             })),
             info: ServerInfo {
                 id: "server-1".into(),
@@ -585,12 +597,19 @@ impl Connector for FakeServer {
         if user != USER || password != PASSWORD {
             return Err(ProviderError::WrongCredentials);
         }
-        self.state().kept = true;
+        let mut state = self.state();
+        state.kept = true;
+        state.last_address = Some(address.to_string());
+        drop(state);
         Ok(self.session())
     }
 
     fn restore(&self) -> Result<Option<Arc<dyn MediaServer>>, ProviderError> {
         Ok(self.state().kept.then(|| self.session()))
+    }
+
+    fn last_address(&self) -> Option<String> {
+        self.state().last_address.clone()
     }
 }
 
@@ -798,8 +817,16 @@ impl MediaServer for FakeServer {
     }
 
     fn logout(&self) -> Result<(), ProviderError> {
-        self.state().kept = false;
-        Ok(())
+        let mut state = self.state();
+        state.kept = false;
+        let reports = state.record.reports.len();
+        state.record.logouts.push(reports);
+        // A session kept from an earlier start did not log in here: the server is the one the
+        // tests and the harness invent.
+        state
+            .last_address
+            .get_or_insert_with(|| SERVER_ADDRESS.to_string());
+        state.logout_error.clone().map_or(Ok(()), Err)
     }
 
     fn series(&self, _: &ItemId, query: &FilmQuery) -> Result<Page<Series>, ProviderError> {

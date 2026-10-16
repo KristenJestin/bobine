@@ -38,6 +38,10 @@ pub trait Connector: Send + Sync {
 
     /// The session of the last start, when its token is still in the keyring.
     fn restore(&self) -> Result<Option<Arc<dyn MediaServer>>, ProviderError>;
+
+    /// The address of the server the last session was on, kept after it ended so that the login
+    /// that follows can start from it. None before any login, or when it cannot be read.
+    fn last_address(&self) -> Option<String>;
 }
 
 /// A signed-in session on a server.
