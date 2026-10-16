@@ -84,25 +84,26 @@ pub struct MediaInfo {
     pub requests: Vec<MediaRequestDto>,
 }
 
-/// A request that was declined: what it asked for may be asked again.
-const DECLINED: u8 = 3;
-
 /// Seerr's media status: 1 unknown, 2 pending, 3 processing, 4 partially available, 5
-/// available (Jellyseerr's 6, deleted, is as good as unknown).
+/// available, 6 blocklisted, 7 deleted (as good as unknown: it may be asked for again).
 fn availability(status: u8) -> Availability {
     match status {
         2 => Availability::Pending,
         3 => Availability::Processing,
         4 => Availability::PartiallyAvailable,
         5 => Availability::Available,
+        6 => Availability::Blocked,
         _ => Availability::Missing,
     }
 }
 
+/// Seerr's request status: 1 pending, 2 approved, 3 declined, 4 failed, 5 completed.
 pub fn request_status(status: u8) -> RequestStatus {
     match status {
         1 => RequestStatus::Pending,
-        DECLINED => RequestStatus::Declined,
+        3 => RequestStatus::Declined,
+        4 => RequestStatus::Failed,
+        5 => RequestStatus::Completed,
         _ => RequestStatus::Approved,
     }
 }
@@ -214,15 +215,17 @@ impl Details {
     /// None when the answer is not a film or a series.
     pub fn detail(mut self, kind: MediaKind) -> Option<TitleDetail> {
         let info = self.result.media_info.take().unwrap_or_default();
-        // What is had or asked for, season by season; a declined request asks for nothing.
+        // What is had or on its way, season by season: pending, processing, partly available
+        // or available; asked for by a request still pending or approved. A request declined,
+        // failed or done asks for nothing more (what a done one brought is the media's status).
         let taken = |number: u32| {
             info.seasons
                 .iter()
-                .any(|s| s.season_number == number && s.status > 1)
+                .any(|s| s.season_number == number && (2..=5).contains(&s.status))
                 || info
                     .requests
                     .iter()
-                    .filter(|r| r.status != DECLINED)
+                    .filter(|r| matches!(r.status, 1 | 2))
                     .any(|r| r.seasons.iter().any(|s| s.season_number == number))
         };
         let seasons = self
@@ -339,4 +342,72 @@ pub struct Quota {
 #[serde(default)]
 pub struct Message {
     pub message: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn each_media_status_code_has_its_availability() {
+        let codes: Vec<Availability> = (1..=7).map(availability).collect();
+        assert_eq!(
+            codes,
+            [
+                Availability::Missing,
+                Availability::Pending,
+                Availability::Processing,
+                Availability::PartiallyAvailable,
+                Availability::Available,
+                Availability::Blocked,
+                // Deleted: it may be asked for again.
+                Availability::Missing,
+            ]
+        );
+    }
+
+    #[test]
+    fn each_request_status_code_has_its_status() {
+        let codes: Vec<RequestStatus> = (1..=5).map(request_status).collect();
+        assert_eq!(
+            codes,
+            [
+                RequestStatus::Pending,
+                RequestStatus::Approved,
+                RequestStatus::Declined,
+                RequestStatus::Failed,
+                RequestStatus::Completed,
+            ]
+        );
+    }
+
+    /// Whether each of seven seasons is taken: seasons 1 to 6 by the media at the statuses 2 to
+    /// 7, season 7 by a request at `request`.
+    fn seasons_taken(request: u8) -> Vec<bool> {
+        let details: Details = serde_json::from_value(serde_json::json!({
+            "id": 1,
+            "name": "Invented",
+            "seasons": (1..=7).map(|n| serde_json::json!({ "seasonNumber": n })).collect::<Vec<_>>(),
+            "mediaInfo": {
+                "status": 4,
+                "seasons": (1..=6).map(|n| serde_json::json!({ "seasonNumber": n, "status": n + 1 })).collect::<Vec<_>>(),
+                "requests": [{ "status": request, "seasons": [{ "seasonNumber": 7 }] }],
+            },
+        }))
+        .unwrap();
+        let detail = details.detail(MediaKind::Tv).unwrap();
+        detail.seasons.iter().map(|s| s.taken).collect()
+    }
+
+    #[test]
+    fn a_season_is_taken_only_pending_processing_partly_available_or_available() {
+        // Seasons 1 to 6 at the media statuses 2 to 7: blocklisted and deleted are not taken.
+        assert_eq!(
+            seasons_taken(1)[..6],
+            [true, true, true, true, false, false]
+        );
+        // Season 7, by its request: pending and approved take it, the others do not.
+        let by_request: Vec<bool> = (1..=5).map(|code| seasons_taken(code)[6]).collect();
+        assert_eq!(by_request, [true, true, false, false, false]);
+    }
 }

@@ -37,6 +37,7 @@ pub fn status_label(availability: Availability, in_library: bool) -> Option<&'st
         Availability::Processing => Some("Processing"),
         Availability::PartiallyAvailable => Some("Partially available"),
         Availability::Available => Some("Available"),
+        Availability::Blocked => Some("Blocked"),
     }
 }
 
@@ -46,6 +47,9 @@ pub fn request_label(status: RequestStatus) -> &'static str {
         RequestStatus::Pending => "Pending",
         RequestStatus::Approved => "Requested",
         RequestStatus::Declined => "Declined",
+        RequestStatus::Failed => "Failed",
+        // As Seerr shows it: by its title, which came.
+        RequestStatus::Completed => "Available",
     }
 }
 
@@ -201,8 +205,16 @@ mod tests {
             status_label(Availability::Available, false),
             Some("Available")
         );
+        assert_eq!(
+            status_label(Availability::Blocked, false),
+            Some("Blocked")
+        );
         assert_eq!(request_label(RequestStatus::Approved), "Requested");
         assert_eq!(request_label(RequestStatus::Pending), "Pending");
+        assert_eq!(request_label(RequestStatus::Declined), "Declined");
+        assert_eq!(request_label(RequestStatus::Failed), "Failed");
+        // Seerr shows a completed request by its title's status: it came.
+        assert_eq!(request_label(RequestStatus::Completed), "Available");
     }
 
     fn season(number: u32, taken: bool) -> SeasonOffer {
@@ -259,5 +271,6 @@ mod tests {
         assert!(can_request(Availability::Missing, false));
         assert!(!can_request(Availability::Missing, true));
         assert!(!can_request(Availability::Pending, false));
+        assert!(!can_request(Availability::Blocked, false));
     }
 }

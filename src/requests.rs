@@ -28,6 +28,8 @@ pub enum Availability {
     Processing,
     PartiallyAvailable,
     Available,
+    /// Blocklisted on the server: it cannot be asked for.
+    Blocked,
 }
 
 /// A poster, a backdrop or a photo on TMDb, by its path there (`/abc.jpg`).
@@ -119,6 +121,10 @@ pub enum RequestStatus {
     Pending,
     Approved,
     Declined,
+    /// Approved, but the server could not hand it on.
+    Failed,
+    /// Done: the title came.
+    Completed,
 }
 
 /// A request of the viewer, with the title it asked for.

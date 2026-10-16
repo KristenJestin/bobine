@@ -23,6 +23,8 @@ pub const WINTERS_END: TmdbId = 9004;
 pub const PAPER_MOONS: TmdbId = 9005;
 /// A film nobody asked for.
 pub const NORTHERN_LIGHTS: TmdbId = 9007;
+/// A film the server blocklisted.
+pub const ASHEN_SHORE: TmdbId = 9011;
 /// A series nobody asked for: three seasons.
 pub const COPPER_COAST: TmdbId = 7002;
 /// A series with its first season available and its second requested.
@@ -107,6 +109,7 @@ fn catalogue() -> Vec<Discovered> {
         title(Movie, 9008, "Salt and Iron", 2021, Missing),
         title(Movie, 9009, "The Quiet Field", 2026, Missing),
         title(Movie, 9010, "Lantern Bay", 2018, Missing),
+        title(Movie, ASHEN_SHORE, "Ashen Shore", 2020, Blocked),
         title(Tv, IN_LIBRARY_SERIES, "Signal Lost", 2023, Available),
         title(Tv, COPPER_COAST, "Copper Coast", 2024, Missing),
         title(Tv, HARBOUR_WATCH, "Harbour Watch", 2020, PartiallyAvailable),

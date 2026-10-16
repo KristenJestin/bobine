@@ -74,7 +74,10 @@ impl RequestPage {
             MediaKind::Movie => discover::can_request(detail.title.availability, in_library),
             MediaKind::Tv => {
                 !in_library
-                    && detail.title.availability != Availability::Available
+                    && !matches!(
+                        detail.title.availability,
+                        Availability::Available | Availability::Blocked
+                    )
                     && self.picker.as_ref().is_some_and(|p| !p.offered.is_empty())
             }
         }
@@ -294,7 +297,7 @@ mod tests {
     use super::super::discover::tests::{click, configured, drawn};
     use super::*;
     use crate::fake::{FILM, SERIES};
-    use crate::fake_seerr::{COPPER_COAST, FakeSeerr, HARBOUR_WATCH, NORTHERN_LIGHTS, PAPER_MOONS};
+    use crate::fake_seerr::{ASHEN_SHORE, COPPER_COAST, FakeSeerr, HARBOUR_WATCH, NORTHERN_LIGHTS, PAPER_MOONS};
     use crate::navigation::NavEntry;
     use bobine::provider::ItemId;
 
@@ -364,6 +367,15 @@ mod tests {
         let window = on_request(&seerr, MediaKind::Movie, PAPER_MOONS, cx);
         let mut visual = drawn(&window, cx);
         assert!(visual.debug_bounds("status Pending").is_some());
+        assert!(visual.debug_bounds("request-button").is_none());
+    }
+
+    #[gpui_kit::test]
+    fn a_blocklisted_title_says_blocked_and_cannot_be_requested(cx: &mut TestAppContext) {
+        let seerr = FakeSeerr::default();
+        let window = on_request(&seerr, MediaKind::Movie, ASHEN_SHORE, cx);
+        let mut visual = drawn(&window, cx);
+        assert!(visual.debug_bounds("status Blocked").is_some());
         assert!(visual.debug_bounds("request-button").is_none());
     }
 
