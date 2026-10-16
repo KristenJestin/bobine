@@ -17,7 +17,7 @@ use crate::menu::Menus;
 use crate::motion::{self, Presence};
 use crate::navigation::Screen;
 use crate::scroll;
-use crate::series_page;
+use crate::series_page::{self, Refreshes};
 
 /// How often the "Épisode suivant" card checks its countdown.
 const UP_NEXT_TICK: Duration = Duration::from_millis(250);
@@ -42,6 +42,7 @@ pub struct SeriesPage {
     gesture: scroll::Gesture,
     pub error: Option<&'static str>,
     pub busy: bool,
+    refreshes: Refreshes,
 }
 
 impl SeriesPage {
@@ -78,6 +79,7 @@ impl Shell {
             gesture: Default::default(),
             error: None,
             busy: false,
+            refreshes: Refreshes::default(),
         });
         self.navigator.open(Screen::SeriesDetail);
         self.load_series(self.series_pages.len() - 1, true, None, cx);
@@ -101,7 +103,9 @@ impl Shell {
         after: Option<JoinHandle<()>>,
         cx: &mut Context<Self>,
     ) {
-        let id = self.series_pages[depth].id.clone();
+        let page = &mut self.series_pages[depth];
+        let refresh = page.refreshes.ask();
+        let id = page.id.clone();
         let asked = id.clone();
         self.ask(
             cx,
@@ -121,6 +125,7 @@ impl Shell {
                     Err(error) => {
                         let said = shell.failed(error, cx);
                         if let Some(page) = shell.series_page(depth, &id)
+                            && page.refreshes.landed(refresh)
                             && !matches!(page.detail, Loadable::Ready(_))
                         {
                             page.detail = Loadable::Failed(said);
@@ -129,7 +134,10 @@ impl Shell {
                     }
                 };
                 shell.series.grid.update(&fresh.detail.series);
-                let Some(page) = shell.series_page(depth, &id) else {
+                let Some(page) = shell
+                    .series_page(depth, &id)
+                    .filter(|page| page.refreshes.is_newest(refresh))
+                else {
                     return;
                 };
                 // The chips keep their choice while the episode to play stays the same.
@@ -174,6 +182,8 @@ impl Shell {
             .entry(season.clone())
             .or_insert(Loadable::Loading);
         let id = page.id.clone();
+        // Episodes asked for an older refresh would show what was before it.
+        let refresh = page.refreshes.newest();
         let (series, asked) = (id.clone(), season.clone());
         self.ask(
             cx,
@@ -183,7 +193,9 @@ impl Shell {
                     Ok(episodes) => Loadable::Ready(episodes),
                     Err(error) => Loadable::Failed(shell.failed(error, cx)),
                 };
-                if let Some(page) = shell.series_page(depth, &id) {
+                if let Some(page) = shell.series_page(depth, &id)
+                    && page.refreshes.landed(refresh)
+                {
                     page.episodes.insert(season, episodes);
                 }
             },

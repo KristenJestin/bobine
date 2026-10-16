@@ -157,6 +157,35 @@ pub fn toggle_season_watched(
     server.set_watched(&season.id, season.unwatched > 0)
 }
 
+/// The refreshes of a series page: each is numbered when asked, and only the answers of the
+/// newest are shown, so that an older one landing late does not overwrite it.
+#[derive(Default)]
+pub struct Refreshes {
+    asked: u64,
+}
+
+impl Refreshes {
+    /// A new refresh: its number.
+    pub fn ask(&mut self) -> u64 {
+        self.asked += 1;
+        self.asked
+    }
+
+    /// The newest refresh, the one whose answers are shown.
+    pub fn newest(&self) -> u64 {
+        self.asked
+    }
+
+    pub fn is_newest(&self, refresh: u64) -> bool {
+        refresh == self.asked
+    }
+
+    /// The last answer of `refresh` landed: whether it is shown.
+    pub fn landed(&mut self, refresh: u64) -> bool {
+        self.is_newest(refresh)
+    }
+}
+
 /// The "Épisode suivant" card: counts down, then gives the episode to play, unless cancelled.
 /// It belongs to the series page it showed over, at its depth among the series pages.
 #[derive(Default)]
@@ -654,6 +683,20 @@ mod tests {
         assert!(card.episode().is_some());
         let played = card.take(now + COUNTDOWN * 2, false, top(), false).unwrap();
         assert_eq!(played.item.id, id(2, 5));
+    }
+
+    #[test]
+    fn an_older_answer_does_not_overwrite_a_newer_one() {
+        let mut refreshes = Refreshes::default();
+        let first = refreshes.ask();
+        let second = refreshes.ask();
+        assert_ne!(first, second);
+        assert_eq!(refreshes.newest(), second);
+        // The second lands first; the first, late, is dropped.
+        assert!(refreshes.is_newest(second));
+        assert!(refreshes.landed(second));
+        assert!(!refreshes.is_newest(first));
+        assert!(!refreshes.landed(first));
     }
 
     #[test]
