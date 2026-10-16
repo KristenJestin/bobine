@@ -1285,3 +1285,171 @@ fn an_episode_or_a_whole_season_is_marked_watched_and_unwatched() {
         assert_eq!(s.fake.last("DELETE", &path).param("userId"), Some(USER_ID));
     }
 }
+
+const HARBOUR_TRILOGY: &str = "b0000000000000000000000000000002";
+
+#[test]
+fn the_collections_of_the_server_with_their_posters() {
+    let s = Setup::new();
+    let cards = s.signed_in().collections().unwrap();
+    let names: Vec<&str> = cards.iter().map(|c| c.name.as_str()).collect();
+    assert_eq!(names, ["Sea Stories", "Harbour Trilogy", "Lone Wolves"]);
+    assert_eq!(cards[1].id, ItemId(HARBOUR_TRILOGY.into()));
+    assert_eq!(cards[1].films, Some(3));
+    assert_eq!(
+        cards[1].poster.as_ref().map(|p| p.tag.as_str()),
+        Some("poster-ht")
+    );
+    // A collection with no poster and no count says so rather than inventing them.
+    assert_eq!((cards[2].films, cards[2].poster.clone()), (None, None));
+}
+
+#[test]
+fn the_collections_are_asked_by_name_for_the_user() {
+    let s = Setup::new();
+    s.signed_in().collections().unwrap();
+    let asked = boxset_lookups(&s);
+    assert_eq!(asked.len(), 1, "{asked:?}");
+    let asked = &asked[0];
+    assert_eq!(asked.param("recursive"), Some("true"));
+    assert_eq!(asked.param("sortBy"), Some("SortName"));
+    assert_eq!(asked.param("userId"), Some(USER_ID));
+    assert_eq!(asked.param("fields"), Some("ChildCount"));
+    assert_eq!(asked.param("enableImageTypes"), Some("Primary"));
+}
+
+#[test]
+fn a_collection_lists_its_films_by_release_year() {
+    let s = Setup::new();
+    let collection = s
+        .signed_in()
+        .collection(&ItemId(HARBOUR_TRILOGY.into()))
+        .unwrap();
+    assert_eq!(collection.name, "Harbour Trilogy");
+    assert_eq!(
+        collection.overview.as_deref(),
+        Some("A lighthouse, a return, and the lights that follow.")
+    );
+    assert_eq!(
+        collection
+            .backdrop
+            .as_ref()
+            .map(|b| (b.kind, b.tag.as_str())),
+        Some((ImageKind::Backdrop, "backdrop-ht"))
+    );
+    let films: Vec<(&str, Option<i32>)> = collection
+        .films
+        .iter()
+        .map(|f| (f.title.as_str(), f.year))
+        .collect();
+    assert_eq!(
+        films,
+        [
+            ("The Quiet Harbour", Some(1998)),
+            ("Return to the Harbour", Some(2002)),
+            ("Harbour Lights", Some(2006)),
+        ]
+    );
+    assert!(collection.films[1].watched);
+    let asked = s
+        .fake
+        .seen()
+        .into_iter()
+        .find(|r| r.param("parentId") == Some(HARBOUR_TRILOGY))
+        .expect("the films were asked");
+    assert_eq!(
+        asked.param("sortBy"),
+        Some("ProductionYear,PremiereDate,SortName")
+    );
+    assert_eq!(asked.param("userId"), Some(USER_ID));
+}
+
+#[test]
+fn a_collection_the_server_does_not_know_is_not_found() {
+    let s = Setup::new();
+    let missing = s
+        .signed_in()
+        .collection(&ItemId("b0000000000000000000000000000099".into()));
+    assert_eq!(missing, Err(ProviderError::NotFound));
+}
+
+#[test]
+fn the_list_holds_films_and_series_together_by_title() {
+    let s = Setup::new();
+    let list = s.signed_in().favourites().unwrap();
+    let titles: Vec<&str> = list
+        .iter()
+        .map(|favourite| match favourite {
+            Favourite::Film(film) => film.title.as_str(),
+            Favourite::Series(series) => series.title.as_str(),
+        })
+        .collect();
+    assert_eq!(
+        titles,
+        ["Harbour Lights", "Return to the Harbour", "Tidewater"]
+    );
+    assert!(matches!(list[2], Favourite::Series(_)));
+    assert!(matches!(list[0], Favourite::Film(_)));
+}
+
+#[test]
+fn the_list_is_asked_as_the_users_favourites_of_both_kinds() {
+    let s = Setup::new();
+    s.signed_in().favourites().unwrap();
+    let asked = s
+        .fake
+        .seen()
+        .into_iter()
+        .find(|r| r.param("filters") == Some("IsFavorite"))
+        .expect("the favourites were asked");
+    assert_eq!(asked.param("includeItemTypes"), Some("Movie,Series"));
+    assert_eq!(asked.param("recursive"), Some("true"));
+    assert_eq!(asked.param("sortBy"), Some("SortName"));
+    assert_eq!(asked.param("userId"), Some(USER_ID));
+}
+
+#[test]
+fn a_film_and_a_series_say_whether_they_are_in_the_list() {
+    let s = Setup::new();
+    let server = s.signed_in();
+    assert!(!server.film(&film()).unwrap().favourite);
+    assert!(
+        !server
+            .series_detail(&ItemId(SERIES.into()))
+            .unwrap()
+            .favourite
+    );
+    s.fake.state.lock().unwrap().favourites = vec![FILM.into(), SERIES.into()];
+    assert!(server.film(&film()).unwrap().favourite);
+    assert!(
+        server
+            .series_detail(&ItemId(SERIES.into()))
+            .unwrap()
+            .favourite
+    );
+}
+
+#[test]
+fn an_item_is_put_in_the_list_and_taken_out_for_the_user() {
+    let s = Setup::new();
+    let server = s.signed_in();
+    let path = format!("/UserFavoriteItems/{FILM}");
+    server.set_favourite(&film(), true).unwrap();
+    assert_eq!(s.fake.last("POST", &path).param("userId"), Some(USER_ID));
+    assert!(server.film(&film()).unwrap().favourite);
+    server.set_favourite(&film(), false).unwrap();
+    assert_eq!(s.fake.last("DELETE", &path).param("userId"), Some(USER_ID));
+    assert!(!server.film(&film()).unwrap().favourite);
+}
+
+#[test]
+fn the_list_with_a_revoked_token_asks_to_sign_in_again() {
+    let s = Setup::new();
+    let server = s.signed_in();
+    s.fake.state.lock().unwrap().revoked = true;
+    assert_eq!(server.favourites(), Err(ProviderError::SessionExpired));
+    assert_eq!(
+        server.set_favourite(&film(), true),
+        Err(ProviderError::SessionExpired)
+    );
+}

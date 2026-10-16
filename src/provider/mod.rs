@@ -84,6 +84,15 @@ pub trait MediaServer: Send + Sync {
     fn search(&self, query: &str, per_group: u32) -> Result<SearchResults, ProviderError>;
     /// The films and series a person took part in, the newest first.
     fn person_titles(&self, person: &ItemId) -> Result<PersonTitles, ProviderError>;
+
+    /// Every collection of the user, by name. One call, not pages: a server holds tens of them.
+    fn collections(&self) -> Result<Vec<CollectionCard>, ProviderError>;
+    /// A collection and its films, oldest release first.
+    fn collection(&self, collection: &ItemId) -> Result<CollectionDetail, ProviderError>;
+    /// The films and series the user put in their list, by title.
+    fn favourites(&self) -> Result<Vec<Favourite>, ProviderError>;
+    /// Puts a film or a series in the user's list, or takes it out.
+    fn set_favourite(&self, item: &ItemId, favourite: bool) -> Result<(), ProviderError>;
 }
 
 /// A series as a list shows it.
@@ -110,6 +119,8 @@ pub struct SeriesDetail {
     pub official_rating: Option<String>,
     pub cast: Vec<CastMember>,
     pub similar: Vec<Series>,
+    /// In the user's list.
+    pub favourite: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -266,6 +277,8 @@ pub struct FilmDetail {
     pub cast: Vec<CastMember>,
     pub similar: Vec<Film>,
     pub versions: Vec<MediaSource>,
+    /// In the user's list.
+    pub favourite: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -282,6 +295,33 @@ pub struct Collection {
     pub id: ItemId,
     pub name: String,
     pub others: Vec<Film>,
+}
+
+/// A collection as the grid lists it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CollectionCard {
+    pub id: ItemId,
+    pub name: String,
+    /// How many films it holds, when the server says.
+    pub films: Option<u32>,
+    pub poster: Option<ImageRef>,
+}
+
+/// A collection with its films, oldest release first.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CollectionDetail {
+    pub id: ItemId,
+    pub name: String,
+    pub overview: Option<String>,
+    pub backdrop: Option<ImageRef>,
+    pub films: Vec<Film>,
+}
+
+/// What the user's list holds: films and series together.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Favourite {
+    Film(Film),
+    Series(Series),
 }
 
 /// One version of a film: one file, with its tracks.

@@ -1,8 +1,8 @@
 {
   "Items": [
-    { "Name": "Sea Stories", "Id": "b0000000000000000000000000000001", "Type": "BoxSet", "IsFolder": true },
-    { "Name": "Harbour Trilogy", "Id": "b0000000000000000000000000000002", "Type": "BoxSet", "IsFolder": true },
-    { "Name": "Lone Wolves", "Id": "b0000000000000000000000000000003", "Type": "BoxSet", "IsFolder": true }
+    { "Name": "Sea Stories", "Id": "b0000000000000000000000000000001", "Type": "BoxSet", "IsFolder": true, "ChildCount": 2, "Overview": "Two tales told from the deck.", "ImageTags": { "Primary": "poster-ss" }, "BackdropImageTags": ["backdrop-ss"] },
+    { "Name": "Harbour Trilogy", "Id": "b0000000000000000000000000000002", "Type": "BoxSet", "IsFolder": true, "ChildCount": 3, "Overview": "A lighthouse, a return, and the lights that follow.", "ImageTags": { "Primary": "poster-ht" }, "BackdropImageTags": ["backdrop-ht"] },
+    { "Name": "Lone Wolves", "Id": "b0000000000000000000000000000003", "Type": "BoxSet", "IsFolder": true, "ImageTags": {} }
   ],
   "TotalRecordCount": 3,
   "StartIndex": 0

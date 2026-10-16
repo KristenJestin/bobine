@@ -6,11 +6,11 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use bobine::provider::{
-    AudioTrack, CastMember, Collection, Connector, Episode, ExternalSubtitle, Film, FilmDetail,
-    FilmQuery, ImageKind, ImageRef, ItemId, Library, LibraryKind, MediaServer, MediaSource,
-    MediaSourceId, Page, PersonHit, PersonTitles, PlaySessionId, Playback, PlaybackReport,
-    ProviderError, SearchResults, Season, Series, SeriesDetail, SeriesHit, ServerInfo, StreamUrl,
-    SubtitleTrack, VideoRange, VideoTrack,
+    AudioTrack, CastMember, Collection, CollectionCard, CollectionDetail, Connector, Episode,
+    ExternalSubtitle, Favourite, Film, FilmDetail, FilmQuery, ImageKind, ImageRef, ItemId, Library,
+    LibraryKind, MediaServer, MediaSource, MediaSourceId, Page, PersonHit, PersonTitles,
+    PlaySessionId, Playback, PlaybackReport, ProviderError, SearchResults, Season, Series,
+    SeriesDetail, SeriesHit, ServerInfo, StreamUrl, SubtitleTrack, VideoRange, VideoTrack,
 };
 
 pub const USER: &str = "camille";
@@ -41,6 +41,10 @@ pub struct Record {
     pub film_pages: Vec<ItemId>,
     /// The queries searched, in the order they came.
     pub searches: Vec<String>,
+    /// Every call that put an item in the list (`true`) or took it out, answered or failed.
+    pub favourite_calls: Vec<(ItemId, bool)>,
+    /// How many times the list of favourites was asked.
+    pub list_loads: u32,
 }
 
 /// What the fake server holds, shared by the connector and its sessions.
@@ -62,6 +66,12 @@ pub struct State {
     pub people: Vec<PersonHit>,
     /// How long a search takes to answer: the headless harness shows the palette waiting.
     pub search_delay: std::time::Duration,
+    /// What is in the user's list.
+    pub favourites: Vec<ItemId>,
+    /// Changing the list fails (a server that does not answer).
+    pub favourite_fails: bool,
+    /// How long changing the list takes, so that a double click or the optimistic state shows.
+    pub favourite_delay: std::time::Duration,
 }
 
 #[derive(Clone)]
@@ -364,6 +374,11 @@ impl FakeServer {
                 photos_fail_once: false,
                 people: people(),
                 search_delay: std::time::Duration::ZERO,
+                favourites: ["film-2", "film-7", "series-1", "series-4"]
+                    .map(|id| ItemId(id.into()))
+                    .to_vec(),
+                favourite_fails: false,
+                favourite_delay: std::time::Duration::ZERO,
             })),
             info: ServerInfo {
                 id: "server-1".into(),
@@ -532,6 +547,7 @@ impl MediaServer for FakeServer {
             } else {
                 versions().split_off(1)
             },
+            favourite: self.state().favourites.contains(&found.id),
             film: found,
         })
     }
@@ -540,14 +556,11 @@ impl MediaServer for FakeServer {
         if film.0 != FILM {
             return Ok(None);
         }
-        let mut first = self.find(&ItemId("film-6".into()))?;
-        first.title = "Le Premier Hiver".into();
-        first.year = Some(2019);
-        first.watched = true;
+        let saga = self.collection(&ItemId("saga".into()))?;
         Ok(Some(Collection {
-            id: ItemId("saga".into()),
-            name: "Saga Hiver".into(),
-            others: vec![first],
+            id: saga.id,
+            name: saga.name,
+            others: saga.films.into_iter().filter(|f| &f.id != film).collect(),
         }))
     }
 
@@ -689,6 +702,7 @@ impl MediaServer for FakeServer {
             .ok_or(ProviderError::NotFound)?;
         Ok(SeriesDetail {
             series: Self::counted(&state, found),
+            favourite: state.favourites.contains(series),
             overview: Some(
                 "Sous la glace de l'Arctique, l'équipage d'une station de recherche perd le \
                  contact avec la surface et découvre qu'il n'est pas seul."
@@ -826,6 +840,117 @@ impl MediaServer for FakeServer {
                 .map(|(_, s)| hit(s))
                 .collect(),
         })
+    }
+
+    fn collections(&self) -> Result<Vec<CollectionCard>, ProviderError> {
+        let state = self.state();
+        let mut cards: Vec<CollectionCard> = (0..COLLECTION_NAMES.len())
+            .map(|n| {
+                let collection = collection(&state, n);
+                CollectionCard {
+                    films: Some(collection.films.len() as u32),
+                    poster: image(&collection.id.0, ImageKind::Primary),
+                    id: collection.id,
+                    name: collection.name,
+                }
+            })
+            .collect();
+        cards.sort_by(|a, b| a.name.cmp(&b.name));
+        Ok(cards)
+    }
+
+    fn collection(&self, id: &ItemId) -> Result<CollectionDetail, ProviderError> {
+        let state = self.state();
+        (0..COLLECTION_NAMES.len())
+            .map(|n| collection(&state, n))
+            .find(|collection| &collection.id == id)
+            .ok_or(ProviderError::NotFound)
+    }
+
+    fn favourites(&self) -> Result<Vec<Favourite>, ProviderError> {
+        let mut state = self.state();
+        state.record.list_loads += 1;
+        let mut found: Vec<Favourite> = state
+            .films
+            .iter()
+            .filter(|f| state.favourites.contains(&f.id))
+            .cloned()
+            .map(Favourite::Film)
+            .chain(
+                state
+                    .series
+                    .iter()
+                    .filter(|s| state.favourites.contains(&s.id))
+                    .map(|s| Favourite::Series(Self::counted(&state, s))),
+            )
+            .collect();
+        found.sort_by_key(|favourite| match favourite {
+            Favourite::Film(film) => film.title.to_lowercase(),
+            Favourite::Series(series) => series.title.to_lowercase(),
+        });
+        Ok(found)
+    }
+
+    fn set_favourite(&self, item: &ItemId, favourite: bool) -> Result<(), ProviderError> {
+        let delay = self.state().favourite_delay;
+        std::thread::sleep(delay);
+        let mut state = self.state();
+        state.record.favourite_calls.push((item.clone(), favourite));
+        if state.favourite_fails {
+            return Err(ProviderError::Unreachable("timed out".into()));
+        }
+        state.favourites.retain(|id| id != item);
+        if favourite {
+            state.favourites.push(item.clone());
+        }
+        Ok(())
+    }
+}
+
+const COLLECTION_NAMES: [&str; 10] = [
+    "Saga Hiver",
+    "Trilogie du Phare",
+    "Les Voyageurs",
+    "Cycle des Marées",
+    "Tétralogie Sable",
+    "Mémoires d'Orbite",
+    "Les Veilleurs du Nord",
+    "Diptyque Brume",
+    "Chroniques de Lagune",
+    "Série Noire",
+];
+
+/// The collection number `n`. The first, "Saga Hiver", holds the film of the tests with the
+/// film before it; the others take films by their place in the list.
+fn collection(state: &State, n: usize) -> CollectionDetail {
+    let id = if n == 0 {
+        "saga".to_string()
+    } else {
+        format!("collection-{n}")
+    };
+    let pick = |i: usize| state.films.get(i % state.films.len().max(1)).cloned();
+    let mut films: Vec<Film> = if n == 0 {
+        let first = pick(6).map(|film| Film {
+            title: "Le Premier Hiver".into(),
+            year: Some(2019),
+            watched: true,
+            ..film
+        });
+        pick(0).into_iter().chain(first).collect()
+    } else {
+        (0..2 + n % 3).filter_map(|k| pick(n * 3 + k)).collect()
+    };
+    films.sort_by_key(|film| film.year);
+    CollectionDetail {
+        name: COLLECTION_NAMES[n].into(),
+        overview: Some(
+            "Des films qui se répondent d'un bout à l'autre, réunis dans l'ordre où ils \
+             sont sortis."
+                .into(),
+        ),
+        backdrop: image(&id, ImageKind::Backdrop),
+        films,
+        id: ItemId(id),
     }
 }
 

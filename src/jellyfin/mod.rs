@@ -10,10 +10,10 @@ mod fake;
 mod tests;
 
 use crate::provider::{
-    Collection, Connector, Episode, ExternalSubtitle, Film, FilmDetail, FilmQuery, FilmSort,
-    ImageKind, ImageRef, ItemId, Library, MediaServer, MediaSourceId, Page, PersonTitles,
-    PlaySessionId, Playback, PlaybackReport, ProviderError, SearchResults, Season, Series,
-    SeriesDetail, ServerInfo, StreamUrl, Token, TokenStore,
+    Collection, CollectionCard, CollectionDetail, Connector, Episode, ExternalSubtitle, Favourite,
+    Film, FilmDetail, FilmQuery, FilmSort, ImageKind, ImageRef, ItemId, Library, MediaServer,
+    MediaSourceId, Page, PersonTitles, PlaySessionId, Playback, PlaybackReport, ProviderError,
+    SearchResults, Season, Series, SeriesDetail, ServerInfo, StreamUrl, Token, TokenStore,
 };
 use account::{AccountFile, Login};
 use dto::{AuthenticationResult, Item, PlaybackInfoResponse, PublicSystemInfo, QueryResult};
@@ -297,6 +297,7 @@ impl MediaServer for Jellyfin {
             overview: item.overview,
             genres: item.genres,
             official_rating: item.official_rating,
+            favourite: item.user_data.as_ref().is_some_and(|u| u.is_favorite),
             versions: item
                 .media_sources
                 .into_iter()
@@ -565,6 +566,7 @@ impl MediaServer for Jellyfin {
         )?;
         Ok(SeriesDetail {
             series: item.series(),
+            favourite: item.user_data.as_ref().is_some_and(|u| u.is_favorite),
             cast: item.cast(),
             similar: similar.items.iter().map(Item::series).collect(),
             overview: item.overview,
@@ -609,5 +611,77 @@ impl MediaServer for Jellyfin {
             ],
         )?;
         Ok(found.items.into_iter().next().map(Item::episode))
+    }
+
+    fn collections(&self) -> Result<Vec<CollectionCard>, ProviderError> {
+        let found = self.items(
+            "collections",
+            &[
+                ("includeItemTypes", "BoxSet".into()),
+                ("recursive", "true".into()),
+                ("sortBy", "SortName".into()),
+                ("fields", "ChildCount".into()),
+                ("imageTypeLimit", "1".into()),
+                ("enableImageTypes", "Primary".into()),
+            ],
+        )?;
+        Ok(found.items.iter().map(Item::collection_card).collect())
+    }
+
+    fn collection(&self, collection: &ItemId) -> Result<CollectionDetail, ProviderError> {
+        let item: Item = self.http.get(
+            "collection",
+            &format!("/Items/{}", encode(&collection.0)),
+            &[self.user()],
+        )?;
+        let films = self.items(
+            "collection films",
+            &[
+                ("parentId", collection.0.clone()),
+                ("sortBy", "ProductionYear,PremiereDate,SortName".into()),
+                ("imageTypeLimit", "1".into()),
+                ("enableImageTypes", "Primary,Backdrop".into()),
+            ],
+        )?;
+        Ok(CollectionDetail {
+            id: ItemId(item.id.clone()),
+            name: item.name.clone(),
+            backdrop: item.film().backdrop,
+            overview: item.overview,
+            films: films.items.iter().map(Item::film).collect(),
+        })
+    }
+
+    fn favourites(&self) -> Result<Vec<Favourite>, ProviderError> {
+        let found = self.items(
+            "favourites",
+            &[
+                ("filters", "IsFavorite".into()),
+                ("includeItemTypes", "Movie,Series".into()),
+                ("recursive", "true".into()),
+                ("sortBy", "SortName".into()),
+                ("imageTypeLimit", "1".into()),
+                ("enableImageTypes", "Primary,Backdrop".into()),
+            ],
+        )?;
+        Ok(found
+            .items
+            .iter()
+            .map(|item| match item.kind.as_deref() {
+                Some("Series") => Favourite::Series(item.series()),
+                _ => Favourite::Film(item.film()),
+            })
+            .collect())
+    }
+
+    fn set_favourite(&self, item: &ItemId, favourite: bool) -> Result<(), ProviderError> {
+        let path = format!("/UserFavoriteItems/{}", encode(&item.0));
+        if favourite {
+            self.http
+                .post_empty("add to the list", &path, &[self.user()])
+        } else {
+            self.http
+                .delete("take out of the list", &path, &[self.user()])
+        }
     }
 }
