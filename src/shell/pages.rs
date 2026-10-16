@@ -350,8 +350,8 @@ impl Chip {
     pub fn choose(self, choices: &mut Choices, versions: &[MediaSource], value: Option<i32>) {
         match self {
             Chip::Version => choices.set_version(versions, value.unwrap_or(0) as usize),
-            Chip::Audio => choices.choose_audio(value),
-            Chip::Subtitle => choices.choose_subtitle(value),
+            Chip::Audio => choices.choose_audio(versions, value),
+            Chip::Subtitle => choices.choose_subtitle(versions, value),
         }
     }
 }

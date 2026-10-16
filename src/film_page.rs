@@ -18,15 +18,33 @@ pub struct Choices {
     pub audio: Option<i32>,
     /// `None`: no subtitles.
     pub subtitle: Option<i32>,
+    carried: Carried,
+}
+
+/// The languages picked by hand on the chips, which the next episode of a series starts with
+/// when it has a track in them. Our own convenience, not Jellyfin's: its "remember" settings keep
+/// a choice per item, not from one episode to the next.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Carried {
+    audio: Option<String>,
+    /// The language, and whether the track was a forced one.
+    subtitle: Option<(String, bool)>,
 }
 
 impl Choices {
     /// The first version, with the tracks the server starts it with.
     pub fn new(versions: &[MediaSource]) -> Self {
+        Self::carrying(versions, Carried::default())
+    }
+
+    /// The first version, with the languages `carried` from the episode before where it has
+    /// them, else the tracks the server starts it with.
+    pub fn carrying(versions: &[MediaSource], carried: Carried) -> Self {
         let mut choices = Self {
             version: 0,
             audio: None,
             subtitle: None,
+            carried,
         };
         choices.set_version(versions, 0);
         choices
@@ -56,16 +74,51 @@ impl Choices {
                 .find(|track| track.default)
                 .map(|track| track.index),
         };
+        let speaks = |track: Option<&str>, language: &str| {
+            track.is_some_and(|track| track.eq_ignore_ascii_case(language))
+        };
+        if let Some(language) = &self.carried.audio
+            && let Some(track) = source
+                .audio
+                .iter()
+                .find(|t| speaks(t.language.as_deref(), language))
+        {
+            self.audio = Some(track.index);
+        }
+        if let Some((language, forced)) = &self.carried.subtitle
+            && let Some(track) = source
+                .subtitles
+                .iter()
+                .find(|t| t.forced == *forced && speaks(t.language.as_deref(), language))
+        {
+            self.subtitle = Some(track.index);
+        }
     }
 
-    /// An audio track picked on the chip: it wins for this playback.
-    pub fn choose_audio(&mut self, track: Option<i32>) {
+    /// An audio track picked on the chip: it wins for this playback, and its language is
+    /// carried to the next episode.
+    pub fn choose_audio(&mut self, versions: &[MediaSource], track: Option<i32>) {
         self.audio = track;
+        let picked = self
+            .source(versions)
+            .and_then(|source| source.audio.iter().find(|t| Some(t.index) == track));
+        if let Some(language) = picked.and_then(|t| t.language.clone()) {
+            self.carried.audio = Some(language);
+        }
     }
 
-    /// A subtitle track picked on the chip, or none.
-    pub fn choose_subtitle(&mut self, track: Option<i32>) {
+    /// A subtitle track picked on the chip, or none: then the next episode takes the server's.
+    pub fn choose_subtitle(&mut self, versions: &[MediaSource], track: Option<i32>) {
         self.subtitle = track;
+        let picked = self
+            .source(versions)
+            .and_then(|source| source.subtitles.iter().find(|t| Some(t.index) == track));
+        self.carried.subtitle = picked.and_then(|t| Some((t.language.clone()?, t.forced)));
+    }
+
+    /// What the next episode of the series starts with.
+    pub fn carried(&self) -> Carried {
+        self.carried.clone()
     }
 
     pub fn source<'a>(&self, versions: &'a [MediaSource]) -> Option<&'a MediaSource> {
@@ -445,7 +498,10 @@ mod tests {
         let detail = detail();
         // The fake server starts the first version with English audio and the full French
         // subtitles.
-        assert_eq!(shown(&Choices::new(&detail.versions)), (0, Some(2), Some(4)));
+        assert_eq!(
+            shown(&Choices::new(&detail.versions)),
+            (0, Some(2), Some(4))
+        );
     }
 
     #[test]
@@ -483,8 +539,8 @@ mod tests {
     fn a_chip_choice_wins() {
         let detail = detail();
         let mut choices = Choices::new(&detail.versions);
-        choices.choose_audio(Some(1));
-        choices.choose_subtitle(Some(3));
+        choices.choose_audio(&detail.versions, Some(1));
+        choices.choose_subtitle(&detail.versions, Some(3));
         let plan = plan(&detail.film, &detail.versions, &choices, From::Resume).unwrap();
         assert_eq!((plan.audio_index, plan.subtitle_index), (Some(1), Some(3)));
     }
@@ -591,7 +647,7 @@ mod tests {
     fn no_subtitles_chosen_turns_them_off() {
         let detail = detail();
         let mut choices = Choices::new(&detail.versions);
-        choices.choose_subtitle(None);
+        choices.choose_subtitle(&detail.versions, None);
         let plan = plan(&detail.film, &detail.versions, &choices, From::Resume).unwrap();
         let Call::Load { subtitle, .. } = load(&plan) else {
             panic!("not a load");
