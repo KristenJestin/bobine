@@ -121,6 +121,8 @@ pub struct State {
     pub transcode_only: bool,
     /// The server converts nothing: no transcoding address in its answer.
     pub no_transcoding: bool,
+    /// The extracted subtitle comes from another host, as an absolute address.
+    pub absolute_delivery: bool,
 }
 
 /// How long a held search request waits for the others before it is let go anyway.
@@ -607,9 +609,15 @@ fn playback_info(state: &State, seen: &Seen) -> Value {
         if stream["Codec"] == "subrip" {
             let index = stream["Index"].clone();
             stream["DeliveryMethod"] = json!("External");
-            stream["DeliveryUrl"] = json!(format!(
-                "/Videos/{FILM}/{SOURCE}/Subtitles/{index}/0/Stream.srt?ApiKey={TOKEN}"
-            ));
+            stream["DeliveryUrl"] = if state.absolute_delivery {
+                json!(format!(
+                    "https://subtitles.example.test/{index}.srt?lang=en"
+                ))
+            } else {
+                json!(format!(
+                    "/Videos/{FILM}/{SOURCE}/Subtitles/{index}/0/Stream.srt?ApiKey={TOKEN}"
+                ))
+            };
         } else {
             stream["DeliveryMethod"] = json!("Encode");
         }

@@ -1333,6 +1333,7 @@ fn start_progress_and_stopped_reports_with_the_right_body() {
     assert_eq!(stopped["MediaSourceId"], SOURCE);
     assert_eq!(stopped["PlaySessionId"], PLAY_SESSION);
     assert_eq!(stopped["PositionTicks"], 13_000_000_000_i64);
+    assert!(stopped.get("PlayMethod").is_none(), "{stopped}");
 
     for path in [
         "/Sessions/Playing",
@@ -1503,6 +1504,40 @@ fn the_transcode_request_carries_the_device_profile_with_the_embedded_subtitles(
 }
 
 #[test]
+fn an_absolute_delivery_url_is_used_as_it_is_without_a_token() {
+    let s = Setup::new();
+    s.fake.state.lock().unwrap().absolute_delivery = true;
+    let playback = transcoded(&s, Some(3));
+    assert_eq!(
+        playback.external_subtitles[2].url.expose_for_player(),
+        "https://subtitles.example.test/3.srt?lang=en"
+    );
+}
+
+#[test]
+fn only_an_http_or_https_address_is_absolute() {
+    use super::is_absolute;
+    for absolute in [
+        "http://subtitles.example.test/3.srt",
+        "https://subtitles.example.test/3.srt",
+        "HTTPS://subtitles.example.test/3.srt",
+        "Http://subtitles.example.test/3.srt",
+    ] {
+        assert!(is_absolute(absolute), "{absolute}");
+    }
+    for relative in [
+        "/Videos/1/Subtitles/3/0/Stream.srt",
+        "httpd/Stream.srt",
+        "http-stream.srt",
+        "https",
+        "ftp://subtitles.example.test/3.srt",
+        "",
+    ] {
+        assert!(!is_absolute(relative), "{relative}");
+    }
+}
+
+#[test]
 fn a_version_the_server_cannot_convert_says_so() {
     let s = Setup::new();
     s.fake.state.lock().unwrap().no_transcoding = true;
@@ -1520,7 +1555,7 @@ fn a_version_the_server_cannot_convert_says_so() {
 }
 
 #[test]
-fn the_play_method_is_reported_in_every_report() {
+fn the_play_method_is_reported_while_playing_and_not_when_stopped() {
     let s = Setup::new();
     let server = s.signed_in();
     let transcoded = PlaybackReport {
@@ -1530,20 +1565,14 @@ fn the_play_method_is_reported_in_every_report() {
     server.report_started(&transcoded).unwrap();
     server.report_progress(&transcoded).unwrap();
     server.report_stopped(&transcoded).unwrap();
-    for path in [
-        "/Sessions/Playing",
-        "/Sessions/Playing/Progress",
-        "/Sessions/Playing/Stopped",
-    ] {
+    for path in ["/Sessions/Playing", "/Sessions/Playing/Progress"] {
         let body = s.fake.last("POST", path).json();
         assert_eq!(body["PlayMethod"], "Transcode", "{path}");
         assert_eq!(body["PlaySessionId"], PLAY_SESSION, "{path}");
     }
-    server
-        .report_stopped(&report(Duration::from_secs(1300), false))
-        .unwrap();
     let stopped = s.fake.last("POST", "/Sessions/Playing/Stopped").json();
-    assert_eq!(stopped["PlayMethod"], "DirectPlay");
+    assert_eq!(stopped["PlaySessionId"], PLAY_SESSION);
+    assert!(stopped.get("PlayMethod").is_none(), "{stopped}");
 }
 
 #[test]

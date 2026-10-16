@@ -93,6 +93,9 @@ pub struct State {
     pub tiles: Vec<Vec<u8>>,
     /// How long a tile takes to come.
     pub tile_delay: std::time::Duration,
+    /// How long a stopped report takes to reach the server, so that one sent later can overtake
+    /// it.
+    pub stop_delay: std::time::Duration,
 }
 
 #[derive(Clone)]
@@ -481,6 +484,7 @@ impl FakeServer {
                 trickplay: None,
                 tiles: Vec::new(),
                 tile_delay: std::time::Duration::ZERO,
+                stop_delay: std::time::Duration::ZERO,
             })),
             info: ServerInfo {
                 id: "server-1".into(),
@@ -725,6 +729,8 @@ impl MediaServer for FakeServer {
     }
 
     fn report_stopped(&self, report: &PlaybackReport) -> Result<(), ProviderError> {
+        let delay = self.state().stop_delay;
+        std::thread::sleep(delay);
         let mut guard = self.state();
         let state = &mut *guard;
         state.record.reports.push(Report::Stopped(report.clone()));
