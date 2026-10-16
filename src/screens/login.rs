@@ -23,10 +23,10 @@ pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -
         form.user.clone(),
         form.password.clone(),
     ];
-    let label = if form.busy {
-        "Signing in…"
-    } else {
-        "Sign in"
+    let label = match (form.busy, form.signing_out) {
+        (false, _) => "Sign in",
+        (true, false) => "Signing in…",
+        (true, true) => "Signing out…",
     };
 
     centered().bg(theme::background()).child(

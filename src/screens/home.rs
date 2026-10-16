@@ -244,6 +244,16 @@ impl HeroView {
             logos: hero::Logos::default(),
         }
     }
+
+    /// The logos of the titles of a session that ended.
+    pub fn forget_logos(&mut self) {
+        self.logos.keep_only(&[]);
+    }
+
+    #[cfg(test)]
+    pub fn logos_len(&self) -> usize {
+        self.logos.len()
+    }
 }
 
 impl Render for HeroView {

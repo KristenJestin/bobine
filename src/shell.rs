@@ -143,8 +143,6 @@ pub struct Shell {
     account_menu: Menus<Account>,
     account_fade: Presence<Account>,
     account_button: ButtonBounds,
-    /// The user is being signed out: the server is told, and a second click does nothing.
-    signing_out: bool,
     /// The login was just shown: its address field takes the focus at the next draw.
     login_focus_due: bool,
     pub home: HomePage,
@@ -282,7 +280,6 @@ impl Shell {
             account_menu: Menus::default(),
             account_fade: Presence::new(motion::quick()),
             account_button: Default::default(),
-            signing_out: false,
             login_focus_due: false,
             home: Default::default(),
             list: None,
