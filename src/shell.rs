@@ -218,8 +218,8 @@ pub struct Shell {
 pub struct Draws {
     pub shell: Vec<Instant>,
     pub hero: Vec<Instant>,
-    /// The cards that answer the pointer, whichever card.
-    pub cards: Vec<Instant>,
+    /// The cards that answer the pointer, by card.
+    pub cards: Vec<(gpui_kit::ElementId, Instant)>,
     #[cfg(feature = "harness")]
     pub notified: Vec<Instant>,
 }

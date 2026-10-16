@@ -171,7 +171,11 @@ impl Render for Card {
         let offer = {
             let shell = shell.read(cx);
             #[cfg(any(test, feature = "harness"))]
-            shell.draws.borrow_mut().cards.push(now);
+            shell
+                .draws
+                .borrow_mut()
+                .cards
+                .push((self.name.clone(), now));
             shell.cards.offer(&self.name)
         };
         let Some(offer) = offer else {

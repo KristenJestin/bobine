@@ -296,11 +296,19 @@ mod tests {
             .unwrap()
     }
 
-    fn draws(window: &WindowHandle<Shell>, cx: &mut VisualTestContext) -> (usize, usize) {
+    /// How many times the shell was drawn, and each card.
+    fn draws(
+        window: &WindowHandle<Shell>,
+        cx: &mut VisualTestContext,
+    ) -> (usize, std::collections::HashMap<ElementId, usize>) {
         window
             .read_with(cx, |shell, _| {
                 let draws = shell.draws.borrow();
-                (draws.shell.len(), draws.cards.len())
+                let mut cards = std::collections::HashMap::new();
+                for (id, _) in &draws.cards {
+                    *cards.entry(id.clone()).or_default() += 1;
+                }
+                (draws.shell.len(), cards)
             })
             .unwrap()
     }
@@ -360,9 +368,20 @@ mod tests {
         }
 
         let (shell_after, cards_after) = draws(&window, cx);
+        let drawn = |cards: &std::collections::HashMap<ElementId, usize>, card: &ElementId| {
+            cards.get(card).copied().unwrap_or(0)
+        };
         assert!(
-            cards_after - cards_before >= 4,
+            drawn(&cards_after, &id) - drawn(&cards_before, &id) >= 4,
             "the card must have been drawn"
+        );
+        let others: Vec<&ElementId> = cards_after
+            .keys()
+            .filter(|card| *card != &id && drawn(&cards_after, card) != drawn(&cards_before, card))
+            .collect();
+        assert!(
+            others.is_empty(),
+            "other cards were drawn again: {others:?}"
         );
         assert_eq!(notified.get(), 0, "the shell was notified");
         assert_eq!(shell_after - shell_before, 0, "the shell was built again");
