@@ -6,9 +6,11 @@
 
 mod keyring;
 mod secret;
+mod trickplay;
 
 pub use keyring::{SecretServiceStore, TokenStore};
 pub use secret::{StreamUrl, Token};
+pub use trickplay::{Cell, Trickplay, WANTED_WIDTH};
 
 #[cfg(test)]
 pub use keyring::MemoryStore;
