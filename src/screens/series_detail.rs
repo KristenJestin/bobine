@@ -484,11 +484,9 @@ pub fn up_next_card(
     let (_, subtitle) = series_page::player_title(&episode);
     let play = theme::primary_button("up-next-play", Some(IconName::Play), "Play", window, cx)
         .px(px(16.))
-        .py(px(9.))
         .on_click(cx.listener(|shell, _, window, cx| shell.play_up_next_now(window, cx)));
     let cancel = theme::ghost_button("up-next-cancel", None, "Cancel", window, cx)
         .px(px(16.))
-        .py(px(9.))
         .on_click(cx.listener(|shell, _, _, cx| {
             shell.cancel_up_next(cx);
         }));
