@@ -156,7 +156,7 @@ pub fn primary_button(
 ) -> Stateful<Div> {
     let shades = Shades {
         rest: rgb(0xffffff),
-        hover: rgb(0xe5e5e5),
+        hover: rgb(0xe4e4e7),
         press: rgb(0xd4d4d8),
     };
     eased(id, shades, window, cx)
