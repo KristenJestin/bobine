@@ -163,28 +163,12 @@ enum Answer {
     Empty(u16),
 }
 
-/// Lowercase, without accents: how the fake server orders names ("É" sorts with "E").
-fn folded(text: &str) -> String {
-    text.to_lowercase()
-        .chars()
-        .map(|c| match c {
-            'à' | 'â' | 'ä' => 'a',
-            'é' | 'è' | 'ê' | 'ë' => 'e',
-            'î' | 'ï' => 'i',
-            'ô' | 'ö' => 'o',
-            'ù' | 'û' | 'ü' => 'u',
-            'ç' => 'c',
-            other => other,
-        })
-        .collect()
-}
-
 /// What an item is ordered by for one `SortBy` field: nothing sorts before everything.
 fn sort_key(item: &Value, field: &str) -> (bool, f64, String) {
     match &item[field] {
         Value::Null => (false, 0., String::new()),
         Value::Number(n) => (true, n.as_f64().unwrap(), String::new()),
-        Value::String(text) => (true, 0., folded(text)),
+        Value::String(text) => (true, 0., text.clone()),
         other => (true, 0., other.to_string()),
     }
 }
@@ -212,7 +196,9 @@ fn passes(item: &Value, seen: &Seen) -> bool {
         return false;
     }
     if let Some(before) = seen.param("NameLessThan")
-        && folded(item["SortName"].as_str().unwrap()) >= folded(before)
+        // The raw strings: SortName is stored lowercase and accents stay, so "éclipse" sorts
+        // after "z", and a letter sent in uppercase sorts before every title.
+        && item["SortName"].as_str().unwrap() >= before
     {
         return false;
     }

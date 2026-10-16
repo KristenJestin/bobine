@@ -226,7 +226,9 @@ impl Jellyfin {
             asked.push(("isPlayed", "false".into()));
         }
         if let Some(letter) = query.before {
-            asked.push(("nameLessThan", letter.to_string()));
+            // SortName is stored in lowercase and compared as it is: an uppercase letter would
+            // sort before every title.
+            asked.push(("nameLessThan", letter.to_lowercase().to_string()));
         }
         self.items(what, &asked)
     }

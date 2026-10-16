@@ -618,16 +618,27 @@ fn first_of(server: &dyn MediaServer, letter: char, filters: Filters) -> u32 {
 fn the_index_of_a_letter_is_the_count_of_the_titles_before_it() {
     let s = Setup::new();
     let server = s.signed_in();
-    // "(Untitled)" and "1984 Remix" come first, then "Amber Road", "Brume"…
+    // "(untitled)" and "1984 remix" come first, then "amber road", "brume"…
     assert_eq!(first_of(&*server, 'A', Filters::default()), 2);
     assert_eq!(first_of(&*server, 'B', Filters::default()), 3);
-    assert_eq!(first_of(&*server, 'G', Filters::default()), 8);
-    assert_eq!(first_of(&*server, 'Z', Filters::default()), 9);
+    assert_eq!(first_of(&*server, 'G', Filters::default()), 6);
+    assert_eq!(first_of(&*server, 'Z', Filters::default()), 7);
     let asked = s.fake.last("GET", "/Items");
     assert_eq!(asked.param("ParentId"), Some(LETTERS_LIBRARY));
-    assert_eq!(asked.param("NameLessThan"), Some("Z"));
     assert_eq!(asked.param("SortBy"), Some("SortName"));
     assert_eq!(asked.param("SortOrder"), Some("Ascending"));
+}
+
+#[test]
+fn the_letter_is_sent_in_lowercase_as_sort_names_are_stored() {
+    // Jellyfin keeps SortName in lowercase and compares the bytes: "Z" would sort before
+    // every one of them.
+    let s = Setup::new();
+    first_of(&*s.signed_in(), 'Z', Filters::default());
+    assert_eq!(
+        s.fake.last("GET", "/Items").param("NameLessThan"),
+        Some("z")
+    );
 }
 
 #[test]
@@ -639,20 +650,51 @@ fn the_index_of_a_letter_asks_for_one_title_never_for_none() {
 }
 
 #[test]
-fn an_accented_title_is_counted_with_its_unaccented_letter() {
+fn the_jump_to_a_letter_matches_the_order_the_server_lists_in() {
+    // Whatever the server does with accents, the count and the list are its own: the titles
+    // before the index are the ones that sort before the letter, the others are not.
     let s = Setup::new();
     let server = s.signed_in();
-    // "Éclipse" and "Écume" sit among the E titles: F starts after "Eden".
-    assert_eq!(first_of(&*server, 'E', Filters::default()), 4);
-    assert_eq!(first_of(&*server, 'F', Filters::default()), 7);
+    let listed = server
+        .films(&letters(), &query(FilmSort::Title, false, 0, 100))
+        .unwrap()
+        .items;
+    for letter in 'A'..='Z' {
+        let index = first_of(&*server, letter, Filters::default()) as usize;
+        let before = |title: &str| title.to_lowercase() < letter.to_lowercase().to_string();
+        assert!(listed[..index].iter().all(|f| before(&f.title)), "{letter}");
+        assert!(
+            listed[index..].iter().all(|f| !before(&f.title)),
+            "{letter}"
+        );
+    }
+}
+
+#[test]
+fn an_accented_title_is_wherever_the_server_puts_it() {
+    // The fake server keeps accents and compares bytes, as Jellyfin is believed to: "Éclipse"
+    // and "Écume" come after "Zèbre", so the jump to E lands on "Eden", not on them. What a
+    // real server does is not verified.
+    let s = Setup::new();
+    let server = s.signed_in();
+    let listed = server
+        .films(&letters(), &query(FilmSort::Title, false, 0, 100))
+        .unwrap()
+        .items;
+    let titles: Vec<&str> = listed.iter().map(|f| f.title.as_str()).collect();
+    assert_eq!(titles[7..], ["Zèbre", "Éclipse", "Écume"]);
+    assert_eq!(
+        titles[first_of(&*server, 'E', Filters::default()) as usize],
+        "Eden"
+    );
 }
 
 #[test]
 fn the_index_of_a_letter_counts_within_the_filtered_list() {
     let s = Setup::new();
     let server = s.signed_in();
-    // Drama only: "1984 Remix", "Amber Road", "Éclipse", "Écume", "Gale".
-    assert_eq!(first_of(&*server, 'F', genre("Drama")), 4);
+    // Drama only: "1984 Remix", "Amber Road", "Gale", "Éclipse", "Écume": two before F.
+    assert_eq!(first_of(&*server, 'F', genre("Drama")), 2);
     assert_eq!(s.fake.last("GET", "/Items").param("Genres"), Some("Drama"));
 }
 
