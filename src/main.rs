@@ -19,6 +19,7 @@ mod reports;
 mod screens;
 mod scroll;
 mod search;
+mod series_page;
 mod shell;
 mod start;
 mod theme;

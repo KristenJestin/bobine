@@ -17,6 +17,10 @@ pub const FILM: &str = "f0000000000000000000000000000001";
 pub const SOURCE: &str = "5a000000000000000000000000000001";
 pub const PLAY_SESSION: &str = "9c0ffee09c0ffee09c0ffee09c0ffee0";
 pub const IMAGE: &[u8] = b"\x89PNG fake image";
+pub const SERIES_LIBRARY: &str = "22222222222222222222222222222222";
+pub const SERIES: &str = "50000000000000000000000000000001";
+pub const SEASON: &str = "5e000000000000000000000000000002";
+pub const EPISODE: &str = "e0000000000000000000000000000021";
 
 fn fixture(name: &str) -> Value {
     let text = match name {
@@ -30,11 +34,17 @@ fn fixture(name: &str) -> Value {
         "boxset_harbour_trilogy" => include_str!("fixtures/boxset_harbour_trilogy.json"),
         "similar" => include_str!("fixtures/similar.json"),
         "resume" => include_str!("fixtures/resume.json"),
-        "series" => include_str!("fixtures/series.json"),
+        "search_series" => include_str!("fixtures/search_series.json"),
         "persons" => include_str!("fixtures/persons.json"),
         "person_titles" => include_str!("fixtures/person_titles.json"),
         "person_episodes" => include_str!("fixtures/person_episodes.json"),
         "playback_info" => include_str!("fixtures/playback_info.json"),
+        "series" => include_str!("fixtures/series.json"),
+        "series_detail" => include_str!("fixtures/series_detail.json"),
+        "series_similar" => include_str!("fixtures/series_similar.json"),
+        "seasons" => include_str!("fixtures/seasons.json"),
+        "episodes" => include_str!("fixtures/episodes.json"),
+        "next_up" => include_str!("fixtures/next_up.json"),
         _ => panic!("no fixture {name}"),
     };
     serde_json::from_str(text).unwrap()
@@ -77,6 +87,8 @@ pub struct State {
     pub account_disabled: bool,
     /// How long an image takes to be answered (a server converting a person's photo).
     pub image_delay: std::time::Duration,
+    /// Every episode of every series is watched: Next Up has nothing.
+    pub all_watched: bool,
     /// How many search requests are held until they have all arrived (0: none held), to tell
     /// requests sent at the same time from requests sent one after another.
     pub search_gate: usize,
@@ -149,9 +161,9 @@ enum Answer {
     Empty(u16),
 }
 
-/// The films of the library in the order asked, one page of them.
-fn films(seen: &Seen) -> Value {
-    let mut films = fixture("films").as_array().unwrap().clone();
+/// The films (or series) of the library in the order asked, one page of them.
+fn films(seen: &Seen, fixture_name: &str) -> Value {
+    let mut films = fixture(fixture_name).as_array().unwrap().clone();
     let by = seen.param("SortBy").unwrap_or("SortName");
     let first = by.split(',').next().unwrap();
     films.sort_by_key(|f| f[first].to_string());
@@ -262,10 +274,11 @@ fn answer(state: &State, seen: &Seen) -> Answer {
                 Answer::Json(200, matching("films", seen))
             }
             (_, Some("Series")) if seen.param("SearchTerm").is_some() => {
-                Answer::Json(200, matching("series", seen))
+                Answer::Json(200, matching("search_series", seen))
             }
             _ if seen.param("PersonIds").is_some() => Answer::Json(200, person_titles(seen)),
-            (Some(FILMS_LIBRARY), _) => Answer::Json(200, films(seen)),
+            (Some(FILMS_LIBRARY), _) => Answer::Json(200, films(seen, "films")),
+            (Some(SERIES_LIBRARY), Some("Series")) => Answer::Json(200, films(seen, "series")),
             (None, Some("BoxSet")) => Answer::Json(200, fixture("boxsets")),
             (Some("b0000000000000000000000000000001"), _) => {
                 Answer::Json(200, fixture("boxset_sea_stories"))
@@ -284,14 +297,46 @@ fn answer(state: &State, seen: &Seen) -> Answer {
         ("POST", path) if path == format!("/Items/{FILM}/PlaybackInfo") => {
             Answer::Json(200, fixture("playback_info"))
         }
+        ("POST", path) if path == format!("/Items/{EPISODE}/PlaybackInfo") => {
+            let episode = &fixture("episodes")["Items"][0];
+            Answer::Json(
+                200,
+                json!({ "MediaSources": episode["MediaSources"], "PlaySessionId": PLAY_SESSION }),
+            )
+        }
         (
             "POST",
             "/Sessions/Playing" | "/Sessions/Playing/Progress" | "/Sessions/Playing/Stopped",
         ) => Answer::Empty(204),
-        ("POST" | "DELETE", path) if path == format!("/UserPlayedItems/{FILM}") => Answer::Json(
-            200,
-            json!({ "Played": seen.method == "POST", "PlaybackPositionTicks": 0, "Key": FILM }),
-        ),
+        ("GET", path) if path == format!("/Items/{SERIES}") => {
+            Answer::Json(200, fixture("series_detail"))
+        }
+        ("GET", path) if path == format!("/Items/{SERIES}/Similar") => {
+            Answer::Json(200, fixture("series_similar"))
+        }
+        ("GET", path) if path == format!("/Shows/{SERIES}/Seasons") => {
+            Answer::Json(200, fixture("seasons"))
+        }
+        ("GET", path) if path == format!("/Shows/{SERIES}/Episodes") => {
+            match seen.param("SeasonId") {
+                Some(SEASON) => Answer::Json(200, fixture("episodes")),
+                _ => Answer::Json(200, json!({ "Items": [], "TotalRecordCount": 0 })),
+            }
+        }
+        ("GET", "/Shows/NextUp") => match seen.param("SeriesId") {
+            Some(SERIES) if !state.all_watched => Answer::Json(200, fixture("next_up")),
+            _ => Answer::Json(200, json!({ "Items": [], "TotalRecordCount": 0 })),
+        },
+        ("POST" | "DELETE", path)
+            if [FILM, SEASON, EPISODE]
+                .iter()
+                .any(|id| path == format!("/UserPlayedItems/{id}")) =>
+        {
+            Answer::Json(
+                200,
+                json!({ "Played": seen.method == "POST", "PlaybackPositionTicks": 0 }),
+            )
+        }
         ("GET", path) if path.starts_with(&images) => Answer::Bytes(IMAGE.to_vec()),
         _ => Answer::Empty(404),
     }

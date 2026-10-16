@@ -2,9 +2,11 @@
 
 mod pages;
 mod palette;
+mod series;
 
-pub use pages::{Chip, DetailPage, Loadable, LoginForm, OpenConnector};
-pub use palette::{PersonPage, SERIES_PAGE, SearchState};
+pub use pages::{Chip, DetailPage, LibraryPage, Loadable, LoginForm, OpenConnector};
+pub use palette::{PersonPage, SearchState};
+pub use series::SeriesPage;
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -17,11 +19,11 @@ use gpui_kit::{
     Render, SharedString, Size, Subscription, Task, Window, div, px,
 };
 
-use bobine::provider::{Connector, MediaServer};
+use bobine::provider::{Connector, Episode, Film as FilmItem, MediaServer, Series};
 
 use crate::chrome::{back_link, pill_bar};
 use crate::images::Images;
-use crate::motion::{self, Fade};
+use crate::motion::{self, Fade, Presence};
 use crate::navigation::{Navigator, Screen};
 use crate::player::libmpv::Libmpv;
 use crate::player::mpv::MpvPlayer;
@@ -30,6 +32,7 @@ use crate::player::{Media, Player};
 use crate::reports::{self, Reporting};
 use crate::screens;
 use crate::search;
+use crate::series_page::{self, UpNext};
 use crate::theme;
 use crate::video::Rect;
 use crate::video::subsurface::{VideoSurface, Wayland};
@@ -69,6 +72,33 @@ fn focus_to(login_shown: bool, address_due: &mut bool, nothing_focused: bool) ->
     FocusTo::Keep
 }
 
+/// What becomes of a fullscreen kept for the next episode, at a draw.
+#[derive(Debug, PartialEq, Eq)]
+enum KeptFullscreen {
+    /// Still kept, or nothing was.
+    Keep,
+    /// The next episode plays: the fullscreen is the player's again.
+    Release,
+    /// The card was cancelled, or the next episode did not play: the window leaves it.
+    GiveBack,
+}
+
+/// `kept`: the fullscreen is kept for the next episode; `on_player`, it plays; `card`, the card
+/// counts down; `waiting`, the series page opens the next episode.
+fn kept_fullscreen(kept: bool, on_player: bool, card: bool, waiting: bool) -> KeptFullscreen {
+    match (kept, on_player) {
+        (false, _) => KeptFullscreen::Keep,
+        (true, true) => KeptFullscreen::Release,
+        (true, false) if card || waiting => KeptFullscreen::Keep,
+        (true, false) => KeptFullscreen::GiveBack,
+    }
+}
+
+/// Leaving the player in fullscreen keeps it only for the next episode the card offers.
+fn keeps_fullscreen(offered: bool, fullscreen: bool) -> bool {
+    offered && fullscreen
+}
+
 pub struct Shell {
     pub navigator: Navigator,
     focus: FocusHandle,
@@ -84,9 +114,20 @@ pub struct Shell {
     /// The login was just shown: its address field takes the focus at the next draw.
     login_focus_due: bool,
     pub home: pages::HomePage,
-    pub library: pages::LibraryPage,
+    pub library: pages::LibraryPage<FilmItem>,
+    pub series: pages::LibraryPage<Series>,
     /// The film pages open, the last one on top: one per `Screen::FilmDetail` of the navigator.
     pub details: Vec<DetailPage>,
+    /// The series pages open, the last one on top: one per `Screen::SeriesDetail`.
+    pub series_pages: Vec<SeriesPage>,
+    /// The "Épisode suivant" card over the series page, after an episode ended.
+    pub up_next: UpNext,
+    up_next_ticker: Option<Task<()>>,
+    /// The card fades in and out; the episode it showed stays drawn while it fades out.
+    pub up_next_fade: Presence<Episode>,
+    /// The episode ended in fullscreen: the window stays so while the card counts down, and
+    /// leaves it if the next episode does not play.
+    fullscreen_kept: bool,
     /// The person pages open, the last one on top: one per `Screen::Person` of the navigator.
     pub people: Vec<PersonPage>,
     /// The search palette, while it shows (it stays fading out after it closed).
@@ -118,6 +159,8 @@ pub struct Playback {
     had_error: bool,
     /// What the server is told; `None` for a local file.
     reporting: Option<Reporting>,
+    /// The episode after the one playing: the card offers it at the end.
+    next: Option<Episode>,
     _ticker: Task<()>,
     _bounds: Subscription,
 }
@@ -143,7 +186,13 @@ impl Shell {
             login_focus_due: false,
             home: Default::default(),
             library: Default::default(),
+            series: Default::default(),
             details: Vec::new(),
+            series_pages: Vec::new(),
+            up_next: UpNext::default(),
+            up_next_ticker: None,
+            up_next_fade: Presence::new(motion::quick()),
+            fullscreen_kept: false,
             people: Vec::new(),
             search: None,
             images: Images::default(),
@@ -209,6 +258,7 @@ impl Shell {
             controls_shown: false,
             had_error: false,
             reporting,
+            next: None,
             _ticker: ticker,
             _bounds: bounds,
         });
@@ -239,14 +289,29 @@ impl Shell {
         self.wayland = None;
     }
 
-    fn leave_player(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if window.is_fullscreen() {
+    /// Back to the page the film was started from. `ended`: the file ended by itself, and the
+    /// card may offer the next episode.
+    fn leave_player(&mut self, ended: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let next = self.playback.as_mut().and_then(|playback| {
+            let session = &playback.session;
+            series_page::offered_on_leaving(
+                ended,
+                playback.next.take(),
+                session.position,
+                session.duration,
+            )
+        });
+        self.fullscreen_kept = keeps_fullscreen(next.is_some(), window.is_fullscreen());
+        if window.is_fullscreen() && !self.fullscreen_kept {
             window.toggle_fullscreen();
         }
         let reports = self.stop_playback();
         self.navigator.back();
         if let Some(reports) = reports {
             self.after_playback(reports, cx);
+        }
+        if let Some(next) = next {
+            self.start_up_next(next, window, cx);
         }
         cx.notify();
     }
@@ -280,7 +345,7 @@ impl Shell {
         }
         if ended {
             // The end of the film: back to where it was started from.
-            self.leave_player(window, cx);
+            self.leave_player(true, window, cx);
             return;
         }
         let shown = playback.session.controls_visible(now);
@@ -324,14 +389,14 @@ impl Shell {
             Some(WindowRequest::ToggleFullscreen | WindowRequest::ExitFullscreen) => {
                 window.toggle_fullscreen();
             }
-            Some(WindowRequest::Leave) => self.leave_player(window, cx),
+            Some(WindowRequest::Leave) => self.leave_player(false, window, cx),
             None => {}
         }
         cx.notify();
     }
 
     pub fn player_back(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.leave_player(window, cx);
+        self.leave_player(false, window, cx);
     }
 }
 
@@ -341,6 +406,9 @@ impl Render for Shell {
         if window.viewport_size() != self.viewport {
             self.viewport = window.viewport_size();
             for page in &mut self.details {
+                page.menus.close();
+            }
+            for page in &mut self.series_pages {
                 page.menus.close();
             }
         }
@@ -369,7 +437,26 @@ impl Render for Shell {
         let screen = self.navigator.current();
         let back_label = self.navigator.back_label();
         let playing = screen == Screen::Player && self.playback.is_some();
-        let page = (screen, self.details.len() + self.people.len());
+        // The next episode playing keeps the fullscreen; anything else gives it back.
+        match kept_fullscreen(
+            self.fullscreen_kept,
+            screen == Screen::Player,
+            self.up_next.episode().is_some(),
+            self.series_pages.last().is_some_and(SeriesPage::waiting),
+        ) {
+            KeptFullscreen::Keep => {}
+            KeptFullscreen::Release => self.fullscreen_kept = false,
+            KeptFullscreen::GiveBack => {
+                self.fullscreen_kept = false;
+                if window.is_fullscreen() {
+                    window.toggle_fullscreen();
+                }
+            }
+        }
+        let page = (
+            screen,
+            self.details.len() + self.series_pages.len() + self.people.len(),
+        );
         if page != self.page {
             self.turned_forward = page.1 > self.page.1;
             self.page = page;
@@ -439,6 +526,9 @@ impl Render for Shell {
                     )
                     .into_any_element(),
             })
+            .when(screen == Screen::SeriesDetail, |root| {
+                root.children(screens::up_next_card(self, window, cx))
+            })
             .when(screen.shows_pill_bar(), |root| {
                 root.child(pill_bar(screen, window, cx))
             })
@@ -453,6 +543,24 @@ impl Render for Shell {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fullscreen_is_kept_through_auto_next_and_given_back_on_cancel() {
+        use KeptFullscreen::*;
+        // The episode ends in fullscreen, a card is offered: the window stays so.
+        let kept = keeps_fullscreen(true, true);
+        assert!(kept);
+        assert_eq!(kept_fullscreen(kept, false, true, false), Keep);
+        // The countdown ends, the next episode opens, then plays.
+        assert_eq!(kept_fullscreen(kept, false, false, true), Keep);
+        assert_eq!(kept_fullscreen(kept, true, false, false), Release);
+        // Cancelled instead: given back.
+        assert_eq!(kept_fullscreen(kept, false, false, false), GiveBack);
+        // Left before the end, or not in fullscreen: nothing kept.
+        assert!(!keeps_fullscreen(false, true));
+        assert!(!keeps_fullscreen(true, false));
+        assert_eq!(kept_fullscreen(false, false, false, false), Keep);
+    }
 
     #[test]
     fn the_login_shown_takes_the_focus_the_root_had_taken_meanwhile() {

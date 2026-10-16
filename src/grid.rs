@@ -6,7 +6,7 @@ use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::time::{Duration, Instant};
 
-use bobine::provider::{Film, FilmQuery, FilmSort, Page};
+use bobine::provider::{Film, FilmQuery, FilmSort, ItemId, Page, Series};
 
 /// Films per request.
 pub const PAGE: u32 = 100;
@@ -50,22 +50,49 @@ pub fn query(page: u32) -> FilmQuery {
     }
 }
 
-#[derive(Default)]
-pub struct Grid {
+/// What a grid shows: films or series.
+pub trait Listed: Clone {
+    fn id(&self) -> &ItemId;
+}
+
+impl Listed for Film {
+    fn id(&self) -> &ItemId {
+        &self.id
+    }
+}
+
+impl Listed for Series {
+    fn id(&self) -> &ItemId {
+        &self.id
+    }
+}
+
+pub struct Grid<T> {
     /// Known once the first page came back.
     pub total: Option<u32>,
-    pages: HashMap<u32, Vec<Film>>,
+    pages: HashMap<u32, Vec<T>>,
     asked: HashSet<u32>,
     /// How many times a page failed, and when it last did.
     failures: HashMap<u32, (u32, Instant)>,
 }
 
-impl Grid {
+impl<T> Default for Grid<T> {
+    fn default() -> Self {
+        Self {
+            total: None,
+            pages: HashMap::new(),
+            asked: HashSet::new(),
+            failures: HashMap::new(),
+        }
+    }
+}
+
+impl<T: Listed> Grid<T> {
     pub fn rows(&self, columns: usize) -> usize {
         (self.total.unwrap_or(0) as usize).div_ceil(columns.max(1))
     }
 
-    pub fn film(&self, index: usize) -> Option<&Film> {
+    pub fn film(&self, index: usize) -> Option<&T> {
         let page = (index / PAGE as usize) as u32;
         self.pages.get(&page)?.get(index % PAGE as usize)
     }
@@ -89,7 +116,7 @@ impl Grid {
         }
     }
 
-    pub fn loaded(&mut self, page: u32, films: Page<Film>) {
+    pub fn loaded(&mut self, page: u32, films: Page<T>) {
         self.failures.remove(&page);
         self.total = Some(films.total);
         self.pages.insert(page, films.items);
@@ -102,10 +129,11 @@ impl Grid {
         self.failures.insert(page, (failures + 1, now));
     }
 
-    /// A film changed (watched, resume point): the grid shows it as it is now.
-    pub fn update(&mut self, film: &Film) {
+    /// A film or a series changed (watched, resume point, episodes left): the grid shows it as
+    /// it is now.
+    pub fn update(&mut self, film: &T) {
         for page in self.pages.values_mut() {
-            for found in page.iter_mut().filter(|f| f.id == film.id) {
+            for found in page.iter_mut().filter(|f| f.id() == film.id()) {
                 *found = film.clone();
             }
         }
@@ -116,7 +144,7 @@ impl Grid {
 mod tests {
     use super::*;
     use crate::fake::FakeServer;
-    use bobine::provider::{ItemId, MediaServer};
+    use bobine::provider::MediaServer;
 
     #[test]
     fn eight_columns_at_1440_fewer_when_narrower() {
@@ -143,7 +171,7 @@ mod tests {
 
     #[test]
     fn only_the_pages_of_the_visible_rows_are_asked_once() {
-        let mut grid = Grid::default();
+        let mut grid = Grid::<Film>::default();
         let now = Instant::now();
         assert_eq!(grid.pages_to_ask(0..24, now), [0]);
         assert_eq!(grid.pages_to_ask(0..24, now), Vec::<u32>::new());
@@ -153,7 +181,7 @@ mod tests {
 
     #[test]
     fn a_failed_page_is_not_asked_again_at_every_render() {
-        let mut grid = Grid::default();
+        let mut grid = Grid::<Film>::default();
         let now = Instant::now();
         assert_eq!(grid.pages_to_ask(0..8, now), [0]);
         grid.failed(0, now);
@@ -166,7 +194,7 @@ mod tests {
 
     #[test]
     fn a_failed_page_is_asked_again_after_the_delay() {
-        let mut grid = Grid::default();
+        let mut grid = Grid::<Film>::default();
         let now = Instant::now();
         grid.pages_to_ask(0..8, now);
         grid.failed(0, now);
@@ -176,7 +204,7 @@ mod tests {
 
     #[test]
     fn a_page_that_always_fails_is_given_up_after_a_few_retries() {
-        let mut grid = Grid::default();
+        let mut grid = Grid::<Film>::default();
         let mut now = Instant::now();
         let mut asks = 0;
         for _ in 0..50 {
@@ -189,7 +217,7 @@ mod tests {
 
     #[test]
     fn a_page_that_failed_does_not_hold_back_the_others() {
-        let mut grid = Grid::default();
+        let mut grid = Grid::<Film>::default();
         let now = Instant::now();
         grid.pages_to_ask(0..8, now);
         grid.failed(0, now);
@@ -199,7 +227,7 @@ mod tests {
     #[test]
     fn thousands_of_films_make_rows_from_the_total_and_show_as_pages_come() {
         let server = FakeServer::new(1284, true);
-        let mut grid = Grid::default();
+        let mut grid = Grid::<Film>::default();
         assert_eq!(grid.rows(8), 0);
         let library = ItemId(crate::fake::FILMS_LIBRARY.into());
         grid.loaded(0, server.films(&library, &query(0)).unwrap());

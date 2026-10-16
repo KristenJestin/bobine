@@ -8,8 +8,8 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use bobine::provider::{
-    Collection, Connector, Film, FilmDetail, ItemId, LibraryKind, MediaServer, Playback as Opened,
-    PlaybackReport, ProviderError,
+    Collection, Connector, Episode, Film, FilmDetail, FilmQuery, ItemId, LibraryKind, MediaServer,
+    MediaSource, Page, Playback as Opened, PlaybackReport, ProviderError,
 };
 use gpui_kit::prelude::*;
 use gpui_kit::{
@@ -19,7 +19,7 @@ use gpui_kit::{
 
 use super::{Film as Playing, Shell};
 use crate::film_page::{self, Choices, From, Plan};
-use crate::grid::{self, Grid};
+use crate::grid::{self, Grid, Listed};
 use crate::images::{self, Key};
 use crate::input::TextInput;
 use crate::menu::Menus;
@@ -57,12 +57,84 @@ pub struct HomePage {
     pub resume: Option<Loadable<Vec<Film>>>,
 }
 
-#[derive(Default)]
-pub struct LibraryPage {
-    /// The first library of films of the user.
+/// The films or the series of the first library of their kind of the user.
+pub struct LibraryPage<T> {
     pub library: Option<Loadable<ItemId>>,
-    pub grid: Grid,
+    pub grid: Grid<T>,
     pub scroll: UniformListScrollHandle,
+}
+
+impl<T> Default for LibraryPage<T> {
+    fn default() -> Self {
+        Self {
+            library: None,
+            grid: Grid::default(),
+            scroll: UniformListScrollHandle::default(),
+        }
+    }
+}
+
+/// The page shown again once the player is left, asked anew.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Reload {
+    Series(usize),
+    Film(usize),
+}
+
+/// What is asked again after a playback, on `screen`, the one back to: the series page on top,
+/// else the film page on top, if any.
+pub fn reload_after_playback(screen: Screen, films: usize, series: usize) -> Option<Reload> {
+    if screen == Screen::SeriesDetail {
+        return series.checked_sub(1).map(Reload::Series);
+    }
+    films.checked_sub(1).map(Reload::Film)
+}
+
+/// The page a play button was pressed on, at its depth, with what it shows.
+pub enum Origin {
+    Film(usize, ItemId),
+    Series(usize, ItemId),
+}
+
+/// The wheel or the touchpad over a detail page: the page goes up and down, the row under the
+/// pointer sideways, never both. Whether something moved.
+pub fn route_wheel(
+    page: &ScrollHandle,
+    rows: &[ScrollHandle],
+    gesture: &mut scroll::Gesture,
+    event: &ScrollWheelEvent,
+    window: &Window,
+) -> bool {
+    let delta = event.delta.pixel_delta(window.line_height());
+    let wheel = Wheel {
+        dx: delta.x.into(),
+        dy: delta.y.into(),
+        precise: event.delta.precise(),
+        shift: event.modifiers.shift,
+        phase: match event.touch_phase {
+            TouchPhase::Started => Phase::Started,
+            TouchPhase::Moved => Phase::Moved,
+            TouchPhase::Ended | TouchPhase::Cancelled => Phase::Ended,
+        },
+    };
+    let row = rows
+        .iter()
+        .position(|row| row.bounds().contains(&event.position));
+    let (handle, delta) = match gesture.route(wheel, row, Instant::now()) {
+        Some(Move::Page(dy)) => (page, point(px(0.), px(dy))),
+        Some(Move::Row(row, dx)) => (&rows[row], point(px(dx), px(0.))),
+        None => return false,
+    };
+    let (offset, max) = (handle.offset(), handle.max_offset());
+    let to = point(
+        px(scroll::moved(offset.x.into(), delta.x.into(), max.x.into())),
+        px(scroll::moved(offset.y.into(), delta.y.into(), max.y.into())),
+    );
+    if to == offset {
+        return false;
+    }
+    handle.set_offset(to);
+    true
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -74,6 +146,15 @@ pub enum Chip {
 
 impl Chip {
     pub const ALL: [Chip; 3] = [Chip::Version, Chip::Audio, Chip::Subtitle];
+
+    /// The choice made in this chip's menu, for a film or an episode with `versions`.
+    pub fn choose(self, choices: &mut Choices, versions: &[MediaSource], value: Option<i32>) {
+        match self {
+            Chip::Version => choices.set_version(versions, value.unwrap_or(0) as usize),
+            Chip::Audio => choices.audio = value,
+            Chip::Subtitle => choices.subtitle = value,
+        }
+    }
 }
 
 pub struct DetailPage {
@@ -104,6 +185,12 @@ impl DetailPage {
         }
     }
 }
+
+/// One page of the films or series of a library, from the server.
+type Fetch<T> = fn(&dyn MediaServer, &ItemId, &FilmQuery) -> Result<Page<T>, ProviderError>;
+
+/// Where a chip was last drawn, so its menu opens under it.
+pub type ChipBounds = Rc<Cell<Option<Bounds<Pixels>>>>;
 
 /// Opens the connector (the account file and the keyring): it blocks, so it runs off the
 /// window's thread, once, at the start.
@@ -157,6 +244,8 @@ impl Shell {
         self.login_focus_due = true;
         self.server = None;
         self.details.clear();
+        self.series_pages.clear();
+        self.up_next.cancel();
         self.people.clear();
         self.search = None;
         self.navigator.switch_root(Screen::Login);
@@ -244,7 +333,9 @@ impl Shell {
         self.login = None;
         self.home = HomePage::default();
         self.library = LibraryPage::default();
+        self.series = LibraryPage::default();
         self.details.clear();
+        self.series_pages.clear();
         self.people.clear();
         self.search = None;
         // The atlas holds the old images until they are dropped from it.
@@ -295,6 +386,8 @@ impl Shell {
             return;
         }
         self.details.clear();
+        self.series_pages.clear();
+        self.up_next.cancel();
         self.people.clear();
         self.arrived(cx);
         cx.notify();
@@ -303,14 +396,12 @@ impl Shell {
     /// Escape or the back link.
     pub fn go_back(&mut self, cx: &mut Context<Self>) -> bool {
         match self.navigator.current() {
-            Screen::FilmDetail => {
-                self.details.pop();
-            }
-            Screen::Person => {
-                self.people.pop();
-            }
+            Screen::FilmDetail => drop(self.details.pop()),
+            Screen::SeriesDetail => drop(self.series_pages.pop()),
+            Screen::Person => drop(self.people.pop()),
             _ => {}
         }
+        self.up_next.cancel();
         if !self.navigator.back() {
             return false;
         }
@@ -323,7 +414,12 @@ impl Shell {
     fn arrived(&mut self, cx: &mut Context<Self>) {
         match self.navigator.current() {
             Screen::Home => self.load_home(cx),
-            Screen::Library if self.library.library.is_none() => self.load_library(cx),
+            Screen::Library if self.library.library.is_none() => {
+                self.load_library(LibraryKind::Films, cx)
+            }
+            Screen::Series if self.series.library.is_none() => {
+                self.load_library(LibraryKind::Series, cx)
+            }
             _ => {}
         }
     }
@@ -344,45 +440,87 @@ impl Shell {
         );
     }
 
-    fn load_library(&mut self, cx: &mut Context<Self>) {
-        self.library.library = Some(Loadable::Loading);
+    /// The first library of `kind` of the user, then its first page.
+    fn load_library(&mut self, kind: LibraryKind, cx: &mut Context<Self>) {
+        *self.library_of(kind) = Some(Loadable::Loading);
         self.ask(
             cx,
-            |server| {
+            move |server| {
                 let libraries = server.libraries()?;
                 Ok(libraries
                     .into_iter()
-                    .find(|library| library.kind == LibraryKind::Films)
+                    .find(|library| library.kind == kind)
                     .map(|library| library.id))
             },
-            |shell, found: Result<Option<ItemId>, ProviderError>, cx| {
-                shell.library.library = Some(match found {
+            move |shell, found: Result<Option<ItemId>, ProviderError>, cx| {
+                let loaded = match found {
                     Ok(Some(library)) => Loadable::Ready(library),
+                    Ok(None) if kind == LibraryKind::Series => {
+                        Loadable::Failed("Aucune bibliothèque de séries sur ce serveur.")
+                    }
                     Ok(None) => Loadable::Failed("Aucune bibliothèque de films sur ce serveur."),
                     Err(error) => Loadable::Failed(shell.failed(error, cx)),
-                });
-                shell.ask_films(0..1, cx);
+                };
+                *shell.library_of(kind) = Some(loaded);
+                match kind {
+                    LibraryKind::Series => shell.ask_series(0..1, cx),
+                    _ => shell.ask_films(0..1, cx),
+                }
             },
         );
     }
 
+    fn library_of(&mut self, kind: LibraryKind) -> &mut Option<Loadable<ItemId>> {
+        match kind {
+            LibraryKind::Series => &mut self.series.library,
+            _ => &mut self.library.library,
+        }
+    }
+
     /// The pages of the films at these indexes, when not asked yet.
     pub fn ask_films(&mut self, films: std::ops::Range<usize>, cx: &mut Context<Self>) {
-        let Some(Loadable::Ready(library)) = &self.library.library else {
+        self.ask_pages(
+            films,
+            |shell| &mut shell.library,
+            |s, l, q| s.films(l, q),
+            cx,
+        );
+    }
+
+    /// The pages of the series at these indexes, when not asked yet.
+    pub fn ask_series(&mut self, series: std::ops::Range<usize>, cx: &mut Context<Self>) {
+        self.ask_pages(
+            series,
+            |shell| &mut shell.series,
+            |s, l, q| s.series(l, q),
+            cx,
+        );
+    }
+
+    fn ask_pages<T: Listed + Send + 'static>(
+        &mut self,
+        items: std::ops::Range<usize>,
+        page_of: fn(&mut Shell) -> &mut LibraryPage<T>,
+        fetch: Fetch<T>,
+        cx: &mut Context<Self>,
+    ) {
+        let shown = page_of(self);
+        let Some(Loadable::Ready(library)) = &shown.library else {
             return;
         };
         let library = library.clone();
-        for page in self.library.grid.pages_to_ask(films, Instant::now()) {
+        for page in shown.grid.pages_to_ask(items.clone(), Instant::now()) {
             let library = library.clone();
             self.ask(
                 cx,
-                move |server| server.films(&library, &grid::query(page)),
-                move |shell, films, cx| match films {
-                    Ok(films) => shell.library.grid.loaded(page, films),
+                move |server| fetch(server, &library, &grid::query(page)),
+                move |shell, items, cx| match items {
+                    Ok(items) => page_of(shell).grid.loaded(page, items),
                     Err(error) => {
-                        shell.library.grid.failed(page, Instant::now());
-                        if shell.library.grid.total.is_none() {
-                            shell.library.library = Some(Loadable::Failed(shell.failed(error, cx)));
+                        page_of(shell).grid.failed(page, Instant::now());
+                        if page_of(shell).grid.total.is_none() {
+                            let said = shell.failed(error, cx);
+                            page_of(shell).library = Some(Loadable::Failed(said));
                         }
                     }
                 },
@@ -441,9 +579,9 @@ impl Shell {
                 if page
                     .choices
                     .as_ref()
-                    .is_none_or(|c| c.source(&detail).is_none())
+                    .is_none_or(|c| c.source(&detail.versions).is_none())
                 {
-                    page.choices = Some(Choices::new(&detail));
+                    page.choices = Some(Choices::new(&detail.versions));
                 }
                 page.detail = Loadable::Ready(detail);
                 if with_collection {
@@ -468,6 +606,11 @@ impl Shell {
     }
 
     pub fn choose(&mut self, chip: Chip, value: Option<i32>, cx: &mut Context<Self>) {
+        if self.navigator.current() == Screen::SeriesDetail {
+            self.choose_for_episode(chip, value);
+            cx.notify();
+            return;
+        }
         let Some(page) = self.details.last_mut() else {
             return;
         };
@@ -475,16 +618,11 @@ impl Shell {
         let (Loadable::Ready(detail), Some(choices)) = (&page.detail, &mut page.choices) else {
             return;
         };
-        match chip {
-            Chip::Version => choices.set_version(detail, value.unwrap_or(0) as usize),
-            Chip::Audio => choices.audio = value,
-            Chip::Subtitle => choices.subtitle = value,
-        }
+        chip.choose(choices, &detail.versions, value);
         cx.notify();
     }
 
-    /// The wheel or the touchpad over the film page: the page goes up and down, the row under
-    /// the pointer sideways, never both.
+    /// The wheel or the touchpad over the film page.
     pub fn scroll_film_page(
         &mut self,
         event: &ScrollWheelEvent,
@@ -494,65 +632,52 @@ impl Shell {
         let Some(page) = self.details.last_mut() else {
             return;
         };
-        let delta = event.delta.pixel_delta(window.line_height());
-        let wheel = Wheel {
-            dx: delta.x.into(),
-            dy: delta.y.into(),
-            precise: event.delta.precise(),
-            shift: event.modifiers.shift,
-            phase: match event.touch_phase {
-                TouchPhase::Started => Phase::Started,
-                TouchPhase::Moved => Phase::Moved,
-                TouchPhase::Ended | TouchPhase::Cancelled => Phase::Ended,
-            },
-        };
-        let row = page
-            .rows
-            .iter()
-            .position(|row| row.bounds().contains(&event.position));
-        let (handle, delta) = match page.gesture.route(wheel, row, Instant::now()) {
-            Some(Move::Page(dy)) => (&page.scroll, point(px(0.), px(dy))),
-            Some(Move::Row(row, dx)) => (&page.rows[row], point(px(dx), px(0.))),
-            None => return,
-        };
-        let (offset, max) = (handle.offset(), handle.max_offset());
-        let to = point(
-            px(scroll::moved(offset.x.into(), delta.x.into(), max.x.into())),
-            px(scroll::moved(offset.y.into(), delta.y.into(), max.y.into())),
-        );
-        if to != offset {
-            handle.set_offset(to);
+        if route_wheel(&page.scroll, &page.rows, &mut page.gesture, event, window) {
             // A menu stays under its chip only while the page stands still.
             page.menus.close();
             cx.notify();
         }
     }
 
+    /// The chip menus of the detail page shown, and where its chips were drawn.
+    fn chip_menus(&mut self) -> Option<(&mut Menus<Chip>, &[ChipBounds; 3])> {
+        match self.navigator.current() {
+            Screen::FilmDetail => self.details.last_mut().map(|p| (&mut p.menus, &p.chips)),
+            Screen::SeriesDetail => self
+                .series_pages
+                .last_mut()
+                .map(|p| (&mut p.menus, &p.chips)),
+            _ => None,
+        }
+    }
+
     pub fn toggle_menu(&mut self, chip: Chip, cx: &mut Context<Self>) {
-        if let Some(page) = self.details.last_mut() {
-            page.menus.toggle(chip);
+        if let Some((menus, _)) = self.chip_menus() {
+            menus.toggle(chip);
             cx.notify();
         }
     }
 
     /// The mouse went down outside the open menu, maybe on a chip.
     pub fn pressed_outside_menu(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
-        if let Some(page) = self.details.last_mut() {
+        if let Some((menus, chips)) = self.chip_menus() {
             let on = Chip::ALL.into_iter().find(|chip| {
-                page.chips[*chip as usize]
+                chips[*chip as usize]
                     .get()
                     .is_some_and(|bounds| bounds.contains(&position))
             });
-            page.menus.pressed_outside(on);
+            menus.pressed_outside(on);
             cx.notify();
         }
     }
 
-    /// Escape closes the open menu, else goes back.
+    /// Escape cancels the next episode's card, else closes the open menu, else goes back.
     pub fn escape(&mut self, cx: &mut Context<Self>) {
-        if let Some(page) = self.details.last_mut()
-            && self.navigator.current() == Screen::FilmDetail
-            && page.menus.escape()
+        if self.cancel_up_next(cx) {
+            return;
+        }
+        if let Some((menus, _)) = self.chip_menus()
+            && menus.escape()
         {
             cx.notify();
             return;
@@ -610,7 +735,7 @@ impl Shell {
         if page.busy {
             return;
         }
-        let Some(plan) = film_page::plan(detail, choices, from) else {
+        let Some(plan) = film_page::plan(&detail.film, &detail.versions, choices, from) else {
             page.error = Some("Ce film n'a aucune version à lire.");
             cx.notify();
             return;
@@ -618,6 +743,18 @@ impl Shell {
         let Some(server) = self.server.clone() else {
             return;
         };
+        let mut parts: Vec<String> = detail.film.year.iter().map(i32::to_string).collect();
+        parts.extend(
+            choices
+                .source(&detail.versions)
+                .map(film_page::version_label),
+        );
+        parts.push("lecture directe".into());
+        let playing = Playing {
+            title: plan.title.clone(),
+            subtitle: Some(parts.join(" · ")),
+        };
+        let origin = Origin::Film(depth, page.id.clone());
         page.busy = true;
         page.error = None;
         let (film, source) = (plan.film.clone(), plan.source.clone());
@@ -627,7 +764,7 @@ impl Shell {
         cx.spawn_in(window, async move |this, cx| {
             let opened = task.await;
             this.update_in(cx, |shell, window, cx| {
-                shell.start_playback(depth, plan, opened, window, cx);
+                shell.start_playback(origin, plan, opened, playing, None, window, cx);
                 cx.notify();
             })
             .ok();
@@ -636,41 +773,58 @@ impl Shell {
         cx.notify();
     }
 
-    fn start_playback(
+    /// The page a play button was pressed on: no longer busy, and why it did not play.
+    fn tried(&mut self, origin: &Origin, error: Option<&'static str>) {
+        let (busy, shown) = match origin {
+            Origin::Film(depth, id) => match self.detail_page(*depth, id) {
+                Some(page) => (&mut page.busy, &mut page.error),
+                None => return,
+            },
+            Origin::Series(depth, id) => match self.series_pages.get_mut(*depth) {
+                Some(page) if &page.id == id => (&mut page.busy, &mut page.error),
+                _ => return,
+            },
+        };
+        *busy = false;
+        if error.is_some() {
+            *shown = error;
+        }
+    }
+
+    /// The server opened the playback: the player starts. `next`: the episode after, for the
+    /// card at the end.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "one playback's parts, put together once"
+    )]
+    pub(super) fn start_playback(
         &mut self,
-        depth: usize,
+        origin: Origin,
         plan: Plan,
         opened: Result<Opened, ProviderError>,
+        playing: Playing,
+        next: Option<Episode>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let opened = opened.map_err(|error| self.failed(error, cx));
+        let opened = match opened {
+            Ok(opened) => opened,
+            Err(error) => {
+                let said = self.failed(error, cx);
+                self.tried(&origin, Some(said));
+                return;
+            }
+        };
+        self.tried(&origin, None);
         let options = self.mpv_options.clone();
         let Some(server) = self.server.clone() else {
             return;
         };
-        let Some(page) = self.detail_page(depth, &plan.film) else {
-            return;
-        };
-        page.busy = false;
-        let opened = match opened {
-            Ok(opened) => opened,
-            Err(said) => {
-                page.error = Some(said);
-                return;
-            }
-        };
-        let subtitle = page.ready().map(|(detail, choices)| {
-            let mut parts: Vec<String> = detail.film.year.iter().map(i32::to_string).collect();
-            parts.extend(choices.source(detail).map(film_page::version_label));
-            parts.push("lecture directe".into());
-            parts.join(" · ")
-        });
         let mpv = match Libmpv::new(&options) {
             Ok(mpv) => Arc::new(mpv),
             Err(error) => {
                 eprintln!("bobine: the player cannot start: {error}");
-                page.error = Some("Le lecteur ne peut pas démarrer.");
+                self.tried(&origin, Some("Le lecteur ne peut pas démarrer."));
                 return;
             }
         };
@@ -688,15 +842,16 @@ impl Shell {
         );
         let externals = plan.externals(&opened);
         let media = plan.media(&opened, &externals);
-        let film = Playing {
-            title: plan.title.clone(),
-            subtitle,
-        };
-        if let Err(error) = self.play(mpv, media, film, Some(reporting), window, cx) {
-            // The words of the video surface or of mpv's error code: no address in them.
-            eprintln!("bobine: the film does not play: {error}");
-            if let Some(page) = self.detail_page(depth, &plan.film) {
-                page.error = Some("Lecture impossible.");
+        match self.play(mpv, media, playing, Some(reporting), window, cx) {
+            Ok(()) => {
+                if let Some(playback) = &mut self.playback {
+                    playback.next = next;
+                }
+            }
+            Err(error) => {
+                // The words of the video surface or of mpv's error code: no address in them.
+                eprintln!("bobine: the film does not play: {error}");
+                self.tried(&origin, Some("Lecture impossible."));
             }
         }
     }
@@ -704,8 +859,17 @@ impl Shell {
     /// Back from the player: once "stopped" reached the server, the film page shows where the
     /// viewer is now.
     pub(super) fn after_playback(&mut self, reports: JoinHandle<()>, cx: &mut Context<Self>) {
-        let Some(depth) = self.details.len().checked_sub(1) else {
-            return;
+        let depth = match reload_after_playback(
+            self.navigator.current(),
+            self.details.len(),
+            self.series_pages.len(),
+        ) {
+            Some(Reload::Series(depth)) => {
+                self.load_series(depth, false, Some(reports), cx);
+                return;
+            }
+            Some(Reload::Film(depth)) => depth,
+            None => return,
         };
         let id = self.details[depth].id.clone();
         let asked = id.clone();
@@ -805,5 +969,23 @@ impl Shell {
                 },
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_series_page_reloads_after_a_playback() {
+        assert_eq!(
+            reload_after_playback(Screen::SeriesDetail, 1, 2),
+            Some(Reload::Series(1))
+        );
+        assert_eq!(
+            reload_after_playback(Screen::FilmDetail, 2, 1),
+            Some(Reload::Film(1))
+        );
+        assert_eq!(reload_after_playback(Screen::Home, 0, 0), None);
     }
 }

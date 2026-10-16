@@ -757,7 +757,7 @@ mod tests {
         let t = Instant::now();
         let mut palette = Palette::default();
         search(&mut palette, &*server(), "hivernage", t);
-        assert_eq!(palette.hits()[0].caption(), "2022");
+        assert_eq!(palette.hits()[0].caption(), "2021");
         search(
             &mut palette,
             &*server(),

@@ -1079,3 +1079,209 @@ fn the_token_never_in_debug_or_error_output() {
         "the address stays out of errors: {shown}"
     );
 }
+
+fn series_library() -> ItemId {
+    ItemId(SERIES_LIBRARY.into())
+}
+
+fn series() -> ItemId {
+    ItemId(SERIES.into())
+}
+
+#[test]
+fn series_of_a_library_are_paged_and_sorted_like_films() {
+    let s = Setup::new();
+    let server = s.signed_in();
+    let first = server
+        .series(&series_library(), &query(FilmSort::Title, false, 0, 2))
+        .unwrap();
+    let rest = server
+        .series(&series_library(), &query(FilmSort::Title, false, 2, 2))
+        .unwrap();
+    let names = |page: &Page<Series>| -> Vec<String> {
+        page.items.iter().map(|s| s.title.clone()).collect()
+    };
+    assert_eq!(names(&first), ["Bramble Line", "Glass Orchard"]);
+    assert_eq!(names(&rest), ["Tidewater"]);
+    assert_eq!(first.total, 3);
+    let asked = s.fake.last("GET", "/Items");
+    assert_eq!(asked.param("ParentId"), Some(SERIES_LIBRARY));
+    assert_eq!(asked.param("IncludeItemTypes"), Some("Series"));
+    assert_eq!(asked.param("Recursive"), Some("true"));
+    assert_eq!(asked.param("SortBy"), Some("SortName"));
+    assert_eq!(asked.param("StartIndex"), Some("2"));
+    assert_eq!(asked.param("userId"), Some(USER_ID));
+
+    let newest = server
+        .series(&series_library(), &query(FilmSort::DateAdded, true, 0, 10))
+        .unwrap();
+    assert_eq!(
+        names(&newest),
+        ["Tidewater", "Glass Orchard", "Bramble Line"]
+    );
+}
+
+#[test]
+fn a_series_in_a_list_has_its_years_rating_poster_and_unwatched_count() {
+    let s = Setup::new();
+    let page = s
+        .signed_in()
+        .series(&series_library(), &query(FilmSort::Title, false, 0, 10))
+        .unwrap();
+    let tidewater = page.items.iter().find(|s| s.id == series()).unwrap();
+    assert_eq!(
+        (tidewater.year, tidewater.end_year),
+        (Some(2021), Some(2024))
+    );
+    assert_eq!(tidewater.community_rating, Some(8.4));
+    assert_eq!(tidewater.unwatched, 7);
+    assert_eq!(tidewater.poster.as_ref().unwrap().tag, "poster-tw");
+    assert_eq!(tidewater.backdrop.as_ref().unwrap().tag, "backdrop-tw");
+    let orchard = &page.items[1];
+    assert_eq!((orchard.end_year, orchard.unwatched), (None, 0));
+    let bramble = &page.items[0];
+    assert_eq!((bramble.poster.clone(), bramble.unwatched), (None, 0));
+}
+
+#[test]
+fn series_detail_with_synopsis_genres_cast_and_similar_series() {
+    let s = Setup::new();
+    let detail = s.signed_in().series_detail(&series()).unwrap();
+    assert_eq!(detail.series.title, "Tidewater");
+    assert_eq!(
+        (detail.series.year, detail.series.end_year),
+        (Some(2021), Some(2024))
+    );
+    assert_eq!(
+        detail.overview.as_deref(),
+        Some("A ferry crew keeps a drowned town's secrets.")
+    );
+    assert_eq!(detail.genres, ["Drama", "Mystery"]);
+    assert_eq!(detail.official_rating.as_deref(), Some("TV-14"));
+    let cast: Vec<(&str, Option<&str>)> = detail
+        .cast
+        .iter()
+        .map(|p| (p.name.as_str(), p.role.as_deref()))
+        .collect();
+    assert_eq!(
+        cast,
+        [
+            ("Mara Quill", Some("Captain Rook")),
+            ("Jon Ashby", Some("Deckhand"))
+        ]
+    );
+    assert_eq!(detail.similar.len(), 1);
+    assert_eq!(detail.similar[0].title, "Bramble Line");
+    assert_eq!(detail.similar[0].unwatched, 10);
+    let asked = s.fake.last("GET", &format!("/Items/{SERIES}/Similar"));
+    assert_eq!(asked.param("userId"), Some(USER_ID));
+}
+
+#[test]
+fn the_seasons_of_a_series_in_order() {
+    let s = Setup::new();
+    let seasons = s.signed_in().seasons(&series()).unwrap();
+    let found: Vec<(&str, Option<u32>, u32)> = seasons
+        .iter()
+        .map(|s| (s.name.as_str(), s.number, s.unwatched))
+        .collect();
+    assert_eq!(found, [("Season 1", Some(1), 0), ("Season 2", Some(2), 7)]);
+    assert_eq!(seasons[1].id, ItemId(SEASON.into()));
+    let asked = s.fake.last("GET", &format!("/Shows/{SERIES}/Seasons"));
+    assert_eq!(asked.param("userId"), Some(USER_ID));
+    // A season the library only knows by name, without a file, is not offered.
+    assert_eq!(asked.param("isMissing"), Some("false"));
+}
+
+#[test]
+fn the_episodes_of_a_season_with_still_runtime_state_and_versions() {
+    let s = Setup::new();
+    let episodes = s
+        .signed_in()
+        .episodes(&series(), &ItemId(SEASON.into()))
+        .unwrap();
+    assert_eq!(episodes.len(), 2);
+    let first = &episodes[0];
+    assert_eq!(first.item.id, ItemId(EPISODE.into()));
+    assert_eq!(first.item.title, "Low Water");
+    assert_eq!((first.season_number, first.number), (Some(2), Some(1)));
+    assert_eq!(first.season, ItemId(SEASON.into()));
+    assert_eq!(
+        (first.series.clone(), first.series_title.as_str()),
+        (series(), "Tidewater")
+    );
+    assert_eq!(
+        first.overview.as_deref(),
+        Some("The ferry runs aground on a road that should not be there.")
+    );
+    assert_eq!(first.item.runtime, Some(Duration::from_secs(52 * 60)));
+    assert_eq!(first.item.resume, Some(Duration::from_secs(12 * 60)));
+    assert!(!first.item.watched);
+    assert_eq!(first.item.poster.as_ref().unwrap().tag, "still-lw");
+    assert_eq!(first.versions.len(), 1);
+    assert_eq!(first.versions[0].audio[0].language.as_deref(), Some("eng"));
+    assert!(first.versions[0].subtitles[0].external);
+    assert_eq!(episodes[1].item.poster, None);
+
+    let asked = s.fake.last("GET", &format!("/Shows/{SERIES}/Episodes"));
+    assert_eq!(asked.param("SeasonId"), Some(SEASON));
+    assert_eq!(asked.param("userId"), Some(USER_ID));
+    // Nor is an episode without a file: auto-next would choose it.
+    assert_eq!(asked.param("isMissing"), Some("false"));
+    let fields = asked.param("Fields").unwrap();
+    assert!(
+        fields.contains("MediaSources") && fields.contains("Overview"),
+        "{fields}"
+    );
+}
+
+#[test]
+fn the_next_episode_of_a_series_is_next_up() {
+    let s = Setup::new();
+    let next = s.signed_in().next_up(&series()).unwrap().unwrap();
+    assert_eq!(next.item.id, ItemId(EPISODE.into()));
+    assert_eq!(next.item.resume, Some(Duration::from_secs(12 * 60)));
+    assert_eq!(next.versions.len(), 1);
+    let asked = s.fake.last("GET", "/Shows/NextUp");
+    assert_eq!(asked.param("SeriesId"), Some(SERIES));
+    assert_eq!(asked.param("userId"), Some(USER_ID));
+    assert_eq!(asked.param("EnableResumable"), Some("true"));
+    assert!(asked.param("Fields").unwrap().contains("MediaSources"));
+}
+
+#[test]
+fn a_series_watched_to_the_end_has_no_next_episode() {
+    let s = Setup::new();
+    s.fake.state.lock().unwrap().all_watched = true;
+    assert_eq!(s.signed_in().next_up(&series()).unwrap(), None);
+}
+
+#[test]
+fn an_episode_plays_like_a_film() {
+    let s = Setup::new();
+    let source = MediaSourceId("5a000000000000000000000000000021".into());
+    let playback = s
+        .signed_in()
+        .play(&ItemId(EPISODE.into()), &source)
+        .unwrap();
+    let url = playback.stream.expose_for_player();
+    assert!(
+        url.starts_with(&format!("{}/Videos/{EPISODE}/stream?", s.fake.url)),
+        "{url}"
+    );
+    assert_eq!(playback.external_subtitles.len(), 1);
+    assert_eq!(playback.session, PlaySessionId(PLAY_SESSION.into()));
+}
+
+#[test]
+fn an_episode_or_a_whole_season_is_marked_watched_and_unwatched() {
+    let s = Setup::new();
+    let server = s.signed_in();
+    for id in [EPISODE, SEASON] {
+        let path = format!("/UserPlayedItems/{id}");
+        server.set_watched(&ItemId(id.into()), true).unwrap();
+        assert_eq!(s.fake.last("POST", &path).param("userId"), Some(USER_ID));
+        server.set_watched(&ItemId(id.into()), false).unwrap();
+        assert_eq!(s.fake.last("DELETE", &path).param("userId"), Some(USER_ID));
+    }
+}

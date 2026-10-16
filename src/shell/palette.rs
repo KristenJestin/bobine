@@ -13,9 +13,6 @@ use crate::motion::{self, Fade, Glide};
 use crate::navigation::Screen;
 use crate::search::{self, Hit, Key, PER_GROUP, Palette};
 
-/// Whether the series page exists: until it does, a series found cannot be opened.
-pub const SERIES_PAGE: bool = false;
-
 pub struct SearchState {
     pub input: Entity<TextInput>,
     pub palette: Palette,
@@ -208,9 +205,6 @@ impl Shell {
     }
 
     pub fn open_hit(&mut self, hit: Hit, window: &mut Window, cx: &mut Context<Self>) {
-        if matches!(hit, Hit::Series(_)) && !SERIES_PAGE {
-            return;
-        }
         self.close_search(window, cx);
         match hit {
             Hit::Film(film) => self.open_film(film.id, cx),
@@ -218,9 +212,6 @@ impl Shell {
             Hit::Series(series) => self.open_series(series.id, cx),
         }
     }
-
-    /// The series page is not built yet (it comes with the series): nothing opens.
-    pub fn open_series(&mut self, _id: ItemId, _cx: &mut Context<Self>) {}
 
     pub fn open_person(&mut self, person: PersonHit, cx: &mut Context<Self>) {
         let id = person.id.clone();
