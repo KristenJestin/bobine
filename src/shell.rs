@@ -1021,7 +1021,7 @@ impl Render for Shell {
                 back_label.filter(|_| screen.shows_back_link()),
                 |root, label| root.child(back_link(label, window, cx)),
             )
-            .children(self.notice_pill(screen, window))
+            .children(self.notice_pill(screen, window, cx))
             .children(screens::search::palette(self, window, cx))
     }
 }
