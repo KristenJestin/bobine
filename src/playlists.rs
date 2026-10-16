@@ -12,7 +12,7 @@ pub const FAILED: &str = "The playlist could not be changed.";
 pub const FORBIDDEN: &str = "You can't change this playlist.";
 /// What the Lists say when the user has no playlist.
 pub const NONE: &str =
-    "No playlists yet. Choose “Add to playlist” on a movie or a series to make one.";
+    "No playlists yet. Choose “Add to playlist” on a movie, a series or an episode.";
 /// What a playlist's page says when it holds nothing.
 pub const EMPTY: &str = "Add a movie, a series or an episode from its page.";
 
