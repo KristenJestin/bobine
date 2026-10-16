@@ -195,12 +195,14 @@ pub struct Shell {
     pub mpv_options: Vec<(&'static str, &'static str)>,
 }
 
-/// When the shell and its header were drawn.
+/// When the shell and its header were drawn, and, for the harness, when the shell was notified.
 #[cfg(any(test, feature = "harness"))]
 #[derive(Default)]
 pub struct Draws {
     pub shell: Vec<Instant>,
     pub hero: Vec<Instant>,
+    #[cfg(feature = "harness")]
+    pub notified: Vec<Instant>,
 }
 
 /// The film being played and what keeps it in step with the window.

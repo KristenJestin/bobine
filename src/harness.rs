@@ -17,8 +17,9 @@
 //!
 //! A scenario sends clicks, keys and scroll events to the window as the compositor would, at set
 //! times, and prints what they did (`MENU`, `SCROLL`, `SELECT`, `PANEL` lines) and the frame times
-//! that followed each (`FRAMES`). `--segments N` gives the fake server's films the segments of a
-//! media N seconds long: a recap 0 to 4 s, an intro 5 to 15 s, the credits for the last 15 s.
+//! that followed each (`FRAMES`), and how often the shell and the Home's header were drawn
+//! (`DRAWS`). `--segments N` gives the fake server's films the segments of a media N seconds long:
+//! a recap 0 to 4 s, an intro 5 to 15 s, the credits for the last 15 s.
 //! `--slower N` makes every move N times slower, to photograph it.
 
 use std::sync::Arc;
@@ -333,6 +334,16 @@ fn show_screen(
     window: &mut Window,
     cx: &mut App,
 ) {
+    // Every notification of the shell, which builds the whole window again.
+    cx.observe(shell, |shell, cx| {
+        shell
+            .read(cx)
+            .draws
+            .borrow_mut()
+            .notified
+            .push(Instant::now());
+    })
+    .detach();
     let shell = shell.downgrade();
     let handle = window.window_handle();
     let begun = Instant::now();
@@ -505,7 +516,10 @@ fn show_screen(
                 }
                 if let Some(acts) = &acts {
                     shell
-                        .update(cx, |shell, _| acts.report(&shell.frames.borrow()))
+                        .update(cx, |shell, _| {
+                            acts.report(&shell.frames.borrow());
+                            acts.report_draws(&shell.draws.borrow());
+                        })
                         .ok();
                 }
                 shell.update(cx, |shell, _| shell.close_video()).ok();
@@ -977,6 +991,22 @@ impl Acts {
                 println!("{} (at {at:.2} s)", state(label, shell.read(cx), cx));
             }
         }
+    }
+
+    /// How many times a second, after the first three seconds, the shell was drawn, its header
+    /// was drawn and the shell was notified.
+    fn report_draws(&self, draws: &crate::shell::Draws) {
+        let from = self.begun + Duration::from_secs(3);
+        let span = Instant::now().saturating_duration_since(from).as_secs_f64();
+        let rate = |times: &[Instant]| {
+            times.iter().filter(|time| **time >= from).count() as f64 / span.max(f64::EPSILON)
+        };
+        println!(
+            "DRAWS per second: shell={:.1} hero={:.1} shell_notified={:.1}",
+            rate(&draws.shell),
+            rate(&draws.hero),
+            rate(&draws.notified),
+        );
     }
 
     /// The frame times after each act: the draws of the half second that followed it, then the
