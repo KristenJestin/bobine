@@ -158,18 +158,22 @@ pub fn toggle_season_watched(
 }
 
 /// The "Épisode suivant" card: counts down, then gives the episode to play, unless cancelled.
+/// It belongs to the series page it showed over, at its depth among the series pages.
 #[derive(Default)]
 pub struct UpNext {
     pending: Option<(Episode, Instant)>,
+    page: Option<(usize, ItemId)>,
 }
 
 impl UpNext {
-    pub fn start(&mut self, episode: Episode, now: Instant) {
+    pub fn start(&mut self, episode: Episode, page: (usize, ItemId), now: Instant) {
         self.pending = Some((episode, now));
+        self.page = Some(page);
     }
 
     pub fn cancel(&mut self) {
         self.pending = None;
+        self.page = None;
     }
 
     pub fn episode(&self) -> Option<&Episode> {
@@ -194,12 +198,26 @@ impl UpNext {
         (1. - gone / COUNTDOWN.as_secs_f32()).clamp(0., 1.)
     }
 
-    /// The episode to play now: once the countdown is over, or at once when `now_asked`.
-    pub fn take(&mut self, now: Instant, now_asked: bool) -> Option<Episode> {
+    /// The episode to play now: once the countdown is over, or at once when `now_asked`. `top`:
+    /// the series page shown, `None` on another screen; the card is cancelled when it is no
+    /// longer its page. While `busy`, the page cannot play yet: the card waits.
+    pub fn take(
+        &mut self,
+        now: Instant,
+        now_asked: bool,
+        top: Option<(usize, &ItemId)>,
+        busy: bool,
+    ) -> Option<Episode> {
         let (_, since) = self.pending.as_ref()?;
-        if !now_asked && now < *since + COUNTDOWN {
+        let page = self.page.as_ref().map(|(depth, id)| (*depth, id));
+        if top != page {
+            self.cancel();
             return None;
         }
+        if busy || (!now_asked && now < *since + COUNTDOWN) {
+            return None;
+        }
+        self.page = None;
         self.pending.take().map(|(episode, _)| episode)
     }
 }
@@ -543,22 +561,36 @@ mod tests {
         assert_eq!(following(&server, &episode(&server, 3, 5)).unwrap(), None);
     }
 
+    /// The series page the card shows over: the first, of the series of the tests.
+    fn page() -> (usize, ItemId) {
+        (0, series())
+    }
+
+    fn top() -> Option<(usize, &'static ItemId)> {
+        static SERIES_ID: std::sync::LazyLock<ItemId> =
+            std::sync::LazyLock::new(|| ItemId(SERIES.into()));
+        Some((0, &SERIES_ID))
+    }
+
     #[test]
     fn auto_next_plays_the_next_episode_after_ten_seconds() {
         let server = FakeServer::new(1, true);
         let now = Instant::now();
         let mut card = UpNext::default();
-        card.start(episode(&server, 2, 5), now);
+        card.start(episode(&server, 2, 5), page(), now);
         assert_eq!(card.seconds_left(now), 10);
         assert_eq!(card.seconds_left(now + Duration::from_millis(9500)), 1);
         assert_eq!(card.fraction_left(now), 1.);
         assert_eq!(card.fraction_left(now + Duration::from_secs(5)), 0.5);
-        assert_eq!(card.take(now + Duration::from_secs(9), false), None);
+        assert_eq!(
+            card.take(now + Duration::from_secs(9), false, top(), false),
+            None
+        );
         assert!(card.episode().is_some());
-        let played = card.take(now + COUNTDOWN, false).unwrap();
+        let played = card.take(now + COUNTDOWN, false, top(), false).unwrap();
         assert_eq!(played.item.id, id(2, 5));
         assert!(card.episode().is_none());
-        assert_eq!(card.take(now + COUNTDOWN * 2, false), None);
+        assert_eq!(card.take(now + COUNTDOWN * 2, false, top(), false), None);
     }
 
     #[test]
@@ -566,8 +598,11 @@ mod tests {
         let server = FakeServer::new(1, true);
         let now = Instant::now();
         let mut card = UpNext::default();
-        card.start(episode(&server, 2, 5), now);
-        assert_eq!(card.take(now, true).unwrap().item.id, id(2, 5));
+        card.start(episode(&server, 2, 5), page(), now);
+        assert_eq!(
+            card.take(now, true, top(), false).unwrap().item.id,
+            id(2, 5)
+        );
     }
 
     #[test]
@@ -575,10 +610,50 @@ mod tests {
         let server = FakeServer::new(1, true);
         let now = Instant::now();
         let mut card = UpNext::default();
-        card.start(episode(&server, 2, 5), now);
+        card.start(episode(&server, 2, 5), page(), now);
         card.cancel();
         assert!(card.episode().is_none());
-        assert_eq!(card.take(now + COUNTDOWN * 2, false), None);
+        assert_eq!(card.take(now + COUNTDOWN * 2, false, top(), false), None);
+    }
+
+    #[test]
+    fn auto_next_is_cancelled_when_another_series_page_opens() {
+        let server = FakeServer::new(1, true);
+        let now = Instant::now();
+        let mut card = UpNext::default();
+        card.start(episode(&server, 2, 5), page(), now);
+        let other = ItemId("series-1".into());
+        // A similar series opened over the page: the card does not play there, now or later.
+        assert_eq!(
+            card.take(now + COUNTDOWN, false, Some((1, &other)), false),
+            None
+        );
+        assert!(card.episode().is_none());
+        assert_eq!(card.take(now + COUNTDOWN, true, top(), false), None);
+    }
+
+    #[test]
+    fn auto_next_is_cancelled_when_its_page_is_left() {
+        let server = FakeServer::new(1, true);
+        let now = Instant::now();
+        let mut card = UpNext::default();
+        card.start(episode(&server, 2, 5), page(), now);
+        assert_eq!(card.take(now, false, None, false), None);
+        assert!(card.episode().is_none());
+    }
+
+    #[test]
+    fn auto_next_waits_while_its_page_is_busy() {
+        let server = FakeServer::new(1, true);
+        let now = Instant::now();
+        let mut card = UpNext::default();
+        card.start(episode(&server, 2, 5), page(), now);
+        assert_eq!(card.take(now + COUNTDOWN, false, top(), true), None);
+        assert_eq!(card.take(now, true, top(), true), None);
+        // Kept, and played once the page is free.
+        assert!(card.episode().is_some());
+        let played = card.take(now + COUNTDOWN * 2, false, top(), false).unwrap();
+        assert_eq!(played.item.id, id(2, 5));
     }
 
     #[test]

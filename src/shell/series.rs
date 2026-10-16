@@ -60,6 +60,8 @@ struct Fresh {
 
 impl Shell {
     pub fn open_series(&mut self, id: ItemId, cx: &mut Context<Self>) {
+        // The card belongs to the page under: it does not play over this one.
+        self.cancel_up_next(cx);
         self.series_pages.push(SeriesPage {
             id,
             detail: Loadable::Loading,
@@ -291,6 +293,8 @@ impl Shell {
     /// chips' choices, any other with its defaults. The episode after it is looked for at the
     /// same time, for the end.
     pub fn play_episode(&mut self, episode: Episode, window: &mut Window, cx: &mut Context<Self>) {
+        // Another episode chosen while the card counts down: the card goes.
+        self.cancel_up_next(cx);
         let depth = self.series_pages.len().wrapping_sub(1);
         let Some(page) = self.series_pages.last_mut() else {
             return;
@@ -348,16 +352,17 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.up_next.start(episode, Instant::now());
+        let Some(page) = self.series_pages.last() else {
+            return;
+        };
+        let at = (self.series_pages.len() - 1, page.id.clone());
+        self.up_next.start(episode, at, Instant::now());
         let ticker: Task<()> = cx.spawn_in(window, async move |this, cx| {
             loop {
                 cx.background_executor().timer(UP_NEXT_TICK).await;
                 let counting = this.update_in(cx, |shell, window, cx| {
                     cx.notify();
-                    if shell.navigator.current() != Screen::SeriesDetail {
-                        shell.up_next.cancel();
-                    }
-                    match shell.up_next.take(Instant::now(), false) {
+                    match shell.take_up_next(false) {
                         Some(episode) => {
                             shell.play_episode(episode, window, cx);
                             false
@@ -376,10 +381,25 @@ impl Shell {
 
     /// "Lire" on the card: the next episode at once.
     pub fn play_up_next_now(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(episode) = self.up_next.take(Instant::now(), true) {
+        if let Some(episode) = self.take_up_next(true) {
             self.up_next_ticker = None;
             self.play_episode(episode, window, cx);
         }
+    }
+
+    /// The card's episode, when it is time to play it on the page it belongs to.
+    fn take_up_next(&mut self, now_asked: bool) -> Option<Episode> {
+        let depth = self.series_pages.len().wrapping_sub(1);
+        let top = self
+            .series_pages
+            .last()
+            .filter(|_| self.navigator.current() == Screen::SeriesDetail);
+        self.up_next.take(
+            Instant::now(),
+            now_asked,
+            top.map(|page| (depth, &page.id)),
+            top.is_some_and(|page| page.busy),
+        )
     }
 
     /// "Annuler" on the card, or Escape. Whether there was a card to cancel.
