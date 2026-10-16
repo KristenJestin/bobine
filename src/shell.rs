@@ -257,6 +257,9 @@ pub struct Playback {
     fallback: Option<Fallback>,
     notice_fade: Fade,
     notice_shown: bool,
+    /// "This quality could not be started."
+    refusal_fade: Fade,
+    refusal_shown: bool,
     /// The "My list" button of the player.
     pub list: Option<PlayerList>,
     _ticker: Task<()>,
@@ -443,6 +446,8 @@ impl Shell {
             fallback: None,
             notice_fade: Fade::new(motion::quick()),
             notice_shown: false,
+            refusal_fade: Fade::new(motion::quick()),
+            refusal_shown: false,
             list: None,
             _ticker: ticker,
             _bounds: bounds,
@@ -605,17 +610,23 @@ impl Shell {
             .fallback
             .as_ref()
             .is_some_and(|f| f.notice_shown(&playback.session, now));
+        let refusal = playback
+            .fallback
+            .as_ref()
+            .is_some_and(|f| f.refusal_shown(now));
         let skip_label = playback.session.skip_button().map(|button| button.label);
         // Hidden controls have nothing to redraw: the video is not GPUI's.
         if shown
             || shown != playback.controls_shown
             || has_error != playback.had_error
             || notice != playback.notice_shown
+            || refusal != playback.refusal_shown
             || skip_label != playback.skip_label
         {
             playback.controls_shown = shown;
             playback.had_error = has_error;
             playback.notice_shown = notice;
+            playback.refusal_shown = refusal;
             playback.skip_label = skip_label;
             cx.notify();
         }
@@ -678,7 +689,7 @@ impl Shell {
         let Some(fallback) = &mut playback.fallback else {
             return;
         };
-        if let Some(report) = fallback.answered(id, &mut playback.session, opened) {
+        if let Some(report) = fallback.answered(id, &mut playback.session, opened, Instant::now()) {
             // The playback the viewer left for another quality ends here.
             if let Some(reporting) = playback.reporting.take() {
                 playback.stopping = Some(reporting.finish(&playback.session));
@@ -919,10 +930,16 @@ impl Render for Shell {
                         .as_ref()
                         .is_some_and(|f| f.notice_shown(session, now));
                     playback.notice_fade.set(notice, now);
+                    let refusal = playback
+                        .fallback
+                        .as_ref()
+                        .is_some_and(|f| f.refusal_shown(now));
+                    playback.refusal_fade.set(refusal, now);
                     if playback.controls_fade.moving(now)
                         || playback.panel_fade.moving(now)
                         || playback.settings_fade.moving(now)
                         || playback.notice_fade.moving(now)
+                        || playback.refusal_fade.moving(now)
                         || playback.skip_fade.moving(now)
                         || playback.seek.moving(now)
                     {
@@ -938,6 +955,7 @@ impl Render for Shell {
                         panel: playback.panel_fade.level(now),
                         preview,
                         notice: playback.notice_fade.level(now),
+                        refusal: playback.refusal_fade.level(now),
                         blackout: self.screens.is_some().then(|| switch.level(now)),
                         skip,
                         settings: playback.settings_fade.level(now),

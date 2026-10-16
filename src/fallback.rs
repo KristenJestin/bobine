@@ -125,6 +125,8 @@ pub struct Fallback {
     chosen: Option<(Quality, PlayMethod)>,
     /// The file did not play as it is: the server converts it whatever the quality.
     direct_failed: bool,
+    /// When the server last refused the quality the viewer chose.
+    refused_at: Option<Instant>,
     /// Names this playback, so an answer for one the viewer left is told apart.
     id: u64,
 }
@@ -140,6 +142,7 @@ impl Fallback {
             asking: None,
             chosen: None,
             direct_failed: false,
+            refused_at: None,
             id: PLAYBACKS.fetch_add(1, Ordering::Relaxed),
         }
     }
@@ -180,6 +183,7 @@ impl Fallback {
         id: u64,
         session: &mut Session,
         opened: Result<Playback, ProviderError>,
+        now: Instant,
     ) -> Option<PlaybackReport> {
         if id != self.id {
             return None;
@@ -192,6 +196,7 @@ impl Fallback {
             (Err(error), Some((_, before))) => {
                 eprintln!("bobine: the server does not give the quality asked: {error}");
                 self.method = before;
+                self.refused_at = Some(now);
                 return None;
             }
             (Err(error), None) => {
@@ -240,6 +245,7 @@ impl Fallback {
         } else {
             self.plan.start
         };
+        self.refused_at = None;
         let reopen = match quality {
             Quality::Original if !self.direct_failed => {
                 Reopen::Direct(self.original.film.clone(), self.original.source.clone())
@@ -257,6 +263,12 @@ impl Fallback {
         };
         self.asking = Some(from);
         Some(reopen)
+    }
+
+    /// Whether "This quality could not be started." shows.
+    pub fn refusal_shown(&self, now: Instant) -> bool {
+        self.refused_at
+            .is_some_and(|refused| now.duration_since(refused) < NOTICE_FOR)
     }
 
     /// Whether "Conversion par le serveur" shows.
@@ -578,7 +590,9 @@ mod tests {
         assert_eq!(fallback.choose(cap, &mut session), None, "asked once");
         let opened = Reopen::Convert(request).open(&*server);
         let id = fallback.id();
-        let report = fallback.answered(id, &mut session, opened).expect("plays");
+        let report = fallback
+            .answered(id, &mut session, opened, Instant::now())
+            .expect("plays");
         assert_eq!(report.method, PlayMethod::Transcode);
         assert_eq!(report.position, Duration::from_secs(4500));
         let converted = server.state.lock().unwrap().converted.clone();
@@ -602,7 +616,7 @@ mod tests {
             .choose(Quality::Cap(4_000_000), &mut session)
             .unwrap();
         let id = fallback.id();
-        fallback.answered(id, &mut session, reopen.open(&*server));
+        fallback.answered(id, &mut session, reopen.open(&*server), Instant::now());
         let events = vec![
             PlayerEvent::Loaded,
             PlayerEvent::FirstFrame,
@@ -619,7 +633,12 @@ mod tests {
             (&fallback.plan.film, &fallback.plan.source)
         );
         let report = fallback
-            .answered(id, &mut session, reopen.unwrap().open(&*server))
+            .answered(
+                id,
+                &mut session,
+                reopen.unwrap().open(&*server),
+                Instant::now(),
+            )
             .expect("plays");
         assert_eq!(report.method, PlayMethod::DirectPlay);
         assert_eq!(report.position, Duration::from_secs(4600));
@@ -652,11 +671,16 @@ mod tests {
         )
         .expect("converted");
         let id = fallback.id();
-        fallback.answered(id, &mut session, server.transcode(&request));
+        fallback.answered(id, &mut session, server.transcode(&request), Instant::now());
         let events = vec![PlayerEvent::Loaded, PlayerEvent::FirstFrame];
         tick(&mut fallback, &mut session, &player, &mut now, 1, events);
         let reopen = fallback.choose(Quality::Cap(2_000_000), &mut session);
-        fallback.answered(id, &mut session, reopen.unwrap().open(&*server));
+        fallback.answered(
+            id,
+            &mut session,
+            reopen.unwrap().open(&*server),
+            Instant::now(),
+        );
         let Some(Reopen::Convert(request)) = fallback.choose(Quality::Original, &mut session)
         else {
             panic!("the file does not play as it is");
@@ -674,7 +698,7 @@ mod tests {
             .unwrap();
         let id = fallback.id();
         assert_eq!(
-            fallback.answered(id, &mut session, reopen.open(&*server)),
+            fallback.answered(id, &mut session, reopen.open(&*server), Instant::now()),
             None
         );
         assert_eq!(session.error(), None);
@@ -748,7 +772,10 @@ mod tests {
         let answer = server.transcode(&request);
         assert!(answer.is_err());
         let id = fallback.id();
-        assert_eq!(fallback.answered(id, &mut session, answer), None);
+        assert_eq!(
+            fallback.answered(id, &mut session, answer, Instant::now()),
+            None
+        );
         assert_eq!(
             session.error(),
             Some(&PlayerError("the server cannot convert it".into()))
@@ -784,7 +811,10 @@ mod tests {
             vec![PlayerEvent::Loaded],
         );
         let answer = server.transcode(&request);
-        assert_eq!(fallback.answered(asked, &mut session, answer), None);
+        assert_eq!(
+            fallback.answered(asked, &mut session, answer, Instant::now()),
+            None
+        );
         assert!(player.calls.borrow().is_empty(), "the other film plays on");
         assert_eq!(session.error(), None);
         assert!(!fallback.notice_shown(&session, now));
@@ -807,7 +837,9 @@ mod tests {
         let resume = Duration::from_secs(72 * 60);
         let answer = server.transcode(&request);
         let id = fallback.id();
-        let report = fallback.answered(id, &mut session, answer).expect("plays");
+        let report = fallback
+            .answered(id, &mut session, answer, Instant::now())
+            .expect("plays");
         assert_eq!(
             report,
             PlaybackReport {
@@ -858,6 +890,25 @@ mod tests {
             None,
             "never converted twice"
         );
+    }
+
+    #[test]
+    fn a_refused_quality_says_so_for_a_moment() {
+        let server = Arc::new(FakeServer::new(3, false));
+        let (mut fallback, mut session, _, now) = playing_at(&server, 4500.);
+        assert!(!fallback.refusal_shown(now));
+        server.state.lock().unwrap().transcode_fails = true;
+        let reopen = fallback
+            .choose(Quality::Cap(4_000_000), &mut session)
+            .unwrap();
+        let id = fallback.id();
+        fallback.answered(id, &mut session, reopen.open(&*server), now);
+        assert!(fallback.refusal_shown(now));
+        assert!(fallback.refusal_shown(now + NOTICE_FOR - Duration::from_millis(1)));
+        assert!(!fallback.refusal_shown(now + NOTICE_FOR));
+        server.state.lock().unwrap().transcode_fails = false;
+        fallback.choose(Quality::Cap(2_000_000), &mut session);
+        assert!(!fallback.refusal_shown(now), "another try");
     }
 
     #[test]

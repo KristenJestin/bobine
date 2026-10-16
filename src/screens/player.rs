@@ -57,6 +57,8 @@ pub struct Shown {
     pub skip: Option<(Button, f32)>,
     /// "Conversion par le serveur".
     pub notice: f32,
+    /// "This quality could not be started."
+    pub refusal: f32,
     /// Where the "Black out other screens" switch is, from off (0) to on (1); `None` when the
     /// compositor cannot cover a monitor, and the switch is not offered.
     pub blackout: Option<f32>,
@@ -124,7 +126,9 @@ pub fn render(
         )
     });
     let menu = (shown.settings > 0.).then(|| settings_menu(session, shown.settings, window, cx));
-    let notice = (shown.notice > 0.).then(|| conversion_notice(shown.notice));
+    let conversion = (shown.notice > 0.).then(|| notice("Converted by the server", shown.notice));
+    let refusal =
+        (shown.refusal > 0.).then(|| notice("This quality could not be started.", shown.refusal));
     div()
         .id("player")
         .size_full()
@@ -151,7 +155,8 @@ pub fn render(
             }),
         )
         .children(controls)
-        .children(notice)
+        .children(conversion)
+        .children(refusal)
         .children(
             shown.skip.map(|(button, level)| {
                 super::skip::button(button, level, shown.controls, window, cx)
@@ -181,8 +186,9 @@ pub fn render(
 }
 
 /// One line at the top, over the picture whether the controls show or not: the server
-/// converts the film, which the viewer may notice in its picture or its start.
-fn conversion_notice(shown: f32) -> Div {
+/// converts the film, which the viewer may notice in its picture or its start, or would not
+/// give the quality chosen.
+fn notice(text: &'static str, shown: f32) -> Div {
     div()
         .absolute()
         .top(px(30.))
@@ -198,7 +204,7 @@ fn conversion_notice(shown: f32) -> Div {
                 .rounded(px(theme::RADIUS_LARGE))
                 .bg(theme::panel())
                 .text_size(px(13.))
-                .child("Converted by the server"),
+                .child(text),
         )
 }
 
