@@ -83,6 +83,22 @@ pub fn offered(button: Option<Button>, previewing: bool) -> Option<Button> {
     button.filter(|_| !previewing)
 }
 
+/// Where the segments sit on the seek bar: the start of each and its width, as fractions of
+/// the bar. A segment past the end is cut at the end; none shows before the duration is known.
+pub fn marks(segments: &[Segment], duration: f64) -> Vec<(f32, f32)> {
+    if duration <= 0. {
+        return Vec::new();
+    }
+    segments
+        .iter()
+        .filter_map(|segment| {
+            let start = segment.start.as_secs_f64().min(duration);
+            let end = segment.end.as_secs_f64().min(duration);
+            (end > start).then(|| ((start / duration) as f32, ((end - start) / duration) as f32))
+        })
+        .collect()
+}
+
 /// When the button shows: when its segment starts and each time the pointer moves, for
 /// `SHOWN_FOR`; never outside its segment.
 #[derive(Debug, Default)]
@@ -134,6 +150,33 @@ mod tests {
             segment(SegmentKind::Intro, 40, 130),
             segment(SegmentKind::Outro, 2700, 2820),
         ]
+    }
+
+    #[test]
+    fn segments_are_drawn_on_the_seek_bar_at_their_times() {
+        let marks = marks(&episode_segments(), DURATION);
+        let expected = [
+            (0., 40. / 2820.),
+            (40. / 2820., 90. / 2820.),
+            (2700. / 2820., 120. / 2820.),
+        ];
+        assert_eq!(marks.len(), 3);
+        for ((start, width), (want_start, want_width)) in marks.iter().zip(expected) {
+            assert!((start - want_start).abs() < 1e-6, "{marks:?}");
+            assert!((width - want_width).abs() < 1e-6, "{marks:?}");
+        }
+    }
+
+    #[test]
+    fn segments_wait_for_the_duration_and_stop_at_the_end() {
+        assert_eq!(marks(&episode_segments(), 0.), []);
+        let long = [segment(SegmentKind::Outro, 2700, 3000)];
+        let [(start, width)] = marks(&long, DURATION)[..] else {
+            panic!();
+        };
+        assert!((start + width - 1.).abs() < 1e-6);
+        let past = [segment(SegmentKind::Preview, 2900, 3000)];
+        assert_eq!(marks(&past, DURATION), []);
     }
 
     fn label(segments: &[Segment], position: f64, has_next: bool) -> Option<Label> {

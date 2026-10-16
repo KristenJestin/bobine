@@ -216,6 +216,9 @@ pub struct Playback {
     /// The controls and the panel fade in and out.
     controls_fade: Fade,
     panel_fade: Fade,
+    settings_fade: Fade,
+    /// The tracks of the panel scroll on this, so that a long list opens on the one shown.
+    pub tracks_scroll: gpui_kit::ScrollHandle,
     controls_shown: bool,
     had_error: bool,
     /// What the server is told; `None` for a local file.
@@ -401,6 +404,8 @@ impl Shell {
             session,
             controls_fade: Fade::new(motion::quick()),
             panel_fade: Fade::new(motion::quick()),
+            settings_fade: Fade::new(motion::quick()),
+            tracks_scroll: gpui_kit::ScrollHandle::new(),
             controls_shown: false,
             had_error: false,
             reporting,
@@ -692,8 +697,17 @@ impl Shell {
         cx.notify();
     }
 
+    /// A double click on the player: on the picture, fullscreen comes or goes.
+    pub fn player_double_click(&mut self, y: f32, window: &mut Window, cx: &mut Context<Self>) {
+        let request = self
+            .playback
+            .as_ref()
+            .and_then(|playback| playback.session.double_clicked(y));
+        self.player_request(request, window, cx);
+    }
+
     /// What the session asks of the window after a key or a click.
-    fn player_request(
+    pub fn player_request(
         &mut self,
         request: Option<WindowRequest>,
         window: &mut Window,
@@ -852,6 +866,12 @@ impl Render for Shell {
                         .controls_fade
                         .set(session.controls_visible(now), now);
                     playback.panel_fade.set(session.panel_open(), now);
+                    // A long list opens where the subtitle shown is. Asked at each frame of the
+                    // fade in: GPUI drops the ask of the first, where the list has no place yet.
+                    if session.panel_open() && playback.panel_fade.moving(now) {
+                        playback.tracks_scroll.scroll_to_item(session.chosen_line());
+                    }
+                    playback.settings_fade.set(session.settings_open(), now);
                     let preview = playback.seek.draw(session.duration, now);
                     let skip = playback
                         .skip_fade
@@ -863,6 +883,7 @@ impl Render for Shell {
                     playback.notice_fade.set(notice, now);
                     if playback.controls_fade.moving(now)
                         || playback.panel_fade.moving(now)
+                        || playback.settings_fade.moving(now)
                         || playback.notice_fade.moving(now)
                         || playback.skip_fade.moving(now)
                         || playback.seek.moving(now)
@@ -881,6 +902,12 @@ impl Render for Shell {
                         notice: playback.notice_fade.level(now),
                         blackout: self.screens.is_some().then(|| switch.level(now)),
                         skip,
+                        settings: playback.settings_fade.level(now),
+                        list: playback
+                            .list
+                            .as_ref()
+                            .map(|list| (list.toggle.on(), list.error)),
+                        tracks_scroll: playback.tracks_scroll.clone(),
                     };
                     screens::player::render(session, shown, window, cx).into_any_element()
                 }

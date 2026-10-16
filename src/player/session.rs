@@ -6,7 +6,7 @@ use std::time::Instant;
 
 use bobine::provider::Segment;
 
-use super::controls::{Controls, KeyAction, key_action, subtitle_position};
+use super::controls::{Controls, KeyAction, key_action, on_picture, subtitle_position};
 use super::segments::{Button, Label, Press, Prompt, button_at};
 use super::settings::{self, Page, Quality};
 use super::{Aspect, Media, Player, PlayerError, PlayerEvent, Seek, Track, TrackKind, tracks};
@@ -182,6 +182,11 @@ impl Session {
     /// Whether an episode follows this one: its credits offer it.
     pub fn set_next_episode(&mut self, has_next: bool) {
         self.has_next = has_next;
+    }
+
+    /// Where the segments sit on the seek bar.
+    pub fn segment_marks(&self) -> Vec<(f32, f32)> {
+        super::segments::marks(&self.segments, self.duration)
     }
 
     /// The skip button, while it shows (an intro, a recap, the credits).
@@ -382,6 +387,26 @@ impl Session {
     /// The lines of "Playback info".
     pub fn playback_info(&self) -> Vec<(&'static str, String)> {
         settings::info_lines(self.converted, &self.player.info())
+    }
+
+    /// A double click `y` pixels from the top of the window: on the picture, it toggles
+    /// fullscreen.
+    pub fn double_clicked(&self, y: f32) -> Option<WindowRequest> {
+        on_picture(y, self.window_height, self.controls_shown)
+            .then_some(WindowRequest::ToggleFullscreen)
+    }
+
+    /// Which line of the panel to scroll into view as it opens: the subtitle shown, as the
+    /// panel lays them out (the audio title, the audio tracks, the subtitles title, "None",
+    /// then the subtitle tracks).
+    pub fn chosen_line(&self) -> usize {
+        let audio = self.tracks_of(TrackKind::Audio).count();
+        let shown = self
+            .subtitle_choices()
+            .iter()
+            .position(|choice| choice.current)
+            .unwrap_or(0);
+        1 + audio + 1 + shown
     }
 
     /// The fullscreen button of the controls.
@@ -732,6 +757,50 @@ mod tests {
             f.session.press_fullscreen(),
             Some(WindowRequest::ToggleFullscreen)
         );
+    }
+
+    #[test]
+    fn a_double_click_on_the_picture_toggles_fullscreen() {
+        let mut f = fixture();
+        let start = Instant::now();
+        f.session.layout((1440., 810.), whole(1440., 810.), 1.);
+        f.session.update(start);
+        assert_eq!(
+            f.session.double_clicked(750.),
+            Some(WindowRequest::ToggleFullscreen)
+        );
+        f.session.mouse_moved(start);
+        f.session.update(start);
+        assert_eq!(
+            f.session.double_clicked(400.),
+            Some(WindowRequest::ToggleFullscreen)
+        );
+        assert_eq!(f.session.double_clicked(750.), None, "on the controls");
+    }
+
+    #[test]
+    fn a_long_track_list_keeps_the_chosen_track_in_view() {
+        let mut f = fixture();
+        let mut tracks = vec![
+            track(TrackKind::Audio, 1, "fre", "eac3", true),
+            track(TrackKind::Audio, 2, "eng", "aac", false),
+        ];
+        tracks.extend((1..=40).map(|id| track(TrackKind::Subtitle, id, "eng", "ass", id == 30)));
+        f.queue(vec![PlayerEvent::Tracks(tracks)]);
+        f.session.update(Instant::now());
+        // AUDIO, 2 tracks, SUBTITLES, None, then subtitle 30 is the 30th.
+        assert_eq!(f.session.chosen_line(), 1 + 2 + 1 + 30);
+    }
+
+    #[test]
+    fn with_no_subtitle_shown_none_is_kept_in_view() {
+        let mut f = fixture();
+        f.queue(vec![PlayerEvent::Tracks(vec![
+            track(TrackKind::Audio, 1, "fre", "eac3", true),
+            track(TrackKind::Subtitle, 1, "fre", "ass", false),
+        ])]);
+        f.session.update(Instant::now());
+        assert_eq!(f.session.chosen_line(), 1 + 1 + 1);
     }
 
     #[test]
