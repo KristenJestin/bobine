@@ -37,8 +37,6 @@ const HERO_TEXT_WIDTH: f32 = 560.;
 const BETWEEN_ROWS: f32 = 40.;
 const HEADING: f32 = 28.;
 const UNDER_HEADING: f32 = 16.;
-/// The most a logo takes of the header.
-const LOGO: (f32, f32) = (440., 130.);
 
 /// What a row holds.
 enum Body {
@@ -376,17 +374,17 @@ fn logo_or_title(
     title: &str,
     cx: &mut Context<Shell>,
 ) -> AnyElement {
-    match shell.image(Some(logo), images::LOGO, cx) {
-        Some(image) => {
-            let size = image.size(0);
-            let (w, h) = (size.width.0 as f32, size.height.0 as f32);
-            let scale = (LOGO.0 / w).min(LOGO.1 / h);
-            img(image)
-                .w(px(w * scale))
-                .h(px(h * scale))
-                .object_fit(ObjectFit::Contain)
-                .into_any_element()
-        }
+    let drawn = shell.image(Some(logo), images::LOGO, cx).and_then(|image| {
+        let size = image.size(0);
+        let fit = hero::logo_fit((size.width.0 as f32, size.height.0 as f32))?;
+        Some((image, fit))
+    });
+    match drawn {
+        Some((image, (w, h))) => img(image)
+            .w(px(w))
+            .h(px(h))
+            .object_fit(ObjectFit::Contain)
+            .into_any_element(),
         None => title_text(title.to_string()).into_any_element(),
     }
 }

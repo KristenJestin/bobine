@@ -150,6 +150,19 @@ pub fn text_levels(level: f32) -> (f32, f32) {
     ((1. - 2. * level).max(0.), (2. * level - 1.).max(0.))
 }
 
+/// The most a logo takes of the header.
+pub const LOGO: (f32, f32) = (440., 130.);
+
+/// The size a logo of `size` is drawn at, to fit in the room it has; none for a logo with
+/// nothing to draw (a size of zero), so that the title in text shows instead.
+pub fn logo_fit((width, height): (f32, f32)) -> Option<(f32, f32)> {
+    if width <= 0. || height <= 0. {
+        return None;
+    }
+    let scale = (LOGO.0 / width).min(LOGO.1 / height);
+    Some((width * scale, height * scale))
+}
+
 /// Whether the header's ticker runs: only while the Home shows and there are two titles or more
 /// to take turns, so that nothing wakes the window the rest of the time.
 pub fn ticks(on_home: bool, titles: usize) -> bool {
@@ -237,6 +250,20 @@ mod tests {
             logo: None,
             resume: None,
         }
+    }
+
+    #[test]
+    fn a_logo_is_drawn_as_large_as_its_room_allows_with_its_proportions() {
+        // Wide: the width fills the room. Tall: the height does.
+        assert_eq!(logo_fit((880., 130.)), Some((440., 65.)));
+        assert_eq!(logo_fit((200., 260.)), Some((100., 130.)));
+    }
+
+    #[test]
+    fn a_logo_with_no_size_is_not_drawn() {
+        assert_eq!(logo_fit((0., 100.)), None);
+        assert_eq!(logo_fit((100., 0.)), None);
+        assert_eq!(logo_fit((0., 0.)), None);
     }
 
     #[test]
