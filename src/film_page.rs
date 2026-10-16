@@ -21,7 +21,7 @@ pub struct Choices {
 }
 
 impl Choices {
-    /// The first version, with its default audio track and its default subtitle, if any.
+    /// The first version, with the tracks the server starts it with.
     pub fn new(versions: &[MediaSource]) -> Self {
         let mut choices = Self {
             version: 0,
@@ -32,23 +32,40 @@ impl Choices {
         choices
     }
 
-    /// Another version has its own tracks: they go back to its defaults.
+    /// Another version has its own tracks: those the server chose for the user from their
+    /// settings, else the file's default audio track (or the first) and its default subtitle.
     pub fn set_version(&mut self, versions: &[MediaSource], version: usize) {
         let Some(source) = versions.get(version) else {
             return;
         };
         self.version = version;
+        let audio = |index| source.audio.iter().find(|track| track.index == index);
+        let subtitle = |index| source.subtitles.iter().find(|track| track.index == index);
         self.audio = source
-            .audio
-            .iter()
-            .find(|track| track.default)
+            .default_audio
+            .and_then(audio)
+            .or_else(|| source.audio.iter().find(|track| track.default))
             .or(source.audio.first())
             .map(|track| track.index);
-        self.subtitle = source
-            .subtitles
-            .iter()
-            .find(|track| track.default)
-            .map(|track| track.index);
+        self.subtitle = match source.default_subtitle {
+            Some(None) => None,
+            Some(Some(index)) if subtitle(index).is_some() => Some(index),
+            _ => source
+                .subtitles
+                .iter()
+                .find(|track| track.default)
+                .map(|track| track.index),
+        };
+    }
+
+    /// An audio track picked on the chip: it wins for this playback.
+    pub fn choose_audio(&mut self, track: Option<i32>) {
+        self.audio = track;
+    }
+
+    /// A subtitle track picked on the chip, or none.
+    pub fn choose_subtitle(&mut self, track: Option<i32>) {
+        self.subtitle = track;
     }
 
     pub fn source<'a>(&self, versions: &'a [MediaSource]) -> Option<&'a MediaSource> {
@@ -419,17 +436,57 @@ mod tests {
         assert_eq!(plan.start, Duration::ZERO);
     }
 
+    fn shown(choices: &Choices) -> (usize, Option<i32>, Option<i32>) {
+        (choices.version, choices.audio, choices.subtitle)
+    }
+
     #[test]
-    fn the_defaults_are_the_first_version_its_default_audio_and_no_subtitles() {
+    fn the_servers_indexes_are_used() {
         let detail = detail();
-        assert_eq!(
-            Choices::new(&detail.versions),
-            Choices {
-                version: 0,
-                audio: Some(1),
-                subtitle: None
-            }
-        );
+        // The fake server starts the first version with English audio and the full French
+        // subtitles.
+        assert_eq!(shown(&Choices::new(&detail.versions)), (0, Some(2), Some(4)));
+    }
+
+    #[test]
+    fn a_version_change_takes_its_own_indexes() {
+        let detail = detail();
+        let mut choices = Choices::new(&detail.versions);
+        choices.set_version(&detail.versions, 1);
+        assert_eq!(shown(&choices), (1, Some(1), Some(2)));
+    }
+
+    #[test]
+    fn a_missing_index_falls_back_to_the_default_audio_and_no_subtitles() {
+        let mut detail = detail();
+        detail.versions[0].default_audio = None;
+        detail.versions[0].default_subtitle = None;
+        assert_eq!(shown(&Choices::new(&detail.versions)), (0, Some(1), None));
+    }
+
+    #[test]
+    fn a_wrong_index_falls_back_to_the_default_audio_and_no_subtitles() {
+        let mut detail = detail();
+        detail.versions[0].default_audio = Some(9);
+        detail.versions[0].default_subtitle = Some(Some(9));
+        assert_eq!(shown(&Choices::new(&detail.versions)), (0, Some(1), None));
+    }
+
+    #[test]
+    fn no_subtitles_from_the_server_turns_them_off() {
+        let mut detail = detail();
+        detail.versions[0].default_subtitle = Some(None);
+        assert_eq!(shown(&Choices::new(&detail.versions)), (0, Some(2), None));
+    }
+
+    #[test]
+    fn a_chip_choice_wins() {
+        let detail = detail();
+        let mut choices = Choices::new(&detail.versions);
+        choices.choose_audio(Some(1));
+        choices.choose_subtitle(Some(3));
+        let plan = plan(&detail.film, &detail.versions, &choices, From::Resume).unwrap();
+        assert_eq!((plan.audio_index, plan.subtitle_index), (Some(1), Some(3)));
     }
 
     #[test]
@@ -533,13 +590,9 @@ mod tests {
     #[test]
     fn no_subtitles_chosen_turns_them_off() {
         let detail = detail();
-        let plan = plan(
-            &detail.film,
-            &detail.versions,
-            &Choices::new(&detail.versions),
-            From::Resume,
-        )
-        .unwrap();
+        let mut choices = Choices::new(&detail.versions);
+        choices.choose_subtitle(None);
+        let plan = plan(&detail.film, &detail.versions, &choices, From::Resume).unwrap();
         let Call::Load { subtitle, .. } = load(&plan) else {
             panic!("not a load");
         };
@@ -552,8 +605,7 @@ mod tests {
         let mut choices = Choices::new(&detail.versions);
         choices.subtitle = Some(5);
         choices.set_version(&detail.versions, 1);
-        assert_eq!(choices.audio, Some(1));
-        assert_eq!(choices.subtitle, None);
+        assert_eq!((choices.audio, choices.subtitle), (Some(1), Some(2)));
         let plan = plan(&detail.film, &detail.versions, &choices, From::Resume).unwrap();
         assert_eq!(plan.source, MediaSourceId("source-1080".into()));
     }
