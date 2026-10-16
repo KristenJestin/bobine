@@ -92,6 +92,9 @@ pub struct LibraryPage<T> {
     pub appeared: Option<u64>,
     /// The index of the title to scroll to, found by a letter of the alphabet bar.
     pub jump: Option<usize>,
+    /// A letter found before the list it belongs to had arrived: the list it was found for,
+    /// and the number of titles before the letter. The jump is made when the list lands.
+    pub waiting_jump: Option<(u64, u32)>,
     /// The alphabet bar comes and goes with the sort by title.
     pub letters: Fade,
 }
@@ -111,6 +114,7 @@ impl<T> Default for LibraryPage<T> {
             appear: Glide::new(1., motion::page()),
             appeared: None,
             jump: None,
+            waiting_jump: None,
             letters: Fade::new(motion::quick()),
         }
     }
@@ -128,6 +132,7 @@ impl<T: Listed> LibraryPage<T> {
         self.grid.restart();
         self.error = None;
         self.jump = None;
+        self.waiting_jump = None;
         self.menus.close();
         self.scroll
             .0
@@ -138,12 +143,24 @@ impl<T: Listed> LibraryPage<T> {
     }
 
     /// The server counted `index` titles before a letter, for the list asked under `epoch`: the
-    /// grid goes there, unless the list has changed since.
+    /// grid goes there, unless the list has changed since. A list still on its way is waited
+    /// for: its size is not known yet.
     pub fn found_letter(&mut self, epoch: u64, index: u32) {
-        let Some(total) = self.grid.total.filter(|_| self.grid.is_current(epoch)) else {
+        if !self.grid.is_current(epoch) {
             return;
-        };
-        self.jump = Some(index.min(total.saturating_sub(1)) as usize);
+        }
+        match self.grid.total {
+            Some(total) => self.jump = Some(index.min(total.saturating_sub(1)) as usize),
+            None => self.waiting_jump = Some((epoch, index)),
+        }
+    }
+
+    /// A page of the list asked under `epoch` came back.
+    pub fn loaded(&mut self, epoch: u64, page: u32, items: Page<T>) {
+        self.grid.loaded(epoch, page, items);
+        if let Some((waiting, index)) = self.waiting_jump.take() {
+            self.found_letter(waiting, index);
+        }
     }
 }
 
@@ -636,7 +653,7 @@ impl Shell {
                 cx,
                 move |server| fetch(server, &library, &tools.query(page)),
                 move |shell, items, cx| match items {
-                    Ok(items) => page_of(shell).grid.loaded(epoch, page, items),
+                    Ok(items) => page_of(shell).loaded(epoch, page, items),
                     Err(error) => {
                         let shown = page_of(shell);
                         shown.grid.failed(epoch, page, Instant::now());
@@ -1387,6 +1404,50 @@ mod tests {
         let mut page = films_page();
         page.found_letter(page.grid.epoch(), 1284);
         assert_eq!(page.jump, Some(1283));
+    }
+
+    /// A page of a 1284-film library as the server would answer it for `page`'s tools.
+    fn answer(page: &LibraryPage<Film>, number: u32) -> Page<Film> {
+        FakeServer::new(1284, true)
+            .films(&ItemId(FILMS_LIBRARY.into()), &page.tools.query(number))
+            .unwrap()
+    }
+
+    #[test]
+    fn a_letter_found_before_the_list_arrives_waits_for_it() {
+        let mut page = films_page();
+        page.change(|tools| tools.sort = Sort::Title);
+        let epoch = page.grid.epoch();
+        // The list is on its way: its size is not known yet.
+        page.found_letter(epoch, 412);
+        assert_eq!(page.jump, None);
+        page.loaded(epoch, 0, answer(&page, 0));
+        assert_eq!(page.jump, Some(412));
+        assert_eq!(page.waiting_jump, None);
+    }
+
+    #[test]
+    fn a_waiting_jump_past_the_last_title_goes_to_the_last_one() {
+        let mut page = films_page();
+        page.change(|tools| tools.sort = Sort::Title);
+        let epoch = page.grid.epoch();
+        page.found_letter(epoch, 5000);
+        page.loaded(epoch, 0, answer(&page, 0));
+        assert_eq!(page.jump, Some(1283));
+    }
+
+    #[test]
+    fn a_waiting_jump_is_lost_when_the_list_changes_again() {
+        let mut page = films_page();
+        page.change(|tools| tools.sort = Sort::Title);
+        let asked = page.grid.epoch();
+        page.found_letter(asked, 412);
+        page.change(|tools| tools.filters.unwatched = true);
+        assert_eq!(page.waiting_jump, None);
+        // The answer for the list before it does not land, and takes no jump with it.
+        page.loaded(asked, 0, answer(&page, 0));
+        page.loaded(page.grid.epoch(), 0, answer(&page, 0));
+        assert_eq!(page.jump, None);
     }
 
     #[test]
