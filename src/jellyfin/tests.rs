@@ -2202,6 +2202,7 @@ fn the_collections_are_read_without_asking_for_any_film() {
 fn a_collection_with_no_picture_shows_the_poster_of_its_first_film() {
     let s = Setup::new();
     let poster = s.signed_in().collection_poster(&ItemId(LONE_WOLVES.into()));
+    // The earliest release that has a poster: the 2009 film has none, the 2011 one has.
     assert_eq!(
         poster,
         Some(ImageRef {
@@ -2217,6 +2218,7 @@ fn a_collection_with_no_picture_shows_the_poster_of_its_first_film() {
         Some("ProductionYear,PremiereDate,SortName")
     );
     assert_eq!(asked.param("limit"), Some("1"));
+    assert_eq!(asked.param("imageTypes"), Some("Primary"));
     assert_eq!(asked.param("includeItemTypes"), Some("Movie"));
     assert_eq!(asked.param("userId"), Some(USER_ID));
 }

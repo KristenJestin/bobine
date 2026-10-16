@@ -853,6 +853,8 @@ impl MediaServer for Jellyfin {
     }
 
     fn collection_poster(&self, collection: &ItemId) -> Option<ImageRef> {
+        // `imageTypes` keeps the films with a poster: the first film listed may have none while
+        // the next has one.
         let films = self
             .items(
                 "collection poster",
@@ -860,6 +862,7 @@ impl MediaServer for Jellyfin {
                     ("parentId", collection.0.clone()),
                     ("includeItemTypes", "Movie".into()),
                     ("sortBy", "ProductionYear,PremiereDate,SortName".into()),
+                    ("imageTypes", "Primary".into()),
                     ("limit", "1".into()),
                     ("imageTypeLimit", "1".into()),
                     ("enableImageTypes", "Primary".into()),

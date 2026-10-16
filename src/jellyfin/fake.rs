@@ -337,6 +337,16 @@ fn of_types(mut list: Value, seen: &Seen) -> Value {
     list
 }
 
+/// The items that have an image of each type in `ImageTypes`, as the server filters them.
+fn with_images(mut list: Value, seen: &Seen) -> Value {
+    if let Some(types) = seen.param("ImageTypes") {
+        let items = list["Items"].as_array_mut().unwrap();
+        items.retain(|item| types.split(',').all(|t| item["ImageTags"].get(t).is_some()));
+        list["TotalRecordCount"] = json!(items.len());
+    }
+    list
+}
+
 /// What a person took part in, as the server pages it: only the types asked, `Limit` of them
 /// from `StartIndex`, and the total of them all.
 fn person_titles(seen: &Seen) -> Value {
@@ -458,7 +468,10 @@ fn answer(state: &State, seen: &Seen) -> Answer {
             }
             (Some("b0000000000000000000000000000003"), _) => Answer::Json(
                 200,
-                limited(of_types(fixture("boxset_lone_wolves"), seen), seen),
+                limited(
+                    with_images(of_types(fixture("boxset_lone_wolves"), seen), seen),
+                    seen,
+                ),
             ),
             _ => Answer::Json(200, json!({ "Items": [], "TotalRecordCount": 0 })),
         },
