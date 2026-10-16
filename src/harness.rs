@@ -9,7 +9,7 @@
 //! [--fullscreen-at S] [--windowed-at S] [--next FILE --next-at S] [--leave-at S]
 //! [--measure-from S] --quit-at S`
 //!
-//! `bobine --screen login|home|home-rows|home-list-resume|home-list-next|home-list-latest|library|detail|
+//! `bobine --screen login|home|home-rows|home-list-resume|home-list-next|home-list-latest|home-list-empty|library|detail|
 //! detail-rows|detail-cast|playing|series|series-page|series-rows|up-next|collections|collection-page|
 //! my-list|my-list-empty|film-list|series-list [--films N]
 //! [--media FILE] [--segments SECONDS] [--direct-fails] [--image-delay-ms N] [--photos-fail-once] [--scenario menu|scroll|select|panel|blackout|search|search-slow|search-keys|tools|tools-keys|home-rotate|home-hover|home-jump|home-scroll|home-lists|home-play|skip]
@@ -281,6 +281,12 @@ impl Harness {
             if args.screen.as_deref() == Some("my-list-empty") {
                 state.favourites.clear();
             }
+            if args.screen.as_deref() == Some("home-list-empty") {
+                // Nothing started: "Continue watching" holds nothing.
+                state.films.iter_mut().for_each(|film| film.resume = None);
+                let episodes = state.episodes.iter_mut();
+                episodes.for_each(|episode| episode.item.resume = None);
+            }
             if args.scenario.as_deref() == Some("home-play") {
                 // The file played is seconds long: what was started resumes near its start.
                 let started = Duration::from_secs(1);
@@ -390,7 +396,7 @@ fn show_screen(
     let (series_rows, up_next) = (wants(&["series-rows"]), wants(&["up-next"]));
     let home_rows = wants(&["home-rows"]);
     let list = match screen.as_str() {
-        "home-list-resume" => Some((ListKind::Resume, None)),
+        "home-list-resume" | "home-list-empty" => Some((ListKind::Resume, None)),
         "home-list-next" => Some((ListKind::NextUp, None)),
         "home-list-latest" => Some((
             ListKind::Latest(

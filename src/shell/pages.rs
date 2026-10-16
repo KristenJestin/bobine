@@ -2455,4 +2455,24 @@ mod tests {
             .unwrap();
         assert_eq!(layout(&mut drawn(&window, cx)), library);
     }
+
+    #[gpui_kit::test]
+    fn an_empty_list_shows_its_reason_and_a_row_of_suggestions(cx: &mut gpui_kit::TestAppContext) {
+        let (server, window) = signed_in_window(cx);
+        // Everything started is finished: the list behind the Home's row is empty by now.
+        {
+            let mut state = server.state.lock().unwrap();
+            state.films.iter_mut().for_each(|film| film.resume = None);
+            let episodes = state.episodes.iter_mut();
+            episodes.for_each(|episode| episode.item.resume = None);
+        }
+        window
+            .update(cx, |shell, _, cx| {
+                shell.open_list(ListKind::Resume, None, cx)
+            })
+            .unwrap();
+        let mut visual = drawn(&window, cx);
+        assert!(visual.debug_bounds("empty-reason").is_some());
+        assert!(visual.debug_bounds("suggestions").is_some());
+    }
 }

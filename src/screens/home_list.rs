@@ -7,7 +7,7 @@ use bobine::provider::Title;
 use gpui_kit::prelude::*;
 use gpui_kit::{AnyElement, Context, IntoElement, SharedString, Window, div, px, uniform_list};
 
-use super::home::{Pick, card_picture, error_pill, wide_card};
+use super::home::{Pick, card_picture, error_pill, suggestion_row, wide_card};
 use super::library::{GRID_TOP, heading, rows_frame};
 use super::{centered, note, poster_with, series_poster_with};
 use crate::grid::{self, GAP, MARGIN};
@@ -44,7 +44,6 @@ pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -
     let status = match (list.error, total) {
         (Some(why), None) => Some(why),
         (_, None) => Some("Loading…"),
-        (_, Some(0)) => Some("Nothing in this list."),
         _ => None,
     };
     let scroll = list.scroll.clone();
@@ -56,6 +55,25 @@ pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -
         .flex_col()
         .pt(px(GRID_TOP))
         .child(heading(title, library, total.filter(|total| *total > 0)));
+    if total == Some(0) {
+        let kind = list.kind.clone();
+        let suggestions = suggestion_row(shell, &kind, width, window, cx);
+        return page
+            .child(
+                div()
+                    .debug_selector(|| "empty-reason".into())
+                    .px(px(MARGIN))
+                    .child(note(kind.empty_reason())),
+            )
+            .children(suggestions.map(|row| {
+                div()
+                    .debug_selector(|| "suggestions".into())
+                    .pt(px(40.))
+                    .child(row)
+            }))
+            .children(error.map(error_pill))
+            .into_any_element();
+    }
 
     let rows_list = uniform_list(
         "home-list",
