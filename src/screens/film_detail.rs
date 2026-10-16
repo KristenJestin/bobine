@@ -200,7 +200,7 @@ fn hero(
         .on_click(cx.listener(|shell, _, window, cx| shell.play_film(From::Beginning, window, cx)))
     });
     let trailer = trailer::choose(&detail.trailers, shell.ytdlp)
-        .map(|_| trailer_button("film-trailer", window, cx));
+        .map(|_| trailer_button(FILM_TRAILER, window, cx));
     let watched = theme::ghost_button("film-watched", Some(IconName::Check), "Watched", window, cx)
         .when(film.watched, |button| {
             button
@@ -311,6 +311,10 @@ pub(super) fn list_button(
         .on_click(cx.listener(|shell, _, _, cx| shell.toggle_favourite(cx)))
 }
 
+/// The Trailer buttons, by page: their ids, which are also the selectors every button carries.
+pub const FILM_TRAILER: &str = "film-trailer";
+pub const SERIES_TRAILER: &str = "series-trailer";
+
 /// "Trailer": it fades in the first time the page draws it, like what the page shows by
 /// itself. Like its neighbours, it has no dimming of its own: its row decides.
 pub(super) fn trailer_button(
@@ -328,7 +332,6 @@ pub(super) fn trailer_button(
         window.request_animation_frame();
     }
     theme::ghost_button(id, Some(IconName::PlayCircle), "Trailer", window, cx)
-        .debug_selector(|| id.into())
         .opacity(fade.level(now))
         .on_click(cx.listener(|shell, _, window, cx| shell.play_trailer(window, cx)))
 }

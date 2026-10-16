@@ -15,8 +15,8 @@ use gpui_kit::{
 
 use super::card::{Offer, Open, Play};
 use super::film_detail::{
-    EDGE, MenuState, ROW_POSTER, TEXT_WIDTH, cast_row, chips_row, facts_line, heading, hero_frame,
-    hero_text_under, list_button, row, trailer_button,
+    EDGE, MenuState, ROW_POSTER, SERIES_TRAILER, TEXT_WIDTH, cast_row, chips_row, facts_line,
+    heading, hero_frame, hero_text_under, list_button, row, trailer_button,
 };
 use super::{card, centered, note, picture, progress_bar, row_heading, series_poster};
 use crate::film_page::{self, Choices};
@@ -198,7 +198,7 @@ fn hero(
                     .children(play)
                     .children(
                         trailer::choose(&detail.trailers, shell.ytdlp)
-                            .map(|_| trailer_button("series-trailer", window, cx)),
+                            .map(|_| trailer_button(SERIES_TRAILER, window, cx)),
                     )
                     .child(list_button("series-list", shown.favourite, window, cx)),
             )

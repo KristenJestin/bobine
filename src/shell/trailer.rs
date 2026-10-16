@@ -196,6 +196,7 @@ mod tests {
     use super::*;
     use crate::fake::{FILM, FakeServer, SERIES};
     use crate::navigation::Screen;
+    use crate::screens::{FILM_TRAILER, SERIES_TRAILER};
 
     const ADDRESS: &str = "https://video.example/watch?v=abc";
 
@@ -496,7 +497,7 @@ mod tests {
         let (server, window) = signed_in_window(local(), false, cx);
         on_film(&window, cx);
         let mut visual = drawn_page(&window, cx);
-        click_on(&mut visual, "film-trailer");
+        click_on(&mut visual, FILM_TRAILER);
         assert_eq!(
             server.state.lock().unwrap().record.trailer_asks,
             [ItemId(FILM.into())]
@@ -509,7 +510,7 @@ mod tests {
         let (server, window) = signed_in_window(remote(), true, cx);
         on_series(&window, cx);
         let mut visual = drawn_page(&window, cx);
-        click_on(&mut visual, "series-trailer");
+        click_on(&mut visual, SERIES_TRAILER);
         assert_eq!(opened(&window, cx), [(ADDRESS.to_string(), true)]);
         assert!(server.state.lock().unwrap().record.trailer_asks.is_empty());
         assert_eq!(current(&window, cx), Screen::Player);
@@ -524,7 +525,7 @@ mod tests {
             visual.debug_bounds("cast-member 0").is_some(),
             "the page is drawn"
         );
-        assert!(visual.debug_bounds("film-trailer").is_none());
+        assert!(visual.debug_bounds(FILM_TRAILER).is_none());
         window
             .update(cx, |shell, _, cx| {
                 shell.navigator.back();
@@ -536,7 +537,7 @@ mod tests {
             visual.debug_bounds("cast-member 0").is_some(),
             "the page is drawn"
         );
-        assert!(visual.debug_bounds("series-trailer").is_none());
+        assert!(visual.debug_bounds(SERIES_TRAILER).is_none());
     }
 
     #[gpui_kit::test]
@@ -550,7 +551,7 @@ mod tests {
             visual.debug_bounds("cast-member 0").is_some(),
             "the page is drawn"
         );
-        assert!(visual.debug_bounds("film-trailer").is_none());
+        assert!(visual.debug_bounds(FILM_TRAILER).is_none());
         window
             .update(cx, |shell, _, cx| {
                 shell.navigator.back();
@@ -558,6 +559,6 @@ mod tests {
             })
             .unwrap();
         let mut visual = drawn_page(&window, cx);
-        assert!(visual.debug_bounds("series-trailer").is_none());
+        assert!(visual.debug_bounds(SERIES_TRAILER).is_none());
     }
 }
