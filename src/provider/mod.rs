@@ -133,6 +133,39 @@ pub trait MediaServer: Send + Sync {
     /// The stretches of a film or an episode the server marked (intro, credits…), by start. A
     /// server that does not know them, or an item without any, answers none: never an error.
     fn media_segments(&self, item: &ItemId) -> Result<Vec<Segment>, ProviderError>;
+
+    /// How the user wants the audio and subtitle tracks chosen before a playback. Read once per
+    /// session and kept; none when the server could not say, which leaves the file's own flags
+    /// to choose. Blocks on the first call only.
+    fn track_preferences(&self) -> Option<TrackPreferences>;
+}
+
+/// When a subtitle track starts a playback.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SubtitleMode {
+    /// The file's default or forced track.
+    Default,
+    /// One in the preferred language, whatever the audio.
+    Always,
+    OnlyForced,
+    None,
+    /// One in the preferred language, unless the audio is already in it.
+    Smart,
+}
+
+/// The user's own choices for the tracks of a playback, as their server keeps them. Languages
+/// are ISO 639-2 codes, in either form (`fre` or `fra`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrackPreferences {
+    pub audio_language: Option<String>,
+    /// The file's default audio track wins over the preferred language.
+    pub play_default_audio: bool,
+    pub subtitle_language: Option<String>,
+    pub subtitle_mode: SubtitleMode,
+    /// The next episode of a series keeps the audio language chosen by hand.
+    pub remember_audio: bool,
+    /// The same for the subtitles.
+    pub remember_subtitle: bool,
 }
 
 /// What a marked stretch of a film or an episode is.

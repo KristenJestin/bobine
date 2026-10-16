@@ -3,8 +3,8 @@
 use crate::provider::{
     AudioTrack, CastMember, CollectionCard, Episode, Feature, FeatureKind, Film, ImageKind,
     ImageRef, ItemId, Library, LibraryKind, MediaSource, MediaSourceId, PersonHit, PersonTitles,
-    Season, Segment, SegmentKind, Series, SeriesHit, ServerInfo, SubtitleTrack, Title, Trickplay,
-    VideoRange, VideoTrack,
+    Season, Segment, SegmentKind, Series, SeriesHit, ServerInfo, SubtitleMode, SubtitleTrack,
+    Title, TrackPreferences, Trickplay, VideoRange, VideoTrack,
 };
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -50,6 +50,59 @@ pub struct AuthenticationResult {
 pub struct UserDto {
     pub id: String,
     pub name: String,
+}
+
+/// `GET /Users/{id}`: the user, with the settings the server keeps for them.
+#[derive(Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct UserSettings {
+    pub configuration: UserConfiguration,
+}
+
+/// What the user chose for their tracks. Every field has the server's own default: a missing
+/// one means the user never changed it.
+#[derive(Deserialize)]
+#[serde(rename_all = "PascalCase", default)]
+pub struct UserConfiguration {
+    pub audio_language_preference: Option<String>,
+    pub play_default_audio_track: bool,
+    pub subtitle_language_preference: Option<String>,
+    pub subtitle_mode: String,
+    pub remember_audio_selections: bool,
+    pub remember_subtitle_selections: bool,
+}
+
+impl Default for UserConfiguration {
+    fn default() -> Self {
+        Self {
+            audio_language_preference: None,
+            play_default_audio_track: true,
+            subtitle_language_preference: None,
+            subtitle_mode: "Default".into(),
+            remember_audio_selections: true,
+            remember_subtitle_selections: true,
+        }
+    }
+}
+
+impl UserConfiguration {
+    pub fn into_preferences(self) -> TrackPreferences {
+        let language = |code: Option<String>| code.filter(|code| !code.is_empty());
+        TrackPreferences {
+            audio_language: language(self.audio_language_preference),
+            play_default_audio: self.play_default_audio_track,
+            subtitle_language: language(self.subtitle_language_preference),
+            subtitle_mode: match self.subtitle_mode.as_str() {
+                "Always" => SubtitleMode::Always,
+                "OnlyForced" => SubtitleMode::OnlyForced,
+                "None" => SubtitleMode::None,
+                "Smart" => SubtitleMode::Smart,
+                _ => SubtitleMode::Default,
+            },
+            remember_audio: self.remember_audio_selections,
+            remember_subtitle: self.remember_subtitle_selections,
+        }
+    }
 }
 
 #[derive(Deserialize)]

@@ -11,7 +11,8 @@ use bobine::provider::{
     FilterChoices, ImageKind, ImageRef, ItemId, Library, LibraryKind, MediaServer, MediaSource,
     MediaSourceId, Page, PersonHit, PersonTitles, PlaySessionId, Playback, PlaybackReport,
     ProviderError, SearchResults, Season, Segment, Series, SeriesDetail, SeriesHit, ServerInfo,
-    StreamUrl, SubtitleTrack, Title, TranscodeRequest, Trickplay, VideoRange, VideoTrack,
+    StreamUrl, SubtitleTrack, Title, TrackPreferences, TranscodeRequest, Trickplay, VideoRange,
+    VideoTrack,
 };
 
 pub const USER: &str = "camille";
@@ -87,6 +88,8 @@ pub struct State {
     pub favourite_delay: std::time::Duration,
     /// The media segments every item has (none: a server that does not know them).
     pub segments: Vec<Segment>,
+    /// The user's track preferences; none: the server could not say.
+    pub preferences: Option<TrackPreferences>,
     /// The trickplay layout every version has; none: the server made no trickplay images.
     pub trickplay: Option<Trickplay>,
     /// The JPEGs the tiles are, in turn: tile 0 is the first, tile 3 the first again if three.
@@ -481,6 +484,7 @@ impl FakeServer {
                 favourite_fails: false,
                 favourite_delay: std::time::Duration::ZERO,
                 segments: Vec::new(),
+                preferences: None,
                 trickplay: None,
                 tiles: Vec::new(),
                 tile_delay: std::time::Duration::ZERO,
@@ -1184,6 +1188,10 @@ impl MediaServer for FakeServer {
         let mut state = self.state();
         state.record.segment_asks.push(item.clone());
         Ok(state.segments.clone())
+    }
+
+    fn track_preferences(&self) -> Option<TrackPreferences> {
+        self.state().preferences.clone()
     }
 }
 

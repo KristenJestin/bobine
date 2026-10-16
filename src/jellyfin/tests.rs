@@ -2612,3 +2612,76 @@ fn a_segments_route_that_fails_is_an_error_left_to_the_caller() {
         Err(ProviderError::Server(500))
     );
 }
+
+#[test]
+fn the_track_preferences_are_those_of_the_signed_in_user() {
+    let s = Setup::new();
+    let server = s.signed_in();
+    assert_eq!(
+        server.track_preferences(),
+        Some(TrackPreferences {
+            audio_language: Some("fre".into()),
+            play_default_audio: false,
+            subtitle_language: Some("eng".into()),
+            subtitle_mode: SubtitleMode::Smart,
+            remember_audio: true,
+            remember_subtitle: false,
+        })
+    );
+    let seen = s.fake.state.lock().unwrap().seen.clone();
+    let asked: Vec<_> = seen
+        .iter()
+        .filter(|r| r.path == format!("/Users/{USER_ID}"))
+        .collect();
+    assert_eq!(asked.len(), 1);
+    assert_eq!(asked[0].method, "GET");
+}
+
+#[test]
+fn the_track_preferences_are_read_once_per_session() {
+    let s = Setup::new();
+    let server = s.signed_in();
+    server.track_preferences();
+    server.track_preferences();
+    let seen = s.fake.state.lock().unwrap().seen.clone();
+    let asked = seen
+        .iter()
+        .filter(|r| r.path == format!("/Users/{USER_ID}"))
+        .count();
+    assert_eq!(asked, 1);
+}
+
+#[test]
+fn a_user_with_no_language_set_has_none_for_the_tracks() {
+    let s = Setup::new();
+    let server = s.signed_in();
+    s.fake.state.lock().unwrap().bare_preferences = true;
+    let preferences = server.track_preferences().unwrap();
+    assert_eq!(preferences.audio_language, None);
+    assert_eq!(preferences.subtitle_language, None);
+    assert_eq!(preferences.subtitle_mode, SubtitleMode::Default);
+    assert!(preferences.play_default_audio);
+}
+
+#[test]
+fn preferences_that_cannot_be_read_are_none_and_asked_again_later() {
+    let s = Setup::new();
+    let server = s.signed_in();
+    s.fake
+        .state
+        .lock()
+        .unwrap()
+        .broken
+        .push((format!("/Users/{USER_ID}"), 500));
+    assert_eq!(server.track_preferences(), None);
+    s.fake.state.lock().unwrap().broken.clear();
+    assert!(server.track_preferences().is_some());
+}
+
+#[test]
+fn a_restored_session_reads_the_preferences_too() {
+    let s = Setup::new();
+    s.signed_in();
+    let restored = s.restart().restore().unwrap().unwrap();
+    assert!(restored.track_preferences().is_some());
+}

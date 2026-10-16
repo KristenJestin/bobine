@@ -31,6 +31,7 @@ fn fixture(name: &str) -> Value {
     let text = match name {
         "system_info_public" => include_str!("fixtures/system_info_public.json"),
         "authenticate_by_name" => include_str!("fixtures/authenticate_by_name.json"),
+        "user" => include_str!("fixtures/user.json"),
         "user_views" => include_str!("fixtures/user_views.json"),
         "films" => include_str!("fixtures/films.json"),
         "letters" => include_str!("fixtures/letters.json"),
@@ -123,6 +124,8 @@ pub struct State {
     pub no_transcoding: bool,
     /// The extracted subtitle comes from another host, as an absolute address.
     pub absolute_delivery: bool,
+    /// The user never set a language: the server gives its bare defaults.
+    pub bare_preferences: bool,
 }
 
 /// How long a held search request waits for the others before it is let go anyway.
@@ -546,6 +549,20 @@ fn answer(state: &State, seen: &Seen) -> Answer {
             } else {
                 Answer::Json(200, json!({ "Items": [], "TotalRecordCount": 0 }))
             }
+        }
+        ("GET", path) if path == format!("/Users/{USER_ID}") => {
+            let mut user = fixture("user");
+            if state.bare_preferences {
+                user["Configuration"] = json!({
+                    "AudioLanguagePreference": null,
+                    "PlayDefaultAudioTrack": true,
+                    "SubtitleLanguagePreference": "",
+                    "SubtitleMode": "Default",
+                    "RememberAudioSelections": true,
+                    "RememberSubtitleSelections": true
+                });
+            }
+            Answer::Json(200, user)
         }
         ("GET", "/Items/Latest") => {
             let name = match seen.param("ParentId") {
