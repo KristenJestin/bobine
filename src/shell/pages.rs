@@ -161,7 +161,9 @@ impl<T: Listed> LibraryPage<T> {
     /// out; once it is gone and the new one is there, the new one starts at the top and fades in.
     pub fn follow_list(&mut self, now: Instant) {
         if self.grid.has_stale() {
-            self.appear.set(0., now);
+            // The new list is given up: the old one comes back, with the failure and its way
+            // to try again, rather than a blank.
+            self.appear.set(if self.gave_up() { 1. } else { 0. }, now);
             if self.grid.total.is_none() || self.appear.value(now) > GONE {
                 return;
             }
@@ -1609,6 +1611,30 @@ mod tests {
         assert!(!page.grid.has_stale());
         assert_eq!(opacity(&page, at(t, 600)), 0.);
         assert!(opacity(&page, at(t, 700)) > 0.);
+    }
+
+    #[test]
+    fn a_new_list_given_up_during_the_fade_brings_the_old_one_back_with_its_error() {
+        let t = Instant::now();
+        let mut page = films_page_changed(t);
+        let t = at(t, 1000);
+        page.follow_list(t);
+        page.follow_list(at(t, 400));
+        assert_eq!(opacity(&page, at(t, 400)), 0.);
+        // The first page of the new list fails until it is given up.
+        for _ in 0..=crate::grid::MAX_RETRIES {
+            page.grid.failed(page.grid.epoch(), 0, at(t, 400));
+        }
+        page.error = Some("Hors ligne");
+        assert!(page.gave_up());
+        page.follow_list(at(t, 500));
+        assert!(page.grid.has_stale());
+        assert!(page.cells_visible(at(t, 600)));
+        assert_eq!(opacity(&page, at(t, 1000)), 1.);
+        // "Réessayer": the list goes away again while the new one is awaited.
+        page.retry();
+        page.follow_list(at(t, 1100));
+        assert_eq!(opacity(&page, at(t, 1500)), 0.);
     }
 
     #[test]
