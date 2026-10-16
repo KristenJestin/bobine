@@ -12,19 +12,24 @@ pub const NO_COLLECTION: &str = "Aucune collection sur ce serveur.";
 
 /// How many poster requests of bare collections are in flight at once: few enough to leave the
 /// server and the connections to what the user is looking at, enough to not wait on each round
-/// trip.
+/// trip. The chain goes on after the page is left: the requests already asked are not taken
+/// back, and the cards are worn for when the user returns.
 pub const POSTERS_IN_FLIGHT: usize = 4;
 
 /// The collections that have no picture of their own, whose poster is asked after the grid shows.
 #[derive(Default)]
 pub struct PosterQueue {
+    /// The load whose cards these are: the answers of an earlier one are not for this grid. A
+    /// generation is never 0, which a reset queue keeps.
+    generation: u64,
     waiting: VecDeque<ItemId>,
 }
 
 impl PosterQueue {
     /// The bare cards, in the order of the grid.
-    pub fn of(cards: &[CollectionCard]) -> Self {
+    pub fn of(cards: &[CollectionCard], generation: u64) -> Self {
         Self {
+            generation,
             waiting: cards
                 .iter()
                 .filter(|card| card.poster.is_none())
@@ -38,14 +43,33 @@ impl PosterQueue {
         (0..POSTERS_IN_FLIGHT).map_while(|_| self.next()).collect()
     }
 
-    /// The next to ask, when one request was answered.
-    pub fn next(&mut self) -> Option<ItemId> {
+    fn next(&mut self) -> Option<ItemId> {
         self.waiting.pop_front()
+    }
+
+    /// A request of the load numbered `generation` was answered: the card wears the poster if
+    /// there is one, and the id to ask next is returned. An answer of another load is no
+    /// business of this queue: it changes nothing and starts nothing, so the requests in flight
+    /// stay at most `POSTERS_IN_FLIGHT` after a new sign-in.
+    pub fn answered(
+        &mut self,
+        cards: &mut [CollectionCard],
+        generation: u64,
+        collection: &ItemId,
+        poster: Option<ImageRef>,
+    ) -> Option<ItemId> {
+        if generation != self.generation {
+            return None;
+        }
+        if let Some(poster) = poster {
+            wear(cards, collection, poster);
+        }
+        self.next()
     }
 }
 
 /// A collection's poster landed: its card wears it.
-pub fn wear(cards: &mut [CollectionCard], collection: &ItemId, poster: ImageRef) {
+fn wear(cards: &mut [CollectionCard], collection: &ItemId, poster: ImageRef) {
     if let Some(card) = cards.iter_mut().find(|card| &card.id == collection) {
         card.poster = Some(poster);
     }
@@ -197,41 +221,113 @@ mod tests {
             .collect()
     }
 
+    fn poster(of: &str) -> ImageRef {
+        ImageRef {
+            item: ItemId(of.into()),
+            kind: ImageKind::Primary,
+            tag: "p".into(),
+        }
+    }
+
+    fn id(n: usize) -> ItemId {
+        ItemId(format!("c{n}"))
+    }
+
+    /// The generation of the load the tests are about.
+    const LOAD: u64 = 7;
+
     #[test]
     fn only_the_bare_collections_wait_for_a_poster() {
         let cards = cards_with_posters(&[true, false, true, false]);
-        let mut queue = PosterQueue::of(&cards);
-        assert_eq!(queue.next(), Some(ItemId("c1".into())));
-        assert_eq!(queue.next(), Some(ItemId("c3".into())));
-        assert_eq!(queue.next(), None);
+        let mut queue = PosterQueue::of(&cards, LOAD);
+        assert_eq!(queue.start(), [id(1), id(3)]);
     }
 
     #[test]
     fn no_more_posters_than_the_bound_are_asked_at_once() {
         let cards = cards_with_posters(&[false; 3 * POSTERS_IN_FLIGHT]);
-        let mut queue = PosterQueue::of(&cards);
-        let started = queue.start();
-        assert_eq!(started.len(), POSTERS_IN_FLIGHT);
-        // Each answer lets one more go, in the order of the grid.
-        assert_eq!(queue.next(), Some(ItemId(format!("c{POSTERS_IN_FLIGHT}"))));
+        let mut queue = PosterQueue::of(&cards, LOAD);
+        assert_eq!(queue.start().len(), POSTERS_IN_FLIGHT);
         let few = cards_with_posters(&[false, false]);
-        assert_eq!(PosterQueue::of(&few).start().len(), 2);
+        assert_eq!(PosterQueue::of(&few, LOAD).start().len(), 2);
         assert!(PosterQueue::default().start().is_empty());
+    }
+
+    #[test]
+    fn an_answer_with_no_poster_still_starts_the_next_request() {
+        let mut cards = cards_with_posters(&[false; 2 * POSTERS_IN_FLIGHT]);
+        let mut queue = PosterQueue::of(&cards, LOAD);
+        queue.start();
+        let next = queue.answered(&mut cards, LOAD, &id(0), None);
+        assert_eq!(next, Some(id(POSTERS_IN_FLIGHT)));
+        assert_eq!(cards[0].poster, None);
     }
 
     #[test]
     fn a_poster_that_lands_is_worn_by_its_card_alone() {
         let mut cards = cards_with_posters(&[false, false]);
-        let poster = ImageRef {
-            item: ItemId("film".into()),
-            kind: ImageKind::Primary,
-            tag: "p".into(),
-        };
-        wear(&mut cards, &ItemId("c1".into()), poster.clone());
+        let mut queue = PosterQueue::of(&cards, LOAD);
+        queue.start();
+        queue.answered(&mut cards, LOAD, &id(1), Some(poster("film")));
         assert_eq!(cards[0].poster, None);
-        assert_eq!(cards[1].poster, Some(poster.clone()));
-        // A card that left (the server changed) is no error.
-        wear(&mut cards, &ItemId("gone".into()), poster);
+        assert_eq!(cards[1].poster, Some(poster("film")));
+    }
+
+    #[test]
+    fn an_answer_of_a_previous_load_changes_nothing_and_starts_nothing() {
+        let mut cards = cards_with_posters(&[false; 2 * POSTERS_IN_FLIGHT]);
+        let mut queue = PosterQueue::of(&cards, LOAD);
+        queue.start();
+        let before = cards.clone();
+        for old in [LOAD - 1, LOAD + 1] {
+            let next = queue.answered(&mut cards, old, &id(0), Some(poster("old")));
+            assert_eq!(next, None, "generation {old}");
+        }
+        assert_eq!(cards, before);
+        // The queue still holds what the current load has to ask, untouched by the stale answers.
+        assert_eq!(
+            queue.answered(&mut cards, LOAD, &id(0), None),
+            Some(id(POSTERS_IN_FLIGHT))
+        );
+    }
+
+    #[test]
+    fn an_answer_for_an_unknown_card_starts_the_next_and_wears_nothing() {
+        let mut cards = cards_with_posters(&[false; 2 * POSTERS_IN_FLIGHT]);
+        let mut queue = PosterQueue::of(&cards, LOAD);
+        queue.start();
+        let before = cards.clone();
+        let gone = ItemId("gone".into());
+        let next = queue.answered(&mut cards, LOAD, &gone, Some(poster("film")));
+        assert_eq!(next, Some(id(POSTERS_IN_FLIGHT)));
+        assert_eq!(cards, before);
+    }
+
+    #[test]
+    fn a_whole_drain_never_has_more_requests_in_flight_than_the_bound() {
+        let total = 5 * POSTERS_IN_FLIGHT + 1;
+        let mut cards = cards_with_posters(&vec![false; total]);
+        let mut queue = PosterQueue::of(&cards, LOAD);
+        let mut in_flight = queue.start();
+        let mut most = in_flight.len();
+        let mut asked = in_flight.len();
+        // A previous load's answers come in between: they must not add a request.
+        while !in_flight.is_empty() {
+            let answered = in_flight.remove(0);
+            assert_eq!(
+                queue.answered(&mut cards, LOAD - 1, &answered, None),
+                None,
+                "a stale answer"
+            );
+            // The answers come with a poster, then without, in turn.
+            let poster = asked.is_multiple_of(2).then(|| poster("film"));
+            in_flight.extend(queue.answered(&mut cards, LOAD, &answered, poster));
+            asked = total - queue.waiting.len();
+            most = most.max(in_flight.len());
+        }
+        assert_eq!(most, POSTERS_IN_FLIGHT);
+        assert_eq!(asked, total, "every bare card was asked once");
+        assert!(queue.waiting.is_empty());
     }
 
     #[test]

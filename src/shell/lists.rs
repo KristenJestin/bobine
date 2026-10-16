@@ -9,7 +9,7 @@ use gpui_kit::{Context, ScrollHandle, UniformListScrollHandle};
 use super::Shell;
 use super::pages::Loadable;
 use crate::favourite::{self, ListPage};
-use crate::lists::{self, PosterQueue};
+use crate::lists::PosterQueue;
 use crate::navigation::Screen;
 use crate::series_page::Refreshes;
 
@@ -149,10 +149,11 @@ impl Shell {
             |server| server.collections(),
             |shell, cards, cx| match cards {
                 Ok(cards) => {
-                    shell.collections.posters = PosterQueue::of(&cards);
+                    let generation = shell.next_generation();
+                    shell.collections.posters = PosterQueue::of(&cards, generation);
                     shell.collections.cards = Some(Loadable::Ready(cards));
                     for collection in shell.collections.posters.start() {
-                        shell.load_collection_poster(collection, cx);
+                        shell.load_collection_poster(collection, generation, cx);
                     }
                 }
                 Err(error) => {
@@ -163,20 +164,32 @@ impl Shell {
     }
 
     /// The poster of a bare card, asked after the grid shows. Each answer, a poster or not,
-    /// sends the next request, so a slow server never has more than a few in flight.
-    fn load_collection_poster(&mut self, collection: ItemId, cx: &mut Context<Self>) {
+    /// sends the next request, so a slow server never has more than a few in flight. The chain
+    /// belongs to the load numbered `generation`: it goes on after the page is left, and an
+    /// answer of an earlier load (signed in again) neither wears a card nor sends a request.
+    fn load_collection_poster(
+        &mut self,
+        collection: ItemId,
+        generation: u64,
+        cx: &mut Context<Self>,
+    ) {
         let asked = collection.clone();
+        // Without a server (the login is shown) `ask` calls nothing back and the chain stops
+        // there: the only way out of the login is `signed_in`, which resets the queue.
         self.ask(
             cx,
             move |server| server.collection_poster(&asked),
             move |shell, poster: Option<ImageRef>, cx| {
-                if let (Some(poster), Some(Loadable::Ready(cards))) =
-                    (poster, &mut shell.collections.cards)
-                {
-                    lists::wear(cards, &collection, poster);
-                }
-                if let Some(next) = shell.collections.posters.next() {
-                    shell.load_collection_poster(next, cx);
+                let Some(Loadable::Ready(cards)) = &mut shell.collections.cards else {
+                    return;
+                };
+                let next =
+                    shell
+                        .collections
+                        .posters
+                        .answered(cards, generation, &collection, poster);
+                if let Some(next) = next {
+                    shell.load_collection_poster(next, generation, cx);
                 }
             },
         );
