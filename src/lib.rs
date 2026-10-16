@@ -3,3 +3,4 @@
 
 pub mod jellyfin;
 pub mod provider;
+pub mod requests;
