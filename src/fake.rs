@@ -18,6 +18,8 @@ use bobine::provider::{
 };
 
 pub const USER: &str = "camille";
+/// The id the fake server gives its user.
+pub const USER_ID: &str = "user-1";
 pub const PASSWORD: &str = "marée haute";
 pub const FILMS_LIBRARY: &str = "films";
 /// The film every page of the tests opens: started, with two versions and three subtitles.
@@ -159,6 +161,8 @@ pub struct State {
     /// The logout fails with this, after the server forgot the session (a keyring that cannot
     /// be reached).
     pub logout_error: Option<ProviderError>,
+    /// The id of the user the next login or restore gives a session to.
+    pub user_id: String,
 }
 
 /// Where the fake server pretends to be.
@@ -168,6 +172,8 @@ pub const SERVER_ADDRESS: &str = "https://media.example.org";
 pub struct FakeServer {
     pub state: Arc<Mutex<State>>,
     info: ServerInfo,
+    /// Who the session is: read from the state when it opens.
+    user_id: String,
 }
 
 const TITLES: [&str; 16] = [
@@ -574,12 +580,14 @@ impl FakeServer {
                 stop_delay: std::time::Duration::ZERO,
                 logout_delay: std::time::Duration::ZERO,
                 logout_error: None,
+                user_id: USER_ID.into(),
             })),
             info: ServerInfo {
                 id: "server-1".into(),
                 name: "Salon".into(),
                 version: "10.11.0".into(),
             },
+            user_id: USER_ID.into(),
         }
     }
 
@@ -646,7 +654,10 @@ impl FakeServer {
     }
 
     fn session(&self) -> Arc<dyn MediaServer> {
-        Arc::new(self.clone())
+        Arc::new(Self {
+            user_id: self.state().user_id.clone(),
+            ..self.clone()
+        })
     }
 }
 
@@ -696,6 +707,10 @@ impl MediaServer for FakeServer {
 
     fn user_name(&self) -> &str {
         USER
+    }
+
+    fn user_id(&self) -> &str {
+        &self.user_id
     }
 
     fn libraries(&self) -> Result<Vec<Library>, ProviderError> {
