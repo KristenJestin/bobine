@@ -43,17 +43,26 @@ pub fn count(total: u32) -> String {
 /// What a grid shows: films or series.
 pub trait Listed: Clone {
     fn id(&self) -> &ItemId;
+    fn title(&self) -> &str;
 }
 
 impl Listed for Film {
     fn id(&self) -> &ItemId {
         &self.id
     }
+
+    fn title(&self) -> &str {
+        &self.title
+    }
 }
 
 impl Listed for Series {
     fn id(&self) -> &ItemId {
         &self.id
+    }
+
+    fn title(&self) -> &str {
+        &self.title
     }
 }
 

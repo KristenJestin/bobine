@@ -22,9 +22,9 @@ use crate::film_page::{self, Choices, From, Plan};
 use crate::grid::{Grid, Listed};
 use crate::images::{self, Key};
 use crate::input::TextInput;
-use crate::library_tools::Tools;
+use crate::library_tools::{Sort, Tools};
 use crate::menu::Menus;
-use crate::motion::{self, Glide, Presence};
+use crate::motion::{self, Fade, Glide, Presence};
 use crate::navigation::{NavEntry, Screen};
 use crate::player::libmpv::Libmpv;
 use crate::reports::Reporting;
@@ -92,6 +92,8 @@ pub struct LibraryPage<T> {
     pub appeared: Option<u64>,
     /// The index of the title to scroll to, found by a letter of the alphabet bar.
     pub jump: Option<usize>,
+    /// The alphabet bar comes and goes with the sort by title.
+    pub letters: Fade,
 }
 
 impl<T> Default for LibraryPage<T> {
@@ -109,6 +111,7 @@ impl<T> Default for LibraryPage<T> {
             appear: Glide::new(1., motion::page()),
             appeared: None,
             jump: None,
+            letters: Fade::new(motion::quick()),
         }
     }
 }
@@ -531,10 +534,17 @@ impl Shell {
                     Ok(None) => Loadable::Failed("Aucune bibliothèque de films sur ce serveur."),
                     Err(error) => Loadable::Failed(shell.failed(error, cx)),
                 };
+                let library = match &loaded {
+                    Loadable::Ready(library) => Some(library.clone()),
+                    _ => None,
+                };
                 *shell.library_of(kind) = Some(loaded);
                 match kind {
                     LibraryKind::Series => shell.ask_series(0..1, cx),
                     _ => shell.ask_films(0..1, cx),
+                }
+                if let Some(library) = library {
+                    shell.load_choices(kind, library, cx);
                 }
             },
         );
@@ -545,6 +555,28 @@ impl Shell {
             LibraryKind::Series => &mut self.series.library,
             _ => &mut self.library.library,
         }
+    }
+
+    /// The genres and decades the tools above the grid offer, once the library is known.
+    fn load_choices(&mut self, kind: LibraryKind, library: ItemId, cx: &mut Context<Self>) {
+        fn set(shell: &mut Shell, kind: LibraryKind, loaded: Loadable<FilterChoices>) {
+            match kind {
+                LibraryKind::Series => shell.series.choices = Some(loaded),
+                _ => shell.library.choices = Some(loaded),
+            }
+        }
+        set(self, kind, Loadable::Loading);
+        self.ask(
+            cx,
+            move |server| server.filter_choices(&library),
+            move |shell, found, cx| {
+                let loaded = match found {
+                    Ok(choices) => Loadable::Ready(choices),
+                    Err(error) => Loadable::Failed(shell.failed(error, cx)),
+                };
+                set(shell, kind, loaded);
+            },
+        );
     }
 
     /// The pages of the films at these indexes, when not asked yet.
@@ -598,6 +630,148 @@ impl Shell {
                 },
             );
         }
+    }
+
+    /// Changes the filters or the order of the grid shown; when they did change, its list is
+    /// asked again from the first page.
+    fn change_tools(&mut self, change: impl FnOnce(&mut Tools), cx: &mut Context<Self>) {
+        match self.navigator.current() {
+            Screen::Library => {
+                if self.library.change(change) {
+                    self.ask_films(0..1, cx);
+                }
+            }
+            Screen::Series => {
+                if self.series.change(change) {
+                    self.ask_series(0..1, cx);
+                }
+            }
+            _ => {}
+        }
+        cx.notify();
+    }
+
+    /// The "Non vus" chip.
+    pub fn toggle_unwatched(&mut self, cx: &mut Context<Self>) {
+        self.change_tools(
+            |tools| tools.filters.unwatched = !tools.filters.unwatched,
+            cx,
+        );
+    }
+
+    /// A choice in the menu of a tool: the index of a genre, the first year of a decade, the
+    /// index of a sort; none for "all".
+    pub fn pick(&mut self, tool: Tool, value: Option<i32>, cx: &mut Context<Self>) {
+        let genre = |choices: &Option<Loadable<FilterChoices>>| match (choices, value) {
+            (Some(Loadable::Ready(choices)), Some(index)) => {
+                choices.genres.get(index as usize).cloned()
+            }
+            _ => None,
+        };
+        let genre = match self.navigator.current() {
+            Screen::Library => genre(&self.library.choices),
+            Screen::Series => genre(&self.series.choices),
+            _ => return,
+        };
+        self.change_tools(
+            |tools| match tool {
+                Tool::Genre => tools.filters.genre = genre,
+                Tool::Decade => tools.filters.decade = value,
+                Tool::Sort => {
+                    tools.sort = value
+                        .and_then(|index| Sort::ALL.get(index as usize))
+                        .copied()
+                        .unwrap_or_default()
+                }
+            },
+            cx,
+        );
+        // Choosing what is already chosen leaves the grid alone but still closes the menu.
+        if let Some((menus, _)) = self.tool_menus() {
+            menus.close();
+        }
+    }
+
+    /// The menus of the tools above the grid shown, and where their chips were drawn.
+    fn tool_menus(&mut self) -> Option<(&mut Menus<Tool>, &[ChipBounds; 3])> {
+        match self.navigator.current() {
+            Screen::Library => Some((&mut self.library.menus, &self.library.chips)),
+            Screen::Series => Some((&mut self.series.menus, &self.series.chips)),
+            _ => None,
+        }
+    }
+
+    pub fn toggle_tool_menu(&mut self, tool: Tool, cx: &mut Context<Self>) {
+        if let Some((menus, _)) = self.tool_menus() {
+            menus.toggle(tool);
+            cx.notify();
+        }
+    }
+
+    /// The mouse went down outside the open menu, maybe on one of the chips.
+    pub fn pressed_outside_tool_menu(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
+        if let Some((menus, chips)) = self.tool_menus() {
+            let on = Tool::ALL.into_iter().find(|tool| {
+                chips[*tool as usize]
+                    .get()
+                    .is_some_and(|bounds| bounds.contains(&position))
+            });
+            menus.pressed_outside(on);
+            cx.notify();
+        }
+    }
+
+    /// A letter of the alphabet bar: asks the server where its titles start, then the grid goes
+    /// there and loads the page it lands on. `#` starts the list.
+    pub fn jump_to_letter(&mut self, letter: char, cx: &mut Context<Self>) {
+        match self.navigator.current() {
+            Screen::Library => self.jump_in(
+                |shell| &mut shell.library,
+                |s, l, q| s.films(l, q),
+                letter,
+                cx,
+            ),
+            Screen::Series => self.jump_in(
+                |shell| &mut shell.series,
+                |s, l, q| s.series(l, q),
+                letter,
+                cx,
+            ),
+            _ => {}
+        }
+        cx.notify();
+    }
+
+    fn jump_in<T: Listed + Send + 'static>(
+        &mut self,
+        page_of: fn(&mut Shell) -> &mut LibraryPage<T>,
+        fetch: Fetch<T>,
+        letter: char,
+        cx: &mut Context<Self>,
+    ) {
+        let page = page_of(self);
+        let Some(Loadable::Ready(library)) = &page.library else {
+            return;
+        };
+        if !page.tools.letters_shown() {
+            return;
+        }
+        let epoch = page.grid.epoch();
+        let Some(query) = page.tools.letter_query(letter) else {
+            page.found_letter(epoch, 0);
+            return;
+        };
+        let library = library.clone();
+        self.ask(
+            cx,
+            move |server| fetch(server, &library, &query),
+            move |shell, found, _| {
+                // A failure leaves the grid where it is: the next click asks again.
+                if let Ok(found) = found {
+                    page_of(shell).found_letter(epoch, found.total);
+                }
+            },
+        );
     }
 
     pub fn open_film(&mut self, id: ItemId, cx: &mut Context<Self>) {
@@ -749,6 +923,12 @@ impl Shell {
             return;
         }
         if let Some((menus, _)) = self.chip_menus()
+            && menus.escape()
+        {
+            cx.notify();
+            return;
+        }
+        if let Some((menus, _)) = self.tool_menus()
             && menus.escape()
         {
             cx.notify();

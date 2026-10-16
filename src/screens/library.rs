@@ -3,14 +3,22 @@
 //! as smoothly as a dozen.
 
 use std::ops::Range;
+use std::time::Instant;
 
+use bobine::provider::FilterChoices;
 use gpui_kit::prelude::*;
-use gpui_kit::{AnyElement, Context, FontWeight, IntoElement, Window, div, px, uniform_list};
+use gpui_kit::{
+    AnyElement, Context, Div, FontWeight, IntoElement, ScrollStrategy, Stateful, Window, div, px,
+    rgb, rgba, uniform_list,
+};
 
+use super::film_detail::{Actions, ChipBounds, MenuState, chip};
 use super::{note, poster, series_poster};
 use crate::grid::{self, GAP, Listed, MARGIN};
+use crate::icons::{IconName, icon};
+use crate::library_tools::{LETTERS, Sort, Tools, decade_label, letter_of};
 use crate::shell::LibraryPage;
-use crate::shell::{Loadable, Shell};
+use crate::shell::{Loadable, Shell, Tool};
 use crate::theme;
 
 pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -> impl IntoElement {
@@ -76,16 +84,70 @@ fn grid_screen<T: Listed + 'static>(
         ask,
         cell,
     } = kind;
+    let now = Instant::now();
     let shown = page(shell);
     let rows = shown.grid.rows(columns);
     let total = shown.grid.total;
+    let epoch = shown.grid.epoch();
+    // A list that has just arrived, or a jump to a letter, comes in rather than appears.
+    if total.is_some() && shown.appeared != Some(epoch) {
+        shown.appeared = Some(epoch);
+        shown.appear.jump(0.);
+        shown.appear.set(1., now);
+    }
+    if let Some(index) = shown.jump.take() {
+        shown
+            .scroll
+            .scroll_to_item_strict(index / columns, ScrollStrategy::Top);
+        shown.appear.jump(0.35);
+        shown.appear.set(1., now);
+    }
+    let opacity = shown.appear.value(now);
+    // Nothing to jump in when the filters leave nothing.
+    shown
+        .letters
+        .set(shown.tools.letters_shown() && total != Some(0), now);
+    let letters = shown.letters.level(now);
+    let open = shown.menus.open();
+    let menu = MenuState {
+        open,
+        drawn: shown.menu_fade.follow(open, now),
+    };
+    if shown.appear.moving(now) || shown.letters.moving(now) || shown.menu_fade.moving(now) {
+        window.request_animation_frame();
+    }
     let status = match &shown.library {
         Some(Loadable::Failed(why)) => Some(*why),
+        _ if shown.error.is_some() => shown.error,
         _ if total.is_none() => Some("Chargement…"),
+        _ if rows == 0 && shown.tools.narrowed() => Some(NO_MATCH),
         _ if rows == 0 => Some(empty),
         _ => None,
     };
     let scroll = shown.scroll.clone();
+    let tools = shown.tools.clone();
+    let choices = match &shown.choices {
+        Some(Loadable::Ready(choices)) => Some(choices.clone()),
+        _ => None,
+    };
+    let chips = shown.chips.clone();
+    // The letter the top of the grid is at, when the bar is showing.
+    let top_row = {
+        let state = scroll.0.borrow();
+        let row = state
+            .last_item_size
+            .map_or(0., |size| f32::from(size.item.height));
+        let scrolled = -f32::from(state.base_handle.offset().y);
+        if row > 0. {
+            (scrolled / row).max(0.) as usize
+        } else {
+            0
+        }
+    };
+    let current = shown
+        .grid
+        .film(top_row * columns)
+        .map(|first| letter_of(first.title()));
 
     let list = uniform_list(
         title,
@@ -116,29 +178,230 @@ fn grid_screen<T: Listed + 'static>(
 
     div()
         .size_full()
+        .relative()
         .flex()
         .flex_col()
         .pt(px(96.))
         .child(
             div()
                 .flex()
-                .items_baseline()
-                .gap(px(14.))
+                .items_center()
+                .justify_between()
                 .px(px(MARGIN))
                 .pb(px(24.))
                 .child(
                     div()
-                        .text_size(px(28.))
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .child(title),
+                        .flex()
+                        .items_baseline()
+                        .gap(px(14.))
+                        .child(
+                            div()
+                                .text_size(px(28.))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .child(title),
+                        )
+                        .children(total.map(|total| {
+                            div()
+                                .text_size(px(14.))
+                                .text_color(theme::dim())
+                                .child(grid::count(total))
+                        })),
                 )
-                .children(total.map(|total| {
-                    div()
-                        .text_size(px(14.))
-                        .text_color(theme::dim())
-                        .child(grid::count(total))
-                })),
+                .child(tool_chips(
+                    &tools,
+                    choices.as_ref(),
+                    menu,
+                    &chips,
+                    window,
+                    cx,
+                )),
         )
         .children(status.map(|why| div().px(px(MARGIN)).child(note(why))))
-        .child(list)
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .flex_1()
+                .min_h_0()
+                .opacity(opacity)
+                .child(list),
+        )
+        .children((letters > 0.).then(|| alphabet(current, letters, window, cx)))
+}
+
+/// What the grid says when the filters leave nothing.
+const NO_MATCH: &str = "Aucun titre ne correspond à ces filtres.";
+
+/// Genre, decade, unwatched only and the order, right of the title.
+fn tool_chips(
+    tools: &Tools,
+    choices: Option<&FilterChoices>,
+    menu: MenuState<Tool>,
+    bounds: &[ChipBounds; 3],
+    window: &mut Window,
+    cx: &mut Context<Shell>,
+) -> Div {
+    let genres = tools.filters.genre.as_deref();
+    let genre_options = std::iter::once((None, "Tous les genres".to_string(), genres.is_none()))
+        .chain(
+            choices
+                .into_iter()
+                .flat_map(|choices| choices.genres.iter().enumerate())
+                .map(|(index, genre)| {
+                    (
+                        Some(index as i32),
+                        genre.clone(),
+                        Some(genre.as_str()) == genres,
+                    )
+                }),
+        )
+        .collect();
+    let decade = tools.filters.decade;
+    let decade_options = std::iter::once((None, "Toutes les années".to_string(), decade.is_none()))
+        .chain(
+            choices
+                .into_iter()
+                .flat_map(|choices| choices.decades.iter())
+                .map(|&d| (Some(d), decade_label(d), Some(d) == decade)),
+        )
+        .collect();
+    let sort_options = Sort::ALL
+        .iter()
+        .enumerate()
+        .map(|(index, sort)| {
+            (
+                Some(index as i32),
+                sort.label().to_string(),
+                *sort == tools.sort,
+            )
+        })
+        .collect();
+    let tool = |window: &mut Window,
+                cx: &mut Context<Shell>,
+                kind: Tool,
+                label: &'static str,
+                value: String,
+                options| {
+        chip(
+            kind,
+            LIBRARY_CHIP + kind as usize,
+            label,
+            Some(value),
+            options,
+            menu,
+            &bounds[kind as usize],
+            TOOL_ACTIONS,
+            window,
+            cx,
+        )
+    };
+    div()
+        .flex()
+        .items_center()
+        .gap(px(8.))
+        .child(tool(
+            window,
+            cx,
+            Tool::Genre,
+            "GENRE",
+            genres.unwrap_or("Tous").to_string(),
+            genre_options,
+        ))
+        .child(tool(
+            window,
+            cx,
+            Tool::Decade,
+            "ANNÉE",
+            decade.map_or("Toutes".to_string(), decade_label),
+            decade_options,
+        ))
+        .child(unwatched_chip(tools.filters.unwatched, window, cx))
+        .child(tool(
+            window,
+            cx,
+            Tool::Sort,
+            "TRI",
+            tools.sort.label().to_string(),
+            sort_options,
+        ))
+}
+
+/// Element ids of the library's chips, apart from the film page's.
+const LIBRARY_CHIP: usize = 100;
+
+const TOOL_ACTIONS: Actions<Tool> = Actions {
+    toggle: Shell::toggle_tool_menu,
+    choose: Shell::pick,
+    outside: Shell::pressed_outside_tool_menu,
+};
+
+/// `● NON VUS`: lit when only what the user has not watched shows.
+fn unwatched_chip(on: bool, window: &mut Window, cx: &mut Context<Shell>) -> Stateful<Div> {
+    let shades = theme::Shades {
+        rest: rgba(0x141416cc),
+        hover: theme::line(),
+        press: rgb(0x2e2e33),
+    };
+    theme::eased("unwatched", shades, window, cx)
+        .flex()
+        .items_center()
+        .gap(px(8.))
+        .px(px(12.))
+        .py(px(7.))
+        .rounded_full()
+        .border_1()
+        .border_color(if on { theme::muted() } else { theme::line() })
+        .cursor_pointer()
+        .on_click(cx.listener(|shell, _, _, cx| shell.toggle_unwatched(cx)))
+        .child(icon(IconName::Circle, 8.).text_color(if on {
+            theme::accent()
+        } else {
+            theme::dim()
+        }))
+        .child(
+            div()
+                .text_size(px(10.))
+                .font_weight(FontWeight::BOLD)
+                .text_color(if on { theme::text() } else { theme::dim() })
+                .child("NON VUS"),
+        )
+}
+
+/// A to Z and `#` down the right edge: a click goes to the first title of the letter.
+fn alphabet(
+    current: Option<char>,
+    shown: f32,
+    window: &mut Window,
+    cx: &mut Context<Shell>,
+) -> Div {
+    div()
+        .absolute()
+        .top(px(150.))
+        .bottom(px(24.))
+        .right(px(6.))
+        .w(px(24.))
+        .opacity(shown)
+        .flex()
+        .flex_col()
+        .justify_between()
+        .children(LETTERS.iter().enumerate().map(|(index, &letter)| {
+            let here = current == Some(letter);
+            theme::eased(("letter", index), theme::Shades::veil(), window, cx)
+                .flex()
+                .items_center()
+                .justify_center()
+                .h(px(16.))
+                .w_full()
+                .rounded(px(5.))
+                .text_size(px(10.))
+                .font_weight(if here {
+                    FontWeight::BOLD
+                } else {
+                    FontWeight::MEDIUM
+                })
+                .text_color(if here { theme::text() } else { theme::dim() })
+                .cursor_pointer()
+                .on_click(cx.listener(move |shell, _, _, cx| shell.jump_to_letter(letter, cx)))
+                .child(letter.to_string())
+        }))
 }
