@@ -12,7 +12,7 @@
 //! `bobine --screen login|home|home-rows|home-list-resume|home-list-next|home-list-latest|library|detail|
 //! detail-rows|detail-cast|playing|series|series-page|series-rows|up-next|collections|collection-page|
 //! my-list|my-list-empty|film-list|series-list [--films N]
-//! [--media FILE] [--image-delay-ms N] [--photos-fail-once] [--scenario menu|scroll|select|panel|search|search-slow|search-keys|tools|tools-keys|home-rotate|home-hover|home-jump|home-scroll|home-lists|home-play]
+//! [--media FILE] [--direct-fails] [--image-delay-ms N] [--photos-fail-once] [--scenario menu|scroll|select|panel|search|search-slow|search-keys|tools|tools-keys|home-rotate|home-hover|home-jump|home-scroll|home-lists|home-play]
 //! [--search-delay-ms N] [--favourite-delay-ms N] [--favourite-fails] [--slower N] --quit-at S`
 //!
 //! A scenario sends clicks, keys and scroll events to the window as the compositor would, at set
@@ -66,6 +66,9 @@ struct Args {
     films: usize,
     /// What the fake server's films play.
     media: Option<String>,
+    /// The file played directly is missing: the player falls back on the server's conversion,
+    /// which plays `media`.
+    direct_fails: bool,
     /// How long each image of the fake server takes, in milliseconds.
     image_delay: u64,
     /// The fake server fails the first time it is asked each person's photo.
@@ -133,6 +136,7 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Option<Args>, String>
             }
             "--media" => parsed.media = Some(args.next().ok_or("--media needs a file")?),
             "--photos-fail-once" => parsed.photos_fail_once = true,
+            "--direct-fails" => parsed.direct_fails = true,
             "--search-delay-ms" => {
                 parsed.search_delay = args
                     .next()
@@ -208,6 +212,10 @@ impl Harness {
             let mut state = fake.state.lock().unwrap();
             if let Some(media) = &args.media {
                 state.stream = media.clone();
+                state.converted = media.clone();
+            }
+            if args.direct_fails {
+                state.stream = "file:///nowhere-direct-play.mkv".into();
             }
             state.image_delay = Duration::from_millis(args.image_delay);
             state.photos_fail_once = args.photos_fail_once;
@@ -466,6 +474,23 @@ fn show_screen(
                             }
                         })
                         .collect::<Vec<_>>()
+                );
+                let methods: Vec<String> = record
+                    .reports
+                    .iter()
+                    .map(|report| match report {
+                        crate::fake::Report::Started(r)
+                        | crate::fake::Report::Progress(r)
+                        | crate::fake::Report::Stopped(r) => format!("{:?}", r.method),
+                    })
+                    .collect();
+                println!(
+                    "CONVERSIONS asked_from={:?} report_methods={methods:?}",
+                    record
+                        .transcodes
+                        .iter()
+                        .map(|t| t.start.as_secs())
+                        .collect::<Vec<_>>(),
                 );
                 cx.quit();
                 true
