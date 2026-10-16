@@ -2,7 +2,7 @@
 
 mod account;
 mod dto;
-mod http;
+pub(crate) mod http;
 
 #[cfg(test)]
 mod fake;
