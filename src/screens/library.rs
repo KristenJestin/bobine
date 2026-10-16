@@ -94,6 +94,7 @@ fn grid_screen<T: Listed + 'static>(
     let leaving = shown.grid.has_stale();
     let rows = shown.grid.shown_rows(columns);
     let total = shown.grid.shown_total();
+    let count = shown.header_count();
     if let Some(index) = shown.take_jump() {
         shown
             .scroll
@@ -213,7 +214,7 @@ fn grid_screen<T: Listed + 'static>(
                                 .font_weight(FontWeight::SEMIBOLD)
                                 .child(title),
                         )
-                        .children(total.map(|total| {
+                        .children(count.map(|total| {
                             div()
                                 .text_size(px(14.))
                                 .text_color(theme::dim())

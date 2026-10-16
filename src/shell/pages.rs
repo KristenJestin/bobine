@@ -203,6 +203,14 @@ impl<T: Listed> LibraryPage<T> {
         !self.grid.has_stale() || self.appear.value(now) > GONE
     }
 
+    /// The count in the header: none while the new list is awaited, the old total is not its.
+    pub fn header_count(&self) -> Option<u32> {
+        if self.grid.has_stale() {
+            return None;
+        }
+        self.grid.total
+    }
+
     /// A page of the list asked under `epoch` came back.
     pub fn loaded(&mut self, epoch: u64, page: u32, items: Page<T>) {
         self.grid.loaded(epoch, page, items);
@@ -1665,5 +1673,21 @@ mod tests {
         page.follow_list(t);
         assert_eq!(opacity(&page, t), 0.);
         assert!(page.cells_visible(t));
+    }
+
+    #[test]
+    fn the_header_has_no_count_while_the_new_list_is_awaited() {
+        let (mut page, t) = fading(Instant::now());
+        assert_eq!(page.header_count(), None);
+        // Even when the new list has landed: the old one is still on screen.
+        page.loaded(page.grid.epoch(), 0, answer(&page, 0));
+        assert_eq!(page.header_count(), None);
+        page.follow_list(at(t, 400));
+        assert_eq!(page.header_count(), Some(1027));
+    }
+
+    #[test]
+    fn the_header_has_the_count_when_the_list_stands() {
+        assert_eq!(films_page().header_count(), Some(1284));
     }
 }
