@@ -635,18 +635,16 @@ impl Shell {
     /// Changes the filters or the order of the grid shown; when they did change, its list is
     /// asked again from the first page.
     fn change_tools(&mut self, change: impl FnOnce(&mut Tools), cx: &mut Context<Self>) {
-        match self.navigator.current() {
-            Screen::Library => {
-                if self.library.change(change) {
-                    self.ask_films(0..1, cx);
-                }
-            }
-            Screen::Series => {
-                if self.series.change(change) {
-                    self.ask_series(0..1, cx);
-                }
-            }
-            _ => {}
+        let screen = self.navigator.current();
+        let changed = match screen {
+            Screen::Library => self.library.change(change),
+            Screen::Series => self.series.change(change),
+            _ => false,
+        };
+        if changed && screen == Screen::Series {
+            self.ask_series(0..1, cx);
+        } else if changed {
+            self.ask_films(0..1, cx);
         }
         cx.notify();
     }

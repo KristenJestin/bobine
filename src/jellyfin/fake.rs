@@ -204,7 +204,7 @@ fn passes(item: &Value, seen: &Seen) -> bool {
     if let Some(years) = seen.param("Years")
         && !years
             .split(',')
-            .any(|y| item["ProductionYear"].to_string() == y)
+            .any(|y| item["ProductionYear"].as_i64() == y.parse().ok())
     {
         return false;
     }

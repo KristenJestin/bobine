@@ -477,6 +477,10 @@ pub(super) fn chip<K: Copy + PartialEq + 'static>(
 
 /// The choices of a chip, over the rest of the page, `shown` of the way in. Only an open menu
 /// answers the mouse: one fading out lets clicks through.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one menu's state, read once per frame"
+)]
 fn menu<K: Copy + 'static>(
     chip: Bounds<Pixels>,
     shown: f32,
