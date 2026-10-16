@@ -565,4 +565,27 @@ mod tests {
         // Unasked, the page lands on the second season, where the series is begun.
         assert_eq!(season, 2, "the page opens on the new season");
     }
+
+    /// The card of a new season knows the season, not whether its series is in the list or
+    /// watched: it has the veil and the play button, and no button in its corner.
+    #[gpui_kit::test]
+    fn a_card_of_a_new_season_plays_its_series_and_has_no_corner_buttons(cx: &mut TestAppContext) {
+        let (server, window, cx, id, series) = home_with_a_new_season(cx);
+        let card = bounds(cx, "card-hover", &id);
+        cx.simulate_mouse_move(card.center(), None, Modifiers::none());
+        cx.run_until_parked();
+        assert_eq!(veil(&window, cx, &id), 1.);
+        for button in ["card-my-list", "card-watched"] {
+            let selector: &'static str = Box::leak(format!("{button} {id}").into_boxed_str());
+            assert!(cx.debug_bounds(selector).is_none(), "{button} was drawn");
+        }
+        let next = series_page::next_to_play(&server, &series)
+            .unwrap()
+            .expect("a next episode");
+        click(cx, "card-play", &id);
+        let plays = server.state.lock().unwrap().record.plays.clone();
+        assert_eq!(plays.len(), 1);
+        assert_eq!(plays[0].0, next.item.id, "the series' next up plays");
+        assert_eq!(screen(&window, cx), Screen::Home, "the page was opened");
+    }
 }

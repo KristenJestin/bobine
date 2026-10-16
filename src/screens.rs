@@ -282,7 +282,9 @@ fn film_offer(
 }
 
 /// The card of a series poster: a click opens the series (on its new season, for a card of
-/// one), its layer plays its next episode, puts it in the list and marks all of it watched.
+/// one), its layer plays its next episode, puts it in the list and marks all of it watched. A
+/// card of a new season knows the season, not whether its series is in the list or watched: it
+/// has no button for them.
 fn series_offer(
     marks: &Marks,
     series: &Series,
@@ -291,15 +293,19 @@ fn series_offer(
     name: &ElementId,
     fresh: bool,
 ) -> Offer {
-    let quick = Quick::new(marks, &series.id, series.favourite, series.watched);
-    let look = series_look(series, image, width, name, quick.watched.now, fresh);
+    let quick = series
+        .season
+        .is_none()
+        .then(|| Quick::new(marks, &series.id, series.favourite, series.watched));
+    let watched = quick.as_ref().is_some_and(|quick| quick.watched.now);
+    let look = series_look(series, image, width, name, watched, fresh);
     Offer {
         open: Open::Series(
             series.id.clone(),
             series.season.as_ref().map(|season| season.id.clone()),
         ),
         play: Play::Target(PlayTarget::Series(series.id.clone())),
-        quick: Some(quick),
+        quick,
         draw: Rc::new(move |layer| look.draw(Some(layer))),
     }
 }
