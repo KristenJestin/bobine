@@ -2428,4 +2428,31 @@ mod tests {
         press(NavigationDirection::Back, cx);
         assert_eq!(current(&window, cx), Screen::Home);
     }
+
+    #[gpui_kit::test]
+    fn a_see_all_list_uses_the_library_grid_layout(cx: &mut gpui_kit::TestAppContext) {
+        let (_server, window) = signed_in_window(cx);
+        window
+            .update(cx, |shell, _, cx| shell.select(NavEntry::Films, cx))
+            .unwrap();
+        // Where things are down the page and how big: the page itself may still be sliding in.
+        let layout = |visual: &mut gpui_kit::VisualTestContext| {
+            ["grid-heading", "grid-rows"].map(|part| {
+                let bounds = visual.debug_bounds(part).expect(part);
+                (bounds.origin.y, bounds.size)
+            })
+        };
+        let library = layout(&mut drawn(&window, cx));
+        let films = ListKind::Latest(
+            ItemId(crate::fake::FILMS_LIBRARY.into()),
+            LibraryKind::Films,
+        );
+        window
+            .update(cx, |shell, _, cx| {
+                shell.select(NavEntry::Home, cx);
+                shell.open_list(films, Some("Films".into()), cx);
+            })
+            .unwrap();
+        assert_eq!(layout(&mut drawn(&window, cx)), library);
+    }
 }

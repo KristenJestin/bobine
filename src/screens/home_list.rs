@@ -5,17 +5,15 @@ use std::ops::Range;
 
 use bobine::provider::Title;
 use gpui_kit::prelude::*;
-use gpui_kit::{
-    AnyElement, Context, FontWeight, IntoElement, SharedString, Window, div, px, uniform_list,
-};
+use gpui_kit::{AnyElement, Context, IntoElement, SharedString, Window, div, px, uniform_list};
 
 use super::home::{Pick, card_picture, error_pill, wide_card};
+use super::library::{GRID_TOP, heading, rows_frame};
 use super::{centered, note, poster_with, series_poster_with};
 use crate::grid::{self, GAP, MARGIN};
 use crate::home_page::ListKind;
 use crate::images;
 use crate::shell::Shell;
-use crate::theme;
 
 /// The narrowest a wide card gets before a column goes.
 const MIN_WIDE: f32 = 280.;
@@ -39,7 +37,7 @@ pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -
         grid::columns(width)
     };
     let card_width = (width - 2. * MARGIN - GAP * (columns - 1) as f32) / columns as f32;
-    let heading = list.kind.heading();
+    let title = list.kind.heading();
     let library = list.library.clone();
     let total = list.grid.total;
     let rows = list.grid.rows(columns);
@@ -51,6 +49,13 @@ pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -
     };
     let scroll = list.scroll.clone();
     let error = shell.home.error;
+    let page = div()
+        .size_full()
+        .relative()
+        .flex()
+        .flex_col()
+        .pt(px(GRID_TOP))
+        .child(heading(title, library, total.filter(|total| *total > 0)));
 
     let rows_list = uniform_list(
         "home-list",
@@ -74,40 +79,8 @@ pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -
     .track_scroll(&scroll)
     .flex_1();
 
-    div()
-        .size_full()
-        .relative()
-        .flex()
-        .flex_col()
-        .pt(px(96.))
-        .child(
-            div()
-                .flex()
-                .items_baseline()
-                .gap(px(14.))
-                .px(px(MARGIN))
-                .pb(px(24.))
-                .child(
-                    div()
-                        .text_size(px(28.))
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .child(heading),
-                )
-                .children(library.map(|name| {
-                    div()
-                        .text_size(px(14.))
-                        .text_color(theme::dim())
-                        .child(name)
-                }))
-                .children(total.filter(|total| *total > 0).map(|total| {
-                    div()
-                        .text_size(px(14.))
-                        .text_color(theme::dim())
-                        .child(grid::count(total))
-                })),
-        )
-        .children(status.map(|why| div().px(px(MARGIN)).child(note(why))))
-        .child(rows_list)
+    page.children(status.map(|why| div().px(px(MARGIN)).child(note(why))))
+        .child(rows_frame().child(rows_list))
         .children(error.map(error_pill))
         .into_any_element()
 }

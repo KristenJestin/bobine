@@ -26,15 +26,12 @@ impl Screen {
         !matches!(self, Screen::Login | Screen::Player)
     }
 
-    /// Detail pages also say where Escape leads, under the bar.
+    /// Detail pages also say where Escape leads, under the bar. A full list does not: it is laid
+    /// out like the library grids, and the bar's Home leads back.
     pub fn shows_back_link(self) -> bool {
         matches!(
             self,
-            Screen::FilmDetail
-                | Screen::SeriesDetail
-                | Screen::Person
-                | Screen::HomeList
-                | Screen::CollectionDetail
+            Screen::FilmDetail | Screen::SeriesDetail | Screen::Person | Screen::CollectionDetail
         )
     }
 
@@ -410,13 +407,13 @@ mod tests {
     }
 
     #[test]
-    fn a_full_list_has_a_back_link_to_the_home_under_the_pill_bar() {
+    fn a_full_list_has_the_pill_bar_and_no_back_link_like_the_library_grids() {
         let mut nav = Navigator::new();
         nav.switch_root(Screen::Home);
         nav.open(Screen::HomeList);
         assert!(Screen::HomeList.shows_pill_bar());
-        assert!(Screen::HomeList.shows_back_link());
-        assert_eq!(nav.back_label(), Some("Home"));
+        assert!(!Screen::HomeList.shows_back_link());
+        assert_eq!(nav.back_label(), None);
         assert!(nav.back());
         assert_eq!(nav.current(), Screen::Home);
     }
