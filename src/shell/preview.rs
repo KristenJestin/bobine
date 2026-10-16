@@ -104,6 +104,15 @@ impl SeekPreview {
         })
     }
 
+    /// Tile pictures were given back to the card: the last thumbnail is dropped if it is one of
+    /// them, or it would be drawn once more while it fades, uploaded again and never freed.
+    fn forget(&mut self, gone: &[Arc<RenderImage>]) {
+        let is_gone = |thumb: &Thumb| gone.iter().any(|image| Arc::ptr_eq(image, &thumb.image));
+        if self.last.as_ref().is_some_and(is_gone) {
+            self.last = None;
+        }
+    }
+
     /// The width of the box the preview draws, for keeping it inside the window.
     fn box_width(&self) -> f32 {
         self.thumbnails
@@ -287,8 +296,10 @@ impl Shell {
                 Some(image) => {
                     let size = image.size(0);
                     let bytes = (size.width.0 * size.height.0 * 4).max(0) as usize;
-                    for gone in tiles.arrived(tile, image, bytes, pointer) {
-                        cx.drop_image(gone, None);
+                    let gone = tiles.arrived(tile, image, bytes, pointer);
+                    playback.seek.forget(&gone);
+                    for image in gone {
+                        cx.drop_image(image, None);
                     }
                 }
                 None => tiles.failed(tile, Instant::now()),
@@ -300,12 +311,13 @@ impl Shell {
     /// The film is left: its tiles give their pictures back. This runs inside window code, where
     /// GPUI has taken the window out of its list: it is named, or its card would keep them.
     pub(super) fn release_tiles(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(tiles) = self
-            .playback
-            .as_mut()
-            .and_then(|playback| playback.seek.thumbnails.tiles_mut())
-        {
-            for image in tiles.drain() {
+        let Some(playback) = &mut self.playback else {
+            return;
+        };
+        if let Some(tiles) = playback.seek.thumbnails.tiles_mut() {
+            let images = tiles.drain();
+            playback.seek.forget(&images);
+            for image in images {
                 cx.drop_image(image, Some(window));
             }
         }
@@ -357,6 +369,46 @@ mod tests {
         seek.draw(7860., t);
         seek.scrub.moved(fraction, 300., t);
         seek
+    }
+
+    /// A 1 x 1 picture, as a decoded tile.
+    fn picture() -> Arc<RenderImage> {
+        const PNG: &[u8] = &[
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48,
+            0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00,
+            0x00, 0x1F, 0x15, 0xC4, 0x89, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x44, 0x41, 0x54, 0x78,
+            0x9C, 0x63, 0xF8, 0xCF, 0xC0, 0xF0, 0x1F, 0x00, 0x05, 0x00, 0x01, 0xFF, 0x89, 0x99,
+            0x3D, 0x1D, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+        ];
+        let svg = gpui_kit::SvgRenderer::new(Arc::new(()));
+        Arc::new(Image::from_bytes(gpui_kit::ImageFormat::Png, PNG.to_vec()))
+            .to_image_data(svg)
+            .expect("a valid picture")
+    }
+
+    fn drawn(image: &Arc<RenderImage>) -> Thumb {
+        Thumb {
+            image: image.clone(),
+            crop: thumbnails::Crop {
+                left: 0.,
+                top: 0.,
+                width: 240.,
+                height: 135.,
+                scale: 1.,
+            },
+            picture: (240., 135.),
+        }
+    }
+
+    #[test]
+    fn the_last_thumbnail_goes_with_the_tile_it_came_from() {
+        let (kept, evicted) = (picture(), picture());
+        let mut seek = SeekPreview::new();
+        seek.last = Some(drawn(&evicted));
+        seek.forget(std::slice::from_ref(&kept));
+        assert!(seek.last.is_some(), "another tile went");
+        seek.forget(&[kept, evicted]);
+        assert!(seek.last.is_none());
     }
 
     #[test]
