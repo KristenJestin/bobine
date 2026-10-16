@@ -25,10 +25,18 @@ pub const ROW_GAP: f32 = 4.;
 pub const POSTER_HEIGHT: f32 = 100.;
 pub const POSTER_WIDTH: f32 = 67.;
 pub const PERSON_PHOTO: f32 = 84.;
+/// The "Entrée" key, drawn at the right end of the highlight.
+pub const HINT_HEIGHT: f32 = 18.;
 
 /// The height of the highlight, which is a row without the space under it.
 pub fn highlight_height() -> f32 {
     ROW_HEIGHT - ROW_GAP
+}
+
+/// Where the "Entrée" key starts when the highlight starts at `highlight_top`: always centred
+/// in it, so it travels with the highlight, whatever the highlight's glide gives.
+pub fn hint_top(highlight_top: f32) -> f32 {
+    highlight_top + (highlight_height() - HINT_HEIGHT) / 2.
 }
 
 /// Where the palette starts, from the top of the window.
@@ -409,6 +417,7 @@ pub fn opens_from(screen: Screen) -> bool {
 mod tests {
     use super::*;
     use crate::fake::{FakeServer, PASSWORD, USER};
+    use crate::motion::Glide;
     use bobine::provider::{Connector, MediaServer};
     use std::sync::Arc;
 
@@ -748,6 +757,31 @@ mod tests {
             assert!(highlight_height() >= image + 12., "{image} in a row");
         }
         assert_eq!(highlight_height() + ROW_GAP, ROW_HEIGHT);
+    }
+
+    #[test]
+    fn the_enter_hint_follows_the_highlight_through_its_glide() {
+        let t = Instant::now();
+        let mut glide = Glide::new(0., crate::motion::quick());
+        glide.set(ROW_HEIGHT * 3., t);
+        let mut last = None;
+        for n in [0, 30, 60, 90, 120, 200] {
+            let top = glide.value(t + Duration::from_millis(n));
+            // Centred in the highlight at each step, not waiting for it to land.
+            let hint = hint_top(top);
+            assert_eq!(
+                hint - top,
+                (highlight_height() - HINT_HEIGHT) / 2.,
+                "at {n} ms"
+            );
+            if let Some((last_top, last_hint)) = last {
+                assert_eq!(hint - last_hint, top - last_top, "at {n} ms");
+            }
+            last = Some((top, hint));
+        }
+        let (top, hint) = last.unwrap();
+        assert_eq!(top, ROW_HEIGHT * 3.);
+        assert!(hint > ROW_HEIGHT * 3. && hint + HINT_HEIGHT < top + highlight_height());
     }
 
     #[test]

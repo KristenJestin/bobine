@@ -22,6 +22,8 @@ const WIDTH: f32 = 680.;
 const MESSAGE_HEIGHT: f32 = 64.;
 /// Room kept under the last row.
 const LIST_END: f32 = 8.;
+/// What the highlight keeps free at the right of a row for its "Entrée" key.
+const HINT_ROOM: f32 = 64.;
 /// How far the palette slides while it fades.
 const SLIDE: f32 = 14.;
 
@@ -80,7 +82,7 @@ pub fn palette(
         for line in lines {
             rows.push(match line {
                 Line::Heading(group) => heading(group.label()).into_any_element(),
-                Line::Hit(hit, index) => result(shell, hit, index, index == selected, cx),
+                Line::Hit(hit, index) => result(shell, hit, index, cx),
             });
         }
         Some(
@@ -104,7 +106,18 @@ pub fn palette(
                                 .rounded(px(10.))
                                 .bg(rgba(0x232327ff)),
                         )
-                        .children(rows),
+                        .children(rows)
+                        // After the rows, so it is drawn over them; on the highlight's own glide.
+                        .child(
+                            div()
+                                .absolute()
+                                .right(px(20.))
+                                .top(px(search::hint_top(highlight)))
+                                .h(px(search::HINT_HEIGHT))
+                                .flex()
+                                .items_center()
+                                .child(key_cap("Entrée")),
+                        ),
                 )
                 .into_any_element(),
         )
@@ -235,14 +248,8 @@ fn heading(label: &'static str) -> Div {
         .child(label.to_uppercase())
 }
 
-/// One result: a small image, the title and its line; "Entrée" on the highlighted one.
-fn result(
-    shell: &mut Shell,
-    hit: Hit,
-    index: usize,
-    selected: bool,
-    cx: &mut Context<Shell>,
-) -> AnyElement {
+/// One result: its image, the title and its line.
+fn result(shell: &mut Shell, hit: Hit, index: usize, cx: &mut Context<Shell>) -> AnyElement {
     let (image, round) = match &hit {
         Hit::Film(film) => (film.poster.clone(), false),
         Hit::Series(series) => (series.poster.clone(), false),
@@ -322,7 +329,8 @@ fn result(
                     )
                 }),
         )
-        .when(selected, |row| row.child(key_cap("Entrée")))
+        // Room for the highlight's "Entrée", so a row reads the same selected or not.
+        .pr(px(HINT_ROOM))
         .into_any_element()
 }
 
