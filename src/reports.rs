@@ -177,6 +177,7 @@ mod tests {
                     paused: false,
                     audio_track: Some(2),
                     subtitle_track: Some(4),
+                    method: bobine::provider::PlayMethod::DirectPlay,
                 },
             );
             Self {

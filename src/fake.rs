@@ -11,7 +11,7 @@ use bobine::provider::{
     FilterChoices, ImageKind, ImageRef, ItemId, Library, LibraryKind, MediaServer, MediaSource,
     MediaSourceId, Page, PersonHit, PersonTitles, PlaySessionId, Playback, PlaybackReport,
     ProviderError, SearchResults, Season, Series, SeriesDetail, SeriesHit, ServerInfo, StreamUrl,
-    SubtitleTrack, Title, Trickplay, VideoRange, VideoTrack,
+    SubtitleTrack, Title, TranscodeRequest, Trickplay, VideoRange, VideoTrack,
 };
 
 pub const USER: &str = "camille";
@@ -20,6 +20,8 @@ pub const FILMS_LIBRARY: &str = "films";
 /// The film every page of the tests opens: started, with two versions and three subtitles.
 pub const FILM: &str = "film-0";
 pub const PLAY_SESSION: &str = "session-1";
+/// The play session of a playback the server converts.
+pub const TRANSCODE_SESSION: &str = "session-converted";
 /// The series every series page of the tests opens: three seasons, the first watched, the second
 /// stopped in its fourth episode.
 pub const SERIES: &str = "series-0";
@@ -48,6 +50,8 @@ pub struct Record {
     pub list_loads: u32,
     /// The tiles of trickplay asked, in the order they came.
     pub tiles: Vec<u32>,
+    /// What the player asked the server to convert, in order.
+    pub transcodes: Vec<TranscodeRequest>,
 }
 
 /// What the fake server holds, shared by the connector and its sessions.
@@ -60,12 +64,16 @@ pub struct State {
     pub episodes: Vec<Episode>,
     /// What `play` gives as the stream: a local file in the harness.
     pub stream: String,
+    /// What `transcode` gives as the stream, as the server's conversion would be.
+    pub converted: String,
     pub record: Record,
     /// How long an image takes to come: a real server makes the fetches overlap.
     pub image_delay: std::time::Duration,
     /// The first time each person's photo is asked, the server fails (as a busy server that
     /// times out while it fetches the photo from elsewhere).
     pub photos_fail_once: bool,
+    /// The server refuses to convert anything.
+    pub transcode_fails: bool,
     pub people: Vec<PersonHit>,
     /// How long a search takes to answer: the headless harness shows the palette waiting.
     pub search_delay: std::time::Duration,
@@ -453,9 +461,11 @@ impl FakeServer {
                 series: series(),
                 episodes: episodes(),
                 stream: "file:///nowhere.mkv".into(),
+                converted: "file:///nowhere-converted.m3u8".into(),
                 record: Record::default(),
                 image_delay: std::time::Duration::ZERO,
                 photos_fail_once: false,
+                transcode_fails: false,
                 people: people(),
                 search_delay: std::time::Duration::ZERO,
                 favourites: ["film-2", "film-7", "series-1", "series-4"]
@@ -503,6 +513,31 @@ impl FakeServer {
             .iter()
             .find(|e| &e.item.id == id)
             .cloned()
+    }
+
+    /// The subtitle files beside a version of a film or an episode.
+    fn external_subtitles(
+        &self,
+        film: &ItemId,
+        source: &MediaSourceId,
+    ) -> Result<Vec<ExternalSubtitle>, ProviderError> {
+        let versions = match self.episode(film) {
+            Some(episode) => episode.versions,
+            None => self.film(film)?.versions,
+        };
+        let found = versions
+            .iter()
+            .find(|s| &s.id == source)
+            .ok_or(ProviderError::NotFound)?;
+        Ok(found
+            .subtitles
+            .iter()
+            .filter(|s| s.external)
+            .map(|s| ExternalSubtitle {
+                index: s.index,
+                url: StreamUrl::new(format!("file:///nowhere-{}.srt", s.index)),
+            })
+            .collect())
     }
 
     fn find(&self, film: &ItemId) -> Result<Film, ProviderError> {
@@ -656,14 +691,7 @@ impl MediaServer for FakeServer {
     }
 
     fn play(&self, film: &ItemId, source: &MediaSourceId) -> Result<Playback, ProviderError> {
-        let versions = match self.episode(film) {
-            Some(episode) => episode.versions,
-            None => self.film(film)?.versions,
-        };
-        let found = versions
-            .iter()
-            .find(|s| &s.id == source)
-            .ok_or(ProviderError::NotFound)?;
+        let external_subtitles = self.external_subtitles(film, source)?;
         let mut state = self.state();
         state.record.plays.push((film.clone(), source.clone()));
         Ok(Playback {
@@ -671,15 +699,7 @@ impl MediaServer for FakeServer {
             film: film.clone(),
             source: source.clone(),
             stream: StreamUrl::new(state.stream.clone()),
-            external_subtitles: found
-                .subtitles
-                .iter()
-                .filter(|s| s.external)
-                .map(|s| ExternalSubtitle {
-                    index: s.index,
-                    url: StreamUrl::new(format!("file:///nowhere-{}.srt", s.index)),
-                })
-                .collect(),
+            external_subtitles,
         })
     }
 
@@ -1114,6 +1134,27 @@ impl MediaServer for FakeServer {
         }
         let at = tile as usize % state.tiles.len().max(1);
         state.tiles.get(at).cloned().ok_or(ProviderError::NotFound)
+    }
+
+    fn transcode(&self, request: &TranscodeRequest) -> Result<Playback, ProviderError> {
+        let mut external_subtitles = self.external_subtitles(&request.film, &request.source)?;
+        // The fake's embedded subtitles are all text: the server extracts the one chosen.
+        external_subtitles.extend(request.subtitle_track.map(|index| ExternalSubtitle {
+            index,
+            url: StreamUrl::new(format!("file:///nowhere-converted-{index}.srt")),
+        }));
+        let mut state = self.state();
+        state.record.transcodes.push(request.clone());
+        if state.transcode_fails {
+            return Err(ProviderError::BadAnswer("converts nothing".into()));
+        }
+        Ok(Playback {
+            session: PlaySessionId(TRANSCODE_SESSION.into()),
+            film: request.film.clone(),
+            source: request.source.clone(),
+            stream: StreamUrl::new(state.converted.clone()),
+            external_subtitles,
+        })
     }
 }
 

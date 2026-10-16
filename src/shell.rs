@@ -24,9 +24,13 @@ use gpui_kit::{
     Pixels, Render, SharedString, Size, Subscription, Task, Window, div, px,
 };
 
-use bobine::provider::{Connector, Episode, Film as FilmItem, MediaServer, Series};
+use bobine::provider::{
+    Connector, Episode, Film as FilmItem, MediaServer, Playback as Opened, ProviderError, Series,
+    TranscodeRequest,
+};
 
 use crate::chrome::{back_link, pill_bar};
+use crate::fallback::Fallback;
 use crate::images::Images;
 use crate::motion::{self, Fade, Presence};
 use crate::navigation::{Navigator, Screen};
@@ -185,6 +189,10 @@ pub struct Playback {
     next: Option<Episode>,
     /// The pointer over the seek bar: the time under it and the thumbnail of that moment.
     seek: SeekPreview,
+    /// What the server converts when the file does not play; `None` for a local file.
+    fallback: Option<Fallback>,
+    notice_fade: Fade,
+    notice_shown: bool,
     _ticker: Task<()>,
     _bounds: Subscription,
 }
@@ -313,6 +321,9 @@ impl Shell {
             reporting,
             next: None,
             seek: SeekPreview::new(),
+            fallback: None,
+            notice_fade: Fade::new(motion::quick()),
+            notice_shown: false,
             _ticker: ticker,
             _bounds: bounds,
         });
@@ -403,17 +414,80 @@ impl Shell {
             self.leave_player(true, window, cx);
             return;
         }
+        let ask = playback
+            .fallback
+            .as_mut()
+            .and_then(|f| f.tick(&mut playback.session, now));
+        if let Some(request) = ask {
+            self.convert(request, cx);
+        }
+        let Some(playback) = &mut self.playback else {
+            return;
+        };
         let shown = playback.session.controls_visible(now);
         let has_error = playback.session.error().is_some();
         if preview::bar_is_left(playback.controls_shown, shown) {
             playback.seek.scrub.left_bar();
         }
+        let notice = playback
+            .fallback
+            .as_ref()
+            .is_some_and(|f| f.notice_shown(&playback.session, now));
         // Hidden controls have nothing to redraw: the video is not GPUI's.
-        if shown || shown != playback.controls_shown || has_error != playback.had_error {
+        if shown
+            || shown != playback.controls_shown
+            || has_error != playback.had_error
+            || notice != playback.notice_shown
+        {
             playback.controls_shown = shown;
             playback.had_error = has_error;
+            playback.notice_shown = notice;
             cx.notify();
         }
+    }
+
+    /// The film of the server does not play as it is: the server is asked to convert it. The
+    /// playback that did not play is told stopped first.
+    fn convert(&mut self, request: TranscodeRequest, cx: &mut Context<Self>) {
+        let Some(playback) = &mut self.playback else {
+            return;
+        };
+        let Some(fallback) = &playback.fallback else {
+            return;
+        };
+        if let Some(reporting) = playback.reporting.take() {
+            drop(reporting.finish(&playback.session));
+        }
+        let (server, id) = (fallback.server.clone(), fallback.id());
+        let task = cx
+            .background_executor()
+            .spawn(async move { server.transcode(&request) });
+        cx.spawn(async move |this, cx| {
+            let opened = task.await;
+            this.update(cx, |shell, cx| shell.converted(id, opened, cx))
+                .ok();
+        })
+        .detach();
+        cx.notify();
+    }
+
+    /// The server's answer for the playback `id`.
+    fn converted(
+        &mut self,
+        id: u64,
+        opened: Result<Opened, ProviderError>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(playback) = &mut self.playback else {
+            return;
+        };
+        let Some(fallback) = &mut playback.fallback else {
+            return;
+        };
+        if let Some(report) = fallback.answered(id, &mut playback.session, opened) {
+            playback.reporting = Some(Reporting::start(fallback.server.clone(), report));
+        }
+        cx.notify();
     }
 
     /// The mouse moved over the player: the controls and the cursor come back at once.
@@ -568,8 +642,14 @@ impl Render for Shell {
                         .set(session.controls_visible(now), now);
                     playback.panel_fade.set(session.panel_open(), now);
                     let preview = playback.seek.draw(session.duration, now);
+                    let notice = playback
+                        .fallback
+                        .as_ref()
+                        .is_some_and(|f| f.notice_shown(session, now));
+                    playback.notice_fade.set(notice, now);
                     if playback.controls_fade.moving(now)
                         || playback.panel_fade.moving(now)
+                        || playback.notice_fade.moving(now)
                         || playback.seek.moving(now)
                     {
                         window.request_animation_frame();
@@ -578,6 +658,7 @@ impl Render for Shell {
                         controls: playback.controls_fade.level(now),
                         panel: playback.panel_fade.level(now),
                         preview,
+                        notice: playback.notice_fade.level(now),
                     };
                     screens::player::render(session, shown, window, cx).into_any_element()
                 }

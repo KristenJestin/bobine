@@ -5,7 +5,7 @@
 use std::time::Instant;
 
 use super::controls::{Controls, KeyAction, key_action, subtitle_position};
-use super::{Player, PlayerError, PlayerEvent, Seek, Track, TrackKind, tracks};
+use super::{Media, Player, PlayerError, PlayerEvent, Seek, Track, TrackKind, tracks};
 use crate::video::{Rect, VideoDisplay, placement};
 
 /// What the session asks of the window.
@@ -48,6 +48,9 @@ pub struct Session {
     ended: bool,
     /// The file is open and playing: the server may be told.
     loaded: bool,
+    /// When the file was open, and when its first picture came.
+    loaded_at: Option<Instant>,
+    first_frame_at: Option<Instant>,
     /// How many seeks the viewer asked for, so a seek can be told to the server.
     seeks: u64,
 }
@@ -77,8 +80,40 @@ impl Session {
             subtitle_position: 100.,
             ended: false,
             loaded: false,
+            loaded_at: None,
+            first_frame_at: None,
             seeks: 0,
         }
+    }
+
+    /// Plays `media` instead of the film that did not play, where it was: what was said of
+    /// that one (its error, its loading, its end) goes with it.
+    pub fn restart(&mut self, media: Media<'_>) -> Result<(), PlayerError> {
+        self.error = None;
+        self.loaded = false;
+        self.loaded_at = None;
+        self.first_frame_at = None;
+        self.ended = false;
+        self.tracks.clear();
+        self.player.load(media)
+    }
+
+    /// The error is no longer the film's last word: something else is tried.
+    pub fn forget_error(&mut self) {
+        self.error = None;
+    }
+
+    /// The film cannot play, for a reason the player did not give.
+    pub fn fail(&mut self, error: PlayerError) {
+        self.error = Some(error);
+    }
+
+    pub fn loaded_at(&self) -> Option<Instant> {
+        self.loaded_at
+    }
+
+    pub fn first_frame_at(&self) -> Option<Instant> {
+        self.first_frame_at
     }
 
     /// A key pressed in the player; what the window must do, if anything.
@@ -215,7 +250,13 @@ impl Session {
                 PlayerEvent::Tracks(tracks) => self.tracks = tracks,
                 PlayerEvent::EndOfFile => self.ended = true,
                 PlayerEvent::Error(error) => self.error = Some(error),
-                PlayerEvent::Loaded => self.loaded = true,
+                PlayerEvent::Loaded => {
+                    self.loaded = true;
+                    self.loaded_at = Some(now);
+                }
+                PlayerEvent::FirstFrame => {
+                    self.first_frame_at.get_or_insert(now);
+                }
                 // The film plays; a refused subtitle is simply not in the panel.
                 PlayerEvent::SubtitleFailed(_) => {}
             }
