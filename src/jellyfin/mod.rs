@@ -713,12 +713,14 @@ impl MediaServer for Jellyfin {
     fn logout(&self) -> Result<(), ProviderError> {
         // The server may be gone or have dropped the token already: the session ends here anyway.
         let _ = self.http.post_empty("logout", "/Sessions/Logout", &[]);
-        self.store.delete(&self.login.keyring_account())?;
         let mut account = AccountFile::open(&self.path)?;
         account.login = None;
         // The server stays: the login that follows starts from its address.
         account.last_address = Some(self.login.address.clone());
-        account.save(&self.path)
+        // The file first: when the keyring cannot be reached the token stays in it, but nothing
+        // points at it any more, so the next start never signs back in silently.
+        account.save(&self.path)?;
+        self.store.delete(&self.login.keyring_account())
     }
 
     fn series(&self, library: &ItemId, query: &FilmQuery) -> Result<Page<Series>, ProviderError> {

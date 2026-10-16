@@ -233,6 +233,21 @@ fn signing_out_while_the_server_is_unreachable_still_signs_out_locally() {
 }
 
 #[test]
+fn a_keyring_that_cannot_delete_the_token_still_leaves_no_session_to_restore() {
+    let s = Setup::new();
+    let server = s.signed_in();
+    s.store
+        .delete_fails
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    assert!(matches!(server.logout(), Err(ProviderError::Keyring(_))));
+    // The token is still in the keyring, but the account file no longer points at it: the next
+    // start shows the login instead of signing back in silently.
+    let next = s.restart();
+    assert!(next.restore().unwrap().is_none());
+    assert_eq!(next.last_address(), Some(s.fake.url.clone()));
+}
+
+#[test]
 fn the_device_id_is_stable_across_starts() {
     let s = Setup::new();
     let _ = s.signed_in();
