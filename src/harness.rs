@@ -920,13 +920,15 @@ impl Acts {
                 ),
                 (18.0, "unwatched off", Click(Unwatched)),
             ],
-            // Times count from when the screen is reached; the file starts playing about four
-            // seconds later on a loaded machine, so the segments come at those times plus four.
+            // Times count from when the screen is reached; the file starts playing four to seven
+            // seconds later, so each press comes in the middle of its segment, after a pointer
+            // move that brings the button back.
             "skip" => vec![
-                (6.5, "enter skips the recap", Key("enter")),
-                (10., "enter skips the intro", Key("enter")),
-                (13., "enter between the segments", Key("enter")),
-                (22., "enter skips the credits", Key("enter")),
+                (12.8, "", Hover(Picture)),
+                (13., "enter skips the intro", Key("enter")),
+                (17., "enter between the segments", Key("enter")),
+                (27.8, "", Hover(Picture)),
+                (28., "enter skips the credits", Key("enter")),
             ],
             other => {
                 eprintln!("bobine harness: unknown scenario {other}");
