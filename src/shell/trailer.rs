@@ -166,7 +166,7 @@ impl Shell {
                         .get(*depth)
                         .is_some_and(|page| &page.id == id)
             }
-            Origin::Home => false,
+            Origin::Home | Origin::Playlist(..) => false,
         }
     }
 

@@ -4,6 +4,7 @@ mod home;
 mod lists;
 mod pages;
 mod palette;
+mod playlists;
 mod posters;
 mod preview;
 mod series;
@@ -12,9 +13,10 @@ mod skip;
 mod trailer;
 
 pub use home::{HomePage, ListPage};
-pub use lists::{CollectionPage, CollectionsPage, MyListPage, PlayerList};
+pub use lists::{CollectionPage, CollectionsPage, ListCard, ListsPage, MyListPage, PlayerList};
 pub use pages::{Chip, DetailPage, GONE, LibraryPage, Loadable, LoginForm, OpenConnector, Tool};
 pub use palette::{PersonPage, SearchState};
+pub use playlists::{PlaylistMenu, PlaylistPage};
 pub use series::SeriesPage;
 pub use settings::{QualityMenu, SettingsPage};
 
@@ -32,8 +34,7 @@ use gpui_kit::{
 };
 
 use bobine::provider::{
-    Connector, Episode, Film as FilmItem, MediaServer, Playback as Opened, ProviderError, Series,
-    TokenStore,
+    Connector, Film as FilmItem, MediaServer, Playback as Opened, ProviderError, Series, TokenStore,
 };
 
 use crate::chrome::{Account, AccountView, ButtonBounds, back_link, bar_fade, pill_bar};
@@ -52,7 +53,7 @@ use crate::poster_actions::Marks;
 use crate::reports::{self, Reporting};
 use crate::screens;
 use crate::search;
-use crate::series_page::{self, UpNext};
+use crate::series_page::{self, Next, UpNext};
 use crate::theme;
 use crate::video::Rect;
 use crate::video::blackout::{self, layer::Screens};
@@ -167,8 +168,9 @@ pub struct Shell {
     pub details: Vec<DetailPage>,
     /// The series pages open, the last one on top: one per `Screen::SeriesDetail`.
     pub series_pages: Vec<SeriesPage>,
-    /// The "Next episode" card over the series page, after an episode ended.
-    pub up_next: UpNext,
+    /// The "Next episode" card over the series page, after an episode ended, or over a
+    /// playlist's page, after one of its titles ended.
+    pub up_next: UpNext<Next>,
     up_next_ticker: Option<Task<()>>,
     /// The numbers of the series pages' refreshes, counted over every page: an answer on its way
     /// for a page that closed never matches the page that opens in its place.
@@ -177,7 +179,7 @@ pub struct Shell {
     /// its way for a page that closed never reaches the page that opens in its place.
     pages_opened: u64,
     /// The card fades in and out; the episode it showed stays drawn while it fades out.
-    pub up_next_fade: Presence<Episode>,
+    pub up_next_fade: Presence<Next>,
     /// The episode ended in fullscreen: the window stays so while the card counts down, and
     /// leaves it if the next episode does not play.
     fullscreen_kept: bool,
@@ -187,6 +189,13 @@ pub struct Shell {
     /// The collection pages open, the last one on top: one per `Screen::CollectionDetail`.
     pub collection_pages: Vec<CollectionPage>,
     pub my_list: MyListPage,
+    pub lists: ListsPage,
+    /// The playlists' pages open, the last one on top: one per `Screen::Playlist`.
+    pub playlist_pages: Vec<PlaylistPage>,
+    /// The "Add to playlist" menu, while it shows.
+    pub playlist_menu: Option<PlaylistMenu>,
+    /// How many times the menu was opened: each open's reads carry its number.
+    playlist_menus: u64,
     /// The search palette, while it shows (it stays fading out after it closed).
     pub search: Option<SearchState>,
     /// The pages gone back from, the last one on top: the mouse's forward button opens them again.
@@ -195,6 +204,9 @@ pub struct Shell {
     /// no player starts in a test, so this is what the player would have been given.
     #[cfg(test)]
     planned: Vec<(bobine::provider::ItemId, Duration)>,
+    /// The player the next playback starts on, in a test: no mpv, no window.
+    #[cfg(test)]
+    fake_player: Option<crate::player::fake::FakePlayer>,
     /// The highlight of each entry of the pill bar eases from one section to the next.
     nav_pills: [Fade; NavEntry::ALL.len()],
     pub images: Images,
@@ -260,8 +272,9 @@ pub struct Playback {
     reporting: Option<Reporting>,
     /// The attempt that failed is being told stopped: the conversion's reports wait for it.
     stopping: Option<std::thread::JoinHandle<()>>,
-    /// The episode after the one playing: the card offers it at the end.
-    next: Option<Episode>,
+    /// The episode after the one playing, or the playlist's next title: the card offers it at
+    /// the end.
+    next: Option<Next>,
     /// Told apart from every other playback: an answer on its way for one already left is
     /// dropped.
     generation: u64,
@@ -279,6 +292,8 @@ pub struct Playback {
     refusal_shown: bool,
     /// The "My list" button of the player.
     pub list: Option<PlayerList>,
+    /// What plays, as the server knows it: what "Add to playlist" puts in a playlist.
+    pub playing: Option<bobine::provider::ItemId>,
     _ticker: Task<()>,
     _bounds: Subscription,
 }
@@ -352,10 +367,16 @@ impl Shell {
             collections: Default::default(),
             collection_pages: Vec::new(),
             my_list: Default::default(),
+            lists: Default::default(),
+            playlist_pages: Vec::new(),
+            playlist_menu: None,
+            playlist_menus: 0,
             search: None,
             forward: Vec::new(),
             #[cfg(test)]
             planned: Vec::new(),
+            #[cfg(test)]
+            fake_player: None,
             nav_pills: [Fade::new(motion::quick()); NavEntry::ALL.len()],
             images: Images::default(),
             cards: Default::default(),
@@ -494,6 +515,7 @@ impl Shell {
             refusal_fade: Fade::new(motion::quick()),
             refusal_shown: false,
             list: None,
+            playing: None,
             _ticker: ticker,
             _bounds: bounds,
         });
@@ -839,8 +861,10 @@ impl Render for Shell {
             self.library.menus.close();
             self.series.menus.close();
             self.account_menu.close();
+            self.close_playlist_menu(cx);
             self.settings_page.menus.close();
         }
+        self.follow_playlist_menu(window);
         #[cfg(feature = "harness")]
         self.note_frame();
         #[cfg(any(test, feature = "harness"))]
@@ -893,7 +917,8 @@ impl Render for Shell {
             self.fullscreen_kept,
             screen == Screen::Player,
             self.up_next.episode().is_some(),
-            self.series_pages.last().is_some_and(SeriesPage::waiting),
+            self.series_pages.last().is_some_and(SeriesPage::waiting)
+                || self.playlist_pages.last().is_some_and(|page| page.busy),
         ) {
             KeptFullscreen::Keep => {}
             KeptFullscreen::Release => self.fullscreen_kept = false,
@@ -911,6 +936,8 @@ impl Render for Shell {
                 + self.people.len()
                 + usize::from(self.list.is_some())
                 + self.collection_pages.len()
+                + self.playlist_pages.len()
+                + usize::from(self.navigator.current() == Screen::Favorites)
                 + usize::from(screen == Screen::Settings),
         );
         if page != self.page {
@@ -936,6 +963,10 @@ impl Render for Shell {
                 }
                 if app.search_is_open() {
                     app.search_key(key, window, cx);
+                    return;
+                }
+                if app.playlist_menu_is_open() {
+                    app.playlist_menu_key(key, cx);
                     return;
                 }
                 if app.navigator.current() == Screen::Player && app.playback.is_some() {
@@ -1007,6 +1038,7 @@ impl Render for Shell {
                             .list
                             .as_ref()
                             .map(|list| (list.toggle.on(), list.error)),
+                        add: playback.playing.clone(),
                         tracks_scroll: playback.tracks_scroll.clone(),
                     };
                     screens::player::render(session, shown, window, cx).into_any_element()
@@ -1025,9 +1057,10 @@ impl Render for Shell {
                     )
                     .into_any_element(),
             })
-            .when(screen == Screen::SeriesDetail, |root| {
-                root.children(screens::up_next_card(self, window, cx))
-            })
+            .when(
+                matches!(screen, Screen::SeriesDetail | Screen::Playlist),
+                |root| root.children(screens::up_next_card(self, window, cx)),
+            )
             // The side buttons of the mouse are heard over the whole window, the bar included,
             // which lets no click through to what is under it.
             .child(
@@ -1065,6 +1098,7 @@ impl Render for Shell {
                 back_label.filter(|_| screen.shows_back_link()),
                 |root, label| root.child(back_link(label, window, cx)),
             )
+            .children(screens::playlist::add_menu(self, window, cx))
             .children(self.notice_pill(screen, window, cx))
             .children(screens::search::palette(self, window, cx))
     }

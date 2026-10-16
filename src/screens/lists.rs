@@ -1,23 +1,29 @@
-//! The Collections and My list screens: a grid of posters like the libraries', over a list the
-//! program already holds whole. Only the rows in view are built, so only their images are asked.
+//! The Collections, Lists and Favorites screens. Collections and Favorites are a grid of
+//! posters like the libraries', over a list the program already holds whole: only the rows in
+//! view are built, so only their images are asked. The Lists are a row of the favorites, then
+//! the playlists' cards.
 
 use std::ops::Range;
 
 use bobine::provider::{CollectionCard, Favourite};
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    AnyElement, Context, ElementId, FontWeight, IntoElement, ScrollHandle, Stateful,
+    AnyElement, Context, Div, ElementId, FontWeight, IntoElement, ScrollHandle, Stateful,
     UniformListScrollHandle, Window, div, px, uniform_list,
 };
 
+use super::film_detail::ROW_POSTER;
 use super::home::suggestion_row;
 use super::home_list::{empty_page, page_under_the_bar};
 use super::library::heading;
-use super::{Corner, note, poster, poster_caption, poster_image, series_poster};
+use super::{Corner, note, poster, poster_caption, poster_image, row_heading, series_poster};
 use crate::grid::{self, GAP, MARGIN};
+use crate::home_page;
+use crate::icons::{IconName, icon};
 use crate::images;
 use crate::lists;
-use crate::shell::{Loadable, Shell};
+use crate::playlists;
+use crate::shell::{ListCard, Loadable, Shell};
 use crate::theme;
 
 /// What tells the two screens apart.
@@ -83,7 +89,7 @@ pub fn render_my_list(
     let (len, status, count) = match &shell.my_list.items {
         Some(Loadable::Ready(items)) if items.is_empty() => {
             let scroll = shell.my_list.suggestions.clone();
-            return empty(shell, "My list", lists::EMPTY_LIST, &scroll, window, cx);
+            return empty(shell, "Favorites", lists::EMPTY_LIST, &scroll, window, cx);
         }
         Some(Loadable::Ready(items)) => (items.len(), None, Some(grid::count(items.len() as u32))),
         Some(Loadable::Failed(why)) => (0, Some(*why), None),
@@ -91,7 +97,7 @@ pub fn render_my_list(
     };
     grid_screen(
         Cells {
-            title: "My list",
+            title: "Favorites",
             count,
             status,
             len,
@@ -117,6 +123,212 @@ pub fn render_my_list(
     )
     .into_any_element()
 }
+
+/// The Lists: the favorites first, as a row of posters with "See all", then a card for each
+/// playlist. A user has a few playlists: their cards are all built.
+pub fn render_lists(
+    shell: &mut Shell,
+    window: &mut Window,
+    cx: &mut Context<Shell>,
+) -> impl IntoElement {
+    let width = f32::from(window.viewport_size().width);
+    let columns = grid::columns(width);
+    let card_width = (width - 2. * MARGIN - GAP * (columns - 1) as f32) / columns as f32;
+
+    let (favorites, count) = match &shell.my_list.items {
+        Some(Loadable::Ready(items)) if items.is_empty() => (Err(lists::EMPTY_LIST), None),
+        Some(Loadable::Ready(items)) => (
+            Ok(items
+                .iter()
+                .take(home_page::ROW as usize)
+                .cloned()
+                .collect()),
+            Some(grid::count(items.len() as u32)),
+        ),
+        Some(Loadable::Failed(why)) => (Err(*why), None),
+        _ => (Err("Loading…"), None),
+    };
+    let see_all = favorites.is_ok().then(|| {
+        theme::eased("lists-see-all", theme::Shades::veil(), window, cx)
+            .debug_selector(|| "lists-see-all".into())
+            .flex()
+            .items_center()
+            .gap(px(6.))
+            .px(px(10.))
+            .py(px(5.))
+            .rounded(px(theme::RADIUS))
+            .text_size(px(13.))
+            .text_color(theme::muted())
+            .cursor_pointer()
+            .on_click(cx.listener(|shell, _, _, cx| shell.open_favorites(cx)))
+            .child("See all")
+            .child(icon(IconName::ArrowRight, 14.))
+    });
+    let favorites: AnyElement = match favorites {
+        Ok(items) => {
+            let items: Vec<Favourite> = items;
+            let posters: Vec<AnyElement> = items
+                .iter()
+                .enumerate()
+                .map(|(at, favourite)| match favourite {
+                    Favourite::Film(film) => {
+                        poster(shell, film, ROW_POSTER, ("lists-film", at), false, cx)
+                            .into_any_element()
+                    }
+                    Favourite::Series(series) => {
+                        series_poster(shell, series, ROW_POSTER, ("lists-series", at), cx)
+                            .into_any_element()
+                    }
+                })
+                .collect();
+            div()
+                .id("lists-favorites")
+                .debug_selector(|| "lists-favorites".into())
+                .flex()
+                .gap(px(GAP))
+                .px(px(MARGIN))
+                .overflow_x_scroll()
+                .track_scroll(&shell.lists.favorites)
+                .children(posters)
+                .into_any_element()
+        }
+        Err(why) => div().px(px(MARGIN)).child(note(why)).into_any_element(),
+    };
+
+    let cards: Vec<AnyElement> = shell
+        .lists
+        .cards()
+        .into_iter()
+        .enumerate()
+        .map(|(index, card)| list_card(shell, card, card_width, index, cx).into_any_element())
+        .collect();
+    let playlists = match &shell.lists.playlists {
+        Some(Loadable::Failed(why)) => div().px(px(MARGIN)).child(note(*why)),
+        Some(Loadable::Ready(_)) if cards.is_empty() => {
+            div().px(px(MARGIN)).child(note(playlists::NONE))
+        }
+        Some(Loadable::Ready(_)) => div()
+            .flex()
+            .flex_wrap()
+            .gap(px(GAP))
+            .px(px(MARGIN))
+            .children(cards),
+        _ => div().px(px(MARGIN)).child(note("Loading…")),
+    };
+
+    div()
+        .id("lists")
+        .size_full()
+        .overflow_y_scroll()
+        .track_scroll(&shell.lists.scroll)
+        .pt(px(96.))
+        .pb(px(48.))
+        .flex()
+        .flex_col()
+        .child(
+            div()
+                .flex_none()
+                .px(px(MARGIN))
+                .pb(px(24.))
+                .text_size(px(28.))
+                .font_weight(FontWeight::SEMIBOLD)
+                .child("Lists"),
+        )
+        .child(section("Favorites", count, see_all))
+        // Taller than the window, the page scrolls: nothing in it shrinks.
+        .child(div().flex_none().child(favorites))
+        .child(div().flex_none().h(px(36.)))
+        .child(section("Playlists", None, None::<Div>))
+        .child(playlists.flex_none())
+}
+
+/// The heading of a section of the Lists, with its count and its "See all".
+fn section(title: &'static str, count: Option<String>, see_all: Option<impl IntoElement>) -> Div {
+    div()
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_between()
+        .px(px(MARGIN - 10.))
+        .pb(px(12.))
+        .child(
+            div()
+                .pl(px(10.))
+                .flex()
+                .items_baseline()
+                .gap(px(12.))
+                .child(row_heading(title))
+                .children(count.map(|count| {
+                    div()
+                        .text_size(px(13.))
+                        .text_color(theme::dim())
+                        .child(count)
+                })),
+        )
+        .children(see_all)
+}
+
+/// A playlist as a poster: a mosaic of its first posters, two by two, its name and its count.
+fn list_card(
+    shell: &mut Shell,
+    card: ListCard,
+    width: f32,
+    index: usize,
+    cx: &mut Context<Shell>,
+) -> Stateful<gpui_kit::Div> {
+    let id: ElementId = ("list-card", index).into();
+    let half = (width - MOSAIC_GAP) / 2.;
+    let cells: Vec<AnyElement> = card
+        .posters
+        .iter()
+        .map(|poster| {
+            let image = shell.image(Some(poster), images::POSTER, cx);
+            div()
+                .relative()
+                .w(px(half))
+                .h(px(half * 1.5))
+                .bg(theme::line())
+                .children(super::picture(image, 0.))
+                .into_any_element()
+        })
+        .collect();
+    let empty = cells.is_empty();
+    let opens = card.id.clone();
+    let name = card.name.clone();
+    div()
+        .id(id)
+        .debug_selector(move || format!("list-card {name}"))
+        .w(px(width))
+        .flex_none()
+        .flex()
+        .flex_col()
+        .gap(px(8.))
+        .cursor_pointer()
+        .on_click(cx.listener(move |shell, _, _, cx| shell.open_playlist(opens.clone(), cx)))
+        .child(
+            div()
+                .w(px(width))
+                .h(px(width * 1.5))
+                .rounded(px(theme::RADIUS))
+                .overflow_hidden()
+                .bg(theme::panel())
+                .flex()
+                .flex_wrap()
+                .gap(px(MOSAIC_GAP))
+                .when(empty, |frame| {
+                    frame
+                        .items_center()
+                        .justify_center()
+                        .text_color(theme::dim())
+                        .child(icon(IconName::List, 32.))
+                })
+                .children(cells),
+        )
+        .child(poster_caption(card.name, card.caption))
+}
+
+/// Between the posters of a list's mosaic.
+const MOSAIC_GAP: f32 = 2.;
 
 /// The page holds nothing: the heading, why, and a row of the Home to watch instead, drawn
 /// like the empty full lists.

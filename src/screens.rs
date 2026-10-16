@@ -11,6 +11,7 @@ mod lists;
 mod login;
 mod person;
 pub mod player;
+pub mod playlist;
 pub mod search;
 mod series_detail;
 mod settings;
@@ -61,7 +62,9 @@ pub fn render(
         Screen::HomeList => home_list::render(shell, window, cx).into_any_element(),
         Screen::Collections => lists::render_collections(shell, window, cx).into_any_element(),
         Screen::CollectionDetail => collection_detail::render(shell, window, cx).into_any_element(),
-        Screen::MyList => lists::render_my_list(shell, window, cx).into_any_element(),
+        Screen::MyList => lists::render_lists(shell, window, cx).into_any_element(),
+        Screen::Favorites => lists::render_my_list(shell, window, cx).into_any_element(),
+        Screen::Playlist => playlist::render(shell, window, cx).into_any_element(),
         Screen::Settings => settings::render(shell, window, cx).into_any_element(),
     }
 }
@@ -267,7 +270,7 @@ fn film_offer(
     name: &ElementId,
     with_progress: bool,
 ) -> Offer {
-    let quick = Quick::new(marks, &film.id, film.favourite, film.watched);
+    let quick = Quick::new(marks, &film.id, false, film.favourite, film.watched);
     let look = film_look(
         film,
         image,
@@ -300,7 +303,7 @@ fn series_offer(
     let quick = series
         .favourite
         .zip(series.watched)
-        .map(|(in_list, watched)| Quick::new(marks, &series.id, in_list, watched));
+        .map(|(in_list, watched)| Quick::new(marks, &series.id, true, in_list, watched));
     let watched = quick.as_ref().is_some_and(|quick| quick.watched.now);
     let look = series_look(series, image, width, name, watched, fresh);
     Offer {

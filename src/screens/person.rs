@@ -208,7 +208,7 @@ fn series_card(
         quick: series
             .favourite
             .zip(series.watched)
-            .map(|(in_list, watched)| Quick::new(&shell.marks, &series.id, in_list, watched)),
+            .map(|(in_list, watched)| Quick::new(&shell.marks, &series.id, true, in_list, watched)),
         draw: Rc::new(draw),
     };
     card(shell, ("person-series", index).into(), offer, cx)

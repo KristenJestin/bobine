@@ -21,6 +21,7 @@ mod menu;
 mod motion;
 mod navigation;
 mod player;
+mod playlists;
 mod poster_actions;
 mod reports;
 mod screens;

@@ -9,9 +9,8 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use bobine::provider::{
-    Collection, Connector, Episode, FilmDetail, FilmQuery, FilterChoices, ItemId, LibraryKind,
-    MediaServer, MediaSource, Page, PersonHit, PlayMethod, Playback as Opened, PlaybackReport,
-    ProviderError,
+    Collection, Connector, FilmDetail, FilmQuery, FilterChoices, ItemId, LibraryKind, MediaServer,
+    MediaSource, Page, PersonHit, PlayMethod, Playback as Opened, PlaybackReport, ProviderError,
 };
 use gpui_kit::prelude::*;
 use gpui_kit::{
@@ -36,6 +35,7 @@ use crate::player::libmpv::Libmpv;
 use crate::poster_actions::{Action, Said};
 use crate::reports::Reporting;
 use crate::scroll::{self, Move, Phase, Wheel};
+use crate::series_page::Next;
 use crate::start::{self, Start};
 
 /// A page gone back from, for the mouse's forward button to open again.
@@ -46,6 +46,8 @@ pub(super) enum Reopen {
     Person(PersonHit),
     List(ListKind, Option<String>),
     Collection(ItemId),
+    Favorites,
+    Playlist(ItemId),
 }
 
 /// How long the address must stay unchanged before the server is asked who it is.
@@ -253,8 +255,12 @@ pub enum Arrival {
     Home,
     /// A full list of the Home: what was started or comes next changed with the playback.
     HomeList,
-    /// The user's list is asked again each time it shows: a title put in it elsewhere shows.
+    /// The Lists are asked again each time they show: a title put in one elsewhere shows.
     MyList,
+    /// So are the favorites.
+    Favorites,
+    /// Back on a playlist's page from a title: its titles' state is asked again.
+    Playlist,
     Collections,
     /// Back on a collection page from a film: its films' marks are asked again.
     Collection,
@@ -268,6 +274,8 @@ pub fn arrival(screen: Screen, films_known: bool, series_known: bool) -> Arrival
         Screen::Home => Arrival::Home,
         Screen::HomeList => Arrival::HomeList,
         Screen::MyList => Arrival::MyList,
+        Screen::Favorites => Arrival::Favorites,
+        Screen::Playlist => Arrival::Playlist,
         Screen::Collections => Arrival::Collections,
         Screen::CollectionDetail => Arrival::Collection,
         Screen::Library if !films_known => Arrival::Library(LibraryKind::Films),
@@ -284,6 +292,8 @@ pub enum Reload {
     Home,
     /// A full list of the Home.
     List,
+    /// The playlist's page on top.
+    Playlist,
 }
 
 /// What is asked again after a playback, on `screen`, the one back to: the Home or one of its
@@ -292,6 +302,7 @@ pub fn reload_after_playback(screen: Screen, films: usize, series: usize) -> Opt
     match screen {
         Screen::Home => return Some(Reload::Home),
         Screen::HomeList => return Some(Reload::List),
+        Screen::Playlist => return Some(Reload::Playlist),
         _ => {}
     }
     if screen == Screen::SeriesDetail {
@@ -304,6 +315,8 @@ pub fn reload_after_playback(screen: Screen, films: usize, series: usize) -> Opt
 pub enum Origin {
     Film(usize, ItemId),
     Series(usize, ItemId),
+    /// A playlist's page: its play buttons, and the card of its next title.
+    Playlist(usize, ItemId),
     /// The header or a card of the Home or of one of its lists.
     Home,
 }
@@ -507,6 +520,8 @@ impl Shell {
         self.people.clear();
         self.list = None;
         self.collection_pages.clear();
+        self.playlist_pages.clear();
+        self.playlist_menu = None;
         self.forward.clear();
         self.search = None;
         self.navigator.switch_root(Screen::Login);
@@ -608,6 +623,7 @@ impl Shell {
         self.series = LibraryPage::default();
         self.collections = Default::default();
         self.my_list = Default::default();
+        self.lists = Default::default();
         self.details.clear();
         self.series_pages.clear();
         self.people.clear();
@@ -775,6 +791,11 @@ impl Shell {
                 .collection_pages
                 .pop()
                 .map(|page| Reopen::Collection(page.id)),
+            Screen::Favorites => Some(Reopen::Favorites),
+            Screen::Playlist => self
+                .playlist_pages
+                .pop()
+                .map(|page| Reopen::Playlist(page.id)),
             _ => None,
         };
         self.up_next.cancel();
@@ -800,6 +821,8 @@ impl Shell {
             Reopen::Person(person) => self.open_person(person, cx),
             Reopen::List(kind, library) => self.open_list(kind, library, cx),
             Reopen::Collection(id) => self.open_collection(id, cx),
+            Reopen::Favorites => self.open_favorites(cx),
+            Reopen::Playlist(id) => self.open_playlist(id, cx),
         }
         self.forward = forward;
         true
@@ -840,7 +863,9 @@ impl Shell {
         match arrival {
             Arrival::Home => self.load_home(cx),
             Arrival::HomeList => self.refresh_list(cx),
-            Arrival::MyList => self.load_my_list(cx),
+            Arrival::MyList => self.load_lists(cx),
+            Arrival::Favorites => self.load_my_list(cx),
+            Arrival::Playlist => self.reload_playlist(cx),
             Arrival::Collections => self.load_collections(cx),
             Arrival::Collection => self.reload_collection(cx),
             Arrival::Library(kind) => self.load_library(kind, cx),
@@ -1311,6 +1336,10 @@ impl Shell {
 
     /// Escape cancels the next episode's card, else closes the open menu, else goes back.
     pub fn escape(&mut self, cx: &mut Context<Self>) {
+        if self.playlist_menu_is_open() {
+            self.close_playlist_menu(cx);
+            return;
+        }
         if self.cancel_up_next(cx) {
             return;
         }
@@ -1441,6 +1470,16 @@ impl Shell {
                 Some(page) if &page.id == id => (&mut page.busy, &mut page.error),
                 _ => return,
             },
+            // A playlist's page has no line of its own: the window says it, as for the Home.
+            Origin::Playlist(depth, id) => {
+                if let Some(page) = self.playlist_page(*depth, id) {
+                    page.busy = false;
+                }
+                if let Some(said) = error {
+                    self.show_notice(said, cx);
+                }
+                return;
+            }
             Origin::Home => {
                 self.home.busy = false;
                 if let Some(said) = error {
@@ -1467,7 +1506,7 @@ impl Shell {
         plan: Plan,
         opened: Result<Opened, ProviderError>,
         playing: Playing,
-        next: Option<Episode>,
+        next: Option<Next>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -1482,10 +1521,31 @@ impl Shell {
             }
         };
         self.tried(&origin, None, cx);
+        // A test plays on a fake player, through the rest of this path: what the end offers.
+        #[cfg(test)]
+        if let Some(player) = self.fake_player.take() {
+            let display = Box::new(crate::video::fake::FakeDisplay::default());
+            let session = crate::player::session::Session::new(
+                Box::new(player),
+                display,
+                playing.title,
+                playing.subtitle,
+            );
+            self.begin_playback(session, None, window, cx);
+            if let Some(playback) = &mut self.playback {
+                playback.playing = Some(opened.film.clone());
+            }
+            self.playback_started(&opened.film, next, cx);
+            return;
+        }
         let options = self.mpv_options.clone();
         let Some(server) = self.server.clone() else {
             return;
         };
+        // A test never reaches the real player.
+        if cfg!(test) {
+            panic!("a test started a playback without setting Shell::fake_player");
+        }
         let mpv = match Libmpv::new(&options) {
             Ok(mpv) => Arc::new(mpv),
             Err(error) => {
@@ -1514,6 +1574,9 @@ impl Shell {
         match self.play(mpv, media, playing, Some(reporting), window, cx) {
             Ok(()) => {
                 self.arm_playback(fallback, window, cx);
+                if let Some(playback) = &mut self.playback {
+                    playback.playing = Some(opened.film.clone());
+                }
                 self.load_trickplay(opened.film.clone(), opened.source.clone(), cx);
                 self.playback_started(&opened.film, next, cx);
                 if let Some(item) = list {
@@ -1567,6 +1630,16 @@ impl Shell {
                         let _ = reports.join();
                     },
                     |shell, (), cx| shell.refresh_list(cx),
+                );
+                return;
+            }
+            Some(Reload::Playlist) => {
+                self.ask(
+                    cx,
+                    move |_| {
+                        let _ = reports.join();
+                    },
+                    |shell, (), cx| shell.reload_playlist(cx),
                 );
                 return;
             }
@@ -1704,6 +1777,10 @@ mod tests {
         assert_eq!(
             reload_after_playback(Screen::HomeList, 0, 0),
             Some(Reload::List)
+        );
+        assert_eq!(
+            reload_after_playback(Screen::Playlist, 1, 1),
+            Some(Reload::Playlist)
         );
     }
 
@@ -2920,13 +2997,16 @@ mod tests {
     }
 
     #[gpui_kit::test]
-    fn an_empty_my_list_and_an_empty_collections_page_show_their_reason_and_the_suggestion_row(
+    fn empty_favorites_and_an_empty_collections_page_show_their_reason_and_the_suggestion_row(
         cx: &mut gpui_kit::TestAppContext,
     ) {
         let (server, window) = signed_in_window(cx);
         server.state.lock().unwrap().favourites.clear();
         window
-            .update(cx, |shell, _, cx| shell.select(NavEntry::MyList, cx))
+            .update(cx, |shell, _, cx| {
+                shell.select(NavEntry::MyList, cx);
+                shell.open_favorites(cx);
+            })
             .unwrap();
         cx.run_until_parked();
         let mut visual = drawn(&window, cx);
@@ -2987,7 +3067,9 @@ mod tests {
         window
             .update(cx, |shell, _, _| {
                 let episode = crate::fake::episodes().remove(0);
-                shell.up_next.start(episode, (0, id), Instant::now());
+                shell
+                    .up_next
+                    .start(Next::Episode(episode), (0, id), Instant::now());
             })
             .unwrap();
         let at = drawn(&window, cx)
