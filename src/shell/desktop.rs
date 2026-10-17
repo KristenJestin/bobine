@@ -79,9 +79,11 @@ impl Shell {
                 return;
             };
             let session = &mut playback.session;
-            // Told as a seek when mpv answers, however small it was.
-            if matches!(command, Command::SeekBy(_) | Command::SetPosition(_)) {
-                self.mpris.sought(Instant::now());
+            // Told as a seek when mpv lands there, however small it was.
+            match command {
+                Command::SeekBy(seconds) => self.mpris.sought_by(seconds, Instant::now()),
+                Command::SetPosition(seconds) => self.mpris.sought_to(seconds, Instant::now()),
+                _ => {}
             }
             match command {
                 Command::PlayPause => session.toggle_pause(),

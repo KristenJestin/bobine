@@ -14,12 +14,12 @@ use bobine::provider::{Episode, Film, ImageRef};
 /// A jump of the position beyond what playing explains, in seconds: a seek.
 const SEEK_TOLERANCE: f64 = 1.;
 
-/// How long mpv has to answer a seek the desktop asked for.
-const SEEK_ANSWER: Duration = Duration::from_secs(2);
+/// How long mpv has to answer a seek the desktop asked for: a transcoded stream is slow to.
+const SEEK_ANSWER: Duration = Duration::from_secs(5);
 
-/// What the clock and mpv's own rounding explain, in seconds: below it a position is where
-/// playing puts it.
-const DRIFT: f64 = 0.01;
+/// How far from the position asked a position still is where the seek landed, in seconds: a few
+/// frames, as mpv lands on one.
+const LANDING: f64 = 0.25;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Status {
@@ -99,8 +99,8 @@ pub struct Publisher {
     shown: State,
     /// The position at the last update, when, and whether it was moving then.
     last: Option<(f64, Instant)>,
-    /// When the desktop last asked for a seek that no position has answered yet.
-    asked: Option<Instant>,
+    /// Where the desktop last asked to seek to, and when, until a position answers it.
+    asked: Option<(f64, Instant)>,
 }
 
 impl Publisher {
@@ -113,10 +113,23 @@ impl Publisher {
         }
     }
 
-    /// The desktop asked for a seek at `now`: whatever its size, the position that answers it is
-    /// told as a seek.
-    pub fn sought(&mut self, now: Instant) {
-        self.asked = Some(now);
+    /// The desktop asked to seek `offset` seconds from where the film is.
+    pub fn sought_by(&mut self, offset: f64, now: Instant) {
+        let from = self.last.map_or(0., |(position, _)| position);
+        self.sought_to(from + offset, now);
+    }
+
+    /// The desktop asked to seek to `position`: the position that lands there is told as a seek,
+    /// whatever the size of the jump.
+    pub fn sought_to(&mut self, position: f64, now: Instant) {
+        // The film has no position before its start or after its end to land on.
+        let length = self.shown.track.as_ref().map_or(0., |track| track.length);
+        let position = if length > 0. {
+            position.min(length)
+        } else {
+            position
+        };
+        self.asked = Some((position.max(0.), now));
     }
 
     pub fn follow(&mut self, state: State, position: f64, now: Instant) {
@@ -131,10 +144,13 @@ impl Publisher {
             };
             self.asked = self
                 .asked
-                .filter(|at| now.saturating_duration_since(*at) < SEEK_ANSWER);
-            // The position mpv has not updated yet, still `before`, answers nothing.
-            let answered =
-                self.asked.is_some() && position != before && (position - expected).abs() > DRIFT;
+                .filter(|(_, at)| now.saturating_duration_since(*at) < SEEK_ANSWER);
+            // Only a position near the one asked answers: a frame on the way is no landing, and
+            // the position mpv has not updated yet, still `before`, answers nothing.
+            let answered = position != before
+                && self
+                    .asked
+                    .is_some_and(|(target, _)| (position - target).abs() <= LANDING);
             if answered || (position - expected).abs() > SEEK_TOLERANCE {
                 self.controls.seeked(position);
                 self.asked = None;
@@ -437,15 +453,49 @@ mod tests {
         assert_eq!(*fake.seeked.borrow(), [70.]);
     }
 
+    /// Where mpv reports a film that plays on from `start` after `ms`: it moves by a frame
+    /// (about 42 ms at 24 fps) at a time, whatever the rate the window ticks at.
+    fn frame(start: f64, ms: u64) -> f64 {
+        start + (ms / 42) as f64 * 0.042
+    }
+
+    /// Ticks every 16 ms from `from` to `to` (ms): `position(ms)` is what mpv reports then.
+    fn tick_frames(
+        publisher: &mut Publisher,
+        base: Instant,
+        (from, to): (u64, u64),
+        position: impl Fn(u64) -> f64,
+    ) {
+        for ms in (from..=to).step_by(16) {
+            let at = base + Duration::from_millis(ms);
+            publisher.follow(playing("film-0"), position(ms), at);
+        }
+    }
+
     #[test]
-    fn a_small_seek_asked_by_the_desktop_is_told_whatever_its_size() {
+    fn a_small_seek_forward_is_told_where_it_lands_not_at_the_next_frame() {
         let (mut publisher, fake) = publisher();
-        let now = Instant::now();
-        publisher.follow(playing("film-0"), 10., now);
-        publisher.sought(now + Duration::from_millis(100));
-        // Half a second forward, beyond what playing explains by far less than a second.
-        publisher.follow(playing("film-0"), 10.6, now + Duration::from_millis(200));
+        let base = Instant::now();
+        tick_frames(&mut publisher, base, (0, 96), |ms| frame(10., ms));
+        let asked = base + Duration::from_millis(100);
+        publisher.sought_by(0.5, asked);
+        tick_frames(&mut publisher, base, (112, 144), |ms| frame(10., ms));
+        assert!(fake.seeked.borrow().is_empty(), "{:?}", fake.seeked);
+        // mpv lands half a second on.
+        tick_frames(&mut publisher, base, (160, 400), |ms| frame(10.6, ms - 160));
         assert_eq!(*fake.seeked.borrow(), [10.6]);
+    }
+
+    #[test]
+    fn a_small_seek_back_is_told_where_it_lands_not_at_the_next_frame() {
+        let (mut publisher, fake) = publisher();
+        let base = Instant::now();
+        tick_frames(&mut publisher, base, (0, 96), |ms| frame(10., ms));
+        publisher.sought_by(-0.5, base + Duration::from_millis(100));
+        tick_frames(&mut publisher, base, (112, 144), |ms| frame(10., ms));
+        assert!(fake.seeked.borrow().is_empty(), "{:?}", fake.seeked);
+        tick_frames(&mut publisher, base, (160, 400), |ms| frame(9.6, ms - 160));
+        assert_eq!(*fake.seeked.borrow(), [9.6]);
     }
 
     #[test]
@@ -457,7 +507,7 @@ mod tests {
             ..playing("film-0")
         };
         publisher.follow(paused.clone(), 10., now);
-        publisher.sought(now + Duration::from_millis(100));
+        publisher.sought_to(9.5, now + Duration::from_millis(100));
         publisher.follow(paused, 9.5, now + Duration::from_millis(200));
         assert_eq!(*fake.seeked.borrow(), [9.5]);
     }
@@ -467,7 +517,7 @@ mod tests {
         let (mut publisher, fake) = publisher();
         let now = Instant::now();
         publisher.follow(playing("film-0"), 10., now);
-        publisher.sought(now + Duration::from_millis(100));
+        publisher.sought_to(10.9, now + Duration::from_millis(100));
         publisher.follow(playing("film-0"), 10., now + Duration::from_millis(200));
         assert!(fake.seeked.borrow().is_empty());
         publisher.follow(playing("film-0"), 10.9, now + Duration::from_millis(300));
@@ -475,15 +525,81 @@ mod tests {
     }
 
     #[test]
-    fn a_seek_is_told_once_and_drift_after_it_is_not() {
+    fn a_seek_is_told_once_and_the_frames_after_it_are_not() {
+        let (mut publisher, fake) = publisher();
+        let base = Instant::now();
+        tick_frames(&mut publisher, base, (0, 96), |ms| frame(10., ms));
+        publisher.sought_to(10.6, base + Duration::from_millis(100));
+        tick_frames(&mut publisher, base, (112, 800), |ms| frame(10.6, ms - 112));
+        assert_eq!(*fake.seeked.borrow(), [10.6]);
+    }
+
+    #[test]
+    fn a_second_seek_before_the_first_lands_replaces_it() {
+        let (mut publisher, fake) = publisher();
+        let base = Instant::now();
+        tick_frames(&mut publisher, base, (0, 96), |ms| frame(10., ms));
+        publisher.sought_to(11., base + Duration::from_millis(100));
+        publisher.sought_to(12., base + Duration::from_millis(110));
+        tick_frames(&mut publisher, base, (112, 144), |ms| frame(10., ms));
+        tick_frames(&mut publisher, base, (160, 400), |ms| frame(12., ms - 160));
+        assert_eq!(*fake.seeked.borrow(), [12.]);
+    }
+
+    #[test]
+    fn two_seeks_in_a_row_are_both_told() {
+        let (mut publisher, fake) = publisher();
+        let base = Instant::now();
+        tick_frames(&mut publisher, base, (0, 96), |ms| frame(10., ms));
+        publisher.sought_to(10.6, base + Duration::from_millis(100));
+        tick_frames(&mut publisher, base, (112, 192), |ms| frame(10.6, ms - 112));
+        publisher.sought_by(0.5, base + Duration::from_millis(200));
+        tick_frames(&mut publisher, base, (208, 400), |ms| frame(11.2, ms - 208));
+        assert_eq!(fake.seeked.borrow().len(), 2);
+        assert_eq!(fake.seeked.borrow()[0], 10.6);
+        assert!((fake.seeked.borrow()[1] - 11.2).abs() < 0.01);
+    }
+
+    #[test]
+    fn a_seek_that_never_lands_is_never_told() {
+        let (mut publisher, fake) = publisher();
+        let base = Instant::now();
+        tick_frames(&mut publisher, base, (0, 96), |ms| frame(10., ms));
+        publisher.sought_by(30., base + Duration::from_millis(100));
+        // The film plays on for longer than a transcoded stream takes to answer.
+        tick_frames(&mut publisher, base, (112, 8000), |ms| frame(10., ms));
+        assert!(fake.seeked.borrow().is_empty(), "{:?}", fake.seeked);
+    }
+
+    #[test]
+    fn a_seek_of_a_transcoded_stream_that_lands_late_is_told() {
+        let (mut publisher, fake) = publisher();
+        let base = Instant::now();
+        tick_frames(&mut publisher, base, (0, 96), |ms| frame(10., ms));
+        publisher.sought_to(40., base + Duration::from_millis(100));
+        tick_frames(&mut publisher, base, (112, 3984), |ms| frame(10., ms));
+        publisher.follow(playing("film-0"), 40., base + Duration::from_millis(4000));
+        assert_eq!(*fake.seeked.borrow(), [40.]);
+    }
+
+    #[test]
+    fn a_seek_back_past_the_start_aims_at_the_start() {
         let (mut publisher, fake) = publisher();
         let now = Instant::now();
-        publisher.follow(playing("film-0"), 10., now);
-        publisher.sought(now);
-        publisher.follow(playing("film-0"), 10.6, now + Duration::from_millis(100));
-        publisher.follow(playing("film-0"), 10.7, now + Duration::from_millis(200));
-        publisher.follow(playing("film-0"), 11.2, now + Duration::from_millis(300));
-        assert_eq!(*fake.seeked.borrow(), [10.6]);
+        publisher.follow(playing("film-0"), 0.3, now);
+        publisher.sought_by(-1., now + Duration::from_millis(10));
+        publisher.follow(playing("film-0"), 0., now + Duration::from_millis(60));
+        assert_eq!(*fake.seeked.borrow(), [0.]);
+    }
+
+    #[test]
+    fn a_seek_forward_past_the_end_aims_at_the_end() {
+        let (mut publisher, fake) = publisher();
+        let now = Instant::now();
+        publisher.follow(playing("film-0"), 7859.7, now);
+        publisher.sought_by(1., now + Duration::from_millis(10));
+        publisher.follow(playing("film-0"), 7860., now + Duration::from_millis(60));
+        assert_eq!(*fake.seeked.borrow(), [7860.]);
     }
 
     #[test]
@@ -492,18 +608,6 @@ mod tests {
         let now = Instant::now();
         publisher.follow(playing("film-0"), 10., now);
         publisher.follow(playing("film-0"), 10.6, now + Duration::from_millis(100));
-        assert!(fake.seeked.borrow().is_empty());
-    }
-
-    #[test]
-    fn a_request_that_nothing_answers_does_not_turn_drift_into_a_seek_later() {
-        let (mut publisher, fake) = publisher();
-        let now = Instant::now();
-        publisher.follow(playing("film-0"), 10., now);
-        publisher.sought(now);
-        // The film just plays on, as a seek to where it already is would leave it.
-        publisher.follow(playing("film-0"), 15., now + Duration::from_secs(5));
-        publisher.follow(playing("film-0"), 20.6, now + Duration::from_secs(10));
         assert!(fake.seeked.borrow().is_empty());
     }
 
