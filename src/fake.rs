@@ -1266,7 +1266,7 @@ impl MediaServer for FakeServer {
     }
 
     /// Like Jellyfin asked for unplayed ones: the newest first, the played left out.
-    fn new_episodes(&self, limit: u32) -> Result<Vec<NewEpisode>, ProviderError> {
+    fn new_episodes(&self, start: u32, limit: u32) -> Result<Page<NewEpisode>, ProviderError> {
         let mut state = self.state();
         state.record.new_episode_asks += 1;
         let mut found: Vec<NewEpisode> = state
@@ -1283,8 +1283,15 @@ impl MediaServer for FakeServer {
             .filter(|new| !new.episode.item.watched)
             .collect();
         found.sort_by_key(|new| std::cmp::Reverse(new.added));
-        found.truncate(limit as usize);
-        Ok(found)
+        let total = found.len() as u32;
+        Ok(Page {
+            items: found
+                .into_iter()
+                .skip(start as usize)
+                .take(limit as usize)
+                .collect(),
+            total,
+        })
     }
 
     fn latest(&self, library: &ItemId, limit: u32) -> Result<Vec<Title>, ProviderError> {

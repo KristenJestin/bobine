@@ -62,7 +62,7 @@ fn fixture(name: &str) -> Value {
         "playback_info" => include_str!("fixtures/playback_info.json"),
         "series" => include_str!("fixtures/series.json"),
         "latest_series" => include_str!("fixtures/latest_series.json"),
-        "latest_episodes" => include_str!("fixtures/latest_episodes.json"),
+        "new_episodes" => include_str!("fixtures/new_episodes.json"),
         "series_detail" => include_str!("fixtures/series_detail.json"),
         "series_similar" => include_str!("fixtures/series_similar.json"),
         "seasons" => include_str!("fixtures/seasons.json"),
@@ -397,6 +397,17 @@ fn person_titles(seen: &Seen) -> Value {
     json!({ "Items": page, "TotalRecordCount": total, "StartIndex": start })
 }
 
+/// The episodes not played, the newest added first, as the server pages them. The fixture keeps
+/// a played one and one whose date cannot be read, to show what the client makes of them.
+fn new_episodes(seen: &Seen) -> Value {
+    let items = fixture("new_episodes").as_array().unwrap().clone();
+    let total = items.len();
+    let start: usize = seen.param("StartIndex").map_or(0, |s| s.parse().unwrap());
+    let limit: usize = seen.param("Limit").map_or(total, |s| s.parse().unwrap());
+    let page: Vec<Value> = items.into_iter().skip(start).take(limit).collect();
+    json!({ "Items": page, "TotalRecordCount": total, "StartIndex": start })
+}
+
 fn generated_films(count: usize) -> Vec<Value> {
     (0..count)
         .map(|i| {
@@ -516,6 +527,9 @@ fn answer(state: &State, seen: &Seen) -> Answer {
             (Some(FILMS_LIBRARY), _) => Answer::Json(200, films(seen, "films")),
             (Some(LETTERS_LIBRARY), _) => Answer::Json(200, films(seen, "letters")),
             (Some(SERIES_LIBRARY), Some("Series")) => Answer::Json(200, films(seen, "series")),
+            (None, Some("Episode")) if seen.param("IsPlayed") == Some("false") => {
+                Answer::Json(200, new_episodes(seen))
+            }
             (None, Some("BoxSet")) => Answer::Json(200, fixture("boxsets")),
             (None, Some("Playlist")) => Answer::Json(200, fixture("playlists")),
             (None, Some("Movie,Series")) => Answer::Json(200, limited(fixture("featured"), seen)),
@@ -623,8 +637,6 @@ fn answer(state: &State, seen: &Seen) -> Answer {
             let name = match seen.param("ParentId") {
                 Some(FILMS_LIBRARY) => "films",
                 Some(SERIES_LIBRARY) => "latest_series",
-                // Every library's episodes, one by one.
-                None if seen.param("IncludeItemTypes") == Some("Episode") => "latest_episodes",
                 _ => return Answer::Empty(404),
             };
             let limit: usize = seen

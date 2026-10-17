@@ -16,9 +16,12 @@ use bobine::provider::{Favourite, ImageRef, ItemId, MediaServer, NewEpisode, Pro
 /// How often the server is asked for new episodes while Bobine runs.
 pub const EVERY: Duration = Duration::from_secs(15 * 60);
 
-/// How many of the latest episodes a check reads: more than a quarter of an hour ever adds, short
-/// of a whole season dropped at once into every series.
+/// How many episodes a page of the server's holds.
 const LATEST: u32 = 100;
+
+/// A hard stop on the pages one check reads, whatever the server answers: two thousand episodes
+/// added since the last check are already more than a library ever gains in a day.
+const PAGES: u32 = 20;
 
 /// How many series in progress make the followed ones, beside the favourites.
 const IN_PROGRESS: u32 = 200;
@@ -116,7 +119,7 @@ pub struct Checked {
 ///
 /// One request when nothing new came in; the followed series are asked only when something did.
 pub fn check(server: &dyn MediaServer, seen: Option<i64>) -> Result<Checked, ProviderError> {
-    let latest = server.new_episodes(LATEST)?;
+    let latest = unplayed(server, seen.unwrap_or(i64::MAX))?;
     let newest = latest.iter().map(|new| new.added).max();
     let Some(seen) = seen else {
         return Ok(Checked {
@@ -153,6 +156,22 @@ pub fn check(server: &dyn MediaServer, seen: Option<i64>) -> Result<Checked, Pro
             .map(|(_, episodes)| told(episodes))
             .collect(),
     ))
+}
+
+/// The episodes not played, the newest added first, page after page down to the first that
+/// reaches back to `floor`, or the last, or `PAGES` of them.
+fn unplayed(server: &dyn MediaServer, floor: i64) -> Result<Vec<NewEpisode>, ProviderError> {
+    let mut found = Vec::new();
+    for page in 0..PAGES {
+        let start = page * LATEST;
+        let read = server.new_episodes(start, LATEST)?;
+        let reached = read.items.last().is_some_and(|new| new.added <= floor);
+        found.extend(read.items);
+        if reached || start + LATEST >= read.total {
+            break;
+        }
+    }
+    Ok(found)
 }
 
 /// The series in Favorites and those with an episode up next.
@@ -358,6 +377,28 @@ mod tests {
         let server = FakeServer::new(6, true);
         assert_eq!(check(&server, None).unwrap().seen, 0);
         assert_eq!(check(&server, Some(100)).unwrap().seen, 100);
+    }
+
+    #[test]
+    fn more_than_a_page_of_new_episodes_still_tells_the_followed_one() {
+        let server = FakeServer::new(6, true);
+        {
+            let mut state = server.state.lock().unwrap();
+            let other = ItemId("series-3".into());
+            let template = state.episodes.iter().find(|e| e.series == other).unwrap();
+            let template = template.clone();
+            for n in 0..2 * LATEST as i64 + 50 {
+                let mut episode = template.clone();
+                episode.item.id = ItemId(format!("series-3-new-{n}"));
+                episode.item.watched = false;
+                state.added.push((episode.item.id.clone(), 200 + n));
+                state.episodes.push(episode);
+            }
+        }
+        added(&server, &[("series-1-s1-e4", 150)]);
+        let checked = check(&server, Some(100)).unwrap();
+        let told: Vec<&ItemId> = checked.gained.iter().map(|g| &g.episode).collect();
+        assert_eq!(told, [&ItemId("series-1-s1-e4".into())]);
     }
 
     #[test]

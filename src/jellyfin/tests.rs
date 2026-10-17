@@ -1122,23 +1122,30 @@ fn the_latest_asks_for_the_series_picture_of_a_lone_new_episode() {
 #[test]
 fn the_new_episodes_come_one_by_one_with_when_they_were_added() {
     let s = Setup::new();
-    let found = s.signed_in().new_episodes(20).unwrap();
-    let asked = s.fake.last("GET", "/Items/Latest");
+    let found = s.signed_in().new_episodes(0, 20).unwrap();
+    let asked = s.fake.last("GET", "/Items");
+    assert_eq!(asked.param("UserId"), Some(USER_ID));
     assert_eq!(asked.param("ParentId"), None, "every library");
+    assert_eq!(asked.param("Recursive"), Some("true"));
     assert_eq!(asked.param("IncludeItemTypes"), Some("Episode"));
-    assert_eq!(
-        asked.param("GroupItems"),
-        Some("false"),
-        "not grouped by series"
-    );
-    assert_eq!(asked.param("EnableUserData"), Some("true"));
     assert_eq!(asked.param("IsPlayed"), Some("false"));
+    assert_eq!(asked.param("SortBy"), Some("DateCreated"));
+    assert_eq!(asked.param("SortOrder"), Some("Descending"));
+    assert_eq!(asked.param("StartIndex"), Some("0"));
     assert_eq!(asked.param("Limit"), Some("20"));
+    assert_eq!(asked.param("EnableTotalRecordCount"), Some("true"));
+    assert_eq!(asked.param("EnableUserData"), Some("true"));
     assert_eq!(
         asked.param("Fields"),
         Some("DateCreated,SeriesPrimaryImage")
     );
-    assert_eq!(found.len(), 2);
+    assert_eq!(found.total, 3);
+    let found = found.items;
+    assert_eq!(
+        found.len(),
+        2,
+        "the one whose date cannot be read is left out"
+    );
     let bell = &found[0];
     assert_eq!(bell.episode.item.title, "Bell Tower");
     assert_eq!(bell.episode.series, ItemId(SERIES.into()));
@@ -1167,6 +1174,22 @@ fn the_new_episodes_come_one_by_one_with_when_they_were_added() {
         "2024-02-29T23:59:59Z"
     );
     assert_eq!(table.poster, None);
+}
+
+#[test]
+fn the_new_episodes_are_asked_page_by_page() {
+    let s = Setup::new();
+    let found = s.signed_in().new_episodes(1, 1).unwrap();
+    let asked = s.fake.last("GET", "/Items");
+    assert_eq!(asked.param("StartIndex"), Some("1"));
+    assert_eq!(asked.param("Limit"), Some("1"));
+    assert_eq!(found.total, 3);
+    let titles: Vec<&str> = found
+        .items
+        .iter()
+        .map(|n| n.episode.item.title.as_str())
+        .collect();
+    assert_eq!(titles, ["The Long Table"]);
 }
 
 #[test]

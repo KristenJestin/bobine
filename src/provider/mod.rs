@@ -103,9 +103,10 @@ pub trait MediaServer: Send + Sync {
     fn next_episodes(&self, limit: u32) -> Result<Vec<Episode>, ProviderError>;
     /// What was added to a library lately, the newest first, at most `limit` titles.
     fn latest(&self, library: &ItemId, limit: u32) -> Result<Vec<Title>, ProviderError>;
-    /// The episodes added lately to every library, each on its own, the newest first, at most
-    /// `limit`: what the desktop is told of the series the user follows.
-    fn new_episodes(&self, limit: u32) -> Result<Vec<NewEpisode>, ProviderError>;
+    /// The episodes of every library the user has not played, each on its own, the newest added
+    /// first, `limit` of them from `start`, and how many there are: what the desktop is told of
+    /// the series the user follows.
+    fn new_episodes(&self, start: u32, limit: u32) -> Result<Page<NewEpisode>, ProviderError>;
     /// A few recent titles the user has not watched, films and series, each with a backdrop:
     /// what the top of the Home shows in turn. At most `limit`.
     fn featured(&self, limit: u32) -> Result<Vec<Feature>, ProviderError>;

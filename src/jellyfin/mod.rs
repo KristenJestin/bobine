@@ -904,25 +904,30 @@ impl MediaServer for Jellyfin {
         Ok(titles)
     }
 
-    /// Ungrouped, so each episode comes with its own date, whether its series gained one or
-    /// ten. Played ones are left out by the server.
-    fn new_episodes(&self, limit: u32) -> Result<Vec<NewEpisode>, ProviderError> {
-        let found: Vec<Item> = self.http.get(
+    /// Every library's episodes, not `/Items/Latest`, which leaves out the libraries hidden from
+    /// "Latest" and has no pages. Played ones are left out by the server.
+    fn new_episodes(&self, start: u32, limit: u32) -> Result<Page<NewEpisode>, ProviderError> {
+        let found = self.items(
             "new episodes",
-            "/Items/Latest",
             &[
-                self.user(),
+                ("recursive", "true".into()),
                 ("includeItemTypes", "Episode".into()),
-                ("groupItems", "false".into()),
                 ("isPlayed", "false".into()),
+                ("sortBy", "DateCreated".into()),
+                ("sortOrder", "Descending".into()),
+                ("startIndex", start.to_string()),
+                // Never 0: Jellyfin reads it as no limit at all.
+                ("limit", limit.max(1).to_string()),
+                ("enableTotalRecordCount", "true".into()),
                 ("enableUserData", "true".into()),
-                ("limit", limit.to_string()),
                 ("imageTypeLimit", "1".into()),
                 ("enableImageTypes", "Primary".into()),
                 ("fields", "DateCreated,SeriesPrimaryImage".into()),
             ],
         )?;
-        Ok(found
+        let total = found.total_record_count.unwrap_or(found.items.len() as u32);
+        let items = found
+            .items
             .into_iter()
             .filter_map(|item| {
                 let date = item.date_created.clone();
@@ -932,7 +937,8 @@ impl MediaServer for Jellyfin {
                 }
                 new
             })
-            .collect())
+            .collect();
+        Ok(Page { items, total })
     }
 
     /// The simplest honest choice: the newest titles, films and series, that the user has not
