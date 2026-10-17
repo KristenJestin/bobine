@@ -49,6 +49,8 @@ pub(super) enum Reopen {
     Collection(ItemId),
     /// A title of the request server, by its kind and TMDb id.
     Request(MediaKind, TmdbId),
+    /// A TMDb collection of the request server.
+    SeerrCollection(TmdbId),
     Favorites,
     Playlist(ItemId),
 }
@@ -779,6 +781,7 @@ impl Shell {
         self.list = None;
         self.collection_pages.clear();
         self.seerr.requests.clear();
+        self.seerr.collections.clear();
         self.arrived(cx);
         cx.notify();
     }
@@ -814,6 +817,9 @@ impl Shell {
                 .requests
                 .pop()
                 .map(|page| Reopen::Request(page.kind, page.tmdb)),
+            Screen::SeerrCollection => {
+                (self.seerr.collections.pop()).map(|page| Reopen::SeerrCollection(page.id))
+            }
             Screen::Favorites => Some(Reopen::Favorites),
             Screen::Playlist => self
                 .playlist_pages
@@ -845,6 +851,7 @@ impl Shell {
             Reopen::List(kind, library) => self.open_list(kind, library, cx),
             Reopen::Collection(id) => self.open_collection(id, cx),
             Reopen::Request(kind, tmdb) => self.open_request(kind, tmdb, cx),
+            Reopen::SeerrCollection(id) => self.open_seerr_collection(id, cx),
             Reopen::Favorites => self.open_favorites(cx),
             Reopen::Playlist(id) => self.open_playlist(id, cx),
         }
@@ -1266,12 +1273,13 @@ impl Shell {
                     page.choices = Some(Choices::new(&detail.versions));
                 }
                 page.favourite.sync(detail.favourite, read_at);
-                let tmdb = detail.tmdb;
+                let (tmdb, collection) = (detail.tmdb, detail.tmdb_collection);
                 page.detail = Loadable::Ready(detail);
                 if with_collection {
                     shell.load_collection(depth, id, cx);
                 }
                 shell.load_similar(MediaKind::Movie, tmdb, cx);
+                shell.load_collection_link(tmdb, collection, cx);
             },
         );
     }

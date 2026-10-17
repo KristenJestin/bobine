@@ -250,10 +250,13 @@ fn hero(
         cx,
     );
 
+    let part_of = (shell.collection_link(detail.tmdb))
+        .map(|collection| super::seerr_collection::part_of(collection, window, cx));
     let title = heading(shell, &film.title, detail.logo.as_ref(), window, cx);
     hero_frame(backdrop, height).child(
         hero_text_under(title)
             .child(meta_line)
+            .children(part_of.map(|link| div().flex().child(link)))
             .children((!detail.directors.is_empty()).then(|| {
                 div()
                     .text_size(px(13.))

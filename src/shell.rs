@@ -12,6 +12,7 @@ mod playlists;
 mod posters;
 mod preview;
 mod request;
+mod seerr_collection;
 mod series;
 mod settings;
 mod skip;
@@ -24,6 +25,7 @@ pub use pages::{Chip, DetailPage, GONE, LibraryPage, Loadable, LoginForm, OpenCo
 pub use palette::{PersonPage, SearchState};
 pub use playlists::{PlaylistMenu, PlaylistPage};
 pub use request::RequestPage;
+pub use seerr_collection::SeerrCollectionPage;
 pub use series::SeriesPage;
 pub use settings::{QualityMenu, SettingsPage};
 
