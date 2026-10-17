@@ -69,11 +69,16 @@ pub fn of(history: &WatchHistory, now: LocalTime) -> Option<Stats> {
         .iter()
         .filter(|play| within(play, &this_year) > 0)
         .collect();
-    let all: Vec<&Play> = history.plays.iter().collect();
+    // A play dated after today (a clock set wrong) is counted nowhere.
+    let all: Vec<&Play> = history
+        .plays
+        .iter()
+        .filter(|play| play.at.is_none_or(|at| at.days() <= now.days()))
+        .collect();
     let timed = history.source == HistorySource::PlaybackReporting;
     let mut days = [0; 7];
     let mut hours = [0; 24];
-    for play in &history.plays {
+    for play in &all {
         if let Some(at) = play.at {
             days[at.weekday()] += play.seconds;
             hours[at.hour as usize] += play.seconds;
@@ -349,7 +354,7 @@ mod tests {
         let harbour = movie("The Quiet Harbour", &[]);
         let stats = plugin(vec![
             play(harbour.clone(), Some(at(2026, 10, 12, 21)), 60),
-            play(harbour.clone(), Some(at(2026, 10, 18, 8)), 30),
+            play(harbour.clone(), Some(at(2026, 10, 11, 8)), 30),
             play(harbour, Some(at(2026, 10, 5, 21)), 15),
         ]);
         let days = stats.days.expect("by day");
@@ -376,6 +381,21 @@ mod tests {
         for source in [HistorySource::PlaybackReporting, HistorySource::PlayedItems] {
             assert_eq!(of(&history(source, Vec::new()), now()), None);
         }
+    }
+
+    #[test]
+    fn a_play_dated_after_today_is_counted_nowhere() {
+        let harbour = movie("The Quiet Harbour", &["Drama"]);
+        let ahead = movie("From Tomorrow", &["Western"]);
+        let stats = plugin(vec![
+            play(harbour, Some(at(2026, 10, 17, 21)), 60),
+            play(ahead, Some(at(2026, 10, 18, 21)), 90),
+        ]);
+        let names: Vec<&str> = stats.movies.iter().map(|m| m.title.name.as_str()).collect();
+        assert_eq!(names, ["The Quiet Harbour"]);
+        assert_eq!(stats.genres, [("Drama".to_string(), 60 * 60)]);
+        assert_eq!(stats.days.unwrap()[6], 0, "no Sunday");
+        assert_eq!(stats.hours.unwrap()[21], 60 * 60);
     }
 
     #[test]
