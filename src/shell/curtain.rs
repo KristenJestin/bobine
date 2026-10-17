@@ -452,7 +452,8 @@ mod tests {
         let (_server, window) = signed_in(cx);
         let visual = drawn(&window, cx);
         arm(&window, visual);
-        let header = play_at(visual, "hero-play".into(), "hero".into());
+        // The live "Play" of the first title.
+        let header = play_at(visual, "play-1".into(), "hero".into());
         assert_eq!(screen(&window, visual), Screen::Player);
         assert_eq!(grown_from(&window, visual), Some(header));
     }

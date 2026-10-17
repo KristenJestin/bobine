@@ -430,17 +430,15 @@ impl Draw<'_> {
         .when(live, |button| {
             let target = self.target.clone();
             let what = home_page::play_target(feature);
-            button
-                .debug_selector(|| "hero-play".into())
-                .on_click(move |_, window, cx| {
-                    let what = what.clone();
-                    target
-                        .update(cx, |shell, cx| {
-                            shell.clicked_on(HERO);
-                            shell.play_from_home(what, window, cx)
-                        })
-                        .ok();
-                })
+            button.on_click(move |_, window, cx| {
+                let what = what.clone();
+                target
+                    .update(cx, |shell, cx| {
+                        shell.clicked_on(HERO);
+                        shell.play_from_home(what, window, cx)
+                    })
+                    .ok();
+            })
         });
         let more = theme::ghost_button(id("more"), Some(IconName::Plus), "More info", window, cx)
             .when(live, |button| {
