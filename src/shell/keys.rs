@@ -1,5 +1,7 @@
-//! What the keys of `crate::keys` do on the window: the player's, the pages' and the focus ring
-//! of the cards.
+//! What the keys of `crate::keys` do on the window: the player's, the pages', the focus ring of
+//! the cards and the help.
+
+use std::time::Instant;
 
 use gpui_kit::prelude::*;
 use gpui_kit::{
@@ -36,7 +38,9 @@ impl Shell {
         } else {
             "Browse"
         });
-        let over = if self.search_is_open() {
+        let over = if self.help_open {
+            Some("Help")
+        } else if self.search_is_open() {
             Some("Palette")
         } else if self.playlist_menu_is_open() {
             Some("PlaylistMenu")
@@ -101,6 +105,7 @@ impl Shell {
             .on_action(cx.listener(|shell, _: &PlayFocused, window, cx| {
                 shell.press_ringed(true, window, cx)
             }))
+            .on_action(cx.listener(|shell, _: &Help, _, cx| shell.toggle_help(cx)))
             .on_action(
                 cx.listener(|shell, _: &MenuConfirm, _, cx| shell.playlist_menu_key("enter", cx)),
             )
@@ -108,7 +113,9 @@ impl Shell {
 
     /// Escape: what is over the page closes first, then the player or the page does its own.
     fn dismiss(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.search_is_open() {
+        if self.help_open {
+            self.close_help(cx);
+        } else if self.search_is_open() {
             self.search_key("escape", window, cx);
         } else if self.playlist_menu_is_open() {
             self.playlist_menu_key("escape", cx);
@@ -119,9 +126,31 @@ impl Shell {
         }
     }
 
+    /// `?`: the help over the screen, or away. Never over the palette or a menu.
+    fn toggle_help(&mut self, cx: &mut Context<Self>) {
+        if self.help_open {
+            self.close_help(cx);
+        } else if !self.search_is_open() && !self.playlist_menu_is_open() {
+            self.help_open = true;
+            self.help_fade.set(true, Instant::now());
+            cx.notify();
+        }
+    }
+
     /// A grid of a uniform list drawn: the ring scrolls it too.
     pub fn scrolls_list(&mut self, list: &gpui_kit::UniformListScrollHandle) {
         self.scrolls.push(list.0.borrow().base_handle.clone());
+    }
+
+    /// Whether the help is open, and its fade.
+    pub fn help(&self) -> (bool, crate::motion::Fade) {
+        (self.help_open, self.help_fade)
+    }
+
+    pub fn close_help(&mut self, cx: &mut Context<Self>) {
+        self.help_open = false;
+        self.help_fade.set(false, Instant::now());
+        cx.notify();
     }
 
     /// The card the ring and the card it leaves draw again.
@@ -333,6 +362,7 @@ fn move_by(handle: &gpui_kit::ScrollHandle, by: f32, horizontal: bool) -> bool {
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
+    use std::time::Duration;
 
     use bobine::provider::ItemId;
     use gpui_kit::{
@@ -602,6 +632,50 @@ mod tests {
         assert_eq!(screen(&window, cx), Screen::Player);
     }
 
+    fn help_lines(visual: &mut VisualTestContext) -> (bool, bool) {
+        (
+            visual.debug_bounds("help-line Search").is_some(),
+            visual.debug_bounds("help-line Play or pause").is_some(),
+        )
+    }
+
+    #[gpui_kit::test]
+    fn question_mark_shows_the_help_with_the_screens_keys(cx: &mut TestAppContext) {
+        let window = signed_in(cx);
+        let mut visual = drawn(&window, cx);
+        visual.simulate_keystrokes("?");
+        cx.executor().advance_clock(Duration::from_secs(1));
+        let mut visual = drawn(&window, cx);
+        assert_eq!(help_lines(&mut visual), (true, false), "the pages' keys");
+        // Under the help, the page's keys do nothing; `?` closes it.
+        visual.simulate_keystrokes("alt-2 right");
+        assert_eq!(screen(&window, cx), Screen::Home);
+        assert_eq!(ringed(&window, cx), None);
+        visual.simulate_keystrokes("?");
+        assert!(!window.read_with(cx, |shell, _| shell.help_open).unwrap());
+        // Escape closes it too, and a click outside its panel.
+        visual.simulate_keystrokes("? escape");
+        assert!(!window.read_with(cx, |shell, _| shell.help_open).unwrap());
+        assert_eq!(screen(&window, cx), Screen::Home);
+        visual.simulate_keystrokes("?");
+        visual.simulate_click(point(px(5.), px(5.)), Modifiers::none());
+        assert!(!window.read_with(cx, |shell, _| shell.help_open).unwrap());
+
+        // The player's own keys.
+        playing(&window, cx);
+        let mut visual = drawn(&window, cx);
+        visual.simulate_keystrokes("?");
+        cx.executor().advance_clock(Duration::from_secs(1));
+        let mut visual = drawn(&window, cx);
+        assert_eq!(help_lines(&mut visual), (false, true), "the player's keys");
+        visual.simulate_keystrokes("escape");
+        assert_eq!(
+            screen(&window, cx),
+            Screen::Player,
+            "Escape closed the help only"
+        );
+    }
+
     #[gpui_kit::test]
     fn typing_in_a_field_does_not_trigger_keys(cx: &mut TestAppContext) {
         let window = signed_in(cx);
@@ -617,6 +691,7 @@ mod tests {
         visual.run_until_parked();
         window
             .read_with(cx, |shell, cx| {
+                assert!(!shell.help_open);
                 assert_eq!(shell.navigator.current(), Screen::Home);
                 let typed = shell.search.as_ref().unwrap().input.read(cx).text();
                 assert_eq!(typed, "?p", "Backspace edits the field");

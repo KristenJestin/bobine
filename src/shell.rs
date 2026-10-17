@@ -218,6 +218,9 @@ pub struct Shell {
     pub ring: Ring,
     /// The rows and the pages drawn that scroll: the ring scrolls them to the card it is on.
     pub scrolls: Vec<gpui_kit::ScrollHandle>,
+    /// The help over the screen, `?`.
+    help_open: bool,
+    help_fade: Fade,
     /// The volume and the mute of mpv, which it keeps from one film to the next.
     volume: (f64, bool),
     /// What the buttons of the posters changed that their lists do not say yet.
@@ -390,6 +393,8 @@ impl Shell {
             cards: Default::default(),
             ring: Ring::default(),
             scrolls: Vec::new(),
+            help_open: false,
+            help_fade: Fade::new(motion::quick()),
             volume: (100., false),
             marks: Marks::default(),
             notice: None,
@@ -981,6 +986,7 @@ impl Render for Shell {
             if self.turned_forward { 32. } else { -32. },
         );
 
+        let help = screens::help::overlay(self, playing, window, cx);
         let again = self.ring_again(cx);
         let root = div()
             .id("root")
@@ -1113,6 +1119,7 @@ impl Render for Shell {
             .children(screens::playlist::add_menu(self, window, cx))
             .children(self.notice_pill(screen, window, cx))
             .children(screens::search::palette(self, window, cx))
+            .children(help)
             .children(again)
     }
 }

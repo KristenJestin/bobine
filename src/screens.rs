@@ -4,6 +4,7 @@
 mod card;
 mod collection_detail;
 mod film_detail;
+pub mod help;
 mod home;
 mod home_list;
 mod library;

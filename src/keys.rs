@@ -42,6 +42,7 @@ actions!(
         FocusDown,
         OpenFocused,
         PlayFocused,
+        Help,
         PaletteUp,
         PaletteDown,
         PaletteOpen,
@@ -50,7 +51,6 @@ actions!(
 );
 
 /// Where a key is listed in the help.
-#[allow(dead_code, reason = "read by the help, which comes next")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Scope {
     Player,
@@ -62,7 +62,6 @@ pub enum Scope {
 }
 
 /// One line of the keymap: its keys, where they fire, and what the help says of them.
-#[allow(dead_code, reason = "read by the help, which comes next")]
 pub struct Key {
     /// GPUI keystrokes, as `KeyBinding` reads them.
     pub keys: &'static [&'static str],
@@ -158,6 +157,13 @@ pub const KEYS: &[Key] = &[
         Dismiss
     ),
     key!(&["escape"], "Browse", Browse, "Close or go back", Dismiss),
+    key!(
+        &["?"],
+        "Bobine && !TextInput",
+        Both,
+        "Show or hide the keys",
+        Help
+    ),
     // The palette's keys, its field having the focus; Ctrl+K closes it again.
     key!(&["ctrl-k"], "Palette", Hidden, "Close the search", Search),
     key!(&["up"], "Palette", Hidden, "Previous result", PaletteUp),
@@ -186,4 +192,67 @@ pub fn bind(cx: &mut App) {
             .map(move |keys| (key.bind)(keys, key.context))
     });
     cx.bind_keys(bindings);
+}
+
+/// The lines the help shows on the player (`player`) or on another screen.
+pub fn listed(player: bool) -> impl Iterator<Item = &'static Key> {
+    let shown = if player { Scope::Player } else { Scope::Browse };
+    KEYS.iter()
+        .filter(move |key| key.scope == shown || key.scope == Scope::Both)
+}
+
+/// The caps a keystroke is drawn as: "shift-left" is "Shift" and "←".
+pub fn caps(keystroke: &str) -> Vec<String> {
+    // "-" alone, or a binding of "ctrl--", ends in the key itself.
+    let mut parts: Vec<&str> = keystroke.split('-').collect();
+    if keystroke.ends_with('-') {
+        parts.retain(|part| !part.is_empty());
+        parts.push("-");
+    }
+    parts
+        .into_iter()
+        .map(|part| match part {
+            "ctrl" => "Ctrl".into(),
+            "alt" => "Alt".into(),
+            "shift" => "Shift".into(),
+            "space" => "Space".into(),
+            "enter" => "Enter".into(),
+            "escape" => "Esc".into(),
+            "backspace" => "Backspace".into(),
+            "left" => "←".into(),
+            "right" => "→".into(),
+            "up" => "↑".into(),
+            "down" => "↓".into(),
+            key => key.to_uppercase(),
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_keystroke_is_drawn_as_its_caps() {
+        assert_eq!(caps("shift-left"), ["Shift", "←"]);
+        assert_eq!(caps("ctrl-k"), ["Ctrl", "K"]);
+        assert_eq!(caps("alt-1"), ["Alt", "1"]);
+        assert_eq!(caps("?"), ["?"]);
+        assert_eq!(caps("escape"), ["Esc"]);
+    }
+
+    #[test]
+    fn the_help_of_the_player_lists_its_keys_and_not_the_pages_ones() {
+        let whats: Vec<&str> = listed(true).map(|key| key.what).collect();
+        assert!(whats.contains(&"Play or pause"));
+        assert!(whats.contains(&"Show or hide the keys"));
+        assert!(!whats.contains(&"Search"));
+        let whats: Vec<&str> = listed(false).map(|key| key.what).collect();
+        assert!(whats.contains(&"Search"));
+        assert!(!whats.contains(&"Play or pause"));
+        assert!(
+            !whats.contains(&"Previous result"),
+            "a field's keys are not listed"
+        );
+    }
 }
