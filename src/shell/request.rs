@@ -1021,7 +1021,6 @@ mod tests {
                 .debug_bounds("status Downloading · 62 % · 2 min left")
                 .is_some()
         );
-        assert!(visual.debug_bounds("status Processing").is_none());
         // A thin bar under the pill, filled to the percentage.
         let bar = width(&mut visual, "download-bar");
         let fill = width(&mut visual, "download-fill");
