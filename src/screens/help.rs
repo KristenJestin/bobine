@@ -8,6 +8,7 @@ use gpui_kit::prelude::*;
 use gpui_kit::{AnyElement, Context, Div, FontWeight, MouseButton, Window, div, px, rgba};
 
 use crate::keys::{self, Key};
+use crate::navigation::NavEntry;
 use crate::shell::Shell;
 use crate::theme;
 
@@ -35,7 +36,11 @@ pub fn overlay(
     let scale = FROM_SCALE + (1. - FROM_SCALE) * level;
     let at = |size: f32| px(size * scale);
 
-    let lines: Vec<&Key> = keys::listed(player).collect();
+    // The Discover pill, and its key, only with a request server.
+    let discover = shell.seerr_client().is_some();
+    let lines: Vec<&Key> = keys::listed(player)
+        .filter(|key| discover || key.what != NavEntry::Discover.label())
+        .collect();
     let half = lines.len().div_ceil(2);
     let column = |lines: &[&Key]| {
         div()

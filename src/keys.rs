@@ -36,6 +36,7 @@ actions!(
         Pill3,
         Pill4,
         Pill5,
+        Pill6,
         FocusLeft,
         FocusRight,
         FocusUp,
@@ -148,6 +149,7 @@ pub const KEYS: &[Key] = &[
     key!(&["alt-3"], BROWSE, Browse, "Series", Pill3),
     key!(&["alt-4"], BROWSE, Browse, "Collections", Pill4),
     key!(&["alt-5"], BROWSE, Browse, "Lists", Pill5),
+    key!(&["alt-6"], BROWSE, Browse, "Discover", Pill6),
     // Escape fires in a text field too: it closes what is open first.
     key!(
         &["escape"],

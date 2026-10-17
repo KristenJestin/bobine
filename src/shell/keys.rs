@@ -85,6 +85,7 @@ impl Shell {
         let root = pill::<Pill3>(root, 2, cx);
         let root = pill::<Pill4>(root, 3, cx);
         let root = pill::<Pill5>(root, 4, cx);
+        let root = pill::<Pill6>(root, 5, cx);
         let root = arrow::<FocusLeft>(root, Direction::Left, cx);
         let root = arrow::<FocusRight>(root, Direction::Right, cx);
         let root = arrow::<FocusUp>(root, Direction::Up, cx);
@@ -664,6 +665,10 @@ mod tests {
         cx.executor().advance_clock(Duration::from_secs(1));
         let mut visual = drawn(&window, cx);
         assert_eq!(help_lines(&mut visual), (true, false), "the pages' keys");
+        assert!(
+            visual.debug_bounds("help-line Discover").is_none(),
+            "no Discover pill, no line for it"
+        );
         // Under the help, the page's keys do nothing; `?` closes it.
         visual.simulate_keystrokes("alt-2 right");
         assert_eq!(screen(&window, cx), Screen::Home);
@@ -770,5 +775,20 @@ mod tests {
         let mut visual = drawn(&window, cx);
         visual.simulate_keystrokes("alt-left");
         assert_eq!(screen(&window, cx), Screen::Home);
+    }
+
+    #[gpui_kit::test]
+    fn alt_6_goes_to_discover_when_a_request_server_is_configured(cx: &mut TestAppContext) {
+        let seerr = crate::fake_seerr::FakeSeerr::default();
+        let window = super::super::discover::tests::configured(&seerr, cx);
+        cx.update(crate::keys::bind);
+        let mut visual = drawn(&window, cx);
+        visual.simulate_keystrokes("alt-6");
+        visual.run_until_parked();
+        assert_eq!(screen(&window, cx), Screen::Discover);
+        visual.simulate_keystrokes("?");
+        cx.executor().advance_clock(Duration::from_secs(1));
+        let mut visual = drawn(&window, cx);
+        assert!(visual.debug_bounds("help-line Discover").is_some());
     }
 }
