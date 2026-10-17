@@ -18,8 +18,8 @@ use gpui_kit::{
 use super::card::{Offer, Open, Play};
 use super::film_detail::{EDGE, ROW_POSTER, hero_frame, logo_over_title, meta_line};
 use super::{
-    CAPTION_DETAIL, CAPTION_GAP, CAPTION_TITLE, caption_height, caption_text, card, note, picture,
-    poster, progress_bar, row_heading, series_card,
+    CAPTION_DETAIL, CAPTION_GAP, CAPTION_TITLE, UNDER_POSTER, UNDER_WIDE, caption_height,
+    caption_text, card, note, picture, poster, progress_bar, row_heading, series_card,
 };
 use crate::grid::Grid;
 use crate::hero::{self, Headline};
@@ -34,9 +34,9 @@ use crate::theme;
 const WIDE: f32 = 340.;
 /// What is under a wide card's picture: the gap, its title and a line, with the room between.
 const WIDE_TITLE: f32 = 14.;
-const WIDE_CAPTION: f32 = 10. + caption_height(WIDE_TITLE);
+const WIDE_CAPTION: f32 = UNDER_WIDE + caption_height(WIDE_TITLE);
 /// What is under a poster: the gap and its caption.
-const POSTER_CAPTION: f32 = 8. + caption_height(CAPTION_TITLE);
+const POSTER_CAPTION: f32 = UNDER_POSTER + caption_height(CAPTION_TITLE);
 const GAP: f32 = 16.;
 /// The left of the header's text, after the design.
 const HERO_INSET: f32 = 150.;
@@ -852,7 +852,7 @@ pub(super) fn wide_offer(
             .w(px(width))
             .flex()
             .flex_col()
-            .gap(px(10.))
+            .gap(px(UNDER_WIDE))
             .child(picture_box)
             .child(
                 div()

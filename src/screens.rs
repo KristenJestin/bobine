@@ -180,7 +180,7 @@ impl Look {
             .w(px(width))
             .flex()
             .flex_col()
-            .gap(px(8.))
+            .gap(px(UNDER_POSTER))
             .child(
                 poster_image(
                     &self.name,
@@ -460,6 +460,9 @@ const CAPTION_TITLE: f32 = 13.;
 const CAPTION_DETAIL: f32 = 12.;
 /// Between the two lines of a caption.
 const CAPTION_GAP: f32 = 2.;
+/// Between a card's picture and its caption: a poster's, and a wide card's.
+const UNDER_POSTER: f32 = 8.;
+const UNDER_WIDE: f32 = 10.;
 
 /// The height of a line of caption text of `size`, descenders included: the lines are drawn at
 /// it and the rows keep room from it, so the room is the text's whatever its size.
