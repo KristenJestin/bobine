@@ -18,8 +18,13 @@ impl Shell {
         let session = self.server.clone();
         self.ask(
             cx,
-            |server| server.watch_history(),
-            move |shell, history, cx| {
+            // Counted here, off the window's thread: a long history takes a while.
+            move |server| {
+                server
+                    .watch_history()
+                    .map(|history| stats::of(&history, LocalTime::now()))
+            },
+            move |shell, stats, cx| {
                 // An answer for a user who signed out meanwhile is not the next user's.
                 let same = match (&session, &shell.server) {
                     (Some(asked), Some(now)) => Arc::ptr_eq(asked, now),
@@ -28,10 +33,7 @@ impl Shell {
                 if !same {
                     return;
                 }
-                shell.stats = history
-                    .ok()
-                    .and_then(|history| stats::of(&history, LocalTime::now()))
-                    .map(Rc::new);
+                shell.stats = stats.ok().flatten().map(Rc::new);
                 if shell.stats.is_none() {
                     shell.navigator.forget(|screen| screen == Screen::Stats);
                 }

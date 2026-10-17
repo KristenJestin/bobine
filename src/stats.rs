@@ -1,7 +1,12 @@
 //! The Stats page's numbers, from the watch history: no window here. Periods are on the local
 //! clock, and a week starts on Monday.
 
-use bobine::provider::{HistorySource, LocalTime, Play, WatchHistory, Watched, WatchedKind};
+use std::collections::HashMap;
+use std::collections::hash_map::Entry;
+
+use bobine::provider::{
+    HistorySource, ItemId, LocalTime, Play, WatchHistory, Watched, WatchedKind,
+};
 
 /// How many titles of each kind, and how many genres, the page shows.
 const TOP_TITLES: usize = 10;
@@ -84,15 +89,16 @@ pub fn of(history: &WatchHistory, now: LocalTime) -> Option<Stats> {
         .filter(|month| months[*month] > 0)
         .max_by_key(|month| (months[*month], std::cmp::Reverse(*month)))
         .map(|month| month as u32 + 1);
-    let year_titles = ranked(&year_plays, None);
+    let year_titles = ranked(&year_plays);
+    let all_titles = ranked(&all);
     let year_genres = genres(&year_plays);
     Some(Stats {
         source: history.source,
         week: sum(&|at| at.days() >= week_start),
         month: sum(&|at| at.year == now.year && at.month == now.month),
         year: sum(&this_year),
-        movies: top(ranked(&all, Some(WatchedKind::Movie)), TOP_TITLES),
-        series: top(ranked(&all, Some(WatchedKind::Series)), TOP_TITLES),
+        movies: of_kind(&all_titles, WatchedKind::Movie, TOP_TITLES),
+        series: of_kind(&all_titles, WatchedKind::Series, TOP_TITLES),
         genres: top(genres(&all), TOP_GENRES),
         days: timed.then_some(days),
         hours: timed.then_some(hours),
@@ -111,31 +117,27 @@ fn top<T>(mut list: Vec<T>, count: usize) -> Vec<T> {
     list
 }
 
-/// The titles of `plays`, of `kind` if given, the most watched first.
-fn ranked(plays: &[&Play], kind: Option<WatchedKind>) -> Vec<Ranked> {
+/// The titles of `plays`, the most watched first. A title the library lost is known by its name.
+fn ranked(plays: &[&Play]) -> Vec<Ranked> {
     let mut titles: Vec<Ranked> = Vec::new();
+    let mut at: HashMap<(WatchedKind, Option<&ItemId>, &str), usize> = HashMap::new();
     for play in plays {
-        if kind.is_some_and(|kind| play.title.kind != kind) {
-            continue;
-        }
-        let same = |ranked: &&mut Ranked| {
-            ranked.title.kind == play.title.kind
-                && match (&ranked.title.id, &play.title.id) {
-                    (Some(a), Some(b)) => a == b,
-                    (None, None) => ranked.title.name == play.title.name,
-                    _ => false,
-                }
-        };
-        match titles.iter_mut().find(same) {
-            Some(ranked) => {
+        let title = &play.title;
+        let name = if title.id.is_some() { "" } else { &title.name };
+        match at.entry((title.kind, title.id.as_ref(), name)) {
+            Entry::Occupied(found) => {
+                let ranked = &mut titles[*found.get()];
                 ranked.seconds += play.seconds;
                 ranked.plays += play.count;
             }
-            None => titles.push(Ranked {
-                title: play.title.clone(),
-                seconds: play.seconds,
-                plays: play.count,
-            }),
+            Entry::Vacant(new) => {
+                new.insert(titles.len());
+                titles.push(Ranked {
+                    title: title.clone(),
+                    seconds: play.seconds,
+                    plays: play.count,
+                });
+            }
         }
     }
     titles.sort_by(|a, b| {
@@ -146,17 +148,28 @@ fn ranked(plays: &[&Play], kind: Option<WatchedKind>) -> Vec<Ranked> {
     titles
 }
 
+/// The first `count` of `titles` of `kind`.
+fn of_kind(titles: &[Ranked], kind: WatchedKind, count: usize) -> Vec<Ranked> {
+    titles
+        .iter()
+        .filter(|ranked| ranked.title.kind == kind)
+        .take(count)
+        .cloned()
+        .collect()
+}
+
 /// Each genre of `plays` and the time watched of it, the most watched first.
 fn genres(plays: &[&Play]) -> Vec<(String, u64)> {
-    let mut genres: Vec<(String, u64)> = Vec::new();
+    let mut seconds: HashMap<&str, u64> = HashMap::new();
     for play in plays {
         for genre in &play.title.genres {
-            match genres.iter_mut().find(|(name, _)| name == genre) {
-                Some((_, seconds)) => *seconds += play.seconds,
-                None => genres.push((genre.clone(), play.seconds)),
-            }
+            *seconds.entry(genre).or_default() += play.seconds;
         }
     }
+    let mut genres: Vec<(String, u64)> = seconds
+        .into_iter()
+        .map(|(genre, seconds)| (genre.to_string(), seconds))
+        .collect();
     genres.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
     genres
 }
@@ -192,7 +205,6 @@ pub fn month_name(month: u32) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bobine::provider::ItemId;
 
     /// Saturday 17 October 2026, 21:00.
     fn now() -> LocalTime {
