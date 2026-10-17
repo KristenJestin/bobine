@@ -131,6 +131,10 @@ impl Shell {
             if saved != shell.seerr.key_saved {
                 shell.seerr.key_saved = saved;
                 shell.connect_seerr(cx);
+            } else if shell.seerr.client.is_none() {
+                // A save that failed leaves the key missing: say so again.
+                shell.seerr.hint = shell.missing_hint(cx);
+                cx.notify();
             }
         });
         self.seerr = Seerr {
@@ -143,10 +147,12 @@ impl Shell {
 
     /// The form's Save: the address typed, and the key if one was typed.
     pub fn save_seerr(&mut self, cx: &mut Context<Self>) {
-        self.save_seerr_address(cx);
+        // The key first: once its write is under way the form knows the key is coming, and the
+        // address saved just after does not say that it is missing.
         if let Some(key) = self.seerr.key.clone() {
             key.update(cx, |key, cx| key.save(cx));
         }
+        self.save_seerr_address(cx);
     }
 
     /// The address typed is kept (an empty one forgets it) and the client made again.
@@ -168,6 +174,27 @@ impl Shell {
         cx.notify();
     }
 
+    /// What the form lacks, said once the key field is settled: while the keyring is at work the
+    /// key is not missing, it is coming, and its end reconnects.
+    fn missing_hint(&self, cx: &Context<Self>) -> Option<&'static str> {
+        let settled = self
+            .seerr
+            .key
+            .as_ref()
+            .is_none_or(|key| key.read(cx).is_settled());
+        if !settled {
+            return None;
+        }
+        match (
+            &self.settings.seerr_address,
+            self.seerr.key_saved == Some(true),
+        ) {
+            (Some(_), false) => Some("Add the API key to connect."),
+            (None, true) => Some("Add the address to connect."),
+            _ => None,
+        }
+    }
+
     /// Makes the client from the address and the key, or drops it when one of them is missing:
     /// Discover goes with it, and the Settings say which is missing, or why the client could not
     /// be made. The key is read from the keyring off the window's thread, and goes from there to
@@ -184,11 +211,7 @@ impl Shell {
         self.seerr.owner_line = None;
         let key_saved = self.seerr.key_saved == Some(true);
         let address = self.settings.seerr_address.clone();
-        self.seerr.hint = match (&address, key_saved) {
-            (Some(_), false) => Some("Add the API key to connect."),
-            (None, true) => Some("Add the address to connect."),
-            _ => None,
-        };
+        self.seerr.hint = self.missing_hint(cx);
         let (Some(address), true, Some(server)) = (address, key_saved, self.server.clone()) else {
             self.seerr_gone(cx);
             return;
@@ -877,6 +900,36 @@ pub(super) mod tests {
         );
         let mut visual = drawn(&window, cx);
         assert!(visual.debug_bounds("seerr-hint").is_none());
+    }
+
+    /// The address is kept before the key's keyring write ends: the form is not half filled, it
+    /// is being saved, so the hint "add the key" must not flash in between.
+    #[gpui_kit::test]
+    fn saving_both_fields_never_flashes_the_hint_for_the_key(cx: &mut TestAppContext) {
+        let keyring = Arc::new(MemoryKeyring::default());
+        let seerr = FakeSeerr::default();
+        let (window, _) = start(None, &keyring, &seerr, cx);
+        window
+            .update(cx, |shell, _, cx| {
+                shell.open_settings(cx);
+                let field = shell.seerr.address.clone().unwrap();
+                field.update(cx, |field, cx| field.set_text(ADDRESS, cx));
+                let key = shell.seerr.key.clone().unwrap();
+                key.update(cx, |key, cx| key.type_in(KEY, cx));
+                shell.save_seerr(cx);
+                // Nothing in the background has run yet: the keyring write is still pending.
+                assert_eq!(keyring.secret(ACCOUNT), None, "the write ended already");
+                assert_eq!(
+                    shell.seerr.hint, None,
+                    "a hint while the key is being saved"
+                );
+            })
+            .unwrap();
+        cx.run_until_parked();
+        assert!(connected(&window, cx));
+        window
+            .update(cx, |shell, _, _| assert_eq!(shell.seerr.hint, None))
+            .unwrap();
     }
 
     #[gpui_kit::test]
