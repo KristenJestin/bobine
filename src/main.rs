@@ -24,6 +24,7 @@ mod menu;
 mod motion;
 mod mpris;
 mod navigation;
+mod notify;
 mod player;
 mod playlists;
 mod poster_actions;

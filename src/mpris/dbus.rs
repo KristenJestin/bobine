@@ -456,7 +456,7 @@ impl Player {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     //! The real adapter on a private bus: a `dbus-daemon` started by the test, reached by its
     //! address, killed at the end. Never the session bus of the machine.
 
@@ -474,9 +474,9 @@ mod tests {
 
     const WAIT: Duration = Duration::from_secs(5);
 
-    struct Bus {
+    pub(crate) struct Bus {
         daemon: Child,
-        address: String,
+        pub(crate) address: String,
     }
 
     impl Drop for Bus {
@@ -487,7 +487,7 @@ mod tests {
     }
 
     /// A bus of the test's own; `None`, said aloud, when `dbus-daemon` is not installed.
-    fn private_bus() -> Option<Bus> {
+    pub(crate) fn private_bus() -> Option<Bus> {
         let spawned = std::process::Command::new("dbus-daemon")
             .args(["--session", "--print-address", "--nofork"])
             .stdout(Stdio::piped())
@@ -496,7 +496,7 @@ mod tests {
         let mut daemon = match spawned {
             Ok(daemon) => daemon,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                eprintln!("SKIPPED: dbus-daemon is not installed, the MPRIS adapter is not tried");
+                eprintln!("SKIPPED: dbus-daemon is not installed, the D-Bus adapter is not tried");
                 return None;
             }
             Err(error) => panic!("dbus-daemon does not start: {error}"),
@@ -541,7 +541,7 @@ mod tests {
     }
 
     /// Waits for `done`, five seconds at most.
-    fn until(mut done: impl FnMut() -> bool) -> bool {
+    pub(crate) fn until(mut done: impl FnMut() -> bool) -> bool {
         let start = Instant::now();
         while start.elapsed() < WAIT {
             if done() {

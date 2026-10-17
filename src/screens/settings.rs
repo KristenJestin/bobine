@@ -1,5 +1,5 @@
-//! The Settings screen: one card per section (Playback, Screens, Integrations, About), in a
-//! narrow column under the bar. A change is made where it is shown and kept at once.
+//! The Settings screen: one card per section (Playback, Screens, Notifications, Integrations,
+//! About), in a narrow column under the bar. A change is made where it is shown and kept at once.
 
 use std::time::Instant;
 
@@ -28,6 +28,15 @@ pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -
     let switch_on = {
         let wanted = shell.settings.black_out_other_monitors;
         let fade = &mut shell.blackout_switch;
+        fade.set(wanted, now);
+        if fade.moving(now) {
+            window.request_animation_frame();
+        }
+        fade.level(now)
+    };
+    let episodes_on = {
+        let wanted = shell.settings.notify_new_episodes;
+        let fade = &mut shell.settings_page.episodes_switch;
         fade.set(wanted, now);
         if fade.moving(now) {
             window.request_animation_frame();
@@ -69,6 +78,18 @@ pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -
                 .text_color(theme::dim())
                 .child("This compositor cannot cover other screens.")
         }));
+
+    let notifications = section("settings-notifications", IconName::Bell, "Notifications").child(
+        theme::eased("settings-new-episodes", theme::Shades::line(), window, cx)
+            .debug_selector(|| "settings-new-episodes".into())
+            .cursor_pointer()
+            .on_click(cx.listener(|shell, _, _, cx| shell.toggle_new_episodes(cx)))
+            .child(row(
+                "New episodes",
+                Some("The desktop is told when a series you follow gets a new episode."),
+                switch(episodes_on),
+            )),
+    );
 
     let seerr_key = shell.seerr.key.clone();
     let fields: Vec<_> = shell
@@ -135,6 +156,7 @@ pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -
                 )
                 .child(playback)
                 .child(screens)
+                .child(notifications)
                 .child(integrations)
                 .child(about),
         )

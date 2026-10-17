@@ -11,7 +11,7 @@ use super::Shell;
 use crate::chrome::ButtonBounds;
 use crate::config::Quality;
 use crate::menu::Menus;
-use crate::motion::{self, Presence};
+use crate::motion::{self, Fade, Presence};
 use crate::navigation::Screen;
 use crate::secret_field::{self, SecretField};
 
@@ -26,15 +26,19 @@ pub struct SettingsPage {
     /// The menu fades in and out; the button it opens from is where this says it was drawn.
     pub menu_fade: Presence<QualityMenu>,
     pub quality_button: ButtonBounds,
+    /// The "New episodes" switch slides from one side to the other.
+    pub episodes_switch: Fade,
 }
 
-impl Default for SettingsPage {
-    fn default() -> Self {
+impl SettingsPage {
+    /// The page, its switch drawn as the settings read at the start say.
+    pub fn new(notify_new_episodes: bool) -> Self {
         Self {
             secrets: Vec::new(),
             menus: Menus::default(),
             menu_fade: Presence::new(motion::quick()),
             quality_button: Default::default(),
+            episodes_switch: Fade::starting_at(motion::quick(), notify_new_episodes),
         }
     }
 }
@@ -526,6 +530,22 @@ mod tests {
         assert!(Settings::read(&path).black_out_other_monitors);
         click(&mut visual, "settings-blackout");
         assert!(!Settings::read(&path).black_out_other_monitors);
+    }
+
+    #[gpui_kit::test]
+    fn the_switch_of_the_settings_turns_the_new_episodes_off_and_on(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.toml");
+        let window = start(Some(path.clone()), &Arc::new(MemoryKeyring::default()), cx);
+        window
+            .update(cx, |shell, _, cx| shell.open_settings(cx))
+            .unwrap();
+        let mut visual = drawn(&window, cx);
+        assert!(visual.debug_bounds("settings-notifications").is_some());
+        click(&mut visual, "settings-new-episodes");
+        assert!(!Settings::read(&path).notify_new_episodes);
+        click(&mut visual, "settings-new-episodes");
+        assert!(Settings::read(&path).notify_new_episodes);
     }
 
     #[test]

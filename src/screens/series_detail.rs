@@ -3,15 +3,16 @@
 //! or how far); below, the cast and similar series. The page scrolls; over it, after an episode
 //! ended, the "Next episode" card counts down.
 
+use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Instant;
 
-use bobine::provider::{Episode, Season, SeriesDetail};
+use bobine::provider::{Episode, ItemId, Season, SeriesDetail};
 use bobine::requests::MediaKind;
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    Animation, AnimationExt, AnyElement, Context, Div, FontWeight, IntoElement, Stateful, Window,
-    div, px, rgb, rgba,
+    Animation, AnimationExt, AnyElement, Bounds, Context, Div, FontWeight, IntoElement, Pixels,
+    ScrollHandle, Stateful, Window, canvas, div, point, px, rgb, rgba,
 };
 
 use super::card::{Offer, Open, Play};
@@ -30,6 +31,9 @@ use crate::series_page::{self, Next};
 use crate::shell::{Loadable, SeriesPage, Shell};
 use crate::theme;
 use crate::trailer;
+
+/// How far under the top of the window an episode a notification opened lands: clear of the bar.
+const IN_VIEW_TOP: f32 = 96.;
 
 const STILL_WIDTH: f32 = 190.;
 const STILL_HEIGHT: f32 = 107.;
@@ -358,6 +362,12 @@ fn episode_row(
 ) -> Stateful<Div> {
     let still = shell.image(episode.item.poster.as_ref(), images::CARD, cx);
     let item = &episode.item;
+    // The episode a notification opened the page for: the page scrolls to it once it is laid out.
+    let in_view = shell
+        .series_pages
+        .last()
+        .filter(|page| page.in_view.borrow().as_ref() == Some(&item.id))
+        .map(|page| (page.in_view.clone(), page.scroll.clone()));
     let title = match episode.number {
         Some(number) => format!("{number} · {}", item.title),
         None => item.title.clone(),
@@ -484,6 +494,40 @@ fn episode_row(
                 })),
         )
         .child(check)
+        .when_some(in_view, |row, (wanted, scroll)| {
+            row.relative().child(
+                canvas(
+                    move |at, window, _| bring_into_view(at, &scroll, &wanted, window),
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .inset_0(),
+            )
+        })
+}
+
+/// Scrolls the page so that the row drawn `at` shows near its top, once: the episode is then no
+/// longer wanted in view, and the viewer scrolls on from there.
+fn bring_into_view(
+    at: Bounds<Pixels>,
+    scroll: &ScrollHandle,
+    wanted: &RefCell<Option<ItemId>>,
+    window: &mut Window,
+) {
+    let page = scroll.bounds();
+    if at.top() >= page.top() && at.bottom() <= page.bottom() {
+        wanted.take();
+        return;
+    }
+    let (offset, max) = (scroll.offset(), scroll.max_offset());
+    // Not laid out yet: the next frame tries again.
+    if max.y <= px(0.) {
+        return;
+    }
+    let y = offset.y - (at.top() - page.top() - px(IN_VIEW_TOP));
+    scroll.set_offset(point(offset.x, y.clamp(-max.y, px(0.))));
+    wanted.take();
+    window.refresh();
 }
 
 /// "Next episode", bottom right over the series page: the still, the episode, the seconds

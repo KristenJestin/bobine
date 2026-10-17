@@ -1,7 +1,7 @@
 //! The series grid and the series page: what they show, how it comes from the server, and the
 //! episodes they play. Like the film page, every call to the server runs off the window's thread.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::thread::JoinHandle;
@@ -54,6 +54,8 @@ pub struct SeriesPage {
     pub error: Option<&'static str>,
     pub busy: bool,
     refreshes: Refreshes,
+    /// The episode a notification opened the page for, until the page has scrolled to it.
+    pub in_view: Rc<RefCell<Option<ItemId>>>,
 }
 
 impl ListPage for SeriesPage {
@@ -121,6 +123,7 @@ impl Shell {
             error: None,
             busy: false,
             refreshes: Refreshes::default(),
+            in_view: Rc::default(),
         });
         self.navigator.open(Screen::SeriesDetail);
         self.load_series(self.series_pages.len() - 1, true, None, cx);
