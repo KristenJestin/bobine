@@ -40,10 +40,11 @@ jobs:
           persist-credentials: false
       # With no release behind it, semantic-release starts at 1.0.0. Bobine starts in 0.x, from a
       # `v0.0.0` tag the maintainer puts once on the first commit of `main`: without it, stop
-      # before a wrong version is published.
+      # before a wrong version is published. Only the tags reachable from this commit count: a
+      # release tag on another branch is not a release semantic-release counts from.
       - name: A first release to count from
         run: |
-          git tag --list 'v*' | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+          git tag --merged HEAD --list 'v*' | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' \
             || { echo "::error::No release tag (vX.Y.Z) to count from: tag the first commit of main v0.0.0 (see docs/versions.md)."; exit 1; }
       # semantic-release is a Node tool and Bobine is not a Node project: package.json and its
       # lockfile exist only to pin it and its plugins (`npm ci` installs exactly those).
