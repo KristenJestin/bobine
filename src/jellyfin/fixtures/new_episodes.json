@@ -20,5 +20,12 @@
     "SeasonId": "5e000000000000000000000000000003", "SeriesId": "50000000000000000000000000000002", "SeriesName": "Glass Orchard",
     "UserData": { "PlaybackPositionTicks": 0, "Played": false },
     "ImageTags": { "Primary": "still-lw" }
+  },
+  {
+    "Name": "Not Aired Yet", "Id": "e0000000000000000000000000000033", "Type": "Episode",
+    "IndexNumber": 6, "ParentIndexNumber": 1, "DateCreated": "2025-09-14T09:00:00Z",
+    "LocationType": "Virtual",
+    "SeasonId": "5e000000000000000000000000000003", "SeriesId": "50000000000000000000000000000002", "SeriesName": "Glass Orchard",
+    "UserData": { "PlaybackPositionTicks": 0, "Played": false }
   }
 ]

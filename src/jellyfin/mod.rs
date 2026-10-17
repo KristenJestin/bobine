@@ -913,6 +913,9 @@ impl MediaServer for Jellyfin {
                 ("recursive", "true".into()),
                 ("includeItemTypes", "Episode".into()),
                 ("isPlayed", "false".into()),
+                // Not the episodes that have no file, listed when the user shows missing ones:
+                // Jellyfin reads it as "not virtual", which leaves the unaired out too.
+                ("isMissing", "false".into()),
                 ("sortBy", "DateCreated".into()),
                 ("sortOrder", "Descending".into()),
                 ("startIndex", start.to_string()),

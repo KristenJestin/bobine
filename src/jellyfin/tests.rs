@@ -1193,6 +1193,22 @@ fn the_new_episodes_are_asked_page_by_page() {
 }
 
 #[test]
+fn an_episode_not_aired_yet_is_never_a_new_episode() {
+    let s = Setup::new();
+    let found = s.signed_in().new_episodes(0, 20).unwrap();
+    assert_eq!(
+        s.fake.last("GET", "/Items").param("IsMissing"),
+        Some("false")
+    );
+    let titles: Vec<&str> = found
+        .items
+        .iter()
+        .map(|n| n.episode.item.title.as_str())
+        .collect();
+    assert!(!titles.contains(&"Not Aired Yet"), "{titles:?}");
+}
+
+#[test]
 fn a_series_that_gained_one_episode_is_listed_as_the_series() {
     let s = Setup::new();
     let latest = s

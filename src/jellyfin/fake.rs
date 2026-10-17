@@ -398,9 +398,18 @@ fn person_titles(seen: &Seen) -> Value {
 }
 
 /// The episodes not played, the newest added first, as the server pages them. The fixture keeps
-/// a played one and one whose date cannot be read, to show what the client makes of them.
+/// a played one and one whose date cannot be read, to show what the client makes of them, and
+/// one not aired yet that only "show missing episodes" lists, which `IsMissing=false` leaves out.
 fn new_episodes(seen: &Seen) -> Value {
-    let items = fixture("new_episodes").as_array().unwrap().clone();
+    let items: Vec<Value> = fixture("new_episodes")
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|item| {
+            seen.param("IsMissing") != Some("false") || item["LocationType"] != "Virtual"
+        })
+        .cloned()
+        .collect();
     let total = items.len();
     let start: usize = seen.param("StartIndex").map_or(0, |s| s.parse().unwrap());
     let limit: usize = seen.param("Limit").map_or(total, |s| s.parse().unwrap());
