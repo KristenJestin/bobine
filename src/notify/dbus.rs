@@ -203,7 +203,6 @@ mod tests {
     //! never the session bus of the machine, never a notification on the real desktop.
 
     use std::path::PathBuf;
-    use std::time::Duration;
 
     use bobine::provider::ItemId;
     use zbus::interface;
@@ -325,10 +324,11 @@ mod tests {
         }
     }
 
-    /// The clicks heard within a moment, taken from the inbox without waiting on it: no thread
-    /// is left parked behind.
-    fn heard(clicks: &Clicks) -> Vec<Open> {
-        std::thread::sleep(Duration::from_millis(500));
+    /// The first `count` clicks heard, waited for, taken from the inbox without waiting on it: no
+    /// thread is left parked behind. The signals are handled in the order they were sent, so the
+    /// clicks heard by then are all those that came before.
+    fn heard(clicks: &Clicks, count: usize) -> Vec<Open> {
+        until(|| clicks.0.lock().unwrap().heard.len() >= count);
         clicks.0.lock().unwrap().heard.drain(..).collect()
     }
 
@@ -360,10 +360,10 @@ mod tests {
         dbus.notify(&notification("series-1"));
         dbus.notify(&notification("series-4"));
         assert!(until(|| desktop.asked().len() == 2));
-        // The second, then another action than the click itself, which opens nothing.
-        desktop.click(2, DEFAULT);
+        // Another action than the click itself, which opens nothing, then a click on the second.
         desktop.click(1, "snooze");
-        assert_eq!(heard(&dbus.clicks()), [notification("series-4").open]);
+        desktop.click(2, DEFAULT);
+        assert_eq!(heard(&dbus.clicks(), 1), [notification("series-4").open]);
     }
 
     #[test]
@@ -372,11 +372,13 @@ mod tests {
         let desktop = Desktop::on(&bus);
         let mut dbus = Dbus::at(Some(bus.address.clone()));
         dbus.notify(&notification("series-1"));
-        assert!(until(|| desktop.asked().len() == 1));
+        dbus.notify(&notification("series-4"));
+        assert!(until(|| desktop.asked().len() == 2));
         desktop.close(1);
-        std::thread::sleep(Duration::from_millis(100));
         desktop.click(1, DEFAULT);
-        assert_eq!(heard(&dbus.clicks()), []);
+        // Heard once the close and the click before it were handled.
+        desktop.click(2, DEFAULT);
+        assert_eq!(heard(&dbus.clicks(), 1), [notification("series-4").open]);
     }
 
     #[test]
