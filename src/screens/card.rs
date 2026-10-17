@@ -246,7 +246,7 @@ pub fn play_card(shell: &mut Shell, play: Play, window: &mut Window, cx: &mut Co
     }
 }
 
-/// The keyboard's focus ring: a near-white line just inside the picture's edge.
+/// The keyboard's focus ring: a coral line just inside the picture's edge.
 fn ring_outline(name: &ElementId, level: f32) -> Div {
     div()
         .debug_selector(|| format!("card-ring {name}"))
@@ -254,7 +254,7 @@ fn ring_outline(name: &ElementId, level: f32) -> Div {
         .inset_0()
         .rounded(px(theme::RADIUS))
         .border_2()
-        .border_color(theme::text())
+        .border_color(theme::brand())
         .opacity(level)
 }
 
@@ -512,5 +512,20 @@ impl Card {
                 .child(icon(on, size).absolute().inset_0().opacity(level)),
         )
         .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_keyboard_focus_ring_is_the_brand_coral() {
+        let mut ring = ring_outline(&"card".into(), 1.);
+        let mut coral = div().border_color(theme::brand());
+        assert_eq!(
+            format!("{:?}", ring.style().border_color),
+            format!("{:?}", coral.style().border_color)
+        );
     }
 }

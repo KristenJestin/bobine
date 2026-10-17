@@ -7,10 +7,11 @@ use std::rc::Rc;
 use gpui_kit::prelude::*;
 use gpui_kit::{
     Bounds, Context, Div, FontWeight, IntoElement, MouseButton, MouseDownEvent, Pixels, Point,
-    Stateful, Window, anchored, canvas, deferred, div, linear_color_stop, linear_gradient, point,
-    px, rgb, rgba,
+    Rgba, Stateful, Window, anchored, canvas, deferred, div, linear_color_stop, linear_gradient,
+    point, px, rgb, rgba,
 };
 
+use crate::brand;
 use crate::icons::{IconName, icon};
 use crate::menu;
 use crate::motion;
@@ -58,6 +59,20 @@ pub fn account_menu_place(
     (point(button.right() - px(MENU_WIDTH), at.y), height)
 }
 
+/// The fill of an entry of the bar: clear, then the brand's coral as it becomes the section.
+fn nav_fill(level: f32) -> Rgba {
+    let clear = Rgba {
+        a: 0.,
+        ..theme::brand()
+    };
+    motion::mix(clear, theme::brand(), level)
+}
+
+/// The text of an entry: `rest` while it waits, the black written on the coral when it is lit.
+fn nav_text(rest: Rgba, level: f32) -> Rgba {
+    motion::mix(rest, theme::on_brand(), level)
+}
+
 /// Centred at the top, over the screen, in the same place on every screen; the search field opens
 /// the palette, the account button the menu to sign out. `highlight` is how much each entry
 /// shows as the section of the page, from 0 to 1: it eases from one to the next.
@@ -84,8 +99,8 @@ pub fn pill_bar(
             .py(px(8.))
             .rounded(px(theme::RADIUS))
             .text_size(px(13.))
-            .text_color(motion::mix(rest, theme::text(), level))
-            .bg(motion::mix(rgba(0x23232700), theme::line(), level))
+            .text_color(nav_text(rest, level))
+            .bg(nav_fill(level))
             .child(entry.label());
         if live {
             item.cursor_pointer()
@@ -116,7 +131,7 @@ pub fn pill_bar(
                 .occlude()
                 // Opaque enough to read over a hero image: there is no blur behind it.
                 .bg(rgba(0x141416ec))
-                .child(logo(32., 15., 9.).mr(px(6.)))
+                .child(brand::mark(32., window, cx).mr(px(6.)))
                 .children(entries)
                 .child(search_field(window, cx))
                 .children(account.map(|account| account_button(account, window, cx))),
@@ -284,23 +299,6 @@ fn menu_line(
         .child(label)
 }
 
-/// The Bobine mark: a letter on a tile, until there is a drawn logo.
-pub fn logo(side: f32, font: f32, radius: f32) -> Div {
-    div()
-        .size(px(side))
-        .flex_none()
-        .flex()
-        .items_center()
-        .justify_center()
-        .rounded(px(radius))
-        .border_1()
-        .border_color(theme::line())
-        .bg(rgba(0x1d1d20ff))
-        .text_size(px(font))
-        .font_weight(FontWeight::EXTRA_BOLD)
-        .child("b")
-}
-
 /// Opens the search palette, like Ctrl+K.
 fn search_field(window: &mut Window, cx: &mut Context<Shell>) -> Stateful<Div> {
     theme::eased("nav-search", theme::Shades::line(), window, cx)
@@ -390,6 +388,15 @@ mod tests {
     use super::*;
     use crate::menu::Menus;
     use gpui_kit::size;
+
+    #[test]
+    fn the_active_pill_is_coral_with_text_that_reads_on_it() {
+        assert_eq!(nav_fill(1.), theme::brand());
+        assert_eq!(nav_text(theme::muted(), 1.), theme::on_brand());
+        assert!(crate::theme::tests::contrast(nav_text(theme::muted(), 1.), nav_fill(1.)) >= 4.5);
+        // A section that is not the page's stays clear.
+        assert_eq!(nav_fill(0.).a, 0.);
+    }
 
     fn button_at(top: f32) -> Bounds<Pixels> {
         Bounds::new(point(px(900.), px(top)), size(px(32.), px(32.)))

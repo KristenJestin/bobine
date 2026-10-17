@@ -1,5 +1,6 @@
 //! `bobine`: a native client for films and series, Jellyfin first.
 
+mod brand;
 mod chrome;
 mod config;
 mod discover;
@@ -76,7 +77,7 @@ fn main() {
             let bounds = Bounds::centered(None, size(px(1440.), px(810.)), cx);
             let options = WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
-                app_id: Some("bobine".into()),
+                app_id: Some(bobine::APP_ID.into()),
                 // The video is under the window: the player leaves a hole for it, every other
                 // screen paints its own background.
                 window_background: WindowBackgroundAppearance::Transparent,
