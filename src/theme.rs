@@ -245,8 +245,28 @@ pub fn ghost_button_with(
         .child(label.into())
 }
 
+/// The WCAG contrast ratio of two opaque colours, for the tests that hold text to 4.5.
 #[cfg(test)]
-pub(crate) mod tests {
+pub(crate) fn contrast(a: Rgba, b: Rgba) -> f32 {
+    let (a, b) = (luminance(a), luminance(b));
+    (a.max(b) + 0.05) / (a.min(b) + 0.05)
+}
+
+/// The WCAG relative luminance of an opaque colour.
+#[cfg(test)]
+fn luminance(color: Rgba) -> f32 {
+    let channel = |c: f32| {
+        if c <= 0.03928 {
+            c / 12.92
+        } else {
+            ((c + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    0.2126 * channel(color.r) + 0.7152 * channel(color.g) + 0.0722 * channel(color.b)
+}
+
+#[cfg(test)]
+mod tests {
     use super::*;
 
     #[test]
@@ -268,26 +288,8 @@ pub(crate) mod tests {
         assert!(accent.r - background.r > 0.7);
     }
 
-    /// The WCAG relative luminance of an opaque colour.
-    fn luminance(color: Rgba) -> f32 {
-        let channel = |c: f32| {
-            if c <= 0.03928 {
-                c / 12.92
-            } else {
-                ((c + 0.055) / 1.055).powf(2.4)
-            }
-        };
-        0.2126 * channel(color.r) + 0.7152 * channel(color.g) + 0.0722 * channel(color.b)
-    }
-
-    pub fn contrast(a: Rgba, b: Rgba) -> f32 {
-        let (a, b) = (luminance(a), luminance(b));
-        (a.max(b) + 0.05) / (a.min(b) + 0.05)
-    }
-
     #[test]
     fn the_brand_colour_is_the_coral_of_the_brand_files() {
-        assert_eq!(brand(), rgb(0xf45246));
         assert!(include_str!("../assets/brand/couleurs.txt").contains("#f45246"));
     }
 

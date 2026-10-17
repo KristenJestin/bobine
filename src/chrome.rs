@@ -393,7 +393,7 @@ mod tests {
     fn the_active_pill_is_coral_with_text_that_reads_on_it() {
         assert_eq!(nav_fill(1.), theme::brand());
         assert_eq!(nav_text(theme::muted(), 1.), theme::on_brand());
-        assert!(crate::theme::tests::contrast(nav_text(theme::muted(), 1.), nav_fill(1.)) >= 4.5);
+        assert!(crate::theme::contrast(nav_text(theme::muted(), 1.), nav_fill(1.)) >= 4.5);
         // A section that is not the page's stays clear.
         assert_eq!(nav_fill(0.).a, 0.);
     }
