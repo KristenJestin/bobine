@@ -22,6 +22,7 @@ mod library_tools;
 mod lists;
 mod menu;
 mod motion;
+mod mpris;
 mod navigation;
 mod player;
 mod playlists;

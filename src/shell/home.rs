@@ -548,6 +548,7 @@ impl Shell {
                     title: started.title,
                     subtitle: Some(started.subtitle),
                     list: Some(started.list),
+                    desktop: Some(started.desktop),
                 };
                 self.start_playback(
                     Origin::Home,

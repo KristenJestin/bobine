@@ -417,6 +417,7 @@ impl Shell {
             title,
             subtitle: Some(subtitle),
             list: Some(page.id.clone()),
+            desktop: Some(crate::mpris::Title::episode(&episode)),
         };
         let source = plan.source.clone();
         let task = cx

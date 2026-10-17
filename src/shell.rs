@@ -1,5 +1,6 @@
 //! The root view: the screen the navigator points at, framed by the pill bar or the back link.
 
+mod desktop;
 mod discover;
 mod home;
 mod lists;
@@ -250,6 +251,10 @@ pub struct Shell {
     pub draws: std::cell::RefCell<Draws>,
     /// Given to every mpv: the headless harness silences the sound.
     pub mpv_options: Vec<(&'static str, &'static str)>,
+    /// What the desktop's media controls are shown, and where the posters they show are
+    /// written (`None`: nowhere, and none is shown).
+    pub mpris: crate::mpris::Publisher,
+    art_dir: Option<PathBuf>,
 }
 
 /// When the shell and its header were drawn, and, for the harness, when the shell was notified.
@@ -299,6 +304,8 @@ pub struct Playback {
     refusal_shown: bool,
     /// The "My list" button of the player.
     pub list: Option<PlayerList>,
+    /// What the desktop's media controls show of it; `None` for a trailer, which shows nothing.
+    track: Option<crate::mpris::Track>,
     /// What plays, as the server knows it: what "Add to playlist" puts in a playlist.
     pub playing: Option<bobine::provider::ItemId>,
     _ticker: Task<()>,
@@ -312,6 +319,8 @@ pub struct Film {
     /// What the player's "My list" button puts in the list: the film, or the series of the
     /// episode; `None` for a file of no server.
     pub list: Option<bobine::provider::ItemId>,
+    /// What the desktop's media controls show; `None` for a trailer.
+    pub desktop: Option<crate::mpris::Title>,
 }
 
 impl Shell {
@@ -410,9 +419,31 @@ impl Shell {
             #[cfg(any(test, feature = "harness"))]
             draws: Default::default(),
             mpv_options: Vec::new(),
+            // A test never reaches a bus nor writes a poster: it gives its own.
+            #[cfg(not(test))]
+            mpris: crate::mpris::Publisher::new(Box::new(crate::mpris::dbus::Dbus::session())),
+            #[cfg(test)]
+            mpris: crate::mpris::Publisher::new(Box::new(
+                crate::mpris::fake::FakeControls::default(),
+            )),
+            #[cfg(not(test))]
+            art_dir: crate::mpris::art_dir(
+                std::env::var_os("XDG_CACHE_HOME"),
+                std::env::var_os("HOME"),
+            ),
+            #[cfg(test)]
+            art_dir: None,
         };
         shell.begin(open, cx);
         shell
+    }
+
+    /// The desktop's media controls off: no bus taken, no poster written. The harness on its fake
+    /// server must not show invented films on the user's real bus nor fill their real cache.
+    #[cfg(any(test, feature = "harness"))]
+    pub fn without_desktop(&mut self) {
+        self.mpris = crate::mpris::Publisher::new(Box::new(crate::mpris::dbus::Dbus::at(None)));
+        self.art_dir = None;
     }
 
     /// A frame was drawn: the page and its header are two views of one frame, which count once.
@@ -524,10 +555,13 @@ impl Shell {
             refusal_fade: Fade::new(motion::quick()),
             refusal_shown: false,
             list: None,
+            track: None,
             playing: None,
             _ticker: ticker,
             _bounds: bounds,
         });
+        // What the desktop asked while nothing played is not for this film.
+        self.mpris.commands();
         self.lay_out_video(window);
         self.forward.clear();
         self.navigator.open(Screen::Player);
@@ -538,7 +572,7 @@ impl Shell {
     /// told the playback stopped; the handle ends once it has been.
     pub fn stop_playback(&mut self) -> Option<std::thread::JoinHandle<()>> {
         // The covers first: mpv shutting down can take a moment.
-        blackout::stop_with(self.screens.as_mut(), || {
+        let reports = blackout::stop_with(self.screens.as_mut(), || {
             let Playback {
                 session,
                 reporting,
@@ -548,7 +582,9 @@ impl Shell {
             let reports = reports::last_reports(reporting, stopping, &session);
             drop(session);
             reports
-        })
+        });
+        self.mpris.stop();
+        reports
     }
 
     /// The window is closing: the film goes, the server is told where it stopped (a moment
@@ -560,6 +596,7 @@ impl Shell {
         }
         self.screens = None;
         self.wayland = None;
+        self.mpris.close();
     }
 
     /// Where the account button was last drawn.
@@ -614,6 +651,11 @@ impl Shell {
                 session.duration,
             )
         });
+        self.leave_to(next, window, cx);
+    }
+
+    /// Back to the page the film was started from, the card offering `next` there.
+    fn leave_to(&mut self, next: Option<Next>, window: &mut Window, cx: &mut Context<Self>) {
         self.fullscreen_kept = keeps_fullscreen(next.is_some(), window.is_fullscreen());
         if window.is_fullscreen() && !self.fullscreen_kept {
             window.toggle_fullscreen();
@@ -651,6 +693,10 @@ impl Shell {
 
     fn tick(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.follow_blackout(window, cx);
+        if self.playback.is_none() {
+            return;
+        }
+        self.follow_desktop(window, cx);
         let Some(playback) = &mut self.playback else {
             return;
         };
@@ -671,6 +717,7 @@ impl Shell {
         if let Some(request) = ask {
             self.reopen(Reopen::Convert(request), true, cx);
         }
+        self.show_to_desktop();
         let Some(playback) = &mut self.playback else {
             return;
         };

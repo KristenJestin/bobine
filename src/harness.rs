@@ -320,7 +320,11 @@ impl Harness {
         let Some(args) = self.args else {
             return;
         };
-        shell.update(cx, |shell, _| shell.mpv_options = vec![("ao", "null")]);
+        shell.update(cx, |shell, _| {
+            shell.mpv_options = vec![("ao", "null")];
+            // Its fake server plays invented films: not on the user's bus, not in their cache.
+            shell.without_desktop();
+        });
         match args.screen.clone() {
             Some(screen) => {
                 let fake = self.fake.expect("the harness always has its fake server");
@@ -1745,6 +1749,7 @@ fn play(mut args: Args, shell: &Entity<Shell>, window: &mut Window, cx: &mut App
                                 title: "Second movie".to_string(),
                                 subtitle: None,
                                 list: None,
+                                desktop: None,
                             };
                             let played = Libmpv::new(&[("ao", "null")])
                                 .map_err(|e| e.to_string())
@@ -1800,6 +1805,7 @@ fn play_file(
             .unwrap_or_else(|| "Test movie".to_string()),
         subtitle: Some("local file · direct play".to_string()),
         list: None,
+        desktop: None,
     };
     let external = args.sub.as_deref().map(|url| ExternalSubtitle {
         url,

@@ -1463,6 +1463,7 @@ impl Shell {
             title: plan.title.clone(),
             subtitle: Some(parts.join(" · ")),
             list: Some(plan.film.clone()),
+            desktop: Some(crate::mpris::Title::film(&detail.film)),
         };
         let origin = Origin::Film(depth, page.id.clone());
         page.busy = true;
@@ -1552,6 +1553,7 @@ impl Shell {
             }
         };
         self.tried(&origin, None, cx);
+        let desktop = playing.desktop.clone();
         // A test plays on a fake player, through the rest of this path: what the end offers.
         #[cfg(test)]
         if let Some(player) = self.fake_player.take() {
@@ -1567,6 +1569,7 @@ impl Shell {
                 playback.playing = Some(opened.film.clone());
             }
             self.playback_started(&opened.film, next, cx);
+            self.publish(desktop, cx);
             return;
         }
         let options = self.mpv_options.clone();
@@ -1610,6 +1613,7 @@ impl Shell {
                 }
                 self.load_trickplay(opened.film.clone(), opened.source.clone(), cx);
                 self.playback_started(&opened.film, next, cx);
+                self.publish(desktop, cx);
                 if let Some(item) = list {
                     self.follow_list(item, cx);
                 }
@@ -2831,6 +2835,7 @@ mod tests {
                     title: plan.title.clone(),
                     subtitle: None,
                     list: None,
+                    desktop: None,
                 };
                 shell.start_playback(Origin::Home, plan, opened, playing, None, window, cx);
                 assert!(shell.playback.is_none());
