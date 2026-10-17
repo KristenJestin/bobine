@@ -6,12 +6,19 @@ pub mod dbus;
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use bobine::provider::{Episode, Film, ImageRef};
 
 /// A jump of the position beyond what playing explains, in seconds: a seek.
 const SEEK_TOLERANCE: f64 = 1.;
+
+/// How long mpv has to answer a seek the desktop asked for.
+const SEEK_ANSWER: Duration = Duration::from_secs(2);
+
+/// What the clock and mpv's own rounding explain, in seconds: below it a position is where
+/// playing puts it.
+const DRIFT: f64 = 0.01;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Status {
@@ -91,6 +98,8 @@ pub struct Publisher {
     shown: State,
     /// The position at the last update, when, and whether it was moving then.
     last: Option<(f64, Instant)>,
+    /// When the desktop last asked for a seek that no position has answered yet.
+    asked: Option<Instant>,
 }
 
 impl Publisher {
@@ -99,7 +108,14 @@ impl Publisher {
             controls,
             shown: State::default(),
             last: None,
+            asked: None,
         }
+    }
+
+    /// The desktop asked for a seek at `now`: whatever its size, the position that answers it is
+    /// told as a seek.
+    pub fn sought(&mut self, now: Instant) {
+        self.asked = Some(now);
     }
 
     pub fn follow(&mut self, state: State, position: f64, now: Instant) {
@@ -112,9 +128,19 @@ impl Publisher {
             } else {
                 before
             };
-            if (position - expected).abs() > SEEK_TOLERANCE {
+            self.asked = self
+                .asked
+                .filter(|at| now.saturating_duration_since(*at) < SEEK_ANSWER);
+            // The position mpv has not updated yet, still `before`, answers nothing.
+            let answered =
+                self.asked.is_some() && position != before && (position - expected).abs() > DRIFT;
+            if answered || (position - expected).abs() > SEEK_TOLERANCE {
                 self.controls.seeked(position);
+                self.asked = None;
             }
+        }
+        if !same_track {
+            self.asked = None;
         }
         if state != self.shown {
             self.controls.show(&state);
@@ -339,6 +365,76 @@ mod tests {
         publisher.follow(playing("film-0"), 10.1, now + Duration::from_millis(100));
         publisher.follow(playing("film-0"), 70., now + Duration::from_millis(200));
         assert_eq!(*fake.seeked.borrow(), [70.]);
+    }
+
+    #[test]
+    fn a_small_seek_asked_by_the_desktop_is_told_whatever_its_size() {
+        let (mut publisher, fake) = publisher();
+        let now = Instant::now();
+        publisher.follow(playing("film-0"), 10., now);
+        publisher.sought(now + Duration::from_millis(100));
+        // Half a second forward, beyond what playing explains by far less than a second.
+        publisher.follow(playing("film-0"), 10.6, now + Duration::from_millis(200));
+        assert_eq!(*fake.seeked.borrow(), [10.6]);
+    }
+
+    #[test]
+    fn a_small_seek_while_paused_is_told() {
+        let (mut publisher, fake) = publisher();
+        let now = Instant::now();
+        let paused = State {
+            status: Status::Paused,
+            ..playing("film-0")
+        };
+        publisher.follow(paused.clone(), 10., now);
+        publisher.sought(now + Duration::from_millis(100));
+        publisher.follow(paused, 9.5, now + Duration::from_millis(200));
+        assert_eq!(*fake.seeked.borrow(), [9.5]);
+    }
+
+    #[test]
+    fn the_position_mpv_has_not_updated_yet_is_no_answer_to_a_seek() {
+        let (mut publisher, fake) = publisher();
+        let now = Instant::now();
+        publisher.follow(playing("film-0"), 10., now);
+        publisher.sought(now + Duration::from_millis(100));
+        publisher.follow(playing("film-0"), 10., now + Duration::from_millis(200));
+        assert!(fake.seeked.borrow().is_empty());
+        publisher.follow(playing("film-0"), 10.9, now + Duration::from_millis(300));
+        assert_eq!(*fake.seeked.borrow(), [10.9]);
+    }
+
+    #[test]
+    fn a_seek_is_told_once_and_drift_after_it_is_not() {
+        let (mut publisher, fake) = publisher();
+        let now = Instant::now();
+        publisher.follow(playing("film-0"), 10., now);
+        publisher.sought(now);
+        publisher.follow(playing("film-0"), 10.6, now + Duration::from_millis(100));
+        publisher.follow(playing("film-0"), 10.7, now + Duration::from_millis(200));
+        publisher.follow(playing("film-0"), 11.2, now + Duration::from_millis(300));
+        assert_eq!(*fake.seeked.borrow(), [10.6]);
+    }
+
+    #[test]
+    fn natural_drift_without_a_request_is_no_seek() {
+        let (mut publisher, fake) = publisher();
+        let now = Instant::now();
+        publisher.follow(playing("film-0"), 10., now);
+        publisher.follow(playing("film-0"), 10.6, now + Duration::from_millis(100));
+        assert!(fake.seeked.borrow().is_empty());
+    }
+
+    #[test]
+    fn a_request_that_nothing_answers_does_not_turn_drift_into_a_seek_later() {
+        let (mut publisher, fake) = publisher();
+        let now = Instant::now();
+        publisher.follow(playing("film-0"), 10., now);
+        publisher.sought(now);
+        // The film just plays on, as a seek to where it already is would leave it.
+        publisher.follow(playing("film-0"), 15., now + Duration::from_secs(5));
+        publisher.follow(playing("film-0"), 20.6, now + Duration::from_secs(10));
+        assert!(fake.seeked.borrow().is_empty());
     }
 
     #[test]

@@ -77,6 +77,10 @@ impl Shell {
                 return;
             };
             let session = &mut playback.session;
+            // Told as a seek when mpv answers, however small it was.
+            if matches!(command, Command::SeekBy(_) | Command::SetPosition(_)) {
+                self.mpris.sought(Instant::now());
+            }
             match command {
                 Command::PlayPause => session.toggle_pause(),
                 Command::Play if session.paused => session.toggle_pause(),
@@ -267,6 +271,18 @@ mod tests {
         player.queued.borrow_mut().push(PlayerEvent::Position(600.));
         tick(&window, cx);
         assert_eq!(*controls.seeked.borrow(), [600.]);
+    }
+
+    #[gpui_kit::test]
+    fn a_small_seek_from_mpris_is_followed_by_a_seeked_signal(cx: &mut TestAppContext) {
+        let (_server, window, controls) = signed_in_window(cx);
+        let player = play(&window, cx, Some(film()), None);
+        tick(&window, cx);
+        ask(&controls, Command::SeekBy(0.5));
+        tick(&window, cx);
+        player.queued.borrow_mut().push(PlayerEvent::Position(10.5));
+        tick(&window, cx);
+        assert_eq!(*controls.seeked.borrow(), [10.5]);
     }
 
     #[gpui_kit::test]
