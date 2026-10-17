@@ -12,7 +12,7 @@ set -eu
 
 [ "$(id -u)" != 0 ] || { echo "install.sh: do not run it as root: it installs for your user." >&2; exit 1; }
 
-here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+here=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 prefix=${PREFIX:-${HOME:?HOME is not set: say where to install with PREFIX}/.local}
 bin=$prefix/bin
 share=$prefix/share
