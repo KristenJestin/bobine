@@ -229,7 +229,7 @@ pub struct Shell {
     /// The help over the screen, `?`.
     help_open: bool,
     help_fade: Fade,
-    /// The volume and the mute of mpv, which it keeps from one film to the next.
+    /// The volume and the mute the last film was left at, carried to the next one.
     volume: (f64, bool),
     /// What the buttons of the posters changed that their lists do not say yet.
     pub marks: Marks,
@@ -551,7 +551,7 @@ impl Shell {
             cx.notify();
         });
         let mut session = session;
-        session.keep_volume(self.volume.0, self.volume.1);
+        session.carry_volume(self.volume.0, self.volume.1);
         self.playback = Some(Playback {
             session,
             controls_fade: Fade::new(motion::quick()),

@@ -503,6 +503,23 @@ mod tests {
     }
 
     #[gpui_kit::test]
+    fn the_volume_and_the_mute_carry_to_the_next_film(cx: &mut TestAppContext) {
+        let window = signed_in(cx);
+        playing(&window, cx);
+        let mut visual = drawn(&window, cx);
+        visual.simulate_keystrokes("down m escape");
+        assert_eq!(screen(&window, cx), Screen::Home);
+        // A new mpv starts loud and unmuted: it is told what the one before was left at.
+        let calls = playing(&window, cx);
+        let asked = calls.borrow().clone();
+        assert!(asked.contains(&Call::Volume(95.)), "{asked:?}");
+        assert!(asked.contains(&Call::Muted(true)), "{asked:?}");
+        let mut visual = drawn(&window, cx);
+        visual.simulate_keystrokes("m");
+        assert_eq!(calls.borrow().last(), Some(&Call::Muted(false)));
+    }
+
+    #[gpui_kit::test]
     fn n_plays_the_next_episode_at_once(cx: &mut TestAppContext) {
         let window = signed_in(cx);
         window

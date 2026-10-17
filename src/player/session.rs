@@ -57,7 +57,7 @@ pub struct Session {
     settings_open: bool,
     settings_page: Page,
     speed: f64,
-    /// 0 to 100. mpv keeps it from one film to the next: the window hands it on.
+    /// 0 to 100. Each film has an mpv of its own: the window carries it from one to the next.
     volume: f64,
     muted: bool,
     /// In tenths of a second.
@@ -295,10 +295,13 @@ impl Session {
         None
     }
 
-    /// The volume and the mute mpv kept from the film before: told, not set again.
-    pub fn keep_volume(&mut self, volume: f64, muted: bool) {
+    /// The volume and the mute the film before was left at: each film has an mpv of its own,
+    /// which starts loud and unmuted.
+    pub fn carry_volume(&mut self, volume: f64, muted: bool) {
         self.volume = volume;
         self.muted = muted;
+        self.player.set_volume(volume);
+        self.player.set_muted(muted);
     }
 
     pub fn volume(&self) -> (f64, bool) {
@@ -791,10 +794,13 @@ mod tests {
     #[test]
     fn the_volume_is_kept_from_one_session_to_the_next() {
         let mut f = fixture();
-        f.session.keep_volume(40., true);
+        f.session.carry_volume(40., true);
         f.session.key(KeyAction::Volume(5.), false);
         assert_eq!(f.session.volume(), (45., true));
-        assert_eq!(f.calls(), [Call::Volume(45.)]);
+        assert_eq!(
+            f.calls(),
+            [Call::Volume(40.), Call::Muted(true), Call::Volume(45.)]
+        );
     }
 
     #[test]
