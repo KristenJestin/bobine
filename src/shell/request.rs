@@ -242,8 +242,8 @@ impl Shell {
     /// Whether the page is the one the viewer looks at: a page under another, or behind another
     /// screen, reads nothing.
     fn request_shown(&self, generation: u64) -> bool {
-        let _ = generation;
         self.navigator.current() == Screen::Request
+            && (self.seerr.requests.last()).is_some_and(|page| page.generation == generation)
     }
 
     /// The page's turn. Hidden, it waits for the next one without reading. Shown, it reads the

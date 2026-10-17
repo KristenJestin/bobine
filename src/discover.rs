@@ -88,12 +88,12 @@ pub fn page_status(
     if let Some(sum) = download_progress(availability, in_library, downloads) {
         return Some(match (kind, sum.entries, sum.time_left) {
             (MediaKind::Tv, 2.., _) => {
-                format!("Downloading {} episodes · {} %", sum.entries, sum.percent)
+                format!("Downloading {} episodes · {}%", sum.entries, sum.percent)
             }
             (_, _, Some(left)) => {
-                format!("Downloading · {} % · {}", sum.percent, left_text(left))
+                format!("Downloading · {}% · {}", sum.percent, left_text(left))
             }
-            _ => format!("Downloading · {} %", sum.percent),
+            _ => format!("Downloading · {}%", sum.percent),
         });
     }
     match (availability, in_library) {
@@ -109,7 +109,7 @@ pub fn card_status(
     downloads: &[Download],
 ) -> Option<String> {
     download_progress(availability, in_library, downloads)
-        .map(|sum| format!("Downloading · {} %", sum.percent))
+        .map(|sum| format!("Downloading · {}%", sum.percent))
 }
 
 /// The pill of a card in the viewer's requests: the short download status of an approved one
@@ -131,16 +131,18 @@ pub fn keeps_watching(
     seen_download: bool,
     downloads: &[Download],
 ) -> bool {
-    let _ = downloads;
-    seen_download && is_downloading(availability, in_library)
+    match availability {
+        Availability::Processing => seen_download && !in_library,
+        Availability::PartiallyAvailable => !downloads.is_empty() && !in_library,
+        _ => false,
+    }
 }
 
 /// Whether a request page whose title is available waits for the library to hold it: Seerr
 /// marks a title available when its files are in place, a moment before the media server has
 /// scanned them. Only a title that was seen downloading is waited for.
 pub fn awaits_library(availability: Availability, in_library: bool, seen_download: bool) -> bool {
-    let _ = (availability, in_library, seen_download);
-    false
+    availability == Availability::Available && !in_library && seen_download
 }
 
 /// What a request of the viewer's list says of itself.
