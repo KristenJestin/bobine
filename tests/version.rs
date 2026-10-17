@@ -5,8 +5,13 @@ use std::process::Command;
 
 #[test]
 fn the_version_comes_from_the_build_not_from_cargo_toml() {
-    let expected = option_env!("BOBINE_VERSION").unwrap_or("0.0.0-dev");
-    assert_eq!(bobine::VERSION, expected);
+    match option_env!("BOBINE_VERSION") {
+        Some(named) => assert_eq!(bobine::VERSION, named),
+        None => {
+            assert_eq!(bobine::VERSION, "0.0.0-dev");
+            assert_ne!(bobine::VERSION, env!("CARGO_PKG_VERSION"));
+        }
+    }
 }
 
 #[test]
