@@ -54,8 +54,9 @@ pub struct SeriesPage {
     pub error: Option<&'static str>,
     pub busy: bool,
     refreshes: Refreshes,
-    /// The episode a notification opened the page for, until the page has scrolled to it.
-    pub in_view: Rc<RefCell<Option<ItemId>>>,
+    /// The episode a notification opened the page for, until the page has scrolled to it, and
+    /// the frames waited for the page to be laid out.
+    pub in_view: Rc<RefCell<Option<(ItemId, u8)>>>,
 }
 
 impl ListPage for SeriesPage {

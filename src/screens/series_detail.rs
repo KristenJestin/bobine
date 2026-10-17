@@ -369,7 +369,7 @@ fn episode_row(
     let in_view = shell
         .series_pages
         .last()
-        .filter(|page| page.in_view.borrow().as_ref() == Some(&item.id))
+        .filter(|page| page.in_view.borrow().as_ref().map(|(id, _)| id) == Some(&item.id))
         .map(|page| (page.in_view.clone(), page.scroll.clone()));
     let title = match episode.number {
         Some(number) => format!("{number} · {}", item.title),
@@ -509,12 +509,16 @@ fn episode_row(
         })
 }
 
+/// How many frames a page not laid out yet is waited for before the row is no longer wanted in
+/// view: a row that never fits would otherwise ask for frames as long as the page is shown.
+const LAYOUT_FRAMES: u8 = 8;
+
 /// Scrolls the page so that the row drawn `at` shows near its top, once: the episode is then no
 /// longer wanted in view, and the viewer scrolls on from there.
 fn bring_into_view(
     at: Bounds<Pixels>,
     scroll: &ScrollHandle,
-    wanted: &RefCell<Option<ItemId>>,
+    wanted: &RefCell<Option<(ItemId, u8)>>,
     window: &mut Window,
 ) {
     let page = scroll.bounds();
@@ -525,7 +529,14 @@ fn bring_into_view(
     let (offset, max) = (scroll.offset(), scroll.max_offset());
     // Not laid out yet: the next frame tries again, asked for, since nothing else may draw one.
     if max.y <= px(0.) {
-        window.request_animation_frame();
+        let mut wanted = wanted.borrow_mut();
+        match wanted.as_mut() {
+            Some((_, frames)) if *frames < LAYOUT_FRAMES => {
+                *frames += 1;
+                window.request_animation_frame();
+            }
+            _ => *wanted = None,
+        }
         return;
     }
     let y = offset.y - (at.top() - page.top() - px(IN_VIEW_TOP));
@@ -639,4 +650,47 @@ pub fn up_next_card(
             )
             .into_any_element(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use gpui_kit::{TestAppContext, size};
+
+    use super::*;
+
+    /// A row out of a page never laid out.
+    struct Lost {
+        scroll: ScrollHandle,
+        wanted: Rc<RefCell<Option<(ItemId, u8)>>>,
+    }
+
+    impl Render for Lost {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let (scroll, wanted) = (self.scroll.clone(), self.wanted.clone());
+            let at = Bounds::new(point(px(0.), px(500.)), size(px(10.), px(10.)));
+            canvas(
+                move |_, window, _| bring_into_view(at, &scroll, &wanted, window),
+                |_, _, _, _| {},
+            )
+            .size_full()
+        }
+    }
+
+    #[gpui_kit::test]
+    fn a_row_that_never_fits_stops_asking_for_frames(cx: &mut TestAppContext) {
+        let wanted = Rc::new(RefCell::new(Some((ItemId("series-1-s1-e4".into()), 0))));
+        let lost = Lost {
+            scroll: ScrollHandle::new(),
+            wanted: wanted.clone(),
+        };
+        let (_, window) = cx.add_window_view(|_, _| lost);
+        window.run_until_parked();
+        let mut frames = 0;
+        while window.update(|window, cx| window.simulate_next_frame(cx)) > 0 && frames < 100 {
+            window.run_until_parked();
+            frames += 1;
+        }
+        assert_eq!(frames, usize::from(LAYOUT_FRAMES), "frames asked");
+        assert_eq!(*wanted.borrow(), None, "given up");
+    }
 }

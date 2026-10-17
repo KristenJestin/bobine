@@ -158,7 +158,7 @@ impl Shell {
         self.search = None;
         self.open_series_on(open.series, Some(open.season), cx);
         if let Some(page) = self.series_pages.last_mut() {
-            page.in_view.replace(Some(open.episode));
+            page.in_view.replace(Some((open.episode, 0)));
         }
     }
 }
