@@ -340,6 +340,8 @@ pub enum Origin {
     Series(usize, ItemId),
     /// A playlist's page: its play buttons, and the card of its next title.
     Playlist(usize, ItemId),
+    /// A request page, by its number: only its Trailer button plays from there.
+    Request(u64),
     /// The header or a card of the Home or of one of its lists.
     Home,
 }
@@ -1535,6 +1537,15 @@ impl Shell {
                 Some(page) if &page.id == id => (&mut page.busy, &mut page.error),
                 _ => return,
             },
+            // The page's line is the one of its request, whose button stays as it is.
+            Origin::Request(generation) => {
+                if let Some(page) = self.request_numbered(*generation)
+                    && error.is_some()
+                {
+                    page.error = error;
+                }
+                return;
+            }
             // A playlist's page has no line of its own: the window says it, as for the Home.
             Origin::Playlist(depth, id) => {
                 if let Some(page) = self.playlist_page(*depth, id) {
