@@ -557,7 +557,7 @@ impl Draw<'_> {
 }
 
 /// Around each mark of the header, part of its click.
-const MARK_PAD: f32 = 5.;
+const MARK_PAD: f32 = 8.;
 
 fn title_text(title: String) -> Div {
     div()
@@ -979,6 +979,21 @@ mod tests {
         let caption = visual.debug_bounds("card-caption").expect("the caption");
         let room = visual.debug_bounds("room").expect("the room");
         (caption, room)
+    }
+
+    /// Each mark of the header is at least 24 px wide to click, even the smallest dot.
+    #[test]
+    fn every_hero_mark_is_at_least_24_px_wide_to_click() {
+        let rest = hero::Blend {
+            leaving: None,
+            level: 1.,
+        };
+        let smallest = hero::mark_width(1, 0, rest);
+        assert!(
+            smallest + 2. * MARK_PAD >= 24.,
+            "a mark's click is {}px wide",
+            smallest + 2. * MARK_PAD
+        );
     }
 
     /// The caption under a poster of a row, and under a wide card, sits whole in the room the
