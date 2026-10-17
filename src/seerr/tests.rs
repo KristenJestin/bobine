@@ -251,7 +251,7 @@ fn a_collection_with_two_films_in_the_library_and_two_missing_requests_only_the_
         kind == MediaKind::Movie && library.contains(&id)
     });
     assert_eq!(wanted, [HARBOUR_NIGHTS, HARBOUR_DAWN]);
-    let outcome = request_films(&seerr, &wanted);
+    let outcome = request_films(&seerr, &wanted, &|| true);
     assert_eq!(outcome.requested, wanted);
     let asked: Vec<u64> = fake
         .posts()
@@ -266,14 +266,14 @@ fn a_collection_request_stops_at_the_quota_and_says_which_films_were_not_request
     let fake = FakeSeerr::start();
     fake.state.lock().unwrap().movie_quota = Some(1);
     let seerr = client(&fake);
-    let outcome = request_films(&seerr, &[HARBOUR_NIGHTS, HARBOUR_DAWN]);
+    let outcome = request_films(&seerr, &[HARBOUR_NIGHTS, HARBOUR_DAWN], &|| true);
     assert_eq!(outcome.requested, [HARBOUR_NIGHTS]);
     assert_eq!(outcome.not_requested, [HARBOUR_DAWN]);
     assert_eq!(outcome.failure, Some(RequestError::Quota));
     assert_eq!(fake.posts().len(), 2, "the second one met the quota");
     // A quota already reached sends nothing.
     let posts = fake.posts().len();
-    let outcome = request_films(&seerr, &[PAPER_MOONS]);
+    let outcome = request_films(&seerr, &[PAPER_MOONS], &|| true);
     assert_eq!(outcome.failure, Some(RequestError::Quota));
     assert_eq!(fake.posts().len(), posts);
 }

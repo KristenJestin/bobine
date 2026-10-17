@@ -191,7 +191,13 @@ pub struct CollectionOutcome {
 /// Asks for `films` one after the other, as Seerr's own collection request does: Seerr has no
 /// request for a whole collection. It stops at the first failure, a quota reached before or
 /// during, so that the films after it are said not requested rather than refused one by one.
-pub fn request_films(server: &dyn RequestServer, films: &[TmdbId]) -> CollectionOutcome {
+/// `go_on` is asked before each film: once it says no (the page closed, the viewer signed out),
+/// nothing more is sent.
+pub fn request_films(
+    server: &dyn RequestServer,
+    films: &[TmdbId],
+    go_on: &dyn Fn() -> bool,
+) -> CollectionOutcome {
     let stopped = |at: usize, why: RequestError, requested: Vec<TmdbId>| CollectionOutcome {
         requested,
         not_requested: films[at..].to_vec(),
@@ -204,6 +210,13 @@ pub fn request_films(server: &dyn RequestServer, films: &[TmdbId]) -> Collection
     }
     let mut requested = Vec::new();
     for (at, film) in films.iter().enumerate() {
+        if !go_on() {
+            return CollectionOutcome {
+                requested,
+                not_requested: films[at..].to_vec(),
+                failure: None,
+            };
+        }
         if let Err(why) = server.request(&Ask::Movie(*film)) {
             return stopped(at, why, requested);
         }
@@ -345,7 +358,7 @@ mod tests {
             refuses: Some((3, RequestError::Quota)),
             ..Counter::default()
         };
-        let outcome = request_films(&server, &[1, 2, 3, 4]);
+        let outcome = request_films(&server, &[1, 2, 3, 4], &|| true);
         assert_eq!(outcome.requested, [1, 2]);
         assert_eq!(outcome.not_requested, [3, 4]);
         assert_eq!(outcome.failure, Some(RequestError::Quota));
@@ -362,10 +375,21 @@ mod tests {
             quota: true,
             ..Counter::default()
         };
-        let outcome = request_films(&server, &[1, 2]);
+        let outcome = request_films(&server, &[1, 2], &|| true);
         assert!(outcome.requested.is_empty());
         assert_eq!(outcome.not_requested, [1, 2]);
         assert!(server.asked.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_collection_request_sends_nothing_more_once_told_to_stop() {
+        let server = Counter::default();
+        let go_on = || server.asked.lock().unwrap().is_empty();
+        let outcome = request_films(&server, &[1, 2, 3], &go_on);
+        assert_eq!(*server.asked.lock().unwrap(), [1]);
+        assert_eq!(outcome.requested, [1]);
+        assert_eq!(outcome.not_requested, [2, 3]);
+        assert_eq!(outcome.failure, None);
     }
 
     #[test]
