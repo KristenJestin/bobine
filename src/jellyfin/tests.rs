@@ -3009,6 +3009,42 @@ fn a_segments_route_that_fails_is_an_error_left_to_the_caller() {
     );
 }
 
+#[test]
+fn a_film_and_a_series_have_their_tmdb_ids() {
+    let setup = Setup::new();
+    let server = setup.signed_in();
+    let detail = server.film(&film()).unwrap();
+    assert_eq!(detail.tmdb, Some(9001));
+    assert_eq!(detail.tmdb_collection, Some(500));
+    let series = server.series_detail(&ItemId(SERIES.into())).unwrap();
+    assert_eq!(series.tmdb, Some(7001));
+}
+
+#[test]
+fn the_library_is_indexed_by_tmdb_id_in_one_request() {
+    let setup = Setup::new();
+    let server = setup.signed_in();
+    let index = server.tmdb_index().unwrap();
+    assert_eq!(index.films.get(&9001), Some(&ItemId(FILM.into())));
+    assert_eq!(
+        index.films.get(&9002),
+        Some(&ItemId("f0000000000000000000000000000002".into()))
+    );
+    assert_eq!(
+        index.films.len(),
+        2,
+        "a film without a TMDb id is not in it"
+    );
+    assert_eq!(index.series.get(&7001), Some(&ItemId(SERIES.into())));
+    let asked = setup.fake.last("GET", "/Items");
+    assert_eq!(asked.param("Recursive"), Some("true"));
+    assert_eq!(asked.param("IncludeItemTypes"), Some("Movie,Series"));
+    assert_eq!(asked.param("Fields"), Some("ProviderIds"));
+    assert_eq!(asked.param("userId"), Some(USER_ID));
+    // The whole library at once: counting it too would only cost the server.
+    assert_eq!(asked.param("EnableTotalRecordCount"), Some("false"));
+}
+
 fn rainy_sundays() -> ItemId {
     ItemId(PLAYLIST.into())
 }

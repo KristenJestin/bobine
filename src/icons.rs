@@ -71,6 +71,11 @@ icons! {
     Info => "info",
     CornersOut => "corners-out",
     CornersIn => "corners-in",
+    Compass => "compass",
+    CheckSquare => "check-square",
+    Square => "square",
+    PaperPlane => "paper-plane",
+    Stack => "stack",
     PlayCircle => "play-circle",
 }
 

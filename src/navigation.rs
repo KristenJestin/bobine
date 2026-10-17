@@ -24,6 +24,10 @@ pub enum Screen {
     Playlist,
     /// The viewer's choices, reached from the account menu.
     Settings,
+    /// What the request server offers beyond the library: shown only when one is configured.
+    Discover,
+    /// A title the library does not hold, reached from Discover: what it is, and its request.
+    Request,
 }
 
 impl Screen {
@@ -45,6 +49,7 @@ impl Screen {
                 | Screen::Favorites
                 | Screen::Playlist
                 | Screen::Settings
+                | Screen::Request
         )
     }
 
@@ -52,7 +57,7 @@ impl Screen {
     pub fn has_backdrop(self) -> bool {
         matches!(
             self,
-            Screen::FilmDetail | Screen::SeriesDetail | Screen::CollectionDetail
+            Screen::FilmDetail | Screen::SeriesDetail | Screen::CollectionDetail | Screen::Request
         )
     }
 
@@ -62,7 +67,7 @@ impl Screen {
             Screen::Login => "Sign in",
             Screen::Home => "Home",
             Screen::Library => "Movies",
-            Screen::FilmDetail | Screen::SeriesDetail => "Details",
+            Screen::FilmDetail | Screen::SeriesDetail | Screen::Request => "Details",
             Screen::Person => "Person",
             Screen::Player => "Player",
             Screen::Series => "Series",
@@ -73,6 +78,7 @@ impl Screen {
             Screen::Favorites => "Favorites",
             Screen::Playlist => "Playlist",
             Screen::Settings => "Settings",
+            Screen::Discover => "Discover",
         }
     }
 }
@@ -85,15 +91,18 @@ pub enum NavEntry {
     Series,
     Collections,
     MyList,
+    /// Only while a request server is configured.
+    Discover,
 }
 
 impl NavEntry {
-    pub const ALL: [NavEntry; 5] = [
+    pub const ALL: [NavEntry; 6] = [
         NavEntry::Home,
         NavEntry::Films,
         NavEntry::Series,
         NavEntry::Collections,
         NavEntry::MyList,
+        NavEntry::Discover,
     ];
 
     pub fn label(self) -> &'static str {
@@ -103,6 +112,7 @@ impl NavEntry {
             NavEntry::Series => "Series",
             NavEntry::Collections => "Collections",
             NavEntry::MyList => "Lists",
+            NavEntry::Discover => "Discover",
         }
     }
 
@@ -113,6 +123,7 @@ impl NavEntry {
             NavEntry::Series => Some(Screen::Series),
             NavEntry::Collections => Some(Screen::Collections),
             NavEntry::MyList => Some(Screen::MyList),
+            NavEntry::Discover => Some(Screen::Discover),
         }
     }
 
@@ -175,6 +186,16 @@ impl Navigator {
         true
     }
 
+    /// Takes out the screens that can no longer show (the request server's, once it is gone);
+    /// the Home stands in for a root taken out.
+    pub fn forget(&mut self, gone: impl Fn(Screen) -> bool) {
+        let root_gone = gone(self.stack[0]);
+        self.stack.retain(|screen| !gone(*screen));
+        if root_gone {
+            self.stack.insert(0, Screen::Home);
+        }
+    }
+
     /// The label of the back link: `Movies` when the page was reached from the library.
     pub fn back_label(&self) -> Option<&'static str> {
         if !self.current().shows_back_link() {
@@ -225,6 +246,7 @@ mod tests {
             Screen::Favorites,
             Screen::Playlist,
             Screen::Settings,
+            Screen::Discover,
         ]
         .into_iter()
         .filter(|screen| !screen.shows_pill_bar())
@@ -331,6 +353,20 @@ mod tests {
         assert_eq!(nav.back_label(), Some("Person"));
         assert!(nav.back());
         assert_eq!(nav.current(), Screen::Person);
+    }
+
+    #[test]
+    fn the_screens_of_a_request_server_gone_are_forgotten_and_the_home_stands_for_the_root() {
+        let mut nav = Navigator::new();
+        nav.switch_root(Screen::Discover);
+        nav.open(Screen::FilmDetail);
+        nav.open(Screen::Settings);
+        nav.forget(|screen| screen == Screen::Discover);
+        assert_eq!(nav.current(), Screen::Settings);
+        assert!(nav.back());
+        assert_eq!(nav.current(), Screen::FilmDetail);
+        assert!(nav.back());
+        assert_eq!(nav.current(), Screen::Home);
     }
 
     #[test]
@@ -509,7 +545,17 @@ mod tests {
     #[test]
     fn the_labels_are_in_english() {
         let labels: Vec<&str> = NavEntry::ALL.into_iter().map(NavEntry::label).collect();
-        assert_eq!(labels, ["Home", "Movies", "Series", "Collections", "Lists"]);
+        assert_eq!(
+            labels,
+            [
+                "Home",
+                "Movies",
+                "Series",
+                "Collections",
+                "Lists",
+                "Discover"
+            ]
+        );
     }
 
     #[test]

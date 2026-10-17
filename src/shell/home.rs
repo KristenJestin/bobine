@@ -261,6 +261,8 @@ impl Shell {
     pub fn load_home(&mut self, cx: &mut Context<Self>) {
         let asked = self.home.begin_load();
         let stamp = self.marks.stamp();
+        // What the library holds may have changed: its index by TMDb id too.
+        self.load_tmdb_index(cx);
 
         self.ask(
             cx,

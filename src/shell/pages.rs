@@ -12,6 +12,7 @@ use bobine::provider::{
     Collection, Connector, FilmDetail, FilmQuery, FilterChoices, ItemId, LibraryKind, MediaServer,
     MediaSource, Page, PersonHit, PlayMethod, Playback as Opened, PlaybackReport, ProviderError,
 };
+use bobine::requests::{MediaKind, TmdbId};
 use gpui_kit::prelude::*;
 use gpui_kit::{
     Bounds, Context, Entity, Image, NavigationDirection, Pixels, Point, RenderImage, ScrollHandle,
@@ -46,6 +47,8 @@ pub(super) enum Reopen {
     Person(PersonHit),
     List(ListKind, Option<String>),
     Collection(ItemId),
+    /// A title of the request server, by its kind and TMDb id.
+    Request(MediaKind, TmdbId),
     Favorites,
     Playlist(ItemId),
 }
@@ -53,6 +56,7 @@ pub(super) enum Reopen {
 /// How long the address must stay unchanged before the server is asked who it is.
 const PROBE_AFTER: Duration = Duration::from_millis(600);
 
+#[derive(Clone)]
 pub enum Loadable<T> {
     Loading,
     Ready(T),
@@ -265,6 +269,8 @@ pub enum Arrival {
     /// Back on a collection page from a film: its films' marks are asked again.
     Collection,
     Library(LibraryKind),
+    /// Discover: the viewer's requests are asked again each time.
+    Discover,
     /// A library already known is not asked again: its tools and its list stay as they were.
     Nothing,
 }
@@ -278,6 +284,7 @@ pub fn arrival(screen: Screen, films_known: bool, series_known: bool) -> Arrival
         Screen::Playlist => Arrival::Playlist,
         Screen::Collections => Arrival::Collections,
         Screen::CollectionDetail => Arrival::Collection,
+        Screen::Discover => Arrival::Discover,
         Screen::Library if !films_known => Arrival::Library(LibraryKind::Films),
         Screen::Series if !series_known => Arrival::Library(LibraryKind::Series),
         _ => Arrival::Nothing,
@@ -398,8 +405,9 @@ pub struct DetailPage {
     /// "My list".
     pub favourite: Toggle,
     pub scroll: ScrollHandle,
-    /// The rows that scroll sideways: the cast, the collection, similar titles.
-    pub rows: [ScrollHandle; 3],
+    /// The rows that scroll sideways: the cast, the collection, similar titles, and those of
+    /// the request server not in the library.
+    pub rows: [ScrollHandle; 4],
     gesture: scroll::Gesture,
     /// What went wrong with the last button.
     pub error: Option<&'static str>,
@@ -514,6 +522,7 @@ impl Shell {
         });
         self.login_focus_due = true;
         self.server = None;
+        self.seerr = Default::default();
         self.details.clear();
         self.series_pages.clear();
         self.up_next.cancel();
@@ -608,6 +617,7 @@ impl Shell {
         self.server = Some(server);
         self.login = None;
         self.reset_session(cx);
+        self.set_up_seerr(cx);
         self.navigator.switch_root(Screen::Home);
         self.load_home(cx);
     }
@@ -618,6 +628,7 @@ impl Shell {
         self.settings_page.menus.close();
         // Their keyring entries stay: the next session of the same user finds them again.
         self.settings_page.secrets.clear();
+        self.seerr = Default::default();
         self.home = HomePage::default();
         self.library = LibraryPage::default();
         self.series = LibraryPage::default();
@@ -751,6 +762,10 @@ impl Shell {
 
     /// A click on the pill bar.
     pub fn select(&mut self, entry: NavEntry, cx: &mut Context<Self>) {
+        // Discover is not offered without a request server.
+        if entry == NavEntry::Discover && self.seerr.client.is_none() {
+            return;
+        }
         if !self.navigator.select(entry) {
             return;
         }
@@ -761,6 +776,7 @@ impl Shell {
         self.people.clear();
         self.list = None;
         self.collection_pages.clear();
+        self.seerr.requests.clear();
         self.arrived(cx);
         cx.notify();
     }
@@ -791,6 +807,11 @@ impl Shell {
                 .collection_pages
                 .pop()
                 .map(|page| Reopen::Collection(page.id)),
+            Screen::Request => self
+                .seerr
+                .requests
+                .pop()
+                .map(|page| Reopen::Request(page.kind, page.tmdb)),
             Screen::Favorites => Some(Reopen::Favorites),
             Screen::Playlist => self
                 .playlist_pages
@@ -821,6 +842,7 @@ impl Shell {
             Reopen::Person(person) => self.open_person(person, cx),
             Reopen::List(kind, library) => self.open_list(kind, library, cx),
             Reopen::Collection(id) => self.open_collection(id, cx),
+            Reopen::Request(kind, tmdb) => self.open_request(kind, tmdb, cx),
             Reopen::Favorites => self.open_favorites(cx),
             Reopen::Playlist(id) => self.open_playlist(id, cx),
         }
@@ -869,6 +891,7 @@ impl Shell {
             Arrival::Collections => self.load_collections(cx),
             Arrival::Collection => self.reload_collection(cx),
             Arrival::Library(kind) => self.load_library(kind, cx),
+            Arrival::Discover => self.load_discover(cx),
             Arrival::Nothing => {}
         }
     }
@@ -1241,10 +1264,12 @@ impl Shell {
                     page.choices = Some(Choices::new(&detail.versions));
                 }
                 page.favourite.sync(detail.favourite, read_at);
+                let tmdb = detail.tmdb;
                 page.detail = Loadable::Ready(detail);
                 if with_collection {
                     shell.load_collection(depth, id, cx);
                 }
+                shell.load_similar(MediaKind::Movie, tmdb, cx);
             },
         );
     }
@@ -1354,6 +1379,12 @@ impl Shell {
             return;
         }
         if let Some((menus, _)) = self.tool_menus()
+            && menus.escape()
+        {
+            cx.notify();
+            return;
+        }
+        if let Some((menus, _)) = self.seasons_menu()
             && menus.escape()
         {
             cx.notify();
@@ -1684,11 +1715,38 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> Option<Arc<RenderImage>> {
         let image = image?;
-        let key = Key::new(image, width);
+        self.picture(
+            Key::new(image, width),
+            images::Wanted::Server(image.clone()),
+            cx,
+        )
+    }
+
+    /// A TMDb picture at `width`, through the request server, once it is here.
+    pub fn tmdb_image(
+        &mut self,
+        image: Option<&bobine::requests::TmdbImage>,
+        width: u32,
+        cx: &mut Context<Self>,
+    ) -> Option<Arc<RenderImage>> {
+        let image = image?;
+        self.picture(
+            Key::tmdb(image, width),
+            images::Wanted::Tmdb(image.clone()),
+            cx,
+        )
+    }
+
+    fn picture(
+        &mut self,
+        key: Key,
+        wanted: images::Wanted,
+        cx: &mut Context<Self>,
+    ) -> Option<Arc<RenderImage>> {
         if let Some(found) = self.images.cache.get(&key) {
             return Some(found.clone());
         }
-        self.images.want(&key, image, Instant::now());
+        self.images.want(&key, wanted, Instant::now());
         self.fetch_images(cx);
         // A failed image waiting for its retry is drawn here, with nothing else to end a fetch.
         self.wake_for_image_retries(cx);
@@ -1738,16 +1796,23 @@ impl Shell {
         while let Some((key, image)) = self.images.next_fetch() {
             let svg = cx.svg_renderer();
             let width = key.width();
-            self.ask(
-                cx,
-                move |server| {
-                    let bytes = server.image(&image, width).ok()?;
-                    let format = images::format(&bytes)?;
-                    Arc::new(Image::from_bytes(format, bytes))
-                        .to_image_data(svg)
-                        .ok()
-                },
-                move |shell, decoded, cx| {
+            let decode = move |bytes: Vec<u8>| {
+                let format = images::format(&bytes)?;
+                Arc::new(Image::from_bytes(format, bytes))
+                    .to_image_data(svg)
+                    .ok()
+            };
+            let (server, seerr) = (self.server.clone(), self.seerr_client());
+            let task = cx.background_executor().spawn(async move {
+                let bytes = match image {
+                    images::Wanted::Server(image) => server?.image(&image, width).ok(),
+                    images::Wanted::Tmdb(image) => seerr?.image(&image, width).ok(),
+                };
+                decode(bytes?)
+            });
+            cx.spawn(async move |this, cx| {
+                let decoded = task.await;
+                this.update(cx, |shell, cx| {
                     shell
                         .images
                         .fetched(&key, decoded.is_some(), Instant::now());
@@ -1761,8 +1826,11 @@ impl Shell {
                     shell.notify_hero(cx);
                     shell.fetch_images(cx);
                     shell.wake_for_image_retries(cx);
-                },
-            );
+                    cx.notify();
+                })
+                .ok();
+            })
+            .detach();
         }
     }
 }

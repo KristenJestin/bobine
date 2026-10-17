@@ -32,6 +32,20 @@ pub fn place(chip: Bounds<Pixels>, height: f32, window_height: f32) -> (Point<Pi
     (point(chip.left(), px(y)), height)
 }
 
+/// Where a menu `height` tall goes under its chip, whatever the room above: in the room left
+/// below, where it scrolls, and at least `least` tall, risen from the window's edge if it must.
+pub fn place_below(
+    chip: Bounds<Pixels>,
+    height: f32,
+    window_height: f32,
+    least: f32,
+) -> (Point<Pixels>, f32) {
+    let below = window_height - f32::from(chip.bottom()) - GAP - MARGIN;
+    let height = height.min(below.max(least));
+    let y = (f32::from(chip.bottom()) + GAP).min(window_height - MARGIN - height);
+    (point(chip.left(), px(y)), height)
+}
+
 pub struct Menus<K> {
     open: Option<K>,
 }
@@ -107,6 +121,25 @@ mod tests {
         assert_eq!(
             place(chip_at(60.), 900., 810.),
             (point(px(372.), px(98.)), 704.)
+        );
+    }
+
+    #[test]
+    fn a_menu_kept_below_its_chip_scrolls_in_the_room_left_there() {
+        // 124 pixels below: the menu takes them, though 418 are free above.
+        assert_eq!(
+            place_below(chip_at(640.), 216., 810., 90.),
+            (point(px(372.), px(678.)), 124.)
+        );
+        // Room for it all: all of it.
+        assert_eq!(
+            place_below(chip_at(60.), 216., 810., 90.),
+            (point(px(372.), px(98.)), 216.)
+        );
+        // 44 below, fewer than the least it needs: it rises by what is missing.
+        assert_eq!(
+            place_below(chip_at(720.), 216., 810., 90.),
+            (point(px(372.), px(712.)), 90.)
         );
     }
 

@@ -15,6 +15,7 @@ pub use trickplay::{Cell, Trickplay, WANTED_WIDTH};
 #[cfg(test)]
 pub use keyring::MemoryStore;
 
+use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 use std::time::Duration;
@@ -155,6 +156,9 @@ pub trait MediaServer: Send + Sync {
     /// The stretches of a film or an episode the server marked (intro, credits…), by start. A
     /// server that does not know them, or an item without any, answers none: never an error.
     fn media_segments(&self, item: &ItemId) -> Result<Vec<Segment>, ProviderError>;
+    /// The films and series of every library that have a TMDb id, by that id: one call, for
+    /// the request server's titles to be told in the library.
+    fn tmdb_index(&self) -> Result<TmdbIndex, ProviderError>;
     /// Where to stream the first trailer file the server holds for a film or a series. No
     /// playback session is opened: a trailer is not watched, the server is told nothing of it.
     /// `NotFound` when the title has none.
@@ -168,6 +172,13 @@ pub struct Trailers {
     pub local: bool,
     /// The first trailer hosted elsewhere (YouTube…). A public page address, no secret.
     pub remote: Option<String>,
+}
+
+/// The library's films and series by their TMDb id.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TmdbIndex {
+    pub films: HashMap<u64, ItemId>,
+    pub series: HashMap<u64, ItemId>,
 }
 
 /// What a marked stretch of a film or an episode is.
@@ -269,6 +280,8 @@ pub struct SeriesDetail {
     pub logo: Option<ImageRef>,
     /// In the user's list.
     pub favourite: bool,
+    /// Its id on TMDb, when the server knows it.
+    pub tmdb: Option<u64>,
     pub trailers: Trailers,
 }
 
@@ -470,6 +483,9 @@ pub struct FilmDetail {
     pub logo: Option<ImageRef>,
     /// In the user's list.
     pub favourite: bool,
+    /// Its id on TMDb, and the id of its TMDb collection, when the server knows them.
+    pub tmdb: Option<u64>,
+    pub tmdb_collection: Option<u64>,
     pub trailers: Trailers,
 }
 
