@@ -12,7 +12,7 @@
 //! `bobine --screen login|home|home-rows|home-list-resume|home-list-next|home-list-latest|home-list-empty|library|detail|
 //! detail-rows|detail-cast|playing|series|series-page|series-rows|up-next|collections|collection-page|
 //! my-list|my-list-empty|lists|playlist|film-list|series-list|discover|request|seasons|seerr-collection|similar|settings-seerr|stats|stats-played [--films N]
-//! [--media FILE] [--segments SECONDS] [--direct-fails] [--trailer] [--image-delay-ms N] [--photos-fail-once] [--scenario menu|scroll|select|panel|blackout|search|search-slow|search-keys|help|ring|ring-wheel|tools|tools-keys|home-rotate|home-hover|home-jump|home-scroll|home-lists|home-play|home-poster-hover|grid-poster-hover|playlist-menu|cast-hover|genre-hover|episode-hover|skip|settings|settings-screen|long-tracks|segment-marks|stats-scroll]
+//! [--media FILE] [--segments SECONDS] [--direct-fails] [--trailer] [--image-delay-ms N] [--photos-fail-once] [--scenario detail-play|menu|scroll|select|panel|blackout|search|search-slow|search-keys|help|ring|ring-wheel|tools|tools-keys|home-rotate|home-hover|home-jump|home-scroll|home-lists|home-play|home-poster-hover|grid-poster-hover|playlist-menu|cast-hover|genre-hover|episode-hover|skip|settings|settings-screen|long-tracks|segment-marks|stats-scroll]
 //! [--stats plugin|played] [--search-delay-ms N] [--favourite-delay-ms N] [--logout-delay-ms N] [--favourite-fails] [--slower N] --quit-at S`
 //!
 //! A scenario sends clicks, keys and scroll events to the window as the compositor would, at set
@@ -311,7 +311,7 @@ impl Harness {
                 let episodes = state.episodes.iter_mut();
                 episodes.for_each(|episode| episode.item.resume = None);
             }
-            if args.scenario.as_deref() == Some("home-play") {
+            if matches!(args.scenario.as_deref(), Some("home-play" | "detail-play")) {
                 // The file played is seconds long: what was started resumes near its start.
                 let started = Duration::from_secs(1);
                 let films = state.films.iter_mut();
@@ -648,6 +648,7 @@ fn show_screen(
                         .update(cx, |shell, _| {
                             acts.report(&shell.frames.borrow());
                             acts.report_draws(&shell.draws.borrow());
+                            report_curtains(&shell.frames.borrow(), &shell.curtain_marks.borrow());
                         })
                         .ok();
                 }
@@ -789,6 +790,8 @@ enum Act {
     Blackout,
     /// The player's back arrow pressed, as its click does.
     Leave,
+    /// "Play" pressed on the film page, as its click does.
+    PlayFilm,
     /// A field for a secret added to the Integrations section, as the first integration will.
     DemoSecret,
     /// Text typed in that field.
@@ -1189,6 +1192,13 @@ impl Acts {
                 ),
                 (3.0, "the pointer leaves it", Hover(Bottom)),
             ],
+            // "Play" on the film page: the way into the player, then the way back out.
+            "detail-play" => vec![
+                (0.0, "", Hover(Top)),
+                (1.0, "play the movie from its page", PlayFilm),
+                (4.0, "leave the player", Leave),
+                (6.0, "the movie page is back", Mark),
+            ],
             // The header's "Play" plays the first title, Escape leaves, the Home is asked anew.
             "home-play" => vec![
                 // Before any move the window takes the pointer for being at its corner, over
@@ -1362,6 +1372,53 @@ impl Acts {
     }
 }
 
+/// The frame times of each way into the player and out of it: from its start to its end, and
+/// when the video's first frame came.
+fn report_curtains(frames: &[Instant], marks: &[(&'static str, Instant)]) {
+    if let Some((_, first)) = marks.first() {
+        let at = |t: &Instant| t.duration_since(*first).as_secs_f64() * 1000.;
+        let said: Vec<String> = marks
+            .iter()
+            .map(|(what, t)| format!("{what}@{:.1}", at(t)))
+            .collect();
+        println!("CURTAIN marks (ms from the first): {}", said.join(", "));
+    }
+    for (at, (way, start)) in marks.iter().enumerate() {
+        if *way != "opening" && *way != "closing" {
+            continue;
+        }
+        let rest = &marks[at + 1..];
+        let end = rest
+            .iter()
+            .take_while(|(what, _)| *what != "opening" && *what != "closing");
+        let found = |name: &str| end.clone().find(|(what, _)| *what == name).map(|(_, t)| *t);
+        let (first, over) = (found("first frame"), found("over"));
+        let until = over.unwrap_or_else(Instant::now);
+        let during: Vec<Instant> = frames
+            .iter()
+            .copied()
+            .filter(|frame| frame >= start && *frame <= until)
+            .collect();
+        let gaps: Vec<f64> = during
+            .windows(2)
+            .map(|pair| pair[1].duration_since(pair[0]).as_secs_f64() * 1000.)
+            .collect();
+        let ms =
+            |t: Option<Instant>| t.map_or(-1., |t| t.duration_since(*start).as_secs_f64() * 1000.);
+        println!(
+            "CURTAIN {way}: length_ms={:.1} first_frame_ms={:.1} draws={} longest_gap_ms={:.1} gaps_over_20ms={} gaps_ms={:?}",
+            ms(over),
+            ms(first),
+            during.len(),
+            gaps.iter().copied().fold(0., f64::max),
+            gaps.iter().filter(|gap| **gap > 20.).count(),
+            gaps.iter()
+                .map(|gap| (gap * 10.).round() / 10.)
+                .collect::<Vec<_>>(),
+        );
+    }
+}
+
 /// The Home's header is this tall, as the screen draws it.
 fn hero_height(size: gpui_kit::Size<Pixels>) -> Pixels {
     (size.height * 0.72).clamp(px(460.), px(760.))
@@ -1488,6 +1545,10 @@ fn send(act: &Act, shell: &Entity<Shell>, window: &mut Window, cx: &mut App) {
         }
         Act::Leave => {
             shell.update(cx, |shell, cx| shell.player_back(window, cx));
+            Vec::new()
+        }
+        Act::PlayFilm => {
+            shell.update(cx, |shell, cx| shell.play_film(From::Resume, window, cx));
             Vec::new()
         }
         Act::DemoSecret => {
