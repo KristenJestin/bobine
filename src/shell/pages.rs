@@ -318,6 +318,20 @@ pub fn reload_after_playback(screen: Screen, films: usize, series: usize) -> Opt
     films.checked_sub(1).map(Reload::Film)
 }
 
+/// Two handles that both end once `handle` has: a thread can be joined only once.
+fn forked(handle: JoinHandle<()>) -> (JoinHandle<()>, JoinHandle<()>) {
+    let (ended, waiting) = std::sync::mpsc::channel::<()>();
+    let first = std::thread::spawn(move || {
+        let _ = handle.join();
+        drop(ended);
+    });
+    // Its sender is dropped, never used to send: the wait ends with the first thread.
+    let second = std::thread::spawn(move || {
+        let _ = waiting.recv();
+    });
+    (first, second)
+}
+
 /// The page a play button was pressed on, at its depth, with what it shows.
 pub enum Origin {
     Film(usize, ItemId),
@@ -1649,6 +1663,16 @@ impl Shell {
     /// Back from the player: once "stopped" reached the server, the film page shows where the
     /// viewer is now.
     pub(super) fn after_playback(&mut self, reports: JoinHandle<()>, cx: &mut Context<Self>) {
+        // What was just watched counts now, whatever the screen: Escape from a film page opened
+        // on the Stats page goes back to it without opening it again.
+        let (reports, for_stats) = forked(reports);
+        self.ask(
+            cx,
+            move |_| {
+                let _ = for_stats.join();
+            },
+            |shell, (), cx| shell.load_stats(cx),
+        );
         let depth = match reload_after_playback(
             self.navigator.current(),
             self.details.len(),

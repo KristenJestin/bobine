@@ -289,6 +289,34 @@ mod tests {
     }
 
     #[gpui_kit::test]
+    fn a_playback_started_from_the_stats_page_shows_its_numbers_when_back_on_it(
+        cx: &mut TestAppContext,
+    ) {
+        let history = fake::watch_history(HistorySource::PlaybackReporting, NOW);
+        let (server, window) = start(history, cx);
+        window
+            .update(cx, |shell, _, cx| shell.open_stats(cx))
+            .unwrap();
+        let mut visual = drawn(&window, cx);
+        visual.simulate_keystrokes("right enter");
+        visual.run_until_parked();
+        assert_eq!(screen(&window, cx), Screen::FilmDetail);
+        assert_eq!(reads(&server), 2, "sign-in and the page");
+        // The server now holds another history, the one the playback just made.
+        server.state.lock().unwrap().history = fake::watch_history(HistorySource::PlayedItems, NOW);
+        window
+            .update(cx, |shell, _, cx| {
+                shell.after_playback(std::thread::spawn(|| {}), cx)
+            })
+            .unwrap();
+        visual.run_until_parked();
+        assert_eq!(reads(&server), 3, "read again at the playback's end");
+        visual.simulate_keystrokes("escape");
+        assert_eq!(screen(&window, cx), Screen::Stats);
+        assert_eq!(source(&window, cx), Some(HistorySource::PlayedItems));
+    }
+
+    #[gpui_kit::test]
     fn no_second_read_while_one_runs(cx: &mut TestAppContext) {
         let (server, window) = start(fake::watch_history(HistorySource::PlayedItems, NOW), cx);
         window

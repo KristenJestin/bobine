@@ -579,8 +579,6 @@ impl Shell {
                 let _ = reports.join();
             },
             |shell, (), cx| {
-                // What was just watched counts now.
-                shell.load_stats(cx);
                 if shell.navigator.current() == Screen::Home {
                     shell.load_home(cx);
                 }
