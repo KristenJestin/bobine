@@ -77,6 +77,7 @@ icons! {
     PaperPlane => "paper-plane",
     Stack => "stack",
     PlayCircle => "play-circle",
+    Bell => "bell",
 }
 
 /// The asset source of the window: the icons above and nothing else.

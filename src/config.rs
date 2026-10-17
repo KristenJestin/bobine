@@ -1,6 +1,7 @@
 //! Where Bobine keeps the account file (device id, server address, user name: nothing secret),
 //! and the viewer's settings beside it.
 
+use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
@@ -22,7 +23,7 @@ pub fn settings_path(xdg_config_home: Option<OsString>, home: Option<OsString>) 
 }
 
 /// What the viewer chose, kept between two starts. A setting the file lacks keeps its default.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
     /// "Black out other screens": the other monitors turn black while a film plays fullscreen.
@@ -32,6 +33,36 @@ pub struct Settings {
     pub default_quality: Quality,
     /// Where the request server (Seerr) answers. Its API key is in the keyring, never here.
     pub seerr_address: Option<String>,
+    /// The desktop is told when a series the viewer follows gains an episode.
+    pub notify_new_episodes: bool,
+    /// For each account (`<server id>/<user id>`), what the last check of new episodes saw. Not
+    /// `episodes_seen`, which held a plain number before and would make the whole file unread.
+    /// Last: a table goes after the plain values.
+    pub new_episodes_seen: BTreeMap<String, EpisodesSeen>,
+}
+
+/// What a check of new episodes saw, which the next one starts from.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct EpisodesSeen {
+    /// The newest date an episode was added on: ticks of 100 ns since 1970, by the server's
+    /// clock, which the episodes are dated by.
+    pub mark: i64,
+    /// The episodes not played added within `notify::GRACE` of the mark: id, and when added.
+    /// Not `episodes`, a list of ids before, which the dates would make unread.
+    pub added: BTreeMap<String, i64>,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            black_out_other_monitors: false,
+            default_quality: Quality::default(),
+            seerr_address: None,
+            notify_new_episodes: true,
+            new_episodes_seen: BTreeMap::new(),
+        }
+    }
 }
 
 /// How much of the picture the viewer wants when the server converts a film.
@@ -162,6 +193,81 @@ mod tests {
     }
 
     #[test]
+    fn new_episodes_are_notified_by_default() {
+        assert!(Settings::default().notify_new_episodes);
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("settings.toml"),
+            "black_out_other_monitors = true\n",
+        )
+        .unwrap();
+        assert!(Settings::read(&dir.path().join("settings.toml")).notify_new_episodes);
+    }
+
+    #[test]
+    fn the_last_check_of_new_episodes_is_kept_for_each_account() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("bobine/settings.toml");
+        let mut settings = Settings::default();
+        let first = EpisodesSeen {
+            mark: 17_578_386_051_234_567,
+            added: [
+                ("e1".to_string(), 17_578_386_051_234_567),
+                ("e2".to_string(), 3),
+            ]
+            .into(),
+        };
+        let second = EpisodesSeen {
+            mark: 12,
+            added: BTreeMap::new(),
+        };
+        settings
+            .new_episodes_seen
+            .insert("server-1/user-1".into(), first.clone());
+        settings
+            .new_episodes_seen
+            .insert("server-2/user-1".into(), second.clone());
+        settings.save(&path).unwrap();
+        let read = Settings::read(&path);
+        assert_eq!(read.new_episodes_seen.get("server-1/user-1"), Some(&first));
+        assert_eq!(read.new_episodes_seen.get("server-2/user-1"), Some(&second));
+    }
+
+    #[test]
+    fn a_last_check_kept_the_old_way_leaves_the_other_settings_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.toml");
+        std::fs::write(
+            &path,
+            "black_out_other_monitors = true\n\n[episodes_seen]\n\"server-1/user-1\" = 1757838605\n",
+        )
+        .unwrap();
+        let read = Settings::read(&path);
+        assert!(read.black_out_other_monitors);
+        assert!(read.new_episodes_seen.is_empty());
+    }
+
+    #[test]
+    fn a_last_check_kept_without_dates_leaves_the_other_settings_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.toml");
+        std::fs::write(
+            &path,
+            "black_out_other_monitors = true\n\n[new_episodes_seen.\"server-1/user-1\"]\nmark = 7\nepisodes = [\"e1\"]\n",
+        )
+        .unwrap();
+        let read = Settings::read(&path);
+        assert!(read.black_out_other_monitors);
+        assert_eq!(
+            read.new_episodes_seen.get("server-1/user-1"),
+            Some(&EpisodesSeen {
+                mark: 7,
+                added: BTreeMap::new(),
+            })
+        );
+    }
+
+    #[test]
     fn the_default_quality_is_the_original_file() {
         assert_eq!(Settings::default().default_quality, Quality::Original);
         let dir = tempfile::tempdir().unwrap();
@@ -177,6 +283,15 @@ mod tests {
             black_out_other_monitors: true,
             default_quality: Quality::Cap(8),
             seerr_address: Some("https://seerr.example.org".into()),
+            notify_new_episodes: false,
+            new_episodes_seen: [(
+                "server-1/user-1".to_string(),
+                EpisodesSeen {
+                    mark: 7,
+                    added: [("e1".to_string(), 7)].into(),
+                },
+            )]
+            .into(),
         };
         changed.save(&path).unwrap();
         assert_eq!(Settings::read(&path), changed);
