@@ -324,6 +324,19 @@ mod tests {
         }
     }
 
+    /// Notifications shown and remembered by the adapter. The fake server records a `Notify` as
+    /// it arrives, before the adapter has its reply and remembers the id, so seeing it is not
+    /// enough for a click to be heard. The bus thread sends them one at a time, each after the
+    /// previous was remembered: a last notification, seen by the server, proves the ones before
+    /// it are.
+    fn shown(dbus: &mut Dbus, desktop: &Desktop, series: &[&str]) {
+        for series in series {
+            dbus.notify(&notification(series));
+        }
+        dbus.notify(&notification("fence"));
+        assert!(until(|| desktop.asked().len() == series.len() + 1));
+    }
+
     /// The first `count` clicks heard, waited for, taken from the inbox without waiting on it: no
     /// thread is left parked behind. The signals are handled in the order they were sent, so the
     /// clicks heard by then are all those that came before.
@@ -357,9 +370,7 @@ mod tests {
         let Some(bus) = private_bus() else { return };
         let desktop = Desktop::on(&bus);
         let mut dbus = Dbus::at(Some(bus.address.clone()));
-        dbus.notify(&notification("series-1"));
-        dbus.notify(&notification("series-4"));
-        assert!(until(|| desktop.asked().len() == 2));
+        shown(&mut dbus, &desktop, &["series-1", "series-4"]);
         // Another action than the click itself, which opens nothing, then a click on the second.
         desktop.click(1, "snooze");
         desktop.click(2, DEFAULT);
@@ -371,9 +382,7 @@ mod tests {
         let Some(bus) = private_bus() else { return };
         let desktop = Desktop::on(&bus);
         let mut dbus = Dbus::at(Some(bus.address.clone()));
-        dbus.notify(&notification("series-1"));
-        dbus.notify(&notification("series-4"));
-        assert!(until(|| desktop.asked().len() == 2));
+        shown(&mut dbus, &desktop, &["series-1", "series-4"]);
         desktop.close(1);
         desktop.click(1, DEFAULT);
         // Heard once the close and the click before it were handled.
