@@ -228,8 +228,39 @@ fn credits() -> Value {
     })
 }
 
+fn video(kind: &str, name: &str, site: &str, key: &str) -> Value {
+    json!({ "type": kind, "name": name, "site": site, "key": key, "size": 1080,
+        "url": format!("https://example.invalid/{site}/{key}") })
+}
+
+/// The videos Seerr lists for a title, as it maps TMDb's. Seerr gives neither the language, the
+/// date nor whether a video is official: only its type, name, site and key.
+fn related_videos(id: u64) -> Value {
+    match id {
+        LIGHTHOUSE => json!([
+            video("Featurette", "Making of", "YouTube", "making01"),
+            video("Teaser", "Teaser", "YouTube", "teaser01"),
+            video("Trailer", "Trailer (fan cut)", "YouTube", "fanCut01"),
+            video("Trailer", "Official Trailer", "YouTube", "offTrl01"),
+            video("Clip", "Opening scene", "YouTube", "clip0001"),
+        ]),
+        HARBOUR_LIGHTS => json!([
+            video("Teaser", "Teaser", "YouTube", "teaser02"),
+            video("Featurette", "Behind the lens", "YouTube", "lens0001"),
+            video("Behind the Scenes", "On set", "YouTube", "onset001"),
+        ]),
+        NORTHERN_LINE => json!([video("Trailer", "Season 3 Trailer", "YouTube", "lineTrl1")]),
+        COPPER_COAST => json!([
+            video("Trailer", "Trailer", "Dailymotion", "dm0001"),
+            video("Trailer", "Trailer", "Vimeo", "12345678"),
+        ]),
+        _ => json!([]),
+    }
+}
+
 fn movie_details(state: &State, id: u64) -> Option<Value> {
     let mut details = find(state, id, "movie")?;
+    details["relatedVideos"] = related_videos(id);
     details["runtime"] = json!(112);
     details["genres"] = json!([{ "id": 18, "name": "Drama" }]);
     details["credits"] = credits();
@@ -246,6 +277,7 @@ fn movie_details(state: &State, id: u64) -> Option<Value> {
 
 fn tv_details(state: &State, id: u64) -> Option<Value> {
     let mut details = find(state, id, "tv")?;
+    details["relatedVideos"] = related_videos(id);
     details["genres"] = json!([{ "id": 9648, "name": "Mystery" }]);
     details["credits"] = credits();
     details["seasons"] = json!([
