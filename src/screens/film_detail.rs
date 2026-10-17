@@ -92,6 +92,11 @@ pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -
     let collection = page.collection.clone();
     let scroll = page.scroll.clone();
     let [cast_scroll, collection_scroll, similar_scroll] = page.rows.clone();
+    shell.scrolls.extend([
+        scroll.clone(),
+        collection_scroll.clone(),
+        similar_scroll.clone(),
+    ]);
     let height = f32::from(window.viewport_size().height);
 
     let hero = hero(

@@ -1,16 +1,30 @@
-//! What the keys of `crate::keys` do on the window: the player's and the pages'.
+//! What the keys of `crate::keys` do on the window: the player's, the pages' and the focus ring
+//! of the cards.
 
 use gpui_kit::prelude::*;
-use gpui_kit::{Action, Context, Div, KeyContext, Stateful, Window};
+use gpui_kit::{
+    Action, Bounds, Context, Div, KeyContext, MouseMoveEvent, Pixels, Stateful, Window, canvas,
+    point, px,
+};
 
 use super::Shell;
 use crate::keys::*;
 use crate::navigation::{NavEntry, Screen};
 use crate::player::controls::{KeyAction, SKIP_SECONDS};
 use crate::player::session::VOLUME_STEP;
+use crate::ring::{self, Direction, Place};
+use crate::screens::{Open, open_card, play_card};
 
 /// What a long seek skips.
 const LONG_SKIP: f64 = 60.;
+/// The room a card scrolled into view keeps from the sides of its row.
+const ROW_ROOM: f32 = 40.;
+/// The room it keeps from the top of the window, under the pill bar, and from its bottom, for
+/// the caption under the picture.
+const BAR_ROOM: f32 = 104.;
+const FOOT_ROOM: f32 = 64.;
+/// The gap between two cards, added to a card's size when the page moves on by one.
+const CARD_GAP: f32 = 16.;
 
 impl Shell {
     /// The key context of the window's root: the screen, and what over it takes the keys.
@@ -39,6 +53,12 @@ impl Shell {
     /// The root of the window, answering every key of the keymap.
     pub(super) fn answer_keys(root: Stateful<Div>, cx: &mut Context<Self>) -> Stateful<Div> {
         use KeyAction as K;
+        let root = root.on_mouse_move(cx.listener(|shell, _: &MouseMoveEvent, _, cx| {
+            if shell.ring.hide() {
+                shell.notify_ringed(cx);
+                cx.notify();
+            }
+        }));
         let root = player::<PlayPause>(root, K::TogglePause, cx);
         let root = player::<SeekBack>(root, K::SeekBy(-SKIP_SECONDS), cx);
         let root = player::<SeekForward>(root, K::SeekBy(SKIP_SECONDS), cx);
@@ -61,6 +81,10 @@ impl Shell {
         let root = pill::<Pill3>(root, 2, cx);
         let root = pill::<Pill4>(root, 3, cx);
         let root = pill::<Pill5>(root, 4, cx);
+        let root = arrow::<FocusLeft>(root, Direction::Left, cx);
+        let root = arrow::<FocusRight>(root, Direction::Right, cx);
+        let root = arrow::<FocusUp>(root, Direction::Up, cx);
+        let root = arrow::<FocusDown>(root, Direction::Down, cx);
         let root = palette::<PaletteUp>(root, "up", cx);
         let root = palette::<PaletteDown>(root, "down", cx);
         let root = palette::<PaletteOpen>(root, "enter", cx);
@@ -70,6 +94,12 @@ impl Shell {
             }))
             .on_action(cx.listener(|shell, _: &Back, _, cx| {
                 shell.go_back(cx);
+            }))
+            .on_action(cx.listener(|shell, _: &OpenFocused, window, cx| {
+                shell.press_ringed(false, window, cx)
+            }))
+            .on_action(cx.listener(|shell, _: &PlayFocused, window, cx| {
+                shell.press_ringed(true, window, cx)
             }))
             .on_action(
                 cx.listener(|shell, _: &MenuConfirm, _, cx| shell.playlist_menu_key("enter", cx)),
@@ -87,6 +117,163 @@ impl Shell {
         } else {
             self.escape(cx);
         }
+    }
+
+    /// A grid of a uniform list drawn: the ring scrolls it too.
+    pub fn scrolls_list(&mut self, list: &gpui_kit::UniformListScrollHandle) {
+        self.scrolls.push(list.0.borrow().base_handle.clone());
+    }
+
+    /// The card the ring and the card it leaves draw again.
+    fn notify_ringed(&self, cx: &mut Context<Self>) {
+        if let Some(id) = self.ring.card() {
+            self.cards.notify(id, cx);
+        }
+    }
+
+    /// An arrow over a page: the ring shows, or goes to the next card that way. With no card
+    /// drawn that way, the row or the page moves on by one card and, if `then_again`, the arrow
+    /// is tried again once it is drawn.
+    pub(super) fn move_ring(
+        &mut self,
+        direction: Direction,
+        then_again: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let cards: Vec<_> = self
+            .cards
+            .places()
+            .into_iter()
+            .map(|(id, bounds)| (id, Place::of(bounds)))
+            .collect();
+        let from = self
+            .ring
+            .shown_on()
+            .and_then(|id| cards.iter().find(|(card, _)| card == id))
+            .map(|(_, place)| *place);
+        let to = match from {
+            Some(from) => ring::next(from, &cards, direction),
+            None => {
+                let size = window.viewport_size();
+                let view = Place {
+                    left: 0.,
+                    top: 0.,
+                    right: size.width.into(),
+                    bottom: size.height.into(),
+                };
+                ring::first(&cards, view)
+            }
+        };
+        self.notify_ringed(cx);
+        match (to, from) {
+            (Some(to), _) => {
+                let place = cards
+                    .iter()
+                    .find(|(card, _)| *card == to)
+                    .map(|(_, place)| *place);
+                self.ring.show_on(to);
+                if let Some(place) = place {
+                    self.scroll_into_view(place);
+                }
+            }
+            (None, Some(from)) if then_again => {
+                if self.scroll_on(from, direction) {
+                    self.ring.pending = Some(direction);
+                }
+            }
+            (None, _) => {}
+        }
+        self.notify_ringed(cx);
+        cx.notify();
+    }
+
+    /// The rows and the pages that hold `place` on the axis of `horizontal`: a row is across
+    /// it, a page above and under it.
+    fn scrolls_holding(
+        &self,
+        place: Place,
+        horizontal: bool,
+    ) -> impl Iterator<Item = (&gpui_kit::ScrollHandle, Place)> {
+        let middle = (
+            (place.left + place.right) / 2.,
+            (place.top + place.bottom) / 2.,
+        );
+        self.scrolls.iter().filter_map(move |handle| {
+            let area = Place::of(handle.bounds());
+            let max = handle.max_offset();
+            let holds = if horizontal {
+                f32::from(max.x) > 0. && (area.top..area.bottom).contains(&middle.1)
+            } else {
+                f32::from(max.y) > 0. && (area.left..area.right).contains(&middle.0)
+            };
+            holds.then_some((handle, area))
+        })
+    }
+
+    /// The row and the page move so that the card at `place` shows whole.
+    fn scroll_into_view(&self, place: Place) {
+        for horizontal in [true, false] {
+            for (handle, area) in self.scrolls_holding(place, horizontal) {
+                let (room, end_room) = if horizontal {
+                    (ROW_ROOM, ROW_ROOM)
+                } else {
+                    ((BAR_ROOM - area.top).max(8.), FOOT_ROOM)
+                };
+                let by = ring::into_view(place, area, horizontal, room, end_room);
+                move_by(handle, by, horizontal);
+            }
+        }
+    }
+
+    /// The row or the page under `place` moves on by one card `direction`; whether it moved.
+    fn scroll_on(&self, place: Place, direction: Direction) -> bool {
+        let horizontal = direction.horizontal();
+        let size = if horizontal {
+            place.right - place.left
+        } else {
+            place.bottom - place.top
+        } + CARD_GAP;
+        let by = if direction.forward() { -size } else { size };
+        let mut moved = false;
+        for (handle, _) in self.scrolls_holding(place, horizontal) {
+            moved |= move_by(handle, by, horizontal);
+        }
+        moved
+    }
+
+    /// An arrow that found no card where they were drawn: drawn last over the window, once the
+    /// cards the row or the page moved on are, it is tried again where they are now.
+    pub(super) fn ring_again(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> Option<impl IntoElement + use<>> {
+        let direction = self.ring.pending.take()?;
+        let shell = cx.weak_entity();
+        let again = move |_: Bounds<Pixels>, _: (), window: &mut Window, cx: &mut gpui_kit::App| {
+            window.defer(cx, move |window, cx| {
+                let go = |shell: &mut Shell, cx: &mut Context<Shell>| {
+                    shell.move_ring(direction, false, window, cx)
+                };
+                shell.update(cx, go).ok();
+            });
+        };
+        Some(canvas(|_, _, _| {}, again).absolute().size_full())
+    }
+
+    /// Enter or P on the card the ring shows on: what a click on it, or on its play button,
+    /// does. An episode's row plays either way.
+    fn press_ringed(&mut self, play: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(offer) = self.ring.shown_on().and_then(|id| self.cards.offer(id)) else {
+            return;
+        };
+        self.ring.hide();
+        if play || matches!(offer.open, Open::Row(_)) {
+            play_card(self, offer.play, window, cx);
+        } else {
+            open_card(self, offer.open, cx);
+        }
+        cx.notify();
     }
 }
 
@@ -106,6 +293,17 @@ fn pill<A: Action>(root: Stateful<Div>, at: usize, cx: &mut Context<Shell>) -> S
     root.on_action(cx.listener(move |shell, _: &A, _, cx| shell.select(NavEntry::ALL[at], cx)))
 }
 
+/// `A` moves the ring `direction`.
+fn arrow<A: Action>(
+    root: Stateful<Div>,
+    direction: Direction,
+    cx: &mut Context<Shell>,
+) -> Stateful<Div> {
+    root.on_action(
+        cx.listener(move |shell, _: &A, window, cx| shell.move_ring(direction, true, window, cx)),
+    )
+}
+
 /// `A` is the palette's `key`.
 fn palette<A: Action>(
     root: Stateful<Div>,
@@ -115,12 +313,31 @@ fn palette<A: Action>(
     root.on_action(cx.listener(move |shell, _: &A, window, cx| shell.search_key(key, window, cx)))
 }
 
+/// Moves the scroll of `handle` by `by` on one axis, within its bounds; whether it moved.
+fn move_by(handle: &gpui_kit::ScrollHandle, by: f32, horizontal: bool) -> bool {
+    let (offset, max) = (handle.offset(), handle.max_offset());
+    let to = if horizontal {
+        let x = (f32::from(offset.x) + by).clamp(-f32::from(max.x), 0.);
+        point(px(x), offset.y)
+    } else {
+        let y = (f32::from(offset.y) + by).clamp(-f32::from(max.y), 0.);
+        point(offset.x, px(y))
+    };
+    if to == offset {
+        return false;
+    }
+    handle.set_offset(to);
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
 
     use bobine::provider::ItemId;
-    use gpui_kit::{TestAppContext, VisualTestContext, WindowHandle};
+    use gpui_kit::{
+        ElementId, Modifiers, TestAppContext, VisualTestContext, WindowHandle, point, px,
+    };
 
     use super::*;
     use crate::fake::{FILM, FakeServer, SERIES};
@@ -160,6 +377,12 @@ mod tests {
     fn screen(window: &WindowHandle<Shell>, cx: &mut TestAppContext) -> Screen {
         window
             .read_with(cx, |shell, _| shell.navigator.current())
+            .unwrap()
+    }
+
+    fn ringed(window: &WindowHandle<Shell>, cx: &mut TestAppContext) -> Option<ElementId> {
+        window
+            .read_with(cx, |shell, _| shell.ring.shown_on().cloned())
             .unwrap()
     }
 
@@ -289,6 +512,94 @@ mod tests {
             .unwrap();
         assert_eq!(screen(&window, cx), Screen::Player);
         assert_eq!(now, Some(episodes[1].item.id.clone()));
+    }
+
+    #[gpui_kit::test]
+    fn arrow_focus_moves_through_a_row_and_a_grid_and_enter_opens(cx: &mut TestAppContext) {
+        let window = signed_in(cx);
+        let mut visual = drawn(&window, cx);
+        assert_eq!(ringed(&window, cx), None, "no ring before a key");
+        // The first arrow shows the ring on the first card in view; the next ones move it.
+        visual.simulate_keystrokes("right");
+        let first = ringed(&window, cx).expect("the ring shows");
+        visual.simulate_keystrokes("right");
+        let second = ringed(&window, cx).unwrap();
+        assert_ne!(first, second);
+        visual.simulate_keystrokes("left");
+        assert_eq!(ringed(&window, cx), Some(first.clone()));
+        visual.simulate_keystrokes("down");
+        let below = ringed(&window, cx).unwrap();
+        assert_ne!(below, first, "the row below");
+        // The mouse hides it again.
+        visual.simulate_mouse_move(point(px(300.), px(300.)), None, Modifiers::none());
+        assert_eq!(ringed(&window, cx), None);
+
+        // A grid: Movies.
+        visual.simulate_keystrokes("alt-2");
+        assert_eq!(screen(&window, cx), Screen::Library);
+        let mut visual = drawn(&window, cx);
+        let columns = window
+            .update(cx, |_, window, _| {
+                crate::grid::columns(window.viewport_size().width.into())
+            })
+            .unwrap();
+        visual.simulate_keystrokes("right");
+        assert_eq!(ringed(&window, cx), Some(("film", 0usize).into()));
+        visual.simulate_keystrokes("right");
+        assert_eq!(ringed(&window, cx), Some(("film", 1usize).into()));
+        visual.simulate_keystrokes("down");
+        assert_eq!(ringed(&window, cx), Some(("film", columns + 1).into()));
+        visual.simulate_keystrokes("enter");
+        visual.run_until_parked();
+        assert_eq!(screen(&window, cx), Screen::FilmDetail);
+    }
+
+    #[gpui_kit::test]
+    fn the_ring_scrolls_its_card_into_view_down_a_grid(cx: &mut TestAppContext) {
+        let window = signed_in_with(200, cx);
+        let mut visual = drawn(&window, cx);
+        visual.simulate_keystrokes("alt-2");
+        let mut visual = drawn(&window, cx);
+        visual.simulate_keystrokes("right");
+        let lines = 6;
+        for _ in 0..lines {
+            visual.simulate_keystrokes("down");
+            visual.run_until_parked();
+        }
+        let columns = window
+            .update(cx, |_, window, _| {
+                crate::grid::columns(window.viewport_size().width.into())
+            })
+            .unwrap();
+        assert_eq!(ringed(&window, cx), Some(("film", lines * columns).into()));
+        let selector = format!("card-ring film-{}", lines * columns);
+        let bounds = visual
+            .debug_bounds(Box::leak(selector.into_boxed_str()))
+            .expect("the ring is drawn");
+        let height = window
+            .update(cx, |_, window, _| f32::from(window.viewport_size().height))
+            .unwrap();
+        assert!(
+            f32::from(bounds.bottom()) <= height,
+            "{bounds:?} in {height}"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn p_plays_the_title_the_ring_is_on(cx: &mut TestAppContext) {
+        let window = signed_in(cx);
+        let mut visual = drawn(&window, cx);
+        visual.simulate_keystrokes("alt-2");
+        let mut visual = drawn(&window, cx);
+        visual.simulate_keystrokes("right");
+        window
+            .update(cx, |shell, _, _| {
+                shell.fake_player = Some(FakePlayer::default())
+            })
+            .unwrap();
+        visual.simulate_keystrokes("p");
+        visual.run_until_parked();
+        assert_eq!(screen(&window, cx), Screen::Player);
     }
 
     #[gpui_kit::test]

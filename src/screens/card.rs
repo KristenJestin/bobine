@@ -113,7 +113,14 @@ pub struct Card {
     /// Where the shell keeps what the card offers.
     name: ElementId,
     fade: Fade,
+    /// The keyboard's focus ring around the picture.
+    ring: Fade,
+    /// Where the picture was last drawn, for the arrows.
+    place: Place,
 }
+
+/// Where a card's picture was last drawn on the window.
+type Place = Rc<Cell<Option<Bounds<Pixels>>>>;
 
 impl Card {
     /// How much the layer shows at `now`.
@@ -128,6 +135,7 @@ struct Kept {
     view: Entity<Card>,
     offer: Offer,
     drawn: u64,
+    place: Place,
 }
 
 /// The cards drawn: one view for each, forgotten once its card is no longer drawn.
@@ -159,15 +167,19 @@ impl Cards {
         }
         let shell = cx.weak_entity();
         let name = id.clone();
+        let place = Place::default();
         let view = cx.new(|_| Card {
             shell,
             name,
             fade: Fade::new(motion::quick()),
+            ring: Fade::new(motion::quick()),
+            place: place.clone(),
         });
         let kept = Kept {
             view: view.clone(),
             offer,
             drawn: frame,
+            place,
         };
         self.views.insert(id.clone(), kept);
         view
@@ -176,6 +188,23 @@ impl Cards {
     /// What the card `id` offers, as the shell's last draw gave it.
     pub fn offer(&self, id: &ElementId) -> Option<Offer> {
         self.views.get(id).map(|kept| kept.offer.clone())
+    }
+
+    /// The cards of the last draw, and where their pictures were: one drawn by the draw before
+    /// it is still kept, at a place it is no longer at.
+    pub fn places(&self) -> Vec<(ElementId, Bounds<Pixels>)> {
+        self.views
+            .iter()
+            .filter(|(_, kept)| kept.drawn == self.frame)
+            .filter_map(|(id, kept)| Some((id.clone(), kept.place.get()?)))
+            .collect()
+    }
+
+    /// The card `id` draws again.
+    pub fn notify(&self, id: &ElementId, cx: &mut App) {
+        if let Some(kept) = self.views.get(id) {
+            cx.notify(kept.view.entity_id());
+        }
     }
 
     #[cfg(test)]
@@ -189,13 +218,53 @@ impl Cards {
     }
 }
 
+/// What a click on a card opens; Enter on the card the ring is on.
+pub fn open_card(shell: &mut Shell, open: Open, cx: &mut Context<Shell>) {
+    match open {
+        Open::Film(id) => shell.open_film(id, cx),
+        Open::Series(id, season) => shell.open_series_on(id, season, cx),
+        Open::Pick(pick) => {
+            if let Some(title) = pick.title(shell.list.as_ref().map(|l| &l.grid)) {
+                shell.open_title(&title, cx);
+            }
+        }
+        Open::Row(_) => {}
+    }
+}
+
+/// What the card's play button starts; P on the card the ring is on.
+pub fn play_card(shell: &mut Shell, play: Play, window: &mut Window, cx: &mut Context<Shell>) {
+    let target = match play {
+        Play::Episode(episode) => return shell.play_episode(*episode, window, cx),
+        Play::Target(target) => Some(target),
+        Play::Pick(pick) => pick
+            .title(shell.list.as_ref().map(|list| &list.grid))
+            .map(|title| PlayTarget::of(&title)),
+    };
+    if let Some(target) = target {
+        shell.play_from_home(target, window, cx);
+    }
+}
+
+/// The keyboard's focus ring: a near-white line just inside the picture's edge.
+fn ring_outline(name: &ElementId, level: f32) -> Div {
+    div()
+        .debug_selector(|| format!("card-ring {name}"))
+        .absolute()
+        .inset_0()
+        .rounded(px(theme::RADIUS))
+        .border_2()
+        .border_color(theme::text())
+        .opacity(level)
+}
+
 impl Render for Card {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let now = Instant::now();
         let Some(shell) = self.shell.upgrade() else {
             return div().into_any_element();
         };
-        let offer = {
+        let (offer, ringed) = {
             let shell = shell.read(cx);
             #[cfg(any(test, feature = "harness"))]
             shell
@@ -203,11 +272,16 @@ impl Render for Card {
                 .borrow_mut()
                 .cards
                 .push((self.name.clone(), now));
-            shell.cards.offer(&self.name)
+            (shell.cards.offer(&self.name), shell.ring.on(&self.name))
         };
         let Some(offer) = offer else {
             return div().into_any_element();
         };
+        self.ring.set(ringed, now);
+        let ring = self.ring.level(now);
+        if self.ring.moving(now) {
+            window.request_animation_frame();
+        }
         let level = self.fade.level(now);
         if self.fade.moving(now) {
             window.request_animation_frame();
@@ -235,7 +309,14 @@ impl Render for Card {
                 cx.notify();
             }))
             .children(play.map(|play| play.opacity(level)))
-            .children(quick.map(|quick| quick.opacity(level)));
+            .children(quick.map(|quick| quick.opacity(level)))
+            .children((ring > 0.).then(|| ring_outline(name, ring)))
+            .child({
+                let place = self.place.clone();
+                canvas(move |bounds, _, _| place.set(Some(bounds)), |_, _, _, _| {})
+                    .absolute()
+                    .size_full()
+            });
         let shell = self.shell.clone();
         let open = offer.open;
         (offer.draw)(layer)
@@ -244,16 +325,7 @@ impl Render for Card {
             .on_click(move |_, _, cx| {
                 let open = open.clone();
                 shell
-                    .update(cx, |shell, cx| match open {
-                        Open::Film(id) => shell.open_film(id, cx),
-                        Open::Series(id, season) => shell.open_series_on(id, season, cx),
-                        Open::Pick(pick) => {
-                            if let Some(title) = pick.title(shell.list.as_ref().map(|l| &l.grid)) {
-                                shell.open_title(&title, cx);
-                            }
-                        }
-                        Open::Row(_) => {}
-                    })
+                    .update(cx, |shell, cx| open_card(shell, open, cx))
                     .ok();
             })
             .into_any_element()
@@ -291,18 +363,7 @@ impl Card {
             cx.stop_propagation();
             let play = play.clone();
             shell
-                .update(cx, |shell, cx| {
-                    let target = match play {
-                        Play::Episode(episode) => return shell.play_episode(*episode, window, cx),
-                        Play::Target(target) => Some(target),
-                        Play::Pick(pick) => pick
-                            .title(shell.list.as_ref().map(|list| &list.grid))
-                            .map(|title| PlayTarget::of(&title)),
-                    };
-                    if let Some(target) = target {
-                        shell.play_from_home(target, window, cx);
-                    }
-                })
+                .update(cx, |shell, cx| play_card(shell, play, window, cx))
                 .ok();
         })
         .child(icon(IconName::Play, 22.))

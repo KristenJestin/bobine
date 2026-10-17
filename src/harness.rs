@@ -12,7 +12,7 @@
 //! `bobine --screen login|home|home-rows|home-list-resume|home-list-next|home-list-latest|home-list-empty|library|detail|
 //! detail-rows|detail-cast|playing|series|series-page|series-rows|up-next|collections|collection-page|
 //! my-list|my-list-empty|lists|playlist|film-list|series-list [--films N]
-//! [--media FILE] [--segments SECONDS] [--direct-fails] [--trailer] [--image-delay-ms N] [--photos-fail-once] [--scenario menu|scroll|select|panel|blackout|search|search-slow|search-keys|tools|tools-keys|home-rotate|home-hover|home-jump|home-scroll|home-lists|home-play|home-poster-hover|grid-poster-hover|playlist-menu|cast-hover|genre-hover|episode-hover|skip|settings|settings-screen|long-tracks|segment-marks]
+//! [--media FILE] [--segments SECONDS] [--direct-fails] [--trailer] [--image-delay-ms N] [--photos-fail-once] [--scenario menu|scroll|select|panel|blackout|search|search-slow|search-keys|ring|tools|tools-keys|home-rotate|home-hover|home-jump|home-scroll|home-lists|home-play|home-poster-hover|grid-poster-hover|playlist-menu|cast-hover|genre-hover|episode-hover|skip|settings|settings-screen|long-tracks|segment-marks]
 //! [--search-delay-ms N] [--favourite-delay-ms N] [--logout-delay-ms N] [--favourite-fails] [--slower N] --quit-at S`
 //!
 //! A scenario sends clicks, keys and scroll events to the window as the compositor would, at set
@@ -875,6 +875,13 @@ impl Acts {
                 (5.8, "down", Key("down")),
                 (6.2, "up", Key("up")),
                 (7.0, "ctrl-k closes", Key("ctrl-k")),
+            ],
+            // The focus ring: shown by an arrow, along a row, to the row below.
+            "ring" => vec![
+                (1.0, "the ring shows", Key("right")),
+                (1.6, "along the row", Key("right")),
+                (2.2, "the row below", Key("down")),
+                (2.8, "along it", Key("right")),
             ],
             // Nothing but the pointer put away: the header runs.
             "home-idle" => vec![(0.0, "", Hover(Bottom))],

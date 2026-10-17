@@ -25,6 +25,7 @@ mod player;
 mod playlists;
 mod poster_actions;
 mod reports;
+mod ring;
 mod screens;
 mod scroll;
 mod search;

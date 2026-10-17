@@ -139,6 +139,8 @@ pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -
 
     let specs = rows(shell);
     let scrolls = shell.home.rows_for(specs.len());
+    shell.scrolls.push(shell.home.scroll.clone());
+    shell.scrolls.extend(scrolls.iter().cloned());
     let scrolled = -f32::from(shell.home.scroll.offset().y);
     let mut y = top + 12.;
     let mut shown: Vec<AnyElement> = Vec::new();
@@ -687,6 +689,7 @@ pub(super) fn suggestion_row(
     window: &mut Window,
     cx: &mut Context<Shell>,
 ) -> Option<Div> {
+    shell.scrolls.push(scroll.clone());
     let mut specs = rows(shell);
     specs.retain(|spec| !matches!(spec.body, Body::Failed(_)));
     let kinds: Vec<ListKind> = specs.iter().map(|spec| spec.list.clone()).collect();

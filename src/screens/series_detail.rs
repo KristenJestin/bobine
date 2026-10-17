@@ -55,6 +55,9 @@ pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -
     let shown = Shown::of(page);
     let scroll = page.scroll.clone();
     let [cast_scroll, similar_scroll] = page.rows.clone();
+    shell
+        .scrolls
+        .extend([scroll.clone(), similar_scroll.clone()]);
     let height = f32::from(window.viewport_size().height);
 
     let hero = hero(shell, &detail, &shown, menu, height, window, cx);

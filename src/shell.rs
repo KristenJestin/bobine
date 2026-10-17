@@ -53,6 +53,7 @@ use crate::player::session::{Session, WindowRequest};
 use crate::player::{Media, Player};
 use crate::poster_actions::Marks;
 use crate::reports::{self, Reporting};
+use crate::ring::Ring;
 use crate::screens;
 use crate::series_page::{self, Next, UpNext};
 use crate::theme;
@@ -213,6 +214,10 @@ pub struct Shell {
     pub images: Images,
     /// The cards drawn that answer the pointer, each a view of its own.
     pub cards: screens::Cards,
+    /// The keyboard's focus ring over the cards.
+    pub ring: Ring,
+    /// The rows and the pages drawn that scroll: the ring scrolls them to the card it is on.
+    pub scrolls: Vec<gpui_kit::ScrollHandle>,
     /// The volume and the mute of mpv, which it keeps from one film to the next.
     volume: (f64, bool),
     /// What the buttons of the posters changed that their lists do not say yet.
@@ -383,6 +388,8 @@ impl Shell {
             nav_pills: [Fade::new(motion::quick()); NavEntry::ALL.len()],
             images: Images::default(),
             cards: Default::default(),
+            ring: Ring::default(),
+            scrolls: Vec::new(),
             volume: (100., false),
             marks: Marks::default(),
             notice: None,
@@ -871,6 +878,7 @@ impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.images.new_frame();
         self.cards.new_frame();
+        self.scrolls.clear();
         if window.viewport_size() != self.viewport {
             self.viewport = window.viewport_size();
             for page in &mut self.details {
@@ -962,6 +970,8 @@ impl Render for Shell {
                 + usize::from(screen == Screen::Settings),
         );
         if page != self.page {
+            // The ring was on a card of the page before.
+            self.ring = Ring::default();
             self.turned_forward = page.1 > self.page.1;
             self.page = page;
             self.page_turns += 1;
@@ -971,6 +981,7 @@ impl Render for Shell {
             if self.turned_forward { 32. } else { -32. },
         );
 
+        let again = self.ring_again(cx);
         let root = div()
             .id("root")
             .size_full()
@@ -1102,6 +1113,7 @@ impl Render for Shell {
             .children(screens::playlist::add_menu(self, window, cx))
             .children(self.notice_pill(screen, window, cx))
             .children(screens::search::palette(self, window, cx))
+            .children(again)
     }
 }
 

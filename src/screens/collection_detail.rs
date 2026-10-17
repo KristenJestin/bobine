@@ -44,6 +44,7 @@ pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -
                     .child(overview)
             })),
     );
+    shell.scrolls.push(scroll.clone());
     let posters: Vec<_> = collection
         .films
         .iter()

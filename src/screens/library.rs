@@ -166,6 +166,7 @@ fn grid_screen<T: Listed + 'static>(
         window.request_animation_frame();
     }
 
+    shell.scrolls_list(&scroll);
     let list = uniform_list(
         title,
         rows,
