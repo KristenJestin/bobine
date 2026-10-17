@@ -155,9 +155,9 @@ fn serve(
         .build()?;
     let name = take_name(&connection)?;
     let player = connection.object_server().interface::<_, Player>(PATH)?;
-    // Every message until `Close`, or until the window's side is gone.
-    for message in messages {
-        match message {
+    serve_messages(
+        messages,
+        |message| match message {
             Message::Show(state) => {
                 let mut shown = player.get_mut();
                 let before = std::mem::replace(&mut shown.state, state);
@@ -180,16 +180,38 @@ fn serve(
                         shown.playback_status_changed(emitter).await?;
                     }
                     zbus::Result::Ok(())
-                })?;
+                })
             }
             Message::Seeked(micros) => {
-                zbus::block_on(Player::seeked(player.signal_emitter(), micros))?;
+                zbus::block_on(Player::seeked(player.signal_emitter(), micros))
             }
-            Message::Close => break,
-        }
-    }
+            Message::Close => Ok(()),
+        },
+        |error| eprintln!("bobine: the desktop's media controls missed a signal: {error}"),
+    );
     connection.release_name(name.as_str())?;
     Ok(())
+}
+
+/// Every message until `Close`, or until the window's side is gone. A signal that fails to go
+/// out is told once (`report`) and does not end the service: the next change may well go.
+fn serve_messages(
+    messages: Receiver<Message>,
+    mut handle: impl FnMut(Message) -> zbus::Result<()>,
+    mut report: impl FnMut(&zbus::Error),
+) {
+    let mut told = false;
+    for message in messages {
+        let closing = matches!(message, Message::Close);
+        if let Err(error) = handle(message)
+            && !std::mem::replace(&mut told, true)
+        {
+            report(&error);
+        }
+        if closing {
+            break;
+        }
+    }
 }
 
 /// `org.mpris.MediaPlayer2.bobine`, or, when another Bobine holds it, the same with
@@ -779,6 +801,32 @@ mod tests {
             at("Metadata") <= at("PlaybackStatus"),
             "a widget must not see Playing with no track: {changes:?}"
         );
+    }
+
+    #[test]
+    fn a_failed_send_is_told_once_and_the_service_goes_on() {
+        let (to, messages) = mpsc::channel();
+        for _ in 0..3 {
+            to.send(Message::Seeked(1)).unwrap();
+        }
+        to.send(Message::Close).unwrap();
+        to.send(Message::Seeked(9)).unwrap();
+        let mut handled = Vec::new();
+        let mut told = Vec::new();
+        serve_messages(
+            messages,
+            |message| {
+                handled.push(matches!(message, Message::Close));
+                Err(zbus::Error::Failure("the bus hung up".into()))
+            },
+            |error| told.push(error.to_string()),
+        );
+        assert_eq!(
+            handled,
+            [false, false, false, true],
+            "all of them, up to Close"
+        );
+        assert_eq!(told.len(), 1, "told once: {told:?}");
     }
 
     #[test]
