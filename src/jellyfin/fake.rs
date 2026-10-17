@@ -7,7 +7,8 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use tiny_http::{Header, Response, Server};
 
-pub const USER: &str = "ada";
+/// A letter beyond `f`: no device id, which is hex, can hold it by chance.
+pub const USER: &str = "zoe";
 pub const PASSWORD: &str = "correct horse battery staple";
 pub const USER_ID: &str = "0f1e2d3c4b5a69788796a5b4c3d2e1f0";
 pub const SERVER_ID: &str = "a1b2c3d4e5f60718293a4b5c6d7e8f90";
