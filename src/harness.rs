@@ -11,9 +11,9 @@
 //!
 //! `bobine --screen login|home|home-rows|home-list-resume|home-list-next|home-list-latest|home-list-empty|library|detail|
 //! detail-rows|detail-cast|playing|series|series-page|series-rows|up-next|collections|collection-page|
-//! my-list|my-list-empty|lists|playlist|film-list|series-list|discover|request|seasons|seerr-collection|similar|settings-seerr [--films N]
-//! [--media FILE] [--segments SECONDS] [--direct-fails] [--trailer] [--image-delay-ms N] [--photos-fail-once] [--scenario menu|scroll|select|panel|blackout|search|search-slow|search-keys|help|ring|ring-wheel|tools|tools-keys|home-rotate|home-hover|home-jump|home-scroll|home-lists|home-play|home-poster-hover|grid-poster-hover|playlist-menu|cast-hover|genre-hover|episode-hover|skip|settings|settings-screen|long-tracks|segment-marks]
-//! [--search-delay-ms N] [--favourite-delay-ms N] [--logout-delay-ms N] [--favourite-fails] [--slower N] --quit-at S`
+//! my-list|my-list-empty|lists|playlist|film-list|series-list|discover|request|seasons|seerr-collection|similar|settings-seerr|stats|stats-played [--films N]
+//! [--media FILE] [--segments SECONDS] [--direct-fails] [--trailer] [--image-delay-ms N] [--photos-fail-once] [--scenario menu|scroll|select|panel|blackout|search|search-slow|search-keys|help|ring|ring-wheel|tools|tools-keys|home-rotate|home-hover|home-jump|home-scroll|home-lists|home-play|home-poster-hover|grid-poster-hover|playlist-menu|cast-hover|genre-hover|episode-hover|skip|settings|settings-screen|long-tracks|segment-marks|stats-scroll]
+//! [--stats plugin|played] [--search-delay-ms N] [--favourite-delay-ms N] [--logout-delay-ms N] [--favourite-fails] [--slower N] --quit-at S`
 //!
 //! A scenario sends clicks, keys and scroll events to the window as the compositor would, at set
 //! times, and prints what they did (`MENU`, `SCROLL`, `SELECT`, `PANEL` lines) and the frame times
@@ -97,6 +97,8 @@ struct Args {
     trickplay: Option<(u32, u64)>,
     /// How long the fake server takes to answer each tile, in milliseconds.
     tile_delay: u64,
+    /// What the fake server's user watched, and where it is read: nothing without it.
+    stats: Option<bobine::provider::HistorySource>,
 }
 
 fn parse(mut args: impl Iterator<Item = String>) -> Result<Option<Args>, String> {
@@ -155,6 +157,14 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Option<Args>, String>
             "--photos-fail-once" => parsed.photos_fail_once = true,
             "--direct-fails" => parsed.direct_fails = true,
             "--trailer" => parsed.trailer = true,
+            "--stats" => {
+                use bobine::provider::HistorySource;
+                parsed.stats = match args.next().as_deref() {
+                    Some("plugin") => Some(HistorySource::PlaybackReporting),
+                    Some("played") => Some(HistorySource::PlayedItems),
+                    _ => return Err("--stats needs plugin or played".into()),
+                };
+            }
             "--search-delay-ms" => {
                 parsed.search_delay = args
                     .next()
@@ -284,6 +294,14 @@ impl Harness {
                 count,
                 interval: Duration::from_millis(interval),
             });
+            let stats = match args.screen.as_deref() {
+                Some("stats") => Some(bobine::provider::HistorySource::PlaybackReporting),
+                Some("stats-played") => Some(bobine::provider::HistorySource::PlayedItems),
+                _ => args.stats,
+            };
+            if let Some(source) = stats {
+                state.history = crate::fake::watch_history(source, crate::fake::NOW);
+            }
             if args.screen.as_deref() == Some("my-list-empty") {
                 state.favourites.clear();
             }
@@ -324,6 +342,8 @@ impl Harness {
             shell.mpv_options = vec![("ao", "null")];
             // Its fake server plays invented films: not on the user's bus, not in their cache.
             shell.without_desktop();
+            // Its invented history is dated from a fixed now: the stats are counted on it too.
+            shell.clock = || bobine::provider::LocalTime::from_unix(crate::fake::NOW);
         });
         match args.screen.clone() {
             Some(screen) => {
@@ -452,6 +472,7 @@ fn show_screen(
     let press_list = wants(&["film-list", "series-list"]);
     let (series_rows, up_next) = (wants(&["series-rows"]), wants(&["up-next"]));
     let home_rows = wants(&["home-rows"]);
+    let to_stats = wants(&["stats", "stats-played"]);
     // The request server's screens, with the fake one configured as a user would.
     let seerr = wants(&[
         "discover",
@@ -475,7 +496,12 @@ fn show_screen(
     };
     let mut done_steps = 0;
     // A scenario starts once the screen is reached: the login at once, a film page after it opened.
-    let ready_after = if to_film || to_series_page || list.is_some() || to_collection || to_playlist
+    let ready_after = if to_film
+        || to_series_page
+        || list.is_some()
+        || to_collection
+        || to_playlist
+        || to_stats
     {
         3
     } else {
@@ -550,6 +576,9 @@ fn show_screen(
                                 }
                                 if to_playlist {
                                     shell.open_playlist(ItemId("playlist-late".into()), cx);
+                                }
+                                if to_stats {
+                                    shell.open_stats(cx);
                                 }
                                 true
                             }
@@ -1025,6 +1054,15 @@ impl Acts {
                 (5.0, "click the first mark again", Click(HeroMark(0))),
             ],
             // The wheel over a row goes sideways, over the header it goes down.
+            "stats-scroll" => vec![(
+                0.5,
+                "wheel down to the foot of the stats",
+                Wheel {
+                    over: At(720., 400.),
+                    lines: -60.,
+                    shift: false,
+                },
+            )],
             "home-scroll" => vec![
                 // Before any move the window takes the pointer for being at its corner, over
                 // the header: it goes where it is out of the way.
@@ -1376,9 +1414,11 @@ fn position(target: Target, shell: &Shell, window: &Window) -> Point<Pixels> {
             )
         }),
         Target::SignOut => shell.account_button_bounds().map(|button| {
+            // Under "Stats", when the menu offers it.
+            let line = 1.5 + f32::from(u8::from(shell.stats.is_some()));
             point(
                 button.right() - px(100.),
-                button.bottom() + px(menu::GAP + 7. + MENU_HEADER + MENU_RULE + menu::LINE * 1.5),
+                button.bottom() + px(menu::GAP + 7. + MENU_HEADER + MENU_RULE + menu::LINE * line),
             )
         }),
         Target::QualityButton => center(shell.settings_page.quality_button.get()),

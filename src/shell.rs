@@ -16,6 +16,7 @@ mod seerr_collection;
 mod series;
 mod settings;
 mod skip;
+mod stats;
 mod trailer;
 
 pub use discover::{OpenSeerr, Seerr};
@@ -203,6 +204,16 @@ pub struct Shell {
     pub collection_pages: Vec<CollectionPage>,
     pub my_list: MyListPage,
     pub lists: ListsPage,
+    /// What the viewer watched, once read: None while there is nothing to show, and no page.
+    pub stats: Option<Rc<crate::stats::Stats>>,
+    /// The local clock the stats are counted on: a fixed one in the tests and the harness.
+    pub clock: fn() -> bobine::provider::LocalTime,
+    /// The Stats page scrolls down, and its rows of movies and of series sideways.
+    pub stats_scrolls: [gpui_kit::ScrollHandle; 3],
+    /// The watch history is being read: it is not asked again meanwhile.
+    stats_reading: bool,
+    /// Each read of the watch history is numbered: only the newest one's answer is shown.
+    stats_asked: u64,
     /// The playlists' pages open, the last one on top: one per `Screen::Playlist`.
     pub playlist_pages: Vec<PlaylistPage>,
     /// The "Add to playlist" menu, while it shows.
@@ -408,6 +419,14 @@ impl Shell {
             collection_pages: Vec::new(),
             my_list: Default::default(),
             lists: Default::default(),
+            stats: None,
+            #[cfg(not(test))]
+            clock: bobine::provider::LocalTime::now,
+            #[cfg(test)]
+            clock: || bobine::provider::LocalTime::from_unix(crate::fake::NOW),
+            stats_scrolls: Default::default(),
+            stats_reading: false,
+            stats_asked: 0,
             playlist_pages: Vec::new(),
             playlist_menu: None,
             playlist_menus: 0,
@@ -806,6 +825,7 @@ impl Shell {
             user: server.user_name().to_string(),
             server: server.server().name.clone(),
             open: open.is_some(),
+            stats: self.stats.is_some(),
             shown: drawn.map(|(_, shown)| shown),
             bounds: self.account_button.clone(),
         })
@@ -1039,7 +1059,8 @@ impl Render for Shell {
                 + self.collection_pages.len()
                 + self.playlist_pages.len()
                 + usize::from(self.navigator.current() == Screen::Favorites)
-                + usize::from(screen == Screen::Settings),
+                + usize::from(screen == Screen::Settings)
+                + usize::from(screen == Screen::Stats),
         );
         if page != self.page {
             // The ring was on a card of the page before, the help said the keys of that screen.

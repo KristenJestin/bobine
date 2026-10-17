@@ -24,6 +24,8 @@ pub enum Screen {
     Playlist,
     /// The viewer's choices, reached from the account menu.
     Settings,
+    /// What the viewer watched, reached from the account menu while there is something to show.
+    Stats,
     /// What the request server offers beyond the library: shown only when one is configured.
     Discover,
     /// A title the library does not hold, reached from Discover: what it is, and its request.
@@ -51,6 +53,7 @@ impl Screen {
                 | Screen::Favorites
                 | Screen::Playlist
                 | Screen::Settings
+                | Screen::Stats
                 | Screen::Request
                 | Screen::SeerrCollection
         )
@@ -85,6 +88,7 @@ impl Screen {
             Screen::Favorites => "Favorites",
             Screen::Playlist => "Playlist",
             Screen::Settings => "Settings",
+            Screen::Stats => "Stats",
             Screen::Discover => "Discover",
         }
     }

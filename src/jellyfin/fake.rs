@@ -74,6 +74,8 @@ fn fixture(name: &str) -> Value {
         "tmdb_index" => include_str!("fixtures/tmdb_index.json"),
         "playlists" => include_str!("fixtures/playlists.json"),
         "playlist_items" => include_str!("fixtures/playlist_items.json"),
+        "played_items" => include_str!("fixtures/played_items.json"),
+        "watched_titles" => include_str!("fixtures/watched_titles.json"),
         _ => panic!("no fixture {name}"),
     };
     serde_json::from_str(text).unwrap()
@@ -149,6 +151,20 @@ pub struct State {
     pub local_trailer: bool,
     /// The trailers hosted elsewhere that the film and the series list, in order.
     pub remote_trailers: Vec<String>,
+    /// The rows the Playback Reporting plugin answers a query with, every user's, whatever the
+    /// query: `DateCreated, UserId, ItemId, ItemType, ItemName, PlayDuration`. None: the plugin
+    /// is not installed, its routes answer 404.
+    pub reporting: Option<Vec<[&'static str; 6]>>,
+    /// How many seconds each row of `reporting` is ahead of UTC, as its query's `ServerOffset`
+    /// cell says (`"7200.0000001"`; an empty text is a row the server could not date). None:
+    /// the column is missing from its answer.
+    pub reporting_offsets: Option<Vec<&'static str>>,
+    /// The user has played nothing.
+    pub nothing_played: bool,
+    /// A request for episodes by id that names this one answers 500.
+    pub broken_episode: Option<&'static str>,
+    /// Episodes the library holds beside `EPISODE`, with their series: (episode, series).
+    pub episodes: Vec<(&'static str, &'static str)>,
 }
 
 /// How many episodes the series of the pages puts in a playlist.
@@ -511,6 +527,13 @@ fn answer(state: &State, seen: &Seen) -> Answer {
     {
         return Answer::Empty(500);
     }
+    if seen.path == "/Items"
+        && state
+            .broken_episode
+            .is_some_and(|id| seen.param("Ids").is_some_and(|ids| ids.contains(id)))
+    {
+        return Answer::Empty(500);
+    }
     let images = format!("/Items/{FILM}/Images/");
     match route {
         ("POST", "/Sessions/Logout") => Answer::Empty(204),
@@ -519,6 +542,68 @@ fn answer(state: &State, seen: &Seen) -> Answer {
         ("GET", "/Genres") => Answer::Json(200, genres(library_fixture(seen))),
         ("GET", "/Items/Filters") => Answer::Json(200, years(library_fixture(seen))),
         ("GET", "/Persons") => Answer::Json(200, matching("persons", seen)),
+        ("POST", "/user_usage_stats/submit_custom_query") if state.reporting.is_some() => {
+            let rows = state.reporting.as_ref().unwrap();
+            let mut names = vec![
+                "DateCreated",
+                "UserId",
+                "ItemId",
+                "ItemType",
+                "ItemName",
+                "PlayDuration",
+            ];
+            names.extend(state.reporting_offsets.as_ref().map(|_| "ServerOffset"));
+            let columns = if rows.is_empty() {
+                json!([])
+            } else {
+                json!(names)
+            };
+            let results: Vec<Vec<&str>> = rows
+                .iter()
+                .enumerate()
+                .map(|(at, row)| {
+                    let offset = state.reporting_offsets.as_ref().map(|offsets| offsets[at]);
+                    row.iter().copied().chain(offset).collect()
+                })
+                .collect();
+            let message = if rows.is_empty() {
+                "Query executed, no data returned.</br>Number of rows effected : 0"
+            } else {
+                ""
+            };
+            Answer::Json(
+                200,
+                json!({ "colums": columns, "results": results, "message": message }),
+            )
+        }
+        ("GET", "/Items") if seen.param("Ids").is_some() => {
+            let held: Vec<_> = std::iter::once((EPISODE, SERIES))
+                .chain(state.episodes.iter().copied())
+                .collect();
+            let items: Vec<Value> = seen
+                .param("Ids")
+                .unwrap()
+                .split(',')
+                .filter_map(|id| held.iter().find(|(episode, _)| *episode == id))
+                .map(|(episode, series)| {
+                    json!({ "Id": episode, "Name": "An episode", "Type": "Episode", "SeriesId": series })
+                })
+                .collect();
+            Answer::Json(
+                200,
+                json!({ "Items": items, "TotalRecordCount": items.len() }),
+            )
+        }
+        ("GET", "/Items") if seen.param("IsPlayed") == Some("true") => {
+            if state.nothing_played {
+                Answer::Json(200, json!({ "Items": [], "TotalRecordCount": 0 }))
+            } else {
+                Answer::Json(200, fixture("played_items"))
+            }
+        }
+        ("GET", "/Items") if seen.param("Fields") == Some("Genres") => {
+            Answer::Json(200, fixture("watched_titles"))
+        }
         ("GET", "/Items") if seen.param("HasTmdbId") == Some("true") => {
             Answer::Json(200, of_types(fixture("tmdb_index"), seen))
         }

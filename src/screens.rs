@@ -20,6 +20,7 @@ mod seerr_collection;
 mod series_detail;
 mod settings;
 pub mod skip;
+pub mod stats;
 
 pub use card::{Card, Cards, Offer, Open, Play, Quick, open_card, play_card};
 #[cfg(test)]
@@ -70,6 +71,7 @@ pub fn render(
         Screen::Favorites => lists::render_my_list(shell, window, cx).into_any_element(),
         Screen::Playlist => playlist::render(shell, window, cx).into_any_element(),
         Screen::Settings => settings::render(shell, window, cx).into_any_element(),
+        Screen::Stats => stats::render(shell, window, cx).into_any_element(),
         Screen::Discover => discover::render(shell, window, cx).into_any_element(),
         Screen::Request => request::render(shell, window, cx).into_any_element(),
         Screen::SeerrCollection => seerr_collection::render(shell, window, cx).into_any_element(),
