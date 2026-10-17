@@ -356,6 +356,28 @@ mod tests {
     }
 
     #[gpui_kit::test]
+    fn the_harness_keeps_the_desktop_off(cx: &mut TestAppContext) {
+        let (_server, window, controls) = signed_in_window(cx);
+        let cache = tempfile::tempdir().unwrap();
+        window
+            .update(cx, |shell, _, _| {
+                shell.art_dir = Some(cache.path().join("bobine").join("mpris"));
+                shell.without_desktop();
+            })
+            .unwrap();
+        play(&window, cx, Some(film()), None);
+        tick(&window, cx);
+        assert!(
+            controls.shown.borrow().is_empty(),
+            "nothing is shown to the desktop"
+        );
+        assert!(
+            !cache.path().join("bobine").exists(),
+            "no poster is written to the cache"
+        );
+    }
+
+    #[gpui_kit::test]
     fn stopping_the_film_sets_it_to_stopped(cx: &mut TestAppContext) {
         let (_server, window, controls) = signed_in_window(cx);
         play(&window, cx, Some(film()), None);

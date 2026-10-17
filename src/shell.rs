@@ -429,6 +429,14 @@ impl Shell {
         shell
     }
 
+    /// The desktop's media controls off: no bus taken, no poster written. The harness on its fake
+    /// server must not show invented films on the user's real bus nor fill their real cache.
+    #[cfg(any(test, feature = "harness"))]
+    pub fn without_desktop(&mut self) {
+        self.mpris = crate::mpris::Publisher::new(Box::new(crate::mpris::dbus::Dbus::at(None)));
+        self.art_dir = None;
+    }
+
     /// A frame was drawn: the page and its header are two views of one frame, which count once.
     #[cfg(feature = "harness")]
     pub fn note_frame(&self) {

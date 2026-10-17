@@ -320,7 +320,11 @@ impl Harness {
         let Some(args) = self.args else {
             return;
         };
-        shell.update(cx, |shell, _| shell.mpv_options = vec![("ao", "null")]);
+        shell.update(cx, |shell, _| {
+            shell.mpv_options = vec![("ao", "null")];
+            // Its fake server plays invented films: not on the user's bus, not in their cache.
+            shell.without_desktop();
+        });
         match args.screen.clone() {
             Some(screen) => {
                 let fake = self.fake.expect("the harness always has its fake server");
