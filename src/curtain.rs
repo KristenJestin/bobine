@@ -3,8 +3,8 @@
 //! opaque cover hides the video: the picture that was clicked grows from where it was to the
 //! whole window while the page fades out over it and the player's controls fade in; the cover
 //! fades out onto the video once its first frame is there, never before, never later. Closing,
-//! the video is gone at once: the picture shrinks back from the whole window to its place while
-//! the page comes back.
+//! the video is gone at once: the picture shrinks back from the whole window to its place on the
+//! page, which is already there.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -151,7 +151,8 @@ impl<P> Curtain<P> {
             },
             Way::Closing => Frame {
                 grown: 1. - done,
-                page: done,
+                // The page is the screen already: the picture shrinks back over it.
+                page: 1.,
                 player: 0.,
                 cover: 1.,
             },
@@ -281,14 +282,15 @@ mod tests {
     }
 
     #[test]
-    fn closing_shrinks_the_picture_back_while_the_page_comes_back() {
+    fn closing_shrinks_the_picture_back_to_its_place_on_the_page() {
         let start = Instant::now();
         let curtain: Curtain<()> = Curtain::closing(Some(()), start);
         assert_eq!(curtain.way(), Way::Closing);
         let first = curtain.at(start);
-        assert_eq!((first.grown, first.page, first.player), (1., 0., 0.));
+        assert_eq!((first.grown, first.page, first.player), (1., 1., 0.));
         let half = curtain.at(start + 150 * MS);
-        assert!(half.grown < 0.5 && half.page > 0.5, "{half:?}");
+        assert!(half.grown < 0.5, "{half:?}");
+        assert_eq!(half.page, 1., "the page is the screen: it is not faded in");
         assert!(!curtain.waiting(), "closing awaits no video");
         let end = curtain.at(start + 300 * MS);
         assert_eq!((end.grown, end.page), (0., 1.));
