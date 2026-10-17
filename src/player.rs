@@ -220,6 +220,9 @@ pub trait Player {
     fn info(&self) -> PlaybackInfo;
     /// What happened since the last call, oldest first. Never waits.
     fn events(&mut self) -> Vec<PlayerEvent>;
+    /// Asking it may hold the window for a while as it opens a file: it is not asked while the
+    /// window moves.
+    fn answers_slowly(&self) -> bool;
 }
 
 #[cfg(test)]
@@ -260,6 +263,8 @@ pub mod fake {
         pub info: std::rc::Rc<std::cell::RefCell<PlaybackInfo>>,
         /// `load` fails.
         pub load_fails: std::rc::Rc<std::cell::Cell<bool>>,
+        /// It says it answers slowly, as mpv does.
+        pub slow: bool,
     }
 
     impl FakePlayer {
@@ -269,6 +274,9 @@ pub mod fake {
     }
 
     impl Player for FakePlayer {
+        fn answers_slowly(&self) -> bool {
+            self.slow
+        }
         fn load(&mut self, media: Media<'_>) -> Result<(), PlayerError> {
             self.record(Call::Load {
                 url: media.stream.url.to_string(),

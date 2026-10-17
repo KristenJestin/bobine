@@ -267,6 +267,10 @@ impl VideoDisplay for VideoSurface {
         let _ = wayland.connection.flush();
     }
 
+    fn picture_shown(&self) -> bool {
+        self.target.shown()
+    }
+
     fn set_cursor_visible(&mut self, visible: bool) {
         let mut wayland = self.wayland.borrow_mut();
         wayland.dispatch();
