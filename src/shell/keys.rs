@@ -391,7 +391,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::fake::{FILM, FakeServer, SERIES};
+    use crate::fake::{FILM, FakeServer, Report, SERIES};
     use crate::home_page::PlayTarget;
     use crate::player::fake::{Call, FakePlayer};
     use crate::player::{PlayerEvent, Seek, Track, TrackKind};
@@ -402,8 +402,12 @@ mod tests {
 
     /// A shell signed in on a server of `films` films.
     fn signed_in_with(films: usize, cx: &mut TestAppContext) -> WindowHandle<Shell> {
-        let connector: Arc<dyn bobine::provider::Connector> =
-            Arc::new(FakeServer::new(films, true));
+        signed_in_on(&FakeServer::new(films, true), cx)
+    }
+
+    /// A shell signed in on `server`, which stays at hand to read what it was told.
+    fn signed_in_on(server: &FakeServer, cx: &mut TestAppContext) -> WindowHandle<Shell> {
+        let connector: Arc<dyn bobine::provider::Connector> = Arc::new(server.clone());
         let window = cx.add_window(|_, cx| {
             crate::input::bind_keys(cx);
             crate::keys::bind(cx);
@@ -580,6 +584,122 @@ mod tests {
             .unwrap();
         assert_eq!(screen(&window, cx), Screen::Player);
         assert_eq!(now, Some(episodes[1].item.id.clone()));
+    }
+
+    /// The episode `at` of the series page playing on `player`, the shell then given `next` for
+    /// the episode after it; the episodes of the page are returned.
+    fn playing_an_episode(
+        window: &WindowHandle<Shell>,
+        at: usize,
+        player: FakePlayer,
+        next: FakePlayer,
+        cx: &mut TestAppContext,
+    ) -> Vec<bobine::provider::Episode> {
+        window
+            .update(cx, |shell, _, cx| {
+                shell.open_series(ItemId(SERIES.into()), cx)
+            })
+            .unwrap();
+        cx.run_until_parked();
+        let episodes = window
+            .read_with(cx, |shell, _| {
+                let page = shell.series_pages.last().unwrap();
+                let season = &page.seasons[page.season].id;
+                match &page.episodes[season] {
+                    crate::shell::Loadable::Ready(episodes) => episodes.clone(),
+                    _ => panic!("the episodes are shown"),
+                }
+            })
+            .unwrap();
+        window
+            .update(cx, |shell, window, cx| {
+                shell.fake_player = Some(player);
+                shell.play_episode(episodes[at].clone(), window, cx);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        cx.executor().advance_clock(super::super::PLAYER_TICK * 2);
+        cx.run_until_parked();
+        assert_eq!(screen(window, cx), Screen::Player);
+        window
+            .update(cx, |shell, _, _| shell.fake_player = Some(next))
+            .unwrap();
+        episodes
+    }
+
+    #[gpui_kit::test]
+    fn n_tells_the_server_where_the_episode_stopped_and_does_not_mark_it_watched(
+        cx: &mut TestAppContext,
+    ) {
+        let server = FakeServer::new(12, true);
+        let window = signed_in_on(&server, cx);
+        let player = FakePlayer::default();
+        player.queued.borrow_mut().extend([
+            PlayerEvent::Loaded,
+            PlayerEvent::Duration(48. * 60.),
+            PlayerEvent::Position(600.),
+        ]);
+        // The fourth episode of the season, begun and not watched yet, and the fifth after it.
+        let episodes = playing_an_episode(&window, 3, player, FakePlayer::default(), cx);
+        let (first, second) = (episodes[3].item.id.clone(), episodes[4].item.id.clone());
+        let watched = |id: &ItemId| {
+            server
+                .state
+                .lock()
+                .unwrap()
+                .episodes
+                .iter()
+                .any(|e| e.item.id == *id && e.item.watched)
+        };
+        assert!(!watched(&first) && !watched(&second), "none is watched yet");
+        let mut visual = drawn(&window, cx);
+        visual.simulate_keystrokes("n");
+        visual.run_until_parked();
+        // The reports go out on a thread of their own: waited for, the last one being the
+        // second episode's first.
+        let start = std::time::Instant::now();
+        while !server
+            .state
+            .lock()
+            .unwrap()
+            .record
+            .reports
+            .iter()
+            .any(|report| matches!(report, Report::Stopped(_)))
+            && start.elapsed() < Duration::from_secs(5)
+        {
+            visual.run_until_parked();
+            std::thread::sleep(Duration::from_millis(10));
+        }
+
+        let state = server.state.lock().unwrap();
+        let stopped: Vec<_> = state
+            .record
+            .reports
+            .iter()
+            .filter_map(|report| match report {
+                Report::Stopped(report) => Some((report.film.clone(), report.position)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            stopped,
+            [(first.clone(), Duration::from_secs(600))],
+            "stopped where it was, once"
+        );
+        drop(state);
+        // Marked watched by the server's own rule (past nine tenths) or asked to be: either way
+        // the episode skipped would be gone from Continue Watching and Next Up.
+        assert!(!watched(&first), "the episode is not watched");
+        assert!(!watched(&second));
+        let state = server.state.lock().unwrap();
+        assert_eq!(state.record.watched, []);
+        let resume = state.episodes.iter().find(|e| e.item.id == first);
+        assert_eq!(
+            resume.and_then(|e| e.item.resume),
+            Some(Duration::from_secs(600)),
+            "it resumes where N was pressed"
+        );
     }
 
     #[gpui_kit::test]
