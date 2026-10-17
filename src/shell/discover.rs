@@ -256,10 +256,20 @@ impl Shell {
             return;
         }
         self.seerr.indexing = true;
+        let session = self.server.clone();
         self.ask(
             cx,
             |server| server.tmdb_index(),
-            |shell, index, _| {
+            move |shell, index, _| {
+                // The answer of a user who signed out meanwhile is not the next user's: each
+                // session has its own server, and the new session began its own reading.
+                let same = match (&session, &shell.server) {
+                    (Some(asked), Some(now)) => Arc::ptr_eq(asked, now),
+                    _ => false,
+                };
+                if !same {
+                    return;
+                }
                 shell.seerr.indexing = false;
                 // A failed one is asked again by the next page that needs it.
                 if let Ok(index) = index
@@ -1003,6 +1013,48 @@ pub(super) mod tests {
         // A title of the library says so; one asked for says it is pending.
         assert!(visual.debug_bounds("status In library").is_some());
         assert!(visual.debug_bounds("status Pending").is_some());
+    }
+
+    #[gpui_kit::test]
+    fn an_index_still_loading_when_another_user_signs_in_is_not_theirs(cx: &mut TestAppContext) {
+        let seerr = FakeSeerr::default();
+        let first = FakeServer::new(6, true);
+        let window = configured_on(first.clone(), &seerr, cx);
+        let second = FakeServer::new(6, true);
+        second.state.lock().unwrap().tmdb = vec![(ItemId("film-3".into()), 4242)];
+        let second_index = TmdbIndex {
+            films: HashMap::from([(4242, ItemId("film-3".into()))]),
+            series: HashMap::new(),
+        };
+        // The first user's index is asked, and the second user is in before it comes: nothing
+        // is parked in between, so the first answer lands after the second session began.
+        let request_server = Arc::new(seerr.clone()) as Arc<dyn RequestServer>;
+        window
+            .update(cx, |shell, window, cx| {
+                shell.seerr.index = None;
+                shell.load_tmdb_index(cx);
+                shell.sign_out(window, cx);
+                shell.server = Some(Arc::new(second.clone()));
+                shell.login = None;
+                shell.seerr.client = Some(request_server);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        window
+            .update(cx, |shell, _, _| {
+                assert_eq!(shell.seerr.index, None, "the first user's index is dropped");
+                assert!(!shell.seerr.indexing);
+            })
+            .unwrap();
+        window
+            .update(cx, |shell, _, cx| shell.want_tmdb_index(cx))
+            .unwrap();
+        cx.run_until_parked();
+        window
+            .update(cx, |shell, _, _| {
+                assert_eq!(shell.seerr.index, Some(second_index));
+            })
+            .unwrap();
     }
 
     #[gpui_kit::test]
