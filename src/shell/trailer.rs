@@ -269,6 +269,7 @@ mod tests {
         server.state.lock().unwrap().trailers = trailers;
         let connector: Arc<dyn bobine::provider::Connector> = Arc::new(server.clone());
         let window = cx.add_window(|_, cx| {
+            crate::keys::bind(cx);
             Shell::new(
                 None,
                 Box::new(move || Ok(connector)),
@@ -669,6 +670,7 @@ mod tests {
         let server = FakeServer::new(6, true);
         let connector: Arc<dyn bobine::provider::Connector> = Arc::new(server);
         let window = cx.add_window(|_, cx| {
+            crate::keys::bind(cx);
             Shell::new(
                 None,
                 Box::new(move || Ok(connector)),

@@ -190,15 +190,7 @@ pub trait Player {
     fn set_paused(&mut self, paused: bool);
     fn seek(&mut self, seek: Seek);
     /// 0 to 100.
-    #[allow(
-        dead_code,
-        reason = "part of the port; the controls have no volume yet"
-    )]
     fn set_volume(&mut self, percent: f64);
-    #[allow(
-        dead_code,
-        reason = "part of the port; the controls have no volume yet"
-    )]
     fn set_muted(&mut self, muted: bool);
     /// `None` silences the film.
     fn select_audio(&mut self, id: Option<i64>);

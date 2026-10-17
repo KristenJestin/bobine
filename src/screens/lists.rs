@@ -60,6 +60,7 @@ pub fn render_collections(
         Some(Loadable::Failed(why)) => (0, Some(*why), None),
         _ => (0, Some("Loading…"), None),
     };
+    shell.scrolls_list(&shell.collections.scroll.clone());
     grid_screen(
         Cells {
             title: "Collections",
@@ -95,6 +96,7 @@ pub fn render_my_list(
         Some(Loadable::Failed(why)) => (0, Some(*why), None),
         _ => (0, Some("Loading…"), None),
     };
+    shell.scrolls_list(&shell.my_list.scroll.clone());
     grid_screen(
         Cells {
             title: "Favorites",
@@ -164,6 +166,9 @@ pub fn render_lists(
             .child("See all")
             .child(icon(IconName::ArrowRight, 14.))
     });
+    shell
+        .scrolls
+        .extend([shell.lists.favorites.clone(), shell.lists.scroll.clone()]);
     let favorites: AnyElement = match favorites {
         Ok(items) => {
             let items: Vec<Favourite> = items;
