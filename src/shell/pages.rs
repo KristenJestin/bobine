@@ -1536,10 +1536,10 @@ impl Shell {
             },
             // The page's line is the one of its request, whose button stays as it is.
             Origin::Request(generation) => {
-                if let Some(page) = self.request_numbered(*generation) {
-                    if error.is_some() {
-                        page.error = error;
-                    }
+                if let Some(page) = self.request_numbered(*generation)
+                    && error.is_some()
+                {
+                    page.error = error;
                 }
                 return;
             }
