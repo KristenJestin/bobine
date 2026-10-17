@@ -110,9 +110,14 @@ impl LocalTime {
 
     /// A UTC time as the server writes it (`2026-10-12T20:31:00.0000000Z`), on the local clock.
     pub fn from_utc(text: &str) -> Option<Self> {
-        let utc = Self::parse(text)?;
-        let seconds = utc.days() * 86_400 + i64::from(utc.hour * 3600 + utc.minute * 60);
-        Some(Self::from_unix(seconds))
+        Self::from_clock(text, 0)
+    }
+
+    /// A time read on a clock `offset` seconds ahead of UTC, on the local clock.
+    pub fn from_clock(text: &str, offset: i64) -> Option<Self> {
+        let read = Self::parse(text)?;
+        let seconds = read.days() * 86_400 + i64::from(read.hour * 3600 + read.minute * 60);
+        Some(Self::from_unix(seconds - offset))
     }
 
     /// Days from 1970-01-01 to this date (Howard Hinnant's `days_from_civil`).

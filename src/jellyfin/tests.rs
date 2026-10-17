@@ -3727,3 +3727,69 @@ fn a_series_name_holding_a_dash_and_an_s_is_kept_whole() {
         "Retro"
     );
 }
+
+/// 2026-10-14 21:00 UTC, in seconds from 1970.
+const PLAYED_AT_21_UTC: i64 = 1_792_011_600;
+
+fn first_play_at(offset: Option<&'static str>, written: &'static str) -> Option<LocalTime> {
+    let s = Setup::new();
+    {
+        let mut state = s.fake.state.lock().unwrap();
+        state.reporting_offset = offset;
+        state.reporting = Some(vec![[
+            written,
+            USER_ID,
+            FILM,
+            "Movie",
+            "The Quiet Harbour",
+            "6000",
+        ]]);
+    }
+    s.signed_in().watch_history().unwrap().plays[0].at
+}
+
+#[test]
+fn a_server_in_utc_and_a_client_ahead_put_a_play_at_the_clients_hour() {
+    // On a client at +02:00, 23:00: the client's own clock, whatever the server's.
+    let on_the_client = Some(LocalTime::from_unix(PLAYED_AT_21_UTC));
+    assert_eq!(
+        first_play_at(Some("0.0"), "2026-10-14 21:00:00.1234567"),
+        on_the_client,
+        "a server in UTC"
+    );
+    assert_eq!(
+        first_play_at(Some("7199.99999821186"), "2026-10-14 23:00:00"),
+        on_the_client,
+        "a server at +02:00"
+    );
+    assert_eq!(
+        first_play_at(Some("-18000.0000041723"), "2026-10-14 16:00:00"),
+        on_the_client,
+        "a server at -05:00"
+    );
+}
+
+#[test]
+fn without_the_servers_offset_its_time_is_taken_as_the_clients() {
+    assert_eq!(
+        first_play_at(None, "2026-10-14 21:00:00"),
+        Some(local(14, 10, 21, 0))
+    );
+}
+
+#[test]
+fn the_plugin_is_asked_the_servers_offset_from_utc() {
+    let s = Setup::new();
+    s.fake.state.lock().unwrap().reporting = Some(reporting_rows());
+    s.signed_in().watch_history().unwrap();
+    let asked = s
+        .fake
+        .last("POST", "/user_usage_stats/submit_custom_query")
+        .json();
+    let query = asked["CustomQueryString"].as_str().unwrap();
+    assert!(
+        query
+            .contains("(julianday('now', 'localtime') - julianday('now')) * 86400 AS ServerOffset"),
+        "{query}"
+    );
+}

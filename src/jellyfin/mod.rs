@@ -1304,10 +1304,20 @@ impl Jellyfin {
         else {
             return Ok(Vec::new());
         };
-        let cell = |row: &[serde_json::Value], column: usize| match row.get(at[column]) {
+        let text = |row: &[serde_json::Value], column: usize| match row.get(column) {
             Some(serde_json::Value::String(text)) => text.clone(),
             Some(other) => other.to_string(),
             None => String::new(),
+        };
+        let cell = |row: &[serde_json::Value], column: usize| text(row, at[column]);
+        let offset_at = answer
+            .colums
+            .iter()
+            .position(|column| column == "ServerOffset");
+        // How far ahead of UTC the server's clock is, to the minute: SQLite's sum is not exact.
+        let offset = |row: &[serde_json::Value]| {
+            let seconds = text(row, offset_at?).parse::<f64>().ok()?;
+            Some((seconds / 60.).round() as i64 * 60)
         };
         Ok(answer
             .results
@@ -1315,7 +1325,11 @@ impl Jellyfin {
             // The query asked only the user's rows: what else comes back is not counted.
             .filter(|row| plugin_user_id(&cell(row, 1)).as_deref() == Some(user.as_str()))
             .map(|row| ReportingRow {
-                at: LocalTime::parse(&cell(row, 0)),
+                // Without the offset, the server's clock is taken for the local one.
+                at: match offset(row) {
+                    Some(offset) => LocalTime::from_clock(&cell(row, 0), offset),
+                    None => LocalTime::parse(&cell(row, 0)),
+                },
                 item: cell(row, 2),
                 episode: cell(row, 3) == "Episode",
                 name: cell(row, 4),
@@ -1412,7 +1426,13 @@ const REPORTING_COLUMNS: [&str; 6] = [
     "PlayDuration",
 ];
 
-/// A play the plugin recorded. Its time is the server's clock, taken as the local one.
+/// How many seconds the server's clock is ahead of UTC, beside each row: SQLite's `localtime`
+/// is the clock the plugin dates its plays with.
+const SERVER_OFFSET: &str =
+    "(julianday('now', 'localtime') - julianday('now')) * 86400 AS ServerOffset";
+
+/// A play the plugin recorded, at its time on the local clock. The plugin writes the server's
+/// own clock (`DateTime.Now`), which in a container without a time zone is UTC.
 struct ReportingRow {
     at: Option<LocalTime>,
     item: String,
@@ -1562,7 +1582,7 @@ fn plugin_user_id(user_id: &str) -> Option<String> {
 fn reporting_query(user_id: &str) -> Option<String> {
     let id = plugin_user_id(user_id)?;
     Some(format!(
-        "SELECT {} FROM PlaybackActivity WHERE UserId = '{id}' \
+        "SELECT {}, {SERVER_OFFSET} FROM PlaybackActivity WHERE UserId = '{id}' \
          AND ItemType IN ('Movie', 'Episode') ORDER BY DateCreated",
         REPORTING_COLUMNS.join(", ")
     ))

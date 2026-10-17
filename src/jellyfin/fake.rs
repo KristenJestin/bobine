@@ -154,6 +154,9 @@ pub struct State {
     /// query: `DateCreated, UserId, ItemId, ItemType, ItemName, PlayDuration`. None: the plugin
     /// is not installed, its routes answer 404.
     pub reporting: Option<Vec<[&'static str; 6]>>,
+    /// The plugin's server is this many seconds ahead of UTC, as its query's `ServerOffset`
+    /// says (`"7200.0000001"`). None: the column is missing from its answer.
+    pub reporting_offset: Option<&'static str>,
     /// The user has played nothing.
     pub nothing_played: bool,
     /// Episodes the library holds beside `EPISODE`, with their series: (episode, series).
@@ -510,18 +513,24 @@ fn answer(state: &State, seen: &Seen) -> Answer {
         ("GET", "/Persons") => Answer::Json(200, matching("persons", seen)),
         ("POST", "/user_usage_stats/submit_custom_query") if state.reporting.is_some() => {
             let rows = state.reporting.as_ref().unwrap();
+            let mut names = vec![
+                "DateCreated",
+                "UserId",
+                "ItemId",
+                "ItemType",
+                "ItemName",
+                "PlayDuration",
+            ];
+            names.extend(state.reporting_offset.map(|_| "ServerOffset"));
             let columns = if rows.is_empty() {
                 json!([])
             } else {
-                json!([
-                    "DateCreated",
-                    "UserId",
-                    "ItemId",
-                    "ItemType",
-                    "ItemName",
-                    "PlayDuration"
-                ])
+                json!(names)
             };
+            let results: Vec<Vec<&str>> = rows
+                .iter()
+                .map(|row| row.iter().copied().chain(state.reporting_offset).collect())
+                .collect();
             let message = if rows.is_empty() {
                 "Query executed, no data returned.</br>Number of rows effected : 0"
             } else {
@@ -529,7 +538,7 @@ fn answer(state: &State, seen: &Seen) -> Answer {
             };
             Answer::Json(
                 200,
-                json!({ "colums": columns, "results": rows, "message": message }),
+                json!({ "colums": columns, "results": results, "message": message }),
             )
         }
         ("GET", "/Items") if seen.param("Ids").is_some() => {
