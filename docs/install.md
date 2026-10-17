@@ -6,7 +6,10 @@ x86_64. It needs glibc 2.39 or newer (Omarchy has it), and a Wayland session.
 
 - **A release** (`vX.Y.Z`) is made when `dev` is merged into `main`.
 - **The beta** (`vX.Y.Z-beta.N`, marked pre-release) is made at every push to `dev`, and only the
-  newest one exists. It is the patch after the last release, so it is newer than it.
+  newest one exists. It is the patch after the last release, so it is newer than it. Only a push
+  that changes code makes one (not documentation, the licence or the git hooks). It is published
+  right after the push, even before the tests on `dev` finish: a broken beta is replaced by the
+  next push to `dev`.
 
 See [what a version promises](versions.md).
 

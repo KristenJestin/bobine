@@ -7,7 +7,8 @@ the binary reports it with `bobine --version` and in Settings › About. A local
 
 Bobine is in `0.x`: a 1.0 is the maintainer's decision. From 1.0, a breaking change makes a new
 major version (semantic-release counts it from the `BREAKING CHANGE:` footer of a commit). Until
-then it moves the minor, and the promises below hold **within a minor version** (`0.3.x`). A beta
+then it moves the minor, through a rule in `.releaserc.json` that is removed at 1.0, after which a
+breaking change bumps the major. The promises below hold **within a minor version** (`0.3.x`). A beta
 (`vX.Y.Z-beta.N`) is the patch after the last release and promises nothing beyond what that
 release did, until it is released.
 
