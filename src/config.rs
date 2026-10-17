@@ -1,7 +1,7 @@
 //! Where Bobine keeps the account file (device id, server address, user name: nothing secret),
 //! and the viewer's settings beside it.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
@@ -48,8 +48,9 @@ pub struct EpisodesSeen {
     /// The newest date an episode was added on: ticks of 100 ns since 1970, by the server's
     /// clock, which the episodes are dated by.
     pub mark: i64,
-    /// The episodes not played added within `notify::GRACE` of the mark, by id.
-    pub episodes: BTreeSet<String>,
+    /// The episodes not played added within `notify::GRACE` of the mark: id, and when added.
+    /// Not `episodes`, a list of ids before, which the dates would make unread.
+    pub added: BTreeMap<String, i64>,
 }
 
 impl Default for Settings {
@@ -210,11 +211,15 @@ mod tests {
         let mut settings = Settings::default();
         let first = EpisodesSeen {
             mark: 17_578_386_051_234_567,
-            episodes: ["e1".to_string(), "e2".to_string()].into(),
+            added: [
+                ("e1".to_string(), 17_578_386_051_234_567),
+                ("e2".to_string(), 3),
+            ]
+            .into(),
         };
         let second = EpisodesSeen {
             mark: 12,
-            episodes: BTreeSet::new(),
+            added: BTreeMap::new(),
         };
         settings
             .new_episodes_seen
@@ -243,6 +248,26 @@ mod tests {
     }
 
     #[test]
+    fn a_last_check_kept_without_dates_leaves_the_other_settings_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.toml");
+        std::fs::write(
+            &path,
+            "black_out_other_monitors = true\n\n[new_episodes_seen.\"server-1/user-1\"]\nmark = 7\nepisodes = [\"e1\"]\n",
+        )
+        .unwrap();
+        let read = Settings::read(&path);
+        assert!(read.black_out_other_monitors);
+        assert_eq!(
+            read.new_episodes_seen.get("server-1/user-1"),
+            Some(&EpisodesSeen {
+                mark: 7,
+                added: BTreeMap::new(),
+            })
+        );
+    }
+
+    #[test]
     fn the_default_quality_is_the_original_file() {
         assert_eq!(Settings::default().default_quality, Quality::Original);
         let dir = tempfile::tempdir().unwrap();
@@ -263,7 +288,7 @@ mod tests {
                 "server-1/user-1".to_string(),
                 EpisodesSeen {
                     mark: 7,
-                    episodes: ["e1".to_string()].into(),
+                    added: [("e1".to_string(), 7)].into(),
                 },
             )]
             .into(),

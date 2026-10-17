@@ -249,6 +249,8 @@ pub struct State {
     pub tmdb_index_error: Option<ProviderError>,
     /// The episodes the server added, by id, and when (ticks of 100 ns since 1970).
     pub added: Vec<(ItemId, i64)>,
+    /// What changes on the server once the first page of new episodes is read, before the next.
+    pub between_pages: Option<Box<dyn FnOnce(&mut State) + Send>>,
 }
 
 /// The TMDb id `tmdb` gives `id`.
@@ -692,6 +694,7 @@ impl FakeServer {
                 trailer_stream: "file:///nowhere-trailer.mp4".into(),
                 trailer_error: None,
                 added: Vec::new(),
+                between_pages: None,
             })),
             info: ServerInfo {
                 id: "server-1".into(),
@@ -1284,6 +1287,11 @@ impl MediaServer for FakeServer {
             .collect();
         found.sort_by_key(|new| std::cmp::Reverse(new.added));
         let total = found.len() as u32;
+        if start == 0
+            && let Some(change) = state.between_pages.take()
+        {
+            change(&mut state);
+        }
         Ok(Page {
             items: found
                 .into_iter()

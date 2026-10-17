@@ -137,14 +137,16 @@ pub fn check(
         (Some(seen), None) => seen.mark,
         (None, newest) => newest.unwrap_or(0),
     };
-    let now_seen = EpisodesSeen {
-        mark,
-        episodes: latest
+    // Carried forward, not replaced: an episode this check did not read (a page that shifted
+    // while it was read, a list that came back empty) is still on the server.
+    let mut added = seen.map(|seen| seen.added.clone()).unwrap_or_default();
+    added.extend(
+        latest
             .iter()
-            .filter(|new| new.added > mark - GRACE)
-            .map(|new| new.episode.item.id.0.clone())
-            .collect(),
-    };
+            .map(|new| (new.episode.item.id.0.clone(), new.added)),
+    );
+    added.retain(|_, at| *at > mark - GRACE);
+    let now_seen = EpisodesSeen { mark, added };
     let checked = |gained| Checked {
         seen: now_seen,
         gained,
@@ -157,7 +159,7 @@ pub fn check(
         .filter(|new| {
             new.added > seen.mark - GRACE
                 && !new.episode.item.watched
-                && !seen.episodes.contains(&new.episode.item.id.0)
+                && !seen.added.contains_key(&new.episode.item.id.0)
         })
         .collect();
     if fresh.is_empty() {
@@ -183,11 +185,12 @@ pub fn check(
     ))
 }
 
-/// The episodes not played, the newest added first, page after page down to the first that
-/// reaches back to `mark` less `GRACE` (the newest episode's, with no mark yet), or the last, or
-/// `PAGES` of them.
+/// The episodes not played, each once, the newest added first, page after page down to the first
+/// that reaches back to `mark` less `GRACE` (the newest episode's, with no mark yet), or the last,
+/// or `PAGES` of them.
 fn unplayed(server: &dyn MediaServer, mark: Option<i64>) -> Result<Vec<NewEpisode>, ProviderError> {
     let mut found: Vec<NewEpisode> = Vec::new();
+    let mut ids: HashSet<String> = HashSet::new();
     let mut floor = mark.map(|mark| mark - GRACE);
     for page in 0..PAGES {
         let start = page * LATEST;
@@ -195,7 +198,12 @@ fn unplayed(server: &dyn MediaServer, mark: Option<i64>) -> Result<Vec<NewEpisod
         let floor = *floor
             .get_or_insert_with(|| read.items.first().map_or(i64::MIN, |new| new.added - GRACE));
         let reached = read.items.last().is_some_and(|new| new.added <= floor);
-        found.extend(read.items);
+        // A page that shifted between two reads gives an episode twice.
+        found.extend(
+            read.items
+                .into_iter()
+                .filter(|new| ids.insert(new.episode.item.id.0.clone())),
+        );
         if reached || start + LATEST >= read.total {
             break;
         }
@@ -288,11 +296,14 @@ mod tests {
             .extend(episodes.iter().map(|(id, at)| (ItemId((*id).into()), *at)));
     }
 
-    /// What a check that marked `mark` and saw `episodes` keeps.
-    fn seen(mark: i64, episodes: &[&str]) -> EpisodesSeen {
+    /// What a check that marked `mark` and saw `episodes`, added when they say, keeps.
+    fn seen(mark: i64, episodes: &[(&str, i64)]) -> EpisodesSeen {
         EpisodesSeen {
             mark,
-            episodes: episodes.iter().map(|id| id.to_string()).collect(),
+            added: episodes
+                .iter()
+                .map(|(id, at)| (id.to_string(), *at))
+                .collect(),
         }
     }
 
@@ -314,7 +325,7 @@ mod tests {
         assert_eq!(
             checked,
             Checked {
-                seen: seen(200, &["series-0-s2-e5", "series-1-s1-e3"]),
+                seen: seen(200, &[("series-0-s2-e5", 200), ("series-1-s1-e3", 100)]),
                 gained: vec![]
             }
         );
@@ -325,7 +336,7 @@ mod tests {
         let server = FakeServer::new(6, true);
         added(&server, &[("series-1-s1-e4", 150)]);
         let checked = check(&server, Some(&at(100))).unwrap();
-        assert_eq!(checked.seen, seen(150, &["series-1-s1-e4"]));
+        assert_eq!(checked.seen, seen(150, &[("series-1-s1-e4", 150)]));
         assert_eq!(
             checked.gained,
             [Gained {
@@ -360,7 +371,7 @@ mod tests {
         assert_eq!(
             checked,
             Checked {
-                seen: seen(150, &["series-3-s1-e2"]),
+                seen: seen(150, &[("series-3-s1-e2", 150)]),
                 gained: vec![]
             }
         );
@@ -387,7 +398,7 @@ mod tests {
     fn an_episode_seen_by_the_last_check_is_not_told_again() {
         let server = FakeServer::new(6, true);
         added(&server, &[("series-1-s1-e4", 100)]);
-        let last = seen(100, &["series-1-s1-e4"]);
+        let last = seen(100, &[("series-1-s1-e4", 100)]);
         let checked = check(&server, Some(&last)).unwrap();
         assert_eq!(
             checked,
@@ -411,7 +422,7 @@ mod tests {
     fn nothing_new_costs_one_request() {
         let server = FakeServer::new(6, true);
         added(&server, &[("series-1-s1-e4", 100)]);
-        check(&server, Some(&seen(100, &["series-1-s1-e4"]))).unwrap();
+        check(&server, Some(&seen(100, &[("series-1-s1-e4", 100)]))).unwrap();
         assert_eq!(asks(&server), (1, 0), "no list of favourites asked");
     }
 
@@ -524,7 +535,83 @@ mod tests {
             ],
         );
         let checked = check(&server, None).unwrap();
-        assert_eq!(checked.seen, seen(T, &["series-0-s3-e1", "series-1-s1-e4"]));
+        assert_eq!(
+            checked.seen,
+            seen(
+                T,
+                &[
+                    ("series-0-s3-e1", T),
+                    ("series-1-s1-e4", T - GRACE + SECOND)
+                ]
+            )
+        );
+    }
+
+    /// `count` episodes of series-3, which nobody follows, added a second apart down from `from`.
+    fn unfollowed(server: &FakeServer, count: i64, from: i64) {
+        let mut state = server.state.lock().unwrap();
+        let other = ItemId("series-3".into());
+        let template = state.episodes.iter().find(|e| e.series == other).unwrap();
+        let template = template.clone();
+        for n in 0..count {
+            let mut episode = template.clone();
+            episode.item.id = ItemId(format!("series-3-new-{n}"));
+            episode.item.watched = false;
+            state
+                .added
+                .push((episode.item.id.clone(), from - n * SECOND));
+            state.episodes.push(episode);
+        }
+    }
+
+    #[test]
+    fn an_episode_skipped_because_an_earlier_one_went_between_two_pages_is_not_told_again() {
+        let server = FakeServer::new(6, true);
+        unfollowed(&server, 150, T);
+        // At place 100: the first of the second page.
+        added(&server, &[("series-1-s1-e4", T - 99 * SECOND - SECOND / 2)]);
+        let first = check(&server, Some(&at(T - HOUR))).unwrap();
+        assert_eq!(told(&first), ["series-1-s1-e4"]);
+        // Deleted once the first page is read: series-1-s1-e4 moves up to the first page's end.
+        server.state.lock().unwrap().between_pages = Some(Box::new(|state| {
+            state.added.retain(|(id, _)| id.0 != "series-3-new-0");
+        }));
+        let second = check(&server, Some(&first.seen)).unwrap();
+        assert_eq!(told(&second), Vec::<&str>::new());
+        let third = check(&server, Some(&second.seen)).unwrap();
+        assert_eq!(told(&third), Vec::<&str>::new(), "not told again");
+    }
+
+    #[test]
+    fn a_check_that_finds_no_episode_does_not_make_the_next_tell_them_again() {
+        let server = FakeServer::new(6, true);
+        added(
+            &server,
+            &[("series-1-s1-e3", T), ("series-0-s3-e1", T - HOUR)],
+        );
+        let first = check(&server, Some(&at(T - 2 * HOUR))).unwrap();
+        assert_eq!(told(&first).len(), 2);
+        let kept = std::mem::take(&mut server.state.lock().unwrap().added);
+        let empty = check(&server, Some(&first.seen)).unwrap();
+        assert_eq!(told(&empty), Vec::<&str>::new());
+        server.state.lock().unwrap().added = kept;
+        let after = check(&server, Some(&empty.seen)).unwrap();
+        assert_eq!(told(&after), Vec::<&str>::new(), "not told again");
+    }
+
+    #[test]
+    fn an_episode_read_twice_because_one_came_in_between_two_pages_is_told_as_one() {
+        let server = FakeServer::new(6, true);
+        unfollowed(&server, 151, T + SECOND);
+        // Added on top once the first page is read.
+        let top = server.state.lock().unwrap().added.remove(0);
+        // At place 99: the last of the first page, then the first of the second.
+        added(&server, &[("series-1-s1-e4", T - 98 * SECOND - SECOND / 2)]);
+        server.state.lock().unwrap().between_pages =
+            Some(Box::new(move |state| state.added.push(top)));
+        let checked = check(&server, Some(&at(T - HOUR))).unwrap();
+        assert_eq!(told(&checked), ["series-1-s1-e4"]);
+        assert_eq!(checked.gained[0].body, "S1 · E4 is available");
     }
 
     #[test]
