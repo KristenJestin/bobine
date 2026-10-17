@@ -63,7 +63,7 @@ impl Shell {
         self.ask(
             cx,
             move |server| {
-                let checked = notify::check(server, seen.as_ref())?;
+                let checked = notify::check(server, seen.as_ref(), notify::now())?;
                 let told = checked
                     .gained
                     .into_iter()

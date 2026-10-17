@@ -18,6 +18,11 @@ use bobine::provider::{Favourite, ImageRef, ItemId, MediaServer, NewEpisode, Pro
 /// dated when its file was made or downloaded, which may be well before the server scanned it.
 pub const GRACE: i64 = 48 * 3_600 * 10_000_000;
 
+/// How far past the local clock an episode's date may be and still move the mark: a server's
+/// clock a little ahead is no reason to stop, but one file dated years ahead would push the mark
+/// there and leave every real episode older than the window.
+const AHEAD: i64 = 3_600 * 10_000_000;
+
 /// How often the server is asked for new episodes while Bobine runs.
 pub const EVERY: Duration = Duration::from_secs(15 * 60);
 
@@ -30,6 +35,13 @@ const PAGES: u32 = 20;
 
 /// How many series in progress make the followed ones, beside the favourites.
 const IN_PROGRESS: u32 = 200;
+
+/// The local clock, in ticks of 100 ns since 1970, as the episodes are dated.
+pub fn now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| (since.as_nanos() / 100) as i64)
+}
 
 /// What a click on a notification opens: the episode, on its series' page.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -129,9 +141,14 @@ pub struct Checked {
 pub fn check(
     server: &dyn MediaServer,
     seen: Option<&EpisodesSeen>,
+    now: i64,
 ) -> Result<Checked, ProviderError> {
-    let latest = unplayed(server, seen.map(|seen| seen.mark))?;
-    let newest = latest.iter().map(|new| new.added).max();
+    let latest = unplayed(server, seen.map(|seen| seen.mark), now)?;
+    let newest = latest
+        .iter()
+        .map(|new| new.added)
+        .filter(|added| *added <= now + AHEAD)
+        .max();
     let mark = match (seen, newest) {
         (Some(seen), Some(newest)) => seen.mark.max(newest),
         (Some(seen), None) => seen.mark,
@@ -186,17 +203,25 @@ pub fn check(
 }
 
 /// The episodes not played, each once, the newest added first, page after page down to the first
-/// that reaches back to `mark` less `GRACE` (the newest episode's, with no mark yet), or the last,
-/// or `PAGES` of them.
-fn unplayed(server: &dyn MediaServer, mark: Option<i64>) -> Result<Vec<NewEpisode>, ProviderError> {
+/// that reaches back to `mark` less `GRACE` (with no mark yet, the newest's not dated past
+/// `AHEAD`), or the last, or `PAGES` of them.
+fn unplayed(
+    server: &dyn MediaServer,
+    mark: Option<i64>,
+    now: i64,
+) -> Result<Vec<NewEpisode>, ProviderError> {
     let mut found: Vec<NewEpisode> = Vec::new();
     let mut ids: HashSet<String> = HashSet::new();
     let mut floor = mark.map(|mark| mark - GRACE);
     for page in 0..PAGES {
         let start = page * LATEST;
         let read = server.new_episodes(start, LATEST)?;
-        let floor = *floor
-            .get_or_insert_with(|| read.items.first().map_or(i64::MIN, |new| new.added - GRACE));
+        let floor = *floor.get_or_insert_with(|| {
+            read.items
+                .iter()
+                .find(|new| new.added <= now + AHEAD)
+                .map_or(i64::MIN, |new| new.added - GRACE)
+        });
         let reached = read.items.last().is_some_and(|new| new.added <= floor);
         // A page that shifted between two reads gives an episode twice.
         found.extend(
@@ -310,6 +335,17 @@ mod tests {
     /// A last check at `mark` that saw nothing.
     fn at(mark: i64) -> EpisodesSeen {
         seen(mark, &[])
+    }
+
+    /// The local clock of the tests: later than every date they add, but one.
+    const NOW: i64 = T + 24 * HOUR;
+
+    /// A check at `NOW`.
+    fn check(
+        server: &dyn MediaServer,
+        seen: Option<&EpisodesSeen>,
+    ) -> Result<Checked, ProviderError> {
+        super::check(server, seen, NOW)
     }
 
     fn asks(server: &FakeServer) -> (u32, u32) {
@@ -612,6 +648,18 @@ mod tests {
         let checked = check(&server, Some(&at(T - HOUR))).unwrap();
         assert_eq!(told(&checked), ["series-1-s1-e4"]);
         assert_eq!(checked.gained[0].body, "S1 · E4 is available");
+    }
+
+    #[test]
+    fn an_episode_dated_in_the_future_does_not_move_the_mark() {
+        let server = FakeServer::new(6, true);
+        added(&server, &[("series-0-s3-e1", T + 5 * 365 * 24 * HOUR)]);
+        let first = super::check(&server, Some(&at(T - HOUR)), T).unwrap();
+        assert_eq!(told(&first), ["series-0-s3-e1"], "told once, as new");
+        assert_eq!(first.seen.mark, T - HOUR);
+        added(&server, &[("series-1-s1-e4", T)]);
+        let second = super::check(&server, Some(&first.seen), T + HOUR).unwrap();
+        assert_eq!(told(&second), ["series-1-s1-e4"]);
     }
 
     #[test]
