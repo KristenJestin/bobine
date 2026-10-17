@@ -823,13 +823,29 @@ pub(super) mod tests {
             .unwrap();
         let mut visual = drawn(&window, cx);
         let check = |name: &str, field: &Entity<TextInput>, visual: &mut VisualTestContext| {
-            let crate::input::Drawn { room, caret, clip } =
-                visual.read(|cx| field.read(cx).drawn().expect("the field was drawn"));
+            let crate::input::Drawn {
+                room,
+                caret,
+                line,
+                clip,
+            } = visual.read(|cx| field.read(cx).drawn().expect("the field was drawn"));
             assert!(
                 caret.left() >= room.left() && caret.right() <= room.right(),
                 "the {name}'s caret at {caret:?} is out of its field {room:?}"
             );
-            let clip = clip.unwrap_or_else(|| panic!("the {name}'s text is not clipped"));
+            // The line is longer than the field and ends at the caret: it was painted
+            // scrolled left, with no empty room after its end.
+            assert!(
+                line.left() < room.left(),
+                "the {name}'s line is painted at {line:?}, not scrolled in its field {room:?}"
+            );
+            assert!(
+                (line.right() - caret.left()).abs() <= gpui_kit::px(1.),
+                "the {name}'s line ends at {}, its caret is at {}",
+                line.right(),
+                caret.left()
+            );
+            // What is painted outside the field is cut off by the mask in force.
             assert!(
                 clip.left() >= room.left() && clip.right() <= room.right(),
                 "the {name}'s text is clipped to {clip:?}, wider than its field {room:?}"

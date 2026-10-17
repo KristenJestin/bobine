@@ -64,12 +64,14 @@ pub fn bind_keys(cx: &mut App) {
     ]);
 }
 
-/// What a field drew last: its text's room, its caret, and what its text was clipped to.
+/// What a field drew last: its text's room, its caret, where its whole line was painted (it
+/// starts left of the room once scrolled), and the mask that was in force while it was.
 #[cfg(test)]
 pub struct Drawn {
     pub room: Bounds<Pixels>,
     pub caret: Bounds<Pixels>,
-    pub clip: Option<Bounds<Pixels>>,
+    pub line: Bounds<Pixels>,
+    pub clip: Bounds<Pixels>,
 }
 
 pub struct TextInput {
@@ -90,7 +92,7 @@ pub struct TextInput {
     #[cfg(test)]
     last_caret: Option<Bounds<Pixels>>,
     #[cfg(test)]
-    last_clip: Option<Bounds<Pixels>>,
+    last_painted: Option<(Bounds<Pixels>, Bounds<Pixels>)>,
 }
 
 impl TextInput {
@@ -108,7 +110,7 @@ impl TextInput {
             #[cfg(test)]
             last_caret: None,
             #[cfg(test)]
-            last_clip: None,
+            last_painted: None,
         }
     }
 
@@ -119,10 +121,12 @@ impl TextInput {
     /// What was drawn last.
     #[cfg(test)]
     pub fn drawn(&self) -> Option<Drawn> {
+        let (line, clip) = self.last_painted?;
         Some(Drawn {
             room: self.last_bounds?,
             caret: self.last_caret?,
-            clip: self.last_clip,
+            line,
+            clip,
         })
     }
 
@@ -537,15 +541,24 @@ impl Element for TextLine {
         let scroll = self.input.read(cx).scroll;
         #[cfg(test)]
         let caret = prepaint.cursor.as_ref().map(|cursor| cursor.bounds);
+        let origin = point(bounds.left() - scroll, bounds.top());
+        #[cfg(test)]
+        let painted_at = Bounds::new(origin, size(line.width, window.line_height()));
+        #[cfg(test)]
+        let mut mask = bounds;
         // The text goes no further than the field, whatever its length.
         window.with_content_mask(Some(ContentMask { bounds }), |window| {
+            #[cfg(test)]
+            {
+                mask = window.content_mask().bounds;
+            }
             if focus.is_focused(window)
                 && let Some(selection) = prepaint.selection.take()
             {
                 window.paint_quad(selection);
             }
             line.paint(
-                point(bounds.left() - scroll, bounds.top()),
+                origin,
                 window.line_height(),
                 gpui_kit::TextAlign::Left,
                 None,
@@ -563,7 +576,7 @@ impl Element for TextLine {
             #[cfg(test)]
             {
                 input.last_caret = caret;
-                input.last_clip = Some(bounds);
+                input.last_painted = Some((painted_at, mask));
             }
             input.last_layout = Some(line);
             input.last_bounds = Some(bounds);
