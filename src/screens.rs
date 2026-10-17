@@ -455,24 +455,40 @@ fn poster_image(
         })
 }
 
+/// The text sizes of a card's caption: its title, and the line under it.
+const CAPTION_TITLE: f32 = 13.;
+const CAPTION_DETAIL: f32 = 12.;
+/// Between the two lines of a caption.
+const CAPTION_GAP: f32 = 2.;
+
+/// The height of a line of caption text of `size`, descenders included: the lines are drawn at
+/// it and the rows keep room from it, so the room is the text's whatever its size.
+const fn caption_line(size: f32) -> f32 {
+    (size * 1.4).ceil()
+}
+
+/// The height of a caption whose title is `title` px: its two lines and the gap between.
+const fn caption_height(title: f32) -> f32 {
+    caption_line(title) + CAPTION_GAP + caption_line(CAPTION_DETAIL)
+}
+
+/// A line of a card's caption, cut with an ellipsis rather than wrapped: a caption is two lines.
+fn caption_text(size: f32, text: impl IntoElement) -> Div {
+    div()
+        .text_size(px(size))
+        .line_height(px(caption_line(size)))
+        .truncate()
+        .child(text)
+}
+
 fn poster_caption(title: String, caption: String) -> Div {
     div()
+        .debug_selector(|| "card-caption".into())
         .flex()
         .flex_col()
-        .gap(px(2.))
-        .child(
-            div()
-                .text_size(px(13.))
-                .font_weight(FontWeight::SEMIBOLD)
-                .truncate()
-                .child(title),
-        )
-        .child(
-            div()
-                .text_size(px(12.))
-                .text_color(theme::dim())
-                .child(caption),
-        )
+        .gap(px(CAPTION_GAP))
+        .child(caption_text(CAPTION_TITLE, title).font_weight(FontWeight::SEMIBOLD))
+        .child(caption_text(CAPTION_DETAIL, caption).text_color(theme::dim()))
 }
 
 /// A thin bar: how far the viewer went.

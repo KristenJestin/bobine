@@ -17,7 +17,10 @@ use gpui_kit::{
 
 use super::card::{Offer, Open, Play};
 use super::film_detail::{EDGE, ROW_POSTER, hero_frame, logo_over_title, meta_line};
-use super::{card, note, picture, poster, progress_bar, row_heading, series_card};
+use super::{
+    CAPTION_DETAIL, CAPTION_GAP, CAPTION_TITLE, caption_height, caption_text, card, note, picture,
+    poster, progress_bar, row_heading, series_card,
+};
 use crate::grid::Grid;
 use crate::hero::{self, Headline};
 use crate::home_page::{self, ListKind};
@@ -29,9 +32,11 @@ use crate::theme;
 
 /// A card of a row of what was started, 16:9.
 const WIDE: f32 = 340.;
-/// What is under a wide card's picture: its title and a line, with the room between.
-const WIDE_CAPTION: f32 = 52.;
-const POSTER_CAPTION: f32 = 44.;
+/// What is under a wide card's picture: the gap, its title and a line, with the room between.
+const WIDE_TITLE: f32 = 14.;
+const WIDE_CAPTION: f32 = 10. + caption_height(WIDE_TITLE);
+/// What is under a poster: the gap and its caption.
+const POSTER_CAPTION: f32 = 8. + caption_height(CAPTION_TITLE);
 const GAP: f32 = 16.;
 /// The left of the header's text, after the design.
 const HERO_INSET: f32 = 150.;
@@ -847,35 +852,27 @@ pub(super) fn wide_offer(
             .child(picture_box)
             .child(
                 div()
+                    .debug_selector(|| "card-caption".into())
                     .flex()
                     .flex_col()
-                    .gap(px(2.))
+                    .gap(px(CAPTION_GAP))
                     .child(
                         div()
                             .flex()
                             .justify_between()
                             .gap(px(12.))
                             .child(
-                                div()
-                                    .text_size(px(14.))
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .truncate()
-                                    .child(heading.clone()),
+                                caption_text(WIDE_TITLE, heading.clone())
+                                    .font_weight(FontWeight::SEMIBOLD),
                             )
                             .children(left.clone().map(|left| {
-                                div()
+                                caption_text(CAPTION_DETAIL, left)
                                     .flex_none()
-                                    .text_size(px(12.))
                                     .text_color(theme::muted())
-                                    .child(left)
                             })),
                     )
                     .children(detail.clone().map(|detail| {
-                        div()
-                            .text_size(px(12.))
-                            .text_color(theme::dim())
-                            .truncate()
-                            .child(detail)
+                        caption_text(CAPTION_DETAIL, detail).text_color(theme::dim())
                     })),
             )
     };
@@ -892,6 +889,7 @@ mod tests {
     use super::*;
     use crate::fake::films;
     use bobine::provider::Page;
+    use gpui_kit::ElementId;
 
     fn titles(count: usize) -> Vec<Title> {
         films(count).into_iter().map(Title::Film).collect()
@@ -942,5 +940,81 @@ mod tests {
         );
         let drawn = Pick::Listed(1, all[2].id().clone());
         assert_eq!(drawn.title(Some(&grid)), None);
+    }
+
+    /// A card in a row of the Home, in the room the row keeps for it.
+    struct InRow(Rc<dyn Fn() -> AnyElement>);
+
+    impl Render for InRow {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div().size_full().child((self.0)())
+        }
+    }
+
+    /// Where the caption of `card` is drawn, and the row around it, `room` high.
+    fn caption_in_room(
+        room: f32,
+        card: impl Fn() -> AnyElement + 'static,
+        cx: &mut gpui_kit::TestAppContext,
+    ) -> (
+        gpui_kit::Bounds<gpui_kit::Pixels>,
+        gpui_kit::Bounds<gpui_kit::Pixels>,
+    ) {
+        let card = Rc::new(card);
+        let window = cx.add_window(move |_, _| {
+            let card = Rc::clone(&card);
+            InRow(Rc::new(move || {
+                let card = div().id("card").flex_none().child(card());
+                cards_row(0, &ScrollHandle::new(), room, vec![card])
+                    .debug_selector(|| "room".into())
+                    .into_any_element()
+            }))
+        });
+        let mut visual = gpui_kit::VisualTestContext::from_window(window.into(), cx);
+        visual.run_until_parked();
+        let caption = visual.debug_bounds("card-caption").expect("the caption");
+        let room = visual.debug_bounds("room").expect("the room");
+        (caption, room)
+    }
+
+    /// The caption under a poster of a row, and under a wide card, sits whole in the room the
+    /// row keeps: its two lines take the height of their text, descenders included.
+    #[gpui_kit::test]
+    fn no_caption_under_any_card_is_clipped(cx: &mut gpui_kit::TestAppContext) {
+        let mut film = films(1).remove(0);
+        film.year = Some(2019);
+        let poster = film.clone();
+        let (caption, room) = caption_in_room(
+            ROW_POSTER * 1.5 + POSTER_CAPTION,
+            move || {
+                let name = ElementId::from(("poster", 0usize));
+                super::super::film_look(&poster, None, ROW_POSTER, &name, false, false, false)
+                    .draw(None)
+                    .into_any_element()
+            },
+            cx,
+        );
+        assert!(
+            caption.bottom() <= room.bottom(),
+            "the poster's caption ends at {:?}, its room at {:?}",
+            caption.bottom(),
+            room.bottom()
+        );
+        let wide = Title::Film(film);
+        let (caption, room) = caption_in_room(
+            WIDE * 9. / 16. + WIDE_CAPTION,
+            move || {
+                let pick = Pick::Row(Rc::from(vec![wide.clone()]), 0);
+                let offer = wide_offer(&wide, None, pick, WIDE);
+                (offer.draw)(div().id("layer")).into_any_element()
+            },
+            cx,
+        );
+        assert!(
+            caption.bottom() <= room.bottom(),
+            "the wide card's caption ends at {:?}, its room at {:?}",
+            caption.bottom(),
+            room.bottom()
+        );
     }
 }
