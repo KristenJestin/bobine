@@ -17,7 +17,7 @@ macro_rules! renders {
     };
 }
 
-renders!(16, 32, 48, 64, 128, 256, 512, 1024);
+renders!(32, 48, 64, 128, 256);
 
 /// The render to draw `pixels` wide: the smallest that is at least that, else the largest.
 fn render_for(pixels: f32) -> usize {
@@ -70,6 +70,6 @@ mod tests {
         assert_eq!(side(64.), 64, "the pill bar on a 2x screen");
         assert_eq!(side(44.), 48);
         assert_eq!(side(88.), 128);
-        assert_eq!(side(5000.), 1024, "never past the biggest");
+        assert_eq!(side(5000.), 256, "never past the biggest");
     }
 }
