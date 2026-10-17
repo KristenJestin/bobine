@@ -16,6 +16,7 @@ use crate::config::Quality;
 use crate::icons::{IconName, icon};
 use crate::menu;
 use crate::motion;
+use crate::secret_field;
 use crate::shell::{Loadable, QualityMenu, Shell};
 use crate::theme;
 
@@ -166,15 +167,16 @@ pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -
 fn seerr_block(shell: &Shell, window: &mut Window, cx: &mut Context<Shell>) -> Option<Div> {
     let address = shell.seerr.address.clone()?;
     let key = shell.seerr.key.clone()?;
-    let save = theme::eased("seerr-address-save", theme::Shades::line(), window, cx)
+    let save = theme::eased("seerr-save", theme::Shades::line(), window, cx)
+        .debug_selector(|| "seerr-save".into())
         .px(px(12.))
-        .py(px(10.))
+        .py(px(7.))
         .rounded(px(theme::RADIUS))
         .border_1()
         .border_color(theme::line())
         .text_size(px(13.))
         .cursor_pointer()
-        .on_click(cx.listener(|shell, _, _, cx| shell.save_seerr_address(cx)))
+        .on_click(cx.listener(|shell, _, _, cx| shell.save_seerr(cx)))
         .child("Save");
     let address_row = div()
         .debug_selector(|| "seerr-address".into())
@@ -186,20 +188,7 @@ fn seerr_block(shell: &Shell, window: &mut Window, cx: &mut Context<Shell>) -> O
         .py(px(10.))
         .text_size(px(14.))
         .child("Address")
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .gap(px(8.))
-                .on_key_down(cx.listener(|shell, event: &KeyDownEvent, _, cx| {
-                    if event.keystroke.key == "enter" {
-                        shell.save_seerr_address(cx);
-                        cx.stop_propagation();
-                    }
-                }))
-                .child(div().w(px(240.)).child(address))
-                .child(save),
-        );
+        .child(div().w(px(secret_field::FIELD)).child(address));
     let test = theme::eased("seerr-test", theme::Shades::line(), window, cx)
         .debug_selector(|| "seerr-test".into())
         .flex()
@@ -215,6 +204,22 @@ fn seerr_block(shell: &Shell, window: &mut Window, cx: &mut Context<Shell>) -> O
         .on_click(cx.listener(|shell, _, _, cx| shell.test_seerr(cx)))
         .child(icon(IconName::Plug, 14.).text_color(theme::muted()))
         .child("Test");
+    // A quiet hint while the form is half filled; the test's word once there is one.
+    let hint = (shell.seerr.check.is_none())
+        .then_some(shell.seerr.hint)
+        .flatten()
+        .map(|hint| {
+            div()
+                .debug_selector(|| "seerr-hint".into())
+                .text_size(px(13.))
+                .text_color(theme::dim())
+                .child(hint)
+                .with_animation(
+                    gpui_kit::ElementId::Name(format!("seerr-hint-{hint}").into()),
+                    Animation::new(motion::quick()).with_easing(motion::ease_out),
+                    |line, t| line.opacity(t),
+                )
+        });
     let (said, failed) = match &shell.seerr.check {
         None => (None, false),
         Some(Loadable::Loading) => (Some("Testing…".to_string()), false),
@@ -271,17 +276,28 @@ fn seerr_block(shell: &Shell, window: &mut Window, cx: &mut Context<Shell>) -> O
                             .child("Request movies and series that are not in the library."),
                     ),
             )
-            .child(address_row)
-            .child(div().px(px(12.)).py(px(10.)).child(key))
+            .child(
+                // One form: Enter in either field saves both.
+                div()
+                    .on_key_down(cx.listener(|shell, event: &KeyDownEvent, _, cx| {
+                        if event.keystroke.key == "enter" {
+                            shell.save_seerr(cx);
+                            cx.stop_propagation();
+                        }
+                    }))
+                    .child(address_row)
+                    .child(div().px(px(12.)).py(px(10.)).child(key)),
+            )
             .child(
                 div()
                     .flex()
                     .items_center()
-                    .gap(px(14.))
+                    .gap(px(10.))
                     .px(px(12.))
                     .py(px(10.))
+                    .child(save)
                     .child(test)
-                    .children(check),
+                    .child(div().pl(px(4.)).children(check).children(hint)),
             )
             .children(owner),
     )

@@ -19,6 +19,9 @@ use crate::motion;
 use crate::start;
 use crate::theme;
 
+/// The width of the text field.
+pub const FIELD: f32 = 240.;
+
 /// What a saved secret shows instead of itself.
 const DOTS: &str = "••••";
 
@@ -48,6 +51,8 @@ pub struct SecretField {
     error: Option<&'static str>,
     /// How many times the field changed state: each change fades the new content in.
     changes: usize,
+    /// Part of a form whose own Save keeps it: the field has no Save, and Enter goes to the form.
+    in_form: bool,
 }
 
 impl SecretField {
@@ -87,12 +92,18 @@ impl SecretField {
             state: State::Checking,
             error: None,
             changes: 0,
+            in_form: false,
         }
     }
 
     fn settle(&mut self, saved: bool) {
         self.state = if saved { State::Saved } else { State::Empty };
         self.changes += 1;
+    }
+
+    /// The field is part of a form, which saves it with the rest.
+    pub fn in_form(&mut self) {
+        self.in_form = true;
     }
 
     pub fn is_saved(&self) -> bool {
@@ -219,6 +230,8 @@ impl Render for SecretField {
                     })
                     .child("Clear"),
                 )
+        } else if self.in_form {
+            div().w(px(FIELD)).child(self.input.clone())
         } else {
             div()
                 .flex()
@@ -230,7 +243,7 @@ impl Render for SecretField {
                         cx.stop_propagation();
                     }
                 }))
-                .child(div().w(px(240.)).child(self.input.clone()))
+                .child(div().w(px(FIELD)).child(self.input.clone()))
                 .child(
                     theme::eased(
                         ElementId::from((self.label, 2usize)),

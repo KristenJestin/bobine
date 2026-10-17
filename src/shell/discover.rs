@@ -55,6 +55,9 @@ pub struct Seerr {
     key_saved: Option<bool>,
     /// What the last test of the connection said: the version, or why it failed.
     pub check: Option<Loadable<String>>,
+    /// What the form still lacks, while only one of the address and the key is there: said
+    /// quietly, it is not a failure.
+    pub hint: Option<&'static str>,
     /// Said under the fields when the requests go as the key's owner, not the viewer.
     pub owner_line: Option<String>,
     /// The number of the client being made: an older making that ends late is dropped.
@@ -118,6 +121,7 @@ impl Shell {
         let Some(key) = self.add_secret_field("API key", SEERR_KEY, cx) else {
             return;
         };
+        key.update(cx, |key, _| key.in_form());
         let changed = cx.observe(&key, |shell, key, cx| {
             let key = key.read(cx);
             if !key.is_settled() {
@@ -135,6 +139,14 @@ impl Shell {
             _key_changed: Some(changed),
             ..Seerr::default()
         };
+    }
+
+    /// The form's Save: the address typed, and the key if one was typed.
+    pub fn save_seerr(&mut self, cx: &mut Context<Self>) {
+        self.save_seerr_address(cx);
+        if let Some(key) = self.seerr.key.clone() {
+            key.update(cx, |key, cx| key.save(cx));
+        }
     }
 
     /// The address typed is kept (an empty one forgets it) and the client made again.
@@ -172,14 +184,13 @@ impl Shell {
         self.seerr.owner_line = None;
         let key_saved = self.seerr.key_saved == Some(true);
         let address = self.settings.seerr_address.clone();
-        let missing = match (&address, key_saved) {
-            (Some(_), false) => Some("Enter the API key."),
-            (None, true) => Some("Enter the address."),
+        self.seerr.hint = match (&address, key_saved) {
+            (Some(_), false) => Some("Add the API key to connect."),
+            (None, true) => Some("Add the address to connect."),
             _ => None,
         };
         let (Some(address), true, Some(server)) = (address, key_saved, self.server.clone()) else {
             self.seerr_gone(cx);
-            self.seerr.check = missing.map(Loadable::Failed);
             return;
         };
         let account = secret_field::account(&server.server().id, server.user_id(), SEERR_KEY);
@@ -537,9 +548,8 @@ impl Shell {
     pub fn test_seerr(&mut self, cx: &mut Context<Self>) {
         let Some(client) = self.seerr.client.clone() else {
             // Why there is no client was said already; without a word, both are missing.
-            if !matches!(self.seerr.check, Some(Loadable::Failed(_))) {
-                self.seerr.check =
-                    Some(Loadable::Failed("Enter the address and the API key first."));
+            if self.seerr.check.is_none() && self.seerr.hint.is_none() {
+                self.seerr.hint = Some("Add the address and the API key to connect.");
             }
             cx.notify();
             return;
@@ -754,14 +764,12 @@ pub(super) mod tests {
         let mut visual = drawn(&window, cx);
         window
             .update(cx, |shell, _, _| {
-                assert!(matches!(
-                    shell.seerr.check,
-                    Some(Loadable::Failed("Enter the API key."))
-                ));
+                assert_eq!(shell.seerr.hint, Some("Add the API key to connect."));
+                assert!(shell.seerr.check.is_none());
                 assert_eq!(shell.seerr.owner_line, None);
             })
             .unwrap();
-        assert!(visual.debug_bounds("seerr-check").is_some());
+        assert!(visual.debug_bounds("seerr-hint").is_some());
         assert!(visual.debug_bounds("seerr-owner").is_none());
         assert_eq!(seerr.state.lock().unwrap().record.checks, 0);
     }
@@ -813,6 +821,62 @@ pub(super) mod tests {
             .unwrap();
         visual.run_until_parked();
         check("key", &key_field, &mut visual);
+    }
+
+    /// Saving the address before the key is half the form filled, not a failure: a quiet hint
+    /// says the key is missing, never in the colour of an error.
+    #[gpui_kit::test]
+    fn saving_an_address_with_no_key_shows_a_hint_not_an_error(cx: &mut TestAppContext) {
+        let seerr = FakeSeerr::default();
+        let (window, _) = start(None, &Arc::new(MemoryKeyring::default()), &seerr, cx);
+        window
+            .update(cx, |shell, _, cx| {
+                shell.open_settings(cx);
+                let field = shell.seerr.address.clone().unwrap();
+                field.update(cx, |field, cx| field.set_text(ADDRESS, cx));
+            })
+            .unwrap();
+        let mut visual = drawn(&window, cx);
+        click(&mut visual, "seerr-save");
+        window
+            .update(cx, |shell, _, _| {
+                if let Some(Loadable::Failed(why)) = shell.seerr.check {
+                    panic!("an address without a key is said as an error: {why}");
+                }
+            })
+            .unwrap();
+        assert!(visual.debug_bounds("seerr-hint").is_some(), "no hint");
+        assert!(visual.debug_bounds("seerr-check").is_none());
+    }
+
+    /// One Save keeps the address and the key typed together.
+    #[gpui_kit::test]
+    fn one_save_keeps_the_address_and_the_key_together(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.toml");
+        let keyring = Arc::new(MemoryKeyring::default());
+        let seerr = FakeSeerr::default();
+        let (window, _) = start(Some(path.clone()), &keyring, &seerr, cx);
+        window
+            .update(cx, |shell, _, cx| {
+                shell.open_settings(cx);
+                let field = shell.seerr.address.clone().unwrap();
+                field.update(cx, |field, cx| field.set_text(ADDRESS, cx));
+                let key = shell.seerr.key.clone().unwrap();
+                key.update(cx, |key, cx| key.type_in(KEY, cx));
+            })
+            .unwrap();
+        let mut visual = drawn(&window, cx);
+        click(&mut visual, "seerr-save");
+        cx.run_until_parked();
+        assert!(connected(&window, cx));
+        assert_eq!(keyring.secret(ACCOUNT).as_deref(), Some(KEY));
+        assert_eq!(
+            Settings::read(&path).seerr_address.as_deref(),
+            Some(ADDRESS)
+        );
+        let mut visual = drawn(&window, cx);
+        assert!(visual.debug_bounds("seerr-hint").is_none());
     }
 
     #[gpui_kit::test]
