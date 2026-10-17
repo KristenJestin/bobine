@@ -404,6 +404,73 @@ fn requests_none_of_whose_titles_can_be_read_are_an_error_not_an_empty_list() {
     assert_eq!(shown, Err(RequestError::Server(500)));
 }
 
+/// A queue as Seerr's tracker holds it: `size` bytes, `left` of them to go, the time left a .NET
+/// time span.
+fn queued(id: &str, size: u64, left: u64, time: &str) -> serde_json::Value {
+    serde_json::json!({
+        "mediaType": "movie", "externalId": 31, "size": size, "sizeLeft": left,
+        "status": "downloading", "timeLeft": time, "title": "Invented.Release.2160p",
+        "downloadId": id, "estimatedCompletionTime": "2026-10-17T20:00:00Z",
+    })
+}
+
+#[test]
+fn a_title_downloading_lists_its_queue_entries_with_their_percentage_and_time_left() {
+    let fake = FakeSeerr::start();
+    fake.state.lock().unwrap().queue.push((
+        9006,
+        serde_json::json!({ "downloadStatus": [queued("d1", 10_000, 3_800, "00:02:00")] }),
+    ));
+    let detail = client(&fake).title(MediaKind::Movie, 9006).unwrap();
+    assert_eq!(detail.title.availability, Availability::Processing);
+    let progress = progress(&detail.downloads).unwrap();
+    assert_eq!(progress.percent, 62);
+    assert_eq!(
+        progress.time_left,
+        Some(std::time::Duration::from_secs(120))
+    );
+}
+
+#[test]
+fn a_title_with_nothing_in_the_queue_lists_no_downloads() {
+    let fake = FakeSeerr::start();
+    let detail = client(&fake).title(MediaKind::Movie, 9006).unwrap();
+    assert!(detail.downloads.is_empty());
+}
+
+#[test]
+fn the_episodes_of_a_series_are_summed_in_one_progress() {
+    let fake = FakeSeerr::start();
+    let episode = |number: u32| {
+        let mut entry = queued("pack", 3_000, 1_800, "00:10:00");
+        entry["mediaType"] = "tv".into();
+        entry["episode"] =
+            serde_json::json!({ "seasonNumber": 1, "episodeNumber": number, "id": number });
+        entry
+    };
+    fake.state.lock().unwrap().queue.push((
+        NORTHERN_LINE,
+        serde_json::json!({ "downloadStatus": [episode(1), episode(2), episode(3)] }),
+    ));
+    let detail = client(&fake).title(MediaKind::Tv, NORTHERN_LINE).unwrap();
+    let progress = progress(&detail.downloads).unwrap();
+    assert_eq!((progress.entries, progress.percent), (3, 40));
+}
+
+#[test]
+fn my_requests_carry_the_downloads_of_their_titles() {
+    let fake = FakeSeerr::start();
+    fake.state.lock().unwrap().queue.push((
+        PAPER_MOONS,
+        serde_json::json!({ "downloadStatus": [queued("d2", 1_000, 250, "00:05:00")] }),
+    ));
+    let mine = client(&fake).my_requests().unwrap();
+    let moons = mine.iter().find(|r| r.title.tmdb == PAPER_MOONS).unwrap();
+    assert_eq!(progress(&moons.downloads).unwrap().percent, 75);
+    let line = mine.iter().find(|r| r.title.tmdb == NORTHERN_LINE).unwrap();
+    assert!(line.downloads.is_empty());
+}
+
 #[test]
 fn recommendations_are_read_for_a_film_and_a_series() {
     let fake = FakeSeerr::start();

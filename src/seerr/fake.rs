@@ -72,6 +72,9 @@ pub struct State {
     pub movie_quota: Option<u32>,
     /// The films and series asked for so far, by TMDb id: pending from then on.
     pub requested: Vec<u64>,
+    /// What Seerr's download tracker holds for a title, by TMDb id: `downloadStatus` and
+    /// `downloadStatus4k` as they are in its media info once the title reached Radarr or Sonarr.
+    pub queue: Vec<(u64, Value)>,
 }
 
 pub struct FakeSeerr {
@@ -258,8 +261,19 @@ fn related_videos(id: u64) -> Value {
     }
 }
 
+/// The queue entries of a title go into its media info, as Seerr fills them when it loads it.
+fn with_queue(state: &State, id: u64, details: &mut Value) {
+    let Some((_, queue)) = state.queue.iter().find(|(queued, _)| *queued == id) else {
+        return;
+    };
+    for (key, entries) in queue.as_object().unwrap() {
+        details["mediaInfo"][key] = entries.clone();
+    }
+}
+
 fn movie_details(state: &State, id: u64) -> Option<Value> {
     let mut details = find(state, id, "movie")?;
+    with_queue(state, id, &mut details);
     details["relatedVideos"] = related_videos(id);
     details["runtime"] = json!(112);
     details["genres"] = json!([{ "id": 18, "name": "Drama" }]);
@@ -297,6 +311,7 @@ fn tv_details(state: &State, id: u64) -> Option<Value> {
             ],
         });
     }
+    with_queue(state, id, &mut details);
     Some(details)
 }
 
@@ -522,6 +537,7 @@ impl FakeSeerr {
             no_viewer: false,
             movie_quota: None,
             requested: Vec::new(),
+            queue: Vec::new(),
         }));
         let thread = {
             let server = Arc::clone(&server);

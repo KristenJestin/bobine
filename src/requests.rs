@@ -32,6 +32,80 @@ pub enum Availability {
     Blocked,
 }
 
+/// One entry of Radarr's or Sonarr's download queue for a title, as Seerr relays it in
+/// `mediaInfo.downloadStatus` (and `downloadStatus4k`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Download {
+    /// The download client's id: the episodes of a season pack are one download, one id.
+    pub id: Option<String>,
+    pub size: u64,
+    pub size_left: u64,
+    /// Absent when the queue does not know (a stalled or paused download).
+    pub time_left: Option<Duration>,
+    /// The `(season, episode)` of a series' queue entry; a film's has none.
+    pub episode: Option<(u32, u32)>,
+    /// From Seerr's 4K list: the same episode can be in the queue in HD and in 4K.
+    pub ultra_hd: bool,
+}
+
+/// What the downloads of a title come to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Progress {
+    /// How many episodes, for a series: each counts once, in HD and in 4K both. Without episodes
+    /// in the queue, the longer of the two lists.
+    pub entries: u32,
+    pub percent: u8,
+    /// Until the last download is done.
+    pub time_left: Option<Duration>,
+}
+
+/// The downloads of a title summed into one: the sizes of the downloads that are distinct (a
+/// season pack is listed once per episode, with the pack's size each time), the longest time
+/// left. `None` when nothing downloads.
+pub fn progress(downloads: &[Download]) -> Option<Progress> {
+    if downloads.is_empty() {
+        return None;
+    }
+    let mut seen: Vec<&str> = Vec::new();
+    let (mut size, mut left) = (0u64, 0u64);
+    for download in downloads {
+        if let Some(id) = download.id.as_deref() {
+            if seen.contains(&id) {
+                continue;
+            }
+            seen.push(id);
+        }
+        size = size.saturating_add(download.size);
+        left = left.saturating_add(download.size_left.min(download.size));
+    }
+    let percent = if size == 0 {
+        0
+    } else {
+        ((size - left) as f64 / size as f64 * 100.).round() as u8
+    };
+    Some(Progress {
+        entries: entries(downloads),
+        percent,
+        time_left: downloads.iter().filter_map(|d| d.time_left).max(),
+    })
+}
+
+/// How many episodes the queue holds: the distinct `(season, episode)` pairs, so that one in HD
+/// and in 4K is one. When an entry does not say its episode, the longer of the HD and 4K lists.
+fn entries(downloads: &[Download]) -> u32 {
+    if let Some(mut episodes) = downloads
+        .iter()
+        .map(|d| d.episode)
+        .collect::<Option<Vec<_>>>()
+    {
+        episodes.sort_unstable();
+        episodes.dedup();
+        return episodes.len() as u32;
+    }
+    let ultra = downloads.iter().filter(|d| d.ultra_hd).count();
+    ultra.max(downloads.len() - ultra) as u32
+}
+
 /// A poster, a backdrop or a photo on TMDb, by its path there (`/abc.jpg`).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TmdbImage(pub String);
@@ -107,6 +181,8 @@ pub struct TitleDetail {
     /// The page address of its best trailer (YouTube or Vimeo), played through the `yt-dlp`
     /// hook. A public address, no secret.
     pub trailer: Option<String>,
+    /// What Radarr or Sonarr is downloading for it, 4K included; empty when nothing is.
+    pub downloads: Vec<Download>,
 }
 
 /// A TMDb collection and its films, oldest first.
@@ -135,6 +211,7 @@ pub enum RequestStatus {
 pub struct MyRequest {
     pub title: Discovered,
     pub status: RequestStatus,
+    pub downloads: Vec<Download>,
 }
 
 /// What to ask for: a film, or seasons of a series.
@@ -365,6 +442,107 @@ mod tests {
         assert_eq!(outcome.not_requested, [1, 2]);
         assert_eq!(outcome.failure, Some(RequestError::Quota));
         assert!(asked.is_empty());
+    }
+
+    fn download(id: &str, size: u64, left: u64, minutes: Option<u64>) -> Download {
+        Download {
+            id: (!id.is_empty()).then(|| id.to_string()),
+            size,
+            size_left: left,
+            time_left: minutes.map(|m| Duration::from_secs(m * 60)),
+            episode: None,
+            ultra_hd: false,
+        }
+    }
+
+    fn episode(season: u32, number: u32, ultra_hd: bool) -> Download {
+        Download {
+            episode: Some((season, number)),
+            ultra_hd,
+            ..download(&format!("{season}x{number}x{ultra_hd}"), 1000, 500, None)
+        }
+    }
+
+    #[test]
+    fn an_episode_in_hd_and_in_4k_counts_once() {
+        let both = [episode(1, 1, false), episode(1, 1, true)];
+        assert_eq!(progress(&both).unwrap().entries, 1);
+        let three = [both[0].clone(), both[1].clone(), episode(1, 2, true)];
+        assert_eq!(progress(&three).unwrap().entries, 2);
+        // The same number in another season is another episode.
+        let seasons = [episode(1, 1, false), episode(2, 1, false)];
+        assert_eq!(progress(&seasons).unwrap().entries, 2);
+    }
+
+    #[test]
+    fn without_episodes_the_longer_of_the_hd_and_4k_lists_is_the_count() {
+        let hd = |id| download(id, 1000, 500, None);
+        let ultra = |id| Download {
+            ultra_hd: true,
+            ..download(id, 1000, 500, None)
+        };
+        let both = [hd("a"), hd("b"), ultra("c")];
+        assert_eq!(progress(&both).unwrap().entries, 2);
+        let only_ultra = [ultra("a"), ultra("b"), ultra("c")];
+        assert_eq!(progress(&only_ultra).unwrap().entries, 3);
+    }
+
+    #[test]
+    fn nothing_in_the_queue_is_no_progress() {
+        assert_eq!(progress(&[]), None);
+    }
+
+    #[test]
+    fn one_download_gives_its_percentage_and_its_time_left() {
+        let one = [download("a", 1000, 380, Some(2))];
+        assert_eq!(
+            progress(&one),
+            Some(Progress {
+                entries: 1,
+                percent: 62,
+                time_left: Some(Duration::from_secs(120)),
+            })
+        );
+    }
+
+    #[test]
+    fn the_episodes_of_a_season_pack_count_the_pack_once() {
+        // Three episodes of one pack: the queue lists the pack's size and what is left of it for
+        // each. Two thirds of 3000 bytes are left, not of 9000.
+        let pack = [
+            download("pack", 3000, 1800, Some(10)),
+            download("pack", 3000, 1800, Some(10)),
+            download("pack", 3000, 1800, Some(10)),
+        ];
+        let sum = progress(&pack).unwrap();
+        assert_eq!((sum.entries, sum.percent), (3, 40));
+    }
+
+    #[test]
+    fn separate_downloads_add_up_and_the_longest_time_left_is_the_title_s() {
+        let two = [
+            download("a", 1000, 0, Some(1)),
+            download("b", 3000, 3000, Some(30)),
+        ];
+        let sum = progress(&two).unwrap();
+        assert_eq!((sum.entries, sum.percent), (2, 25));
+        assert_eq!(sum.time_left, Some(Duration::from_secs(30 * 60)));
+    }
+
+    #[test]
+    fn downloads_without_an_id_are_never_taken_for_one_download() {
+        let two = [download("", 1000, 500, None), download("", 1000, 500, None)];
+        let sum = progress(&two).unwrap();
+        assert_eq!((sum.entries, sum.percent, sum.time_left), (2, 50, None));
+    }
+
+    #[test]
+    fn a_queue_that_reports_no_size_is_zero_percent_and_never_divides_by_zero() {
+        let empty = [download("a", 0, 0, None)];
+        assert_eq!(progress(&empty).unwrap().percent, 0);
+        // What is left cannot exceed the size.
+        let odd = [download("a", 100, 400, None)];
+        assert_eq!(progress(&odd).unwrap().percent, 0);
     }
 
     #[test]

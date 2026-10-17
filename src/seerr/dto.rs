@@ -1,8 +1,8 @@
 //! Seerr's JSON, as much of it as Bobine reads, and its translation into the port's types.
 
 use crate::requests::{
-    Availability, CastPerson, CollectionParts, CollectionRef, Discovered, MediaKind, RequestStatus,
-    SeasonOffer, TitleDetail, TmdbImage, year_of,
+    Availability, CastPerson, CollectionParts, CollectionRef, Discovered, Download, MediaKind,
+    RequestStatus, SeasonOffer, TitleDetail, TmdbImage, year_of,
 };
 use serde::Deserialize;
 use std::time::Duration;
@@ -76,12 +76,86 @@ pub struct MediaRequestDto {
     pub seasons: Vec<SeasonStatus>,
 }
 
+/// An entry of `downloadStatus`: Seerr's `DownloadingItem`, from Radarr's or Sonarr's queue.
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct DownloadDto {
+    pub download_id: Option<String>,
+    pub size: Option<f64>,
+    pub size_left: Option<f64>,
+    /// A .NET time span: `00:12:34`, `1.02:03:04`.
+    pub time_left: Option<String>,
+    pub episode: Option<EpisodeDto>,
+}
+
+/// The episode of a series' queue entry.
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct EpisodeDto {
+    pub season_number: Option<u32>,
+    pub episode_number: Option<u32>,
+}
+
+/// The time a queue says is left, `hh:mm:ss` with days before a dot (`d.hh:mm:ss`) and
+/// fractions of a second after the seconds; none for what is not a time span.
+fn time_left(text: &str) -> Option<Duration> {
+    let (days, clock) = match text.split_once('.') {
+        Some((days, rest)) if !days.contains(':') => (days.parse::<u64>().ok()?, rest),
+        _ => (0, text),
+    };
+    let mut parts = clock.split(':');
+    let hours: u64 = parts.next()?.parse().ok()?;
+    let minutes: u64 = parts.next()?.parse().ok()?;
+    let seconds: u64 = parts.next()?.split('.').next()?.parse().ok()?;
+    if parts.next().is_some() || minutes > 59 || seconds > 59 {
+        return None;
+    }
+    // Digits go through `u64`: a text past its range is no time, not a panic.
+    let seconds = days
+        .checked_mul(86_400)?
+        .checked_add(hours.checked_mul(3600)?)?
+        .checked_add(minutes * 60 + seconds)?;
+    Some(Duration::from_secs(seconds))
+}
+
+impl DownloadDto {
+    fn download(self, ultra_hd: bool) -> Download {
+        let episode = self
+            .episode
+            .and_then(|episode| Some((episode.season_number?, episode.episode_number?)));
+        Download {
+            id: self.download_id.filter(|id| !id.is_empty()),
+            size: bytes(self.size),
+            size_left: bytes(self.size_left),
+            time_left: self.time_left.as_deref().and_then(time_left),
+            episode,
+            ultra_hd,
+        }
+    }
+}
+
+/// A size in bytes as JSON numbers come, whole or not; nothing for a missing or negative one.
+fn bytes(size: Option<f64>) -> u64 {
+    size.filter(|size| *size > 0.).map_or(0, |size| size as u64)
+}
+
 #[derive(Deserialize, Default)]
 #[serde(rename_all = "camelCase", default)]
 pub struct MediaInfo {
     pub status: u8,
     pub seasons: Vec<SeasonStatus>,
     pub requests: Vec<MediaRequestDto>,
+    pub download_status: Vec<DownloadDto>,
+    pub download_status4k: Vec<DownloadDto>,
+}
+
+impl MediaInfo {
+    /// What is downloading for the title, in HD and in 4K.
+    pub fn downloads(self) -> Vec<Download> {
+        let hd = self.download_status.into_iter().map(|d| d.download(false));
+        let ultra = self.download_status4k.into_iter().map(|d| d.download(true));
+        hd.chain(ultra).collect()
+    }
 }
 
 /// Seerr's media status: 1 unknown, 2 pending, 3 processing, 4 partially available, 5
@@ -297,6 +371,7 @@ impl Details {
             status: info.status,
             ..MediaInfo::default()
         });
+        let downloads = info.downloads();
         let title = self.result.discovered(Some(kind))?;
         Some(TitleDetail {
             title,
@@ -322,6 +397,7 @@ impl Details {
             }),
             seasons,
             trailer: trailer(self.related_videos),
+            downloads,
         })
     }
 }
@@ -510,5 +586,100 @@ mod tests {
         // Season 7, by its request: pending and approved take it, the others do not.
         let by_request: Vec<bool> = (1..=5).map(|code| seasons_taken(code)[6]).collect();
         assert_eq!(by_request, [true, true, false, false, false]);
+    }
+
+    #[test]
+    fn a_queue_s_time_left_is_read_as_a_time_span() {
+        let secs = |text| time_left(text).map(|time| time.as_secs());
+        assert_eq!(secs("00:02:00"), Some(120));
+        assert_eq!(secs("01:20:05"), Some(4805));
+        assert_eq!(secs("1.02:03:04"), Some(86_400 + 2 * 3600 + 3 * 60 + 4));
+        assert_eq!(secs("00:00:12.3456789"), Some(12));
+        // Past what a `u64` of seconds holds: no time.
+        for too_long in ["999999999999999999.00:00:00", "18446744073709551615:00:00"] {
+            assert_eq!(secs(too_long), None, "{too_long:?}");
+        }
+        for not_a_time in ["", "soon", "12:30", "aa:bb:cc", "00:61:00", "-00:01:00"] {
+            assert_eq!(secs(not_a_time), None, "{not_a_time:?}");
+        }
+    }
+
+    /// A series' page whose media info is `info`.
+    fn downloads_of(info: serde_json::Value) -> Vec<Download> {
+        let details: Details = serde_json::from_value(serde_json::json!({
+            "id": 1,
+            "name": "Invented",
+            "mediaInfo": info,
+        }))
+        .unwrap();
+        details.detail(MediaKind::Tv).unwrap().downloads
+    }
+
+    #[test]
+    fn the_download_status_of_a_media_info_is_read_with_the_4k_one_after_it() {
+        let downloads = downloads_of(serde_json::json!({
+            "status": 3,
+            "downloadStatus": [
+                { "mediaType": "tv", "externalId": 7, "size": 5000, "sizeLeft": 2000,
+                  "status": "downloading", "timeLeft": "00:12:34", "title": "Invented.S01",
+                  "downloadId": "ABC123", "estimatedCompletionTime": "2026-10-17T20:00:00Z",
+                  "episode": { "seasonNumber": 1, "episodeNumber": 2, "absoluteEpisodeNumber": 2, "id": 9 } },
+            ],
+            "downloadStatus4k": [
+                { "mediaType": "tv", "externalId": 8, "size": 9000.0, "sizeLeft": 9000.0,
+                  "status": "queued", "title": "Invented.4K" },
+            ],
+        }));
+        assert_eq!(
+            downloads,
+            [
+                Download {
+                    id: Some("ABC123".into()),
+                    size: 5000,
+                    size_left: 2000,
+                    time_left: Some(Duration::from_secs(12 * 60 + 34)),
+                    episode: Some((1, 2)),
+                    ultra_hd: false,
+                },
+                Download {
+                    id: None,
+                    size: 9000,
+                    size_left: 9000,
+                    time_left: None,
+                    episode: None,
+                    ultra_hd: true,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn a_media_info_without_a_download_status_downloads_nothing() {
+        assert!(downloads_of(serde_json::json!({ "status": 3 })).is_empty());
+        assert!(
+            downloads_of(serde_json::json!({
+                "status": 3, "downloadStatus": [], "downloadStatus4k": []
+            }))
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn an_entry_with_null_fields_is_read_not_an_error() {
+        let downloads = downloads_of(serde_json::json!({
+            "status": 3,
+            "downloadStatus": [{ "size": null, "sizeLeft": null, "timeLeft": null, "downloadId": null }],
+        }));
+        assert_eq!(
+            downloads,
+            [Download {
+                id: None,
+                size: 0,
+                size_left: 0,
+                time_left: None,
+                episode: None,
+                ultra_hd: false,
+            }]
+        );
     }
 }
