@@ -210,8 +210,8 @@ impl RelatedVideo {
 }
 
 /// The trailer a request page plays: among the videos of type Trailer on a site `yt-dlp` plays,
-/// an official one, else the first as Seerr lists them (it asks TMDb for the viewer's language,
-/// and English when there is none).
+/// an official one, else the first one listed. The user's language is not preferred: Seerr drops
+/// each video's `iso_639_1`, so the order kept is TMDb's, as Seerr returns it.
 fn trailer(videos: Vec<RelatedVideo>) -> Option<String> {
     let trailers: Vec<(bool, String)> = videos
         .iter()
