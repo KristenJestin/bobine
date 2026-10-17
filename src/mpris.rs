@@ -6,6 +6,7 @@ pub mod dbus;
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use bobine::provider::{Episode, Film, ImageRef};
@@ -273,8 +274,21 @@ pub fn cached_art(dir: &Path, item: &str, tag: &str) -> Option<PathBuf> {
             path.file_name()
                 .and_then(|name| name.to_str())
                 .and_then(|name| name.strip_prefix(&stem))
-                .is_some_and(|extension| !extension.contains('.'))
+                .is_some_and(|extension| !extension.contains('.') && extension != "part")
         })
+}
+
+/// The temporary file `path` is written to before it is renamed: its own for every write, so two
+/// fetches of one poster at once do not share it, and never named like a poster.
+fn partial_path(path: &Path) -> PathBuf {
+    static WRITES: AtomicU64 = AtomicU64::new(0);
+    let mut name = path.file_name().unwrap_or_default().to_os_string();
+    name.push(format!(
+        ".{}-{}.part",
+        std::process::id(),
+        WRITES.fetch_add(1, Ordering::Relaxed)
+    ));
+    path.with_file_name(name)
 }
 
 /// Writes the poster's bytes where the desktop reads them, named by item, tag and real format,
@@ -284,14 +298,16 @@ pub fn store_art(dir: &Path, item: &str, tag: &str, bytes: &[u8]) -> std::io::Re
     let item = safe(item);
     let path = dir.join(format!("{item}.{}.{}", safe(tag), image_extension(bytes)));
     // Whole or not at all: a half-written file is never taken for the poster.
-    let partial = path.with_extension("part");
+    let partial = partial_path(&path);
     std::fs::write(&partial, bytes)?;
     std::fs::rename(&partial, &path)?;
     let own = format!("{item}.");
     for entry in std::fs::read_dir(dir)?.flatten() {
         let older = entry.path();
         let name = entry.file_name();
-        if older != path && name.to_str().is_some_and(|name| name.starts_with(&own)) {
+        // A temporary file may be another fetch's write going on: it is not the item's older poster.
+        let theirs = |name: &str| name.starts_with(&own) && !name.ends_with(".part");
+        if older != path && name.to_str().is_some_and(theirs) {
             let _ = std::fs::remove_file(older);
         }
     }
@@ -581,6 +597,27 @@ mod tests {
         assert_eq!(name(&jpg), "jpg");
         assert_eq!(name(b"GIF89a"), "gif");
         assert_eq!(name(b"???"), "img");
+    }
+
+    #[test]
+    fn a_leftover_temporary_file_is_never_taken_for_the_poster() {
+        let dir = tempfile::tempdir().unwrap();
+        // What a kill between the write and the rename leaves, truncated.
+        std::fs::write(dir.path().join("film-0.t1.part"), b"\xFF\xD8").unwrap();
+        assert_eq!(cached_art(dir.path(), "film-0", "t1"), None);
+        let path = store_art(dir.path(), "film-0", "t1", &[0xFF, 0xD8, 0xFF, 0xE0]).unwrap();
+        assert_eq!(cached_art(dir.path(), "film-0", "t1"), Some(path));
+    }
+
+    #[test]
+    fn two_writes_of_one_poster_use_their_own_temporary_file() {
+        let path = Path::new("/cache/film-0.t1.jpg");
+        let (first, second) = (partial_path(path), partial_path(path));
+        assert_ne!(first, second);
+        for partial in [first, second] {
+            assert_eq!(partial.parent(), path.parent());
+            assert!(partial.extension().is_some_and(|e| e == "part"));
+        }
     }
 
     #[test]
