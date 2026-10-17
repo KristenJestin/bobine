@@ -24,9 +24,11 @@ impl Shell {
     }
 
     /// Checks now, then every quarter of an hour, for the account signed in, while the switch is
-    /// on and the desktop is told anything. Any check going on is dropped first.
+    /// on and the desktop is told anything. Any checks going on are dropped first; one of theirs
+    /// still asking keeps its own flag, so it does not hold back the first of these.
     pub(super) fn start_episode_checks(&mut self, cx: &mut Context<Self>) {
         self.episode_checks = None;
+        self.episode_checking = Default::default();
         if self.notifier.is_none() || !self.settings.notify_new_episodes || self.server.is_none() {
             return;
         }
@@ -44,12 +46,18 @@ impl Shell {
     }
 
     /// Asks the server what came in since the last check, and the posters of the series that
-    /// gained an episode, written to the cache.
+    /// gained an episode, written to the cache. Not while a check of these is still asking: after
+    /// a suspend, the server may answer slower than a quarter of an hour.
     fn check_new_episodes(&mut self, cx: &mut Context<Self>) {
         let Some(asked) = self.account() else {
             return;
         };
+        let checking = self.episode_checking.clone();
+        if checking.replace(true) {
+            return;
+        }
         let seen = self.settings.new_episodes_seen.get(&asked).cloned();
+        let from = seen.clone();
         let dir = self.art_dir.clone();
         let account = asked.clone();
         self.ask(
@@ -67,15 +75,18 @@ impl Shell {
                 Ok::<_, bobine::provider::ProviderError>((checked.seen, told))
             },
             move |shell, checked, _| {
+                checking.set(false);
                 // A failed check says nothing: the next one, a quarter of an hour later, asks
                 // again from the same place.
                 let Ok((seen, told)) = checked else {
                     return;
                 };
-                // Signed out, or someone else signed in, or the switch turned off meanwhile.
+                // Signed out, or someone else signed in, or the switch turned off meanwhile; or
+                // another check, or the switch turned off and on, moved where checks start from.
                 if shell.account().as_ref() != Some(&asked)
                     || shell.episode_checks.is_none()
                     || !shell.settings.notify_new_episodes
+                    || shell.settings.new_episodes_seen.get(&asked) != from.as_ref()
                 {
                     return;
                 }
@@ -362,6 +373,41 @@ mod tests {
         assert_eq!(told(&notifier), [], "what came in meanwhile is not told");
         add(&server, "series-4-s1-e1", 160);
         later(cx);
+        assert_eq!(told(&notifier).len(), 1);
+    }
+
+    #[gpui_kit::test]
+    fn a_check_started_before_the_switch_went_off_and_on_tells_nothing(cx: &mut TestAppContext) {
+        let server = FakeServer::new(6, true);
+        let (window, notifier) = start(&server, None, cx);
+        add(&server, "series-1-s1-e4", 150);
+        // Nothing runs before the update ends: the check is still asking when the switch moves.
+        window
+            .update(cx, |shell, _, cx| {
+                shell.check_new_episodes(cx);
+                shell.toggle_new_episodes(cx);
+                shell.toggle_new_episodes(cx);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        assert_eq!(told(&notifier), [], "what came in meanwhile is not told");
+        add(&server, "series-4-s1-e1", 160);
+        later(cx);
+        assert_eq!(told(&notifier).len(), 1);
+    }
+
+    #[gpui_kit::test]
+    fn two_overlapping_checks_notify_once(cx: &mut TestAppContext) {
+        let server = FakeServer::new(6, true);
+        let (window, notifier) = start(&server, None, cx);
+        add(&server, "series-1-s1-e4", 150);
+        window
+            .update(cx, |shell, _, cx| {
+                shell.check_new_episodes(cx);
+                shell.check_new_episodes(cx);
+            })
+            .unwrap();
+        cx.run_until_parked();
         assert_eq!(told(&notifier).len(), 1);
     }
 

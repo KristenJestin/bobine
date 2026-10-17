@@ -257,9 +257,11 @@ pub struct Shell {
     pub mpris: crate::mpris::Publisher,
     art_dir: Option<PathBuf>,
     /// What tells the desktop of new episodes (`None`: nothing is told, nothing checked), the
-    /// checks of the account signed in, and the clicks on what was told, heard.
+    /// checks of the account signed in (with whether one of theirs is asking now), and the
+    /// clicks on what was told, heard.
     notifier: Option<Box<dyn crate::notify::Notifier>>,
     episode_checks: Option<Task<()>>,
+    episode_checking: std::rc::Rc<std::cell::Cell<bool>>,
     notification_clicks: Option<Task<()>>,
 }
 
@@ -445,6 +447,7 @@ impl Shell {
             #[cfg(test)]
             notifier: None,
             episode_checks: None,
+            episode_checking: Default::default(),
             notification_clicks: None,
         };
         shell.begin(open, cx);
