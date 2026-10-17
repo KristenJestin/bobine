@@ -6,9 +6,17 @@ on:
     branches: [main, dev]
   workflow_dispatch:
 
+# A new push to a pull request replaces the run it supersedes. Only pull requests are cancelled:
+# a run on `main` or `dev` is never cut short.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   commit-messages:
     runs-on: ubuntu-latest
+    outputs:
+      build: ${{ steps.changes.outputs.build }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -31,9 +39,46 @@ jobs:
         run: |
           printf '%s\n' "$TITLE" > "$RUNNER_TEMP/title"
           tools/commit-message.sh "$RUNNER_TEMP/title"
+      # `verify` is the expensive job (GPUI), so it only runs when it can tell something. It is skipped
+      # by a condition on the job, not by `paths-ignore` on the workflow: a skipped job counts as
+      # passed for a required check, a skipped workflow leaves the check pending forever.
+      #  - pull request: unless every changed file is documentation or repository housekeeping;
+      #  - push to `dev`: the squash comes from a pull request that already passed, so only when the
+      #    dependencies changed, to save the Rust cache that pull requests restore (see below);
+      #  - push to `main` and manual run: always.
+      - name: Decide whether the build and tests must run
+        id: changes
+        env:
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          BEFORE: ${{ github.event.before }}
+          SHA: ${{ github.sha }}
+        run: |
+          build=true
+          if [ "$EVENT" = pull_request ]; then
+            files=$(git diff --name-only "$PR_BASE...$PR_HEAD") || files=unknown
+            # ci.yml is the one workflow file that changes how `verify` runs.
+            if [ "$files" != unknown ] && ! printf '%s\n' "$files" \
+              | grep -v -E '\.md$|^LICENSE|^\.githooks/|^\.github/' | grep -q .; then
+              build=false
+            fi
+            if printf '%s\n' "$files" | grep -q -x '.github/workflows/ci.yml'; then build=true; fi
+          elif [ "$EVENT" = push ] && [ "$REF" = refs/heads/dev ] && [ -n "${BEFORE//0/}" ]; then
+            files=$(git diff --name-only "$BEFORE" "$SHA") || files=unknown
+            if [ "$files" != unknown ] \
+              && ! printf '%s\n' "$files" | grep -q -E '^Cargo\.(lock|toml)$|^rust-toolchain'; then
+              build=false
+            fi
+          fi
+          echo "build=$build" >> "$GITHUB_OUTPUT"
+          echo "build: $build"
 
   # No sound card, no server and no session bus here: the suites run against fakes (see AGENTS.md, Testing).
   verify:
+    needs: commit-messages
+    if: needs.commit-messages.outputs.build == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -44,8 +89,13 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libmpv-dev pkg-config libfontconfig-dev libfreetype-dev \
             libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libx11-xcb-dev libxcb1-dev libvulkan-dev
-      # GPUI takes about ten minutes to build from nothing: keep its build between runs.
+      # GPUI takes about ten minutes to build from nothing: keep its build between runs. Pull requests
+      # restore the cache saved from `dev` and never save their own (about 1.3 GB each). `dev` runs
+      # this job when the dependencies change, or by hand (workflow_dispatch on `dev`) if the cache
+      # has been evicted.
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/main' }}
       - run: rustup component add rustfmt clippy
       - run: cargo fmt --check
       - run: cargo clippy --all-targets --locked -- -D warnings
