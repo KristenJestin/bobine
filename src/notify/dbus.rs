@@ -7,7 +7,7 @@
 //! notification. Without a bus address the adapter stays silent; the harness and the tests get
 //! none: `Shell::without_desktop` turns the desktop off, whatever the environment.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 
@@ -24,6 +24,37 @@ const NAME: &str = "org.freedesktop.Notifications";
 const PATH: &str = "/org/freedesktop/Notifications";
 /// The action a click on the notification itself invokes.
 const DEFAULT: &str = "default";
+
+/// How many notifications shown are remembered for a click: a desktop that never says one was
+/// closed would otherwise have them pile up while Bobine runs.
+const REMEMBERED: usize = 64;
+
+/// The notifications shown, by the desktop's id, with what a click on each opens; the oldest
+/// forgotten beyond `REMEMBERED`.
+#[derive(Default)]
+struct Shown {
+    open: HashMap<u32, Open>,
+    order: VecDeque<u32>,
+}
+
+impl Shown {
+    fn insert(&mut self, id: u32, open: Open) {
+        if self.open.insert(id, open).is_some() {
+            self.order.retain(|kept| *kept != id);
+        }
+        self.order.push_back(id);
+        while self.order.len() > REMEMBERED {
+            if let Some(oldest) = self.order.pop_front() {
+                self.open.remove(&oldest);
+            }
+        }
+    }
+
+    fn remove(&mut self, id: u32) -> Option<Open> {
+        self.order.retain(|kept| *kept != id);
+        self.open.remove(&id)
+    }
+}
 
 pub struct Dbus {
     /// `None`: no bus to reach.
@@ -92,7 +123,7 @@ fn serve(address: &str, notifications: Receiver<Notification>, clicks: Clicks) -
         .path(PATH)?
         .build();
     let signals = MessageIterator::for_match_rule(rule, &connection, None)?;
-    let shown: Arc<Mutex<HashMap<u32, Open>>> = Arc::default();
+    let shown: Arc<Mutex<Shown>> = Arc::default();
     let heard = shown.clone();
     std::thread::Builder::new()
         .name("bobine-notify-signals".into())
@@ -141,7 +172,7 @@ fn show(connection: &Connection, notification: &Notification) -> zbus::Result<u3
 
 /// The desktop's signals: a click on a notification shown is told to the window; a notification
 /// closed is forgotten.
-fn listen(signals: MessageIterator, shown: &Mutex<HashMap<u32, Open>>, clicks: &Clicks) {
+fn listen(signals: MessageIterator, shown: &Mutex<Shown>, clicks: &Clicks) {
     for message in signals.flatten() {
         let header = message.header();
         match header.member().map(|member| member.as_str()) {
@@ -152,13 +183,13 @@ fn listen(signals: MessageIterator, shown: &Mutex<HashMap<u32, Open>>, clicks: &
                 if action != DEFAULT {
                     continue;
                 }
-                if let Some(open) = shown.lock().unwrap().remove(&id) {
+                if let Some(open) = shown.lock().unwrap().remove(id) {
                     clicks.push(open);
                 }
             }
             Some("NotificationClosed") => {
                 if let Ok((id, _reason)) = message.body().deserialize::<(u32, u32)>() {
-                    shown.lock().unwrap().remove(&id);
+                    shown.lock().unwrap().remove(id);
                 }
             }
             _ => {}
@@ -368,6 +399,18 @@ mod tests {
         assert!(until(|| desktop.asked().len() == 1));
         let printed = format!("{:?}", desktop.asked());
         assert!(!printed.contains("http"), "{printed}");
+    }
+
+    #[test]
+    fn only_the_latest_notifications_shown_are_remembered() {
+        let mut shown = Shown::default();
+        for id in 1..=REMEMBERED as u32 + 1 {
+            shown.insert(id, notification(&format!("series-{id}")).open);
+        }
+        assert_eq!(shown.open.len(), REMEMBERED);
+        assert_eq!(shown.remove(1), None, "the oldest forgotten");
+        assert_eq!(shown.remove(2), Some(notification("series-2").open));
+        assert_eq!(shown.order.len(), REMEMBERED - 1);
     }
 
     #[test]
