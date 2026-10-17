@@ -279,12 +279,11 @@ mod tests {
     use bobine::requests::Ask;
     use gpui_kit::{TestAppContext, WindowHandle};
 
-    use super::super::discover::tests::{
-        address_only, change_address, click, configured, configured_on, drawn,
-    };
+    use super::super::discover::tests::{change_address, click, configured, configured_on, drawn};
     use super::*;
     use crate::fake::{FILM, FakeServer, IN_LIBRARY_FILM};
     use crate::fake_seerr::{COLLECTION, FakeSeerr, WINTER_LIGHT, WINTERS_END};
+    use crate::navigation::NavEntry;
 
     /// A shell on the collection page of the fake's Winter Saga: The Tides and The Last Winter
     /// in the library, Winter Light and Winter's End missing.
@@ -585,6 +584,145 @@ mod tests {
         assert!(visual.debug_bounds("part-of-collection").is_some());
     }
 
+    /// Presses "Request collection" and runs the window until the first movie was asked for.
+    fn first_one_asked(window: &WindowHandle<Shell>, seerr: &FakeSeerr, cx: &mut TestAppContext) {
+        drawn(window, cx);
+        window
+            .update(cx, |shell, _, cx| shell.request_collection(cx))
+            .unwrap();
+        run_until_requested(seerr, 1, cx);
+    }
+
+    /// The address emptied in the Settings: no request server any more.
+    fn remove_seerr(window: &WindowHandle<Shell>, cx: &mut TestAppContext) {
+        window
+            .update(cx, |shell, _, cx| {
+                let address = shell.seerr.address.clone().unwrap();
+                address.update(cx, |field, cx| field.set_text("", cx));
+                shell.save_seerr_address(cx);
+            })
+            .unwrap();
+        cx.run_until_parked();
+    }
+
+    #[gpui_kit::test]
+    fn going_back_in_the_middle_of_a_run_sends_nothing_more(cx: &mut TestAppContext) {
+        let seerr = FakeSeerr::default();
+        let window = on_collection(&seerr, cx);
+        first_one_asked(&window, &seerr, cx);
+        window
+            .update(cx, |shell, _, cx| assert!(shell.go_back(cx)))
+            .unwrap();
+        cx.run_until_parked();
+        assert_eq!(seerr.requests(), [Ask::Movie(WINTER_LIGHT)]);
+    }
+
+    #[gpui_kit::test]
+    fn a_pill_switch_in_the_middle_of_a_run_sends_nothing_more(cx: &mut TestAppContext) {
+        let seerr = FakeSeerr::default();
+        let window = on_collection(&seerr, cx);
+        first_one_asked(&window, &seerr, cx);
+        window
+            .update(cx, |shell, _, cx| shell.select(NavEntry::Films, cx))
+            .unwrap();
+        cx.run_until_parked();
+        assert_eq!(seerr.requests(), [Ask::Movie(WINTER_LIGHT)]);
+        assert_eq!(screen(&window, cx), Screen::Library);
+    }
+
+    #[gpui_kit::test]
+    fn removing_seerr_in_the_middle_of_a_run_sends_nothing_more(cx: &mut TestAppContext) {
+        let seerr = FakeSeerr::default();
+        let window = on_collection(&seerr, cx);
+        first_one_asked(&window, &seerr, cx);
+        remove_seerr(&window, cx);
+        assert_eq!(seerr.requests(), [Ask::Movie(WINTER_LIGHT)]);
+        window
+            .update(cx, |shell, _, _| {
+                assert!(shell.seerr.collections.is_empty())
+            })
+            .unwrap();
+    }
+
+    #[gpui_kit::test]
+    fn a_run_left_mid_request_and_the_page_reopened_asks_for_each_movie_once(
+        cx: &mut TestAppContext,
+    ) {
+        let seerr = FakeSeerr::default();
+        let window = on_collection(&seerr, cx);
+        first_one_asked(&window, &seerr, cx);
+        // Escape, then forward again before the answer for Winter Light came.
+        window
+            .update(cx, |shell, _, cx| {
+                assert!(shell.go_back(cx));
+                assert!(shell.go_forward(cx));
+            })
+            .unwrap();
+        cx.run_until_parked();
+        window
+            .update(cx, |shell, _, _| {
+                let page = shell.seerr.collections.last().unwrap();
+                // The answer of the page gone did not land on the new one.
+                assert!(!page.busy());
+                assert_eq!(page.outcome, None);
+            })
+            .unwrap();
+        let mut visual = drawn(&window, cx);
+        click(&mut visual, "collection-request");
+        assert_eq!(
+            seerr.requests(),
+            [Ask::Movie(WINTER_LIGHT), Ask::Movie(WINTERS_END)]
+        );
+        assert_eq!(
+            outcome(&window, cx).as_deref(),
+            Some("Requested: Winter's End.")
+        );
+    }
+
+    #[gpui_kit::test]
+    fn a_failure_after_the_first_request_says_which_movie_was_not_requested_and_why(
+        cx: &mut TestAppContext,
+    ) {
+        let seerr = FakeSeerr::default();
+        let window = on_collection(&seerr, cx);
+        first_one_asked(&window, &seerr, cx);
+        seerr.state.lock().unwrap().failure = Some(RequestError::Unreachable("down".into()));
+        cx.run_until_parked();
+        assert_eq!(
+            outcome(&window, cx).as_deref(),
+            Some("Requested: Winter Light. Not requested (Seerr cannot be reached): Winter's End.")
+        );
+        let mut visual = drawn(&window, cx);
+        assert!(visual.debug_bounds("collection-outcome").is_some());
+        // Winter's End is still offered, checked, for another try.
+        assert!(visual.debug_bounds("collection-request").is_some());
+    }
+
+    #[gpui_kit::test]
+    fn going_forward_again_reopens_the_collection_page(cx: &mut TestAppContext) {
+        let seerr = FakeSeerr::default();
+        let window = on_collection(&seerr, cx);
+        window
+            .update(cx, |shell, _, cx| {
+                assert!(shell.go_back(cx));
+                assert!(shell.go_forward(cx));
+            })
+            .unwrap();
+        cx.run_until_parked();
+        assert_eq!(screen(&window, cx), Screen::SeerrCollection);
+        let mut visual = drawn(&window, cx);
+        assert!(
+            visual
+                .debug_bounds("collection-check Winter Light")
+                .is_some()
+        );
+        click(&mut visual, "collection-request");
+        assert_eq!(
+            seerr.requests(),
+            [Ask::Movie(WINTER_LIGHT), Ask::Movie(WINTERS_END)]
+        );
+    }
+
     #[gpui_kit::test]
     fn without_the_library_indexed_no_movie_is_offered(cx: &mut TestAppContext) {
         let seerr = FakeSeerr::default();
@@ -661,14 +799,60 @@ mod tests {
     #[gpui_kit::test]
     fn without_seerr_a_library_movie_shows_no_collection_link(cx: &mut TestAppContext) {
         let seerr = FakeSeerr::default();
-        let window = address_only(&seerr, cx);
+        let window = configured(&seerr, cx);
         window
             .update(cx, |shell, _, cx| shell.open_film(ItemId(FILM.into()), cx))
             .unwrap();
         cx.run_until_parked();
         let mut visual = drawn(&window, cx);
+        assert!(visual.debug_bounds("part-of-collection").is_some());
+        remove_seerr(&window, cx);
+        let mut visual = drawn(&window, cx);
         assert!(visual.debug_bounds("film-play").is_some());
         assert!(visual.debug_bounds("part-of-collection").is_none());
+    }
+
+    #[gpui_kit::test]
+    fn a_collection_link_that_failed_is_read_again_on_the_next_open(cx: &mut TestAppContext) {
+        let seerr = FakeSeerr::default();
+        let window = configured(&seerr, cx);
+        seerr.state.lock().unwrap().failure = Some(RequestError::Unreachable("down".into()));
+        let open = |cx: &mut TestAppContext| {
+            window
+                .update(cx, |shell, _, cx| shell.open_film(ItemId(FILM.into()), cx))
+                .unwrap();
+            cx.run_until_parked();
+        };
+        open(cx);
+        let mut visual = drawn(&window, cx);
+        assert!(visual.debug_bounds("part-of-collection").is_none());
+        seerr.state.lock().unwrap().failure = None;
+        window
+            .update(cx, |shell, _, cx| assert!(shell.go_back(cx)))
+            .unwrap();
+        open(cx);
+        let mut visual = drawn(&window, cx);
+        assert!(visual.debug_bounds("part-of-collection").is_some());
+    }
+
+    #[gpui_kit::test]
+    fn a_collection_link_is_read_once_per_movie(cx: &mut TestAppContext) {
+        let seerr = FakeSeerr::default();
+        let window = configured(&seerr, cx);
+        for _ in 0..2 {
+            window
+                .update(cx, |shell, _, cx| {
+                    shell.go_back(cx);
+                    shell.open_film(ItemId(FILM.into()), cx)
+                })
+                .unwrap();
+            cx.run_until_parked();
+        }
+        let mut visual = drawn(&window, cx);
+        assert!(visual.debug_bounds("part-of-collection").is_some());
+        let titles = seerr.state.lock().unwrap().record.titles.clone();
+        let reads = titles.iter().filter(|id| **id == IN_LIBRARY_FILM).count();
+        assert_eq!(reads, 1);
     }
 
     #[gpui_kit::test]
