@@ -148,6 +148,12 @@ impl<P> Curtain<P> {
         self.since = at;
     }
 
+    /// A test makes the move last long enough to look at any stage of it.
+    #[cfg(test)]
+    pub fn lasting(&mut self, length: Duration) {
+        self.length = length;
+    }
+
     /// The video's first frame is on the window: the cover goes. Only the first one counts.
     pub fn first_frame(&mut self, now: Instant) {
         if self.way == Way::Opening {

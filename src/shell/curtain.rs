@@ -207,13 +207,18 @@ impl Shell {
 
 /// `picture` filling `at`, cut as the page cuts it.
 fn drawn_at(picture: &Picture, at: Bounds<gpui_kit::Pixels>) -> AnyElement {
-    img(picture.image.clone())
+    div()
+        .debug_selector(|| "curtain-picture".to_string())
         .absolute()
         .left(at.origin.x)
         .top(at.origin.y)
         .w(at.size.width)
         .h(at.size.height)
-        .object_fit(ObjectFit::Cover)
+        .child(
+            img(picture.image.clone())
+                .size_full()
+                .object_fit(ObjectFit::Cover),
+        )
         .into_any_element()
 }
 
@@ -224,11 +229,11 @@ mod tests {
 
     use bobine::provider::{Episode, ItemId, ProviderError};
     use gpui_kit::{
-        Bounds, ElementId, Modifiers, Pixels, TestAppContext, VisualTestContext, WindowHandle, px,
-        size,
+        Bounds, ElementId, Modifiers, Pixels, TestAppContext, VisualTestContext, WindowHandle,
+        point, px, size,
     };
 
-    use crate::curtain::Way;
+    use crate::curtain::{PAGE, Way};
     use crate::fake::{FILM, FakeServer, SERIES};
     use crate::film_page::From;
     use crate::home_page::PlayTarget;
@@ -236,6 +241,7 @@ mod tests {
     use crate::player::PlayerEvent;
     use crate::player::fake::FakePlayer;
     use crate::player::session::WindowRequest;
+    use crate::screens::{Play, play_card};
     use crate::series_page::Next;
     use crate::shell::{Loadable, Shell};
 
@@ -344,7 +350,8 @@ mod tests {
         for _ in 0..3 {
             visual.run_until_parked();
         }
-        // The page slides in on the real clock: a picture is measured once it is in place.
+        // The page's slide is the only animation on the real clock (the others go by the
+        // test's own): a picture is measured once it is in place.
         std::thread::sleep(crate::motion::page());
         visual.update(|window, _| window.refresh());
         visual.run_until_parked();
@@ -447,6 +454,54 @@ mod tests {
         (window.update(cx, |shell, window, _| shell.back_to(&picture, window))).unwrap()
     }
 
+    /// How long a way out lasts in the tests that look at it: the real clock cannot be waited
+    /// for, so `stand_at` says where the move stands in it.
+    const WAY_OUT: Duration = Duration::from_secs(100);
+
+    /// The player is left, on a way out of `WAY_OUT`, and the page it goes back to is drawn.
+    fn leave(window: &WindowHandle<Shell>, cx: &mut VisualTestContext) {
+        tick(cx);
+        window
+            .update(cx, |shell, window, cx| {
+                shell.player_back(window, cx);
+                shell.curtain.as_mut().expect("a way out").lasting(WAY_OUT);
+            })
+            .unwrap();
+        redraw(cx);
+        // The page slides in on the real clock: its cards are measured once they are in place.
+        std::thread::sleep(crate::motion::page());
+        redraw(cx);
+    }
+
+    /// The way out stands `done` of the way along its length, and the window is drawn there.
+    fn stand_at(window: &WindowHandle<Shell>, cx: &mut VisualTestContext, done: f32) {
+        let since = Instant::now()
+            .checked_sub(WAY_OUT.mul_f32(done))
+            .expect("the machine has been up for a while");
+        window
+            .update(cx, |shell, _, _| {
+                shell.curtain.as_mut().expect("a way out").started_at(since)
+            })
+            .unwrap();
+        redraw(cx);
+    }
+
+    fn redraw(cx: &mut VisualTestContext) {
+        for _ in 0..2 {
+            cx.update(|window, _| window.refresh());
+            cx.run_until_parked();
+        }
+    }
+
+    /// The same place, to a fraction of a pixel.
+    fn near(a: Bounds<Pixels>, b: Bounds<Pixels>) -> bool {
+        let close = |a: Pixels, b: Pixels| (f32::from(a) - f32::from(b)).abs() < 0.5;
+        close(a.origin.x, b.origin.x)
+            && close(a.origin.y, b.origin.y)
+            && close(a.size.width, b.size.width)
+            && close(a.size.height, b.size.height)
+    }
+
     #[gpui_kit::test]
     fn play_in_the_home_header_grows_its_backdrop_into_the_player(cx: &mut TestAppContext) {
         let (_server, window) = signed_in(cx);
@@ -502,11 +557,69 @@ mod tests {
         let (_server, window) = signed_in(cx);
         let visual = drawn(&window, cx);
         let card = a_card(&window, visual, "home-");
-        let picture = play_on_card(&window, visual, &card);
-        let back = back_onto(&window, visual).expect("back to the card");
-        // Where the card is now: the page may be sliding in.
-        assert_eq!(back, bounds(visual, format!("card-hover {card}")));
-        assert_eq!(back.size, picture.size);
+        play_on_card(&window, visual, &card);
+        leave(&window, visual);
+        // At the end of the way out, the picture drawn is on its card.
+        stand_at(&window, visual, 0.98);
+        let picture = bounds(visual, "curtain-picture".into());
+        let card = bounds(visual, format!("card-hover {card}"));
+        assert!(near(picture, card), "{picture:?} is not on {card:?}");
+    }
+
+    #[gpui_kit::test]
+    fn a_picture_whose_card_left_the_window_fades_out_and_does_not_shrink_back(
+        cx: &mut TestAppContext,
+    ) {
+        let (_server, window) = signed_in(cx);
+        let visual = drawn(&window, cx);
+        let card = a_card(&window, visual, "home-");
+        play_on_card(&window, visual, &card);
+        leave(&window, visual);
+        stand_at(&window, visual, 0.5);
+        let whole = Bounds::new(point(px(0.), px(0.)), size(px(1600.), px(1200.)));
+        let shrinking = bounds(visual, "curtain-picture".into());
+        assert!(shrinking.size.width < whole.size.width, "{shrinking:?}");
+        // The window gets lower: the card is under its bottom, and the picture fades out.
+        let low = Bounds::new(point(px(0.), px(0.)), size(px(1600.), px(500.)));
+        visual.simulate_resize(low.size);
+        redraw(visual);
+        assert!(near(bounds(visual, "curtain-picture".into()), low));
+        // The card is in sight again before the move is over: the picture goes on fading.
+        visual.simulate_resize(whole.size);
+        redraw(visual);
+        let picture = bounds(visual, "curtain-picture".into());
+        assert!(near(picture, whole), "{picture:?} shrank back");
+    }
+
+    #[gpui_kit::test]
+    fn a_press_that_did_not_play_grows_no_later_playback(cx: &mut TestAppContext) {
+        let (_server, window) = signed_in(cx);
+        let mut episode = series_episodes(&window, cx).remove(0);
+        episode.versions.clear();
+        let visual = drawn(&window, cx);
+        // The still of an episode is pressed, and the episode has no version to play.
+        let still = a_card(&window, visual, "episode-still");
+        window
+            .update(visual, |shell, window, cx| {
+                play_card(shell, &still, Play::Episode(Box::new(episode)), window, cx)
+            })
+            .unwrap();
+        visual.run_until_parked();
+        assert_eq!(screen(&window, visual), Screen::SeriesDetail);
+        // Then the page's own Play: it grows from the page's backdrop, not from that still.
+        let backdrop = window
+            .read_with(visual, |shell, _| {
+                shell.pictures.borrow().get(&PAGE.into()).map(|p| p.bounds)
+            })
+            .unwrap();
+        assert!(backdrop.is_some(), "the page drew its backdrop");
+        arm(&window, visual);
+        let at = bounds(visual, "series-play".into()).center();
+        visual.simulate_mouse_move(at, None, Modifiers::none());
+        visual.simulate_click(at, Modifiers::none());
+        visual.run_until_parked();
+        assert_eq!(screen(&window, visual), Screen::Player);
+        assert_eq!(grown_from(&window, visual), backdrop);
     }
 
     #[gpui_kit::test]
