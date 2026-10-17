@@ -15,6 +15,7 @@ mod home_page;
 mod icons;
 mod images;
 mod input;
+mod keys;
 mod library_tools;
 mod lists;
 mod menu;
@@ -60,6 +61,7 @@ fn main() {
         .with_assets(icons::Icons)
         .run(move |cx: &mut App| {
             input::bind_keys(cx);
+            keys::bind(cx);
             let bounds = Bounds::centered(None, size(px(1440.), px(810.)), cx);
             let options = WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),

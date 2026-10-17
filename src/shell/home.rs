@@ -764,6 +764,7 @@ mod tests {
     ) {
         let server: Arc<dyn Connector> = Arc::new(FakeServer::new(6, true));
         let window = cx.add_window(|_, cx| {
+            crate::keys::bind(cx);
             Shell::new(
                 None,
                 Box::new(move || Ok(server)),
@@ -818,6 +819,7 @@ mod tests {
     fn a_card_of_a_new_season_opens_its_series_on_that_season(cx: &mut gpui_kit::TestAppContext) {
         let server: Arc<dyn Connector> = Arc::new(FakeServer::new(6, true));
         let window = cx.add_window(|_, cx| {
+            crate::keys::bind(cx);
             Shell::new(
                 None,
                 Box::new(move || Ok(server)),
