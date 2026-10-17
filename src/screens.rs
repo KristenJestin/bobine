@@ -16,6 +16,7 @@ pub mod player;
 pub mod playlist;
 mod request;
 pub mod search;
+mod seerr_collection;
 mod series_detail;
 mod settings;
 pub mod skip;
@@ -73,6 +74,7 @@ pub fn render(
         Screen::Stats => stats::render(shell, window, cx).into_any_element(),
         Screen::Discover => discover::render(shell, window, cx).into_any_element(),
         Screen::Request => request::render(shell, window, cx).into_any_element(),
+        Screen::SeerrCollection => seerr_collection::render(shell, window, cx).into_any_element(),
     }
 }
 

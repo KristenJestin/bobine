@@ -68,6 +68,14 @@ pub struct Seerr {
     pub discover: DiscoverPage,
     /// The request pages open, the last one shown.
     pub requests: Vec<super::RequestPage>,
+    /// The collection pages open, the last one shown.
+    pub collections: Vec<super::SeerrCollectionPage>,
+    /// The TMDb collection of each library movie asked about: `None` while it is read, and for
+    /// a movie in none.
+    pub links: HashMap<TmdbId, Option<bobine::requests::CollectionRef>>,
+    /// The name of each TMDb collection read, `None` for one Seerr does not know: read once a
+    /// session, by the link of whichever of its movies or by its page.
+    pub names: HashMap<TmdbId, Option<String>>,
     /// What the server recommends after a title of the library, read once per title.
     similar: HashMap<(MediaKind, TmdbId), Vec<Discovered>>,
 }
@@ -153,6 +161,11 @@ impl Shell {
     /// be made. The key is read from the keyring off the window's thread, and goes from there to
     /// the client only.
     fn connect_seerr(&mut self, cx: &mut Context<Self>) {
+        // What was read and asked of the client before goes with it, its requests not sent
+        // yet with its pages: nothing more goes to the old server.
+        if self.seerr.client.is_some() {
+            self.seerr_gone(cx);
+        }
         self.seerr.making += 1;
         let making = self.seerr.making;
         self.seerr.check = None;
@@ -213,11 +226,11 @@ impl Shell {
         if self.navigator.current() == Screen::Discover {
             self.load_discover(cx);
         }
-        let films: Vec<Option<TmdbId>> = self
+        let films: Vec<(Option<TmdbId>, Option<TmdbId>)> = self
             .details
             .iter()
             .filter_map(|page| match &page.detail {
-                Loadable::Ready(detail) => Some(detail.tmdb),
+                Loadable::Ready(detail) => Some((detail.tmdb, detail.tmdb_collection)),
                 _ => None,
             })
             .collect();
@@ -229,8 +242,9 @@ impl Shell {
                 _ => None,
             })
             .collect();
-        for tmdb in films {
+        for (tmdb, collection) in films {
             self.load_similar(MediaKind::Movie, tmdb, cx);
+            self.load_collection_link(tmdb, collection, cx);
         }
         for tmdb in series {
             self.load_similar(MediaKind::Tv, tmdb, cx);
@@ -244,9 +258,16 @@ impl Shell {
         self.seerr.indexing = false;
         self.seerr.discover = DiscoverPage::default();
         self.seerr.requests.clear();
+        self.seerr.collections.clear();
         self.seerr.similar.clear();
-        self.navigator
-            .forget(|screen| matches!(screen, Screen::Discover | Screen::Request));
+        self.seerr.links.clear();
+        self.seerr.names.clear();
+        self.navigator.forget(|screen| {
+            matches!(
+                screen,
+                Screen::Discover | Screen::Request | Screen::SeerrCollection
+            )
+        });
         cx.notify();
     }
 
@@ -289,7 +310,8 @@ impl Shell {
     }
 
     /// Runs `work` against the request server off the window's thread, then `then` with its
-    /// answer, if the same client is still there.
+    /// answer, if the same client is still there: not one of another session, nor one made
+    /// again since.
     pub(super) fn ask_seerr<R: Send + 'static>(
         &self,
         cx: &mut Context<Self>,
@@ -299,14 +321,14 @@ impl Shell {
         let Some(client) = self.seerr.client.clone() else {
             return;
         };
-        let making = self.seerr.making;
-        let task = cx
-            .background_executor()
-            .spawn(async move { work(&*client) });
+        let asked = client.clone();
+        let task = cx.background_executor().spawn(async move { work(&*asked) });
         cx.spawn(async move |this, cx| {
             let answer = task.await;
             this.update(cx, |shell, cx| {
-                if shell.seerr.making == making && shell.seerr.client.is_some() {
+                let same =
+                    (shell.seerr.client.as_ref()).is_some_and(|now| Arc::ptr_eq(now, &client));
+                if same {
                     then(shell, answer, cx);
                     cx.notify();
                 }
@@ -802,6 +824,51 @@ pub(super) mod tests {
                 ));
             })
             .unwrap();
+    }
+
+    /// Seerr moved: the address is changed in the Settings, and `other` answers there.
+    pub fn change_address(
+        window: &WindowHandle<Shell>,
+        other: &FakeSeerr,
+        cx: &mut TestAppContext,
+    ) {
+        let fake = other.clone();
+        window
+            .update(cx, |shell, _, cx| {
+                shell.open_seerr =
+                    Arc::new(move |_, _, _| Ok(Arc::new(fake.clone()) as Arc<dyn RequestServer>));
+                let address = shell.seerr.address.clone().unwrap();
+                address.update(cx, |field, cx| {
+                    field.set_text("https://requests.example.net", cx)
+                });
+                shell.save_seerr_address(cx);
+            })
+            .unwrap();
+    }
+
+    #[gpui_kit::test]
+    fn a_read_of_a_previous_sessions_client_is_dropped(cx: &mut TestAppContext) {
+        let seerr = FakeSeerr::default();
+        let window = configured(&seerr, cx);
+        let landed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let mark = landed.clone();
+        window
+            .update(cx, |shell, _, cx| {
+                shell.ask_seerr(
+                    cx,
+                    |seerr| seerr.my_requests(),
+                    move |_, _, _| mark.store(true, std::sync::atomic::Ordering::Relaxed),
+                );
+                // Signed out and in again before the answer came: a new session, whose client
+                // was made as many times as the one before.
+                let making = shell.seerr.making;
+                shell.seerr = Seerr::default();
+                shell.seerr.making = making;
+                shell.seerr.client = Some(Arc::new(FakeSeerr::default()));
+            })
+            .unwrap();
+        cx.run_until_parked();
+        assert!(!landed.load(std::sync::atomic::Ordering::Relaxed));
     }
 
     #[gpui_kit::test]

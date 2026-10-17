@@ -30,6 +30,8 @@ pub enum Screen {
     Discover,
     /// A title the library does not hold, reached from Discover: what it is, and its request.
     Request,
+    /// A TMDb collection on the request server, its movies and their request.
+    SeerrCollection,
 }
 
 impl Screen {
@@ -53,6 +55,7 @@ impl Screen {
                 | Screen::Settings
                 | Screen::Stats
                 | Screen::Request
+                | Screen::SeerrCollection
         )
     }
 
@@ -60,7 +63,11 @@ impl Screen {
     pub fn has_backdrop(self) -> bool {
         matches!(
             self,
-            Screen::FilmDetail | Screen::SeriesDetail | Screen::CollectionDetail | Screen::Request
+            Screen::FilmDetail
+                | Screen::SeriesDetail
+                | Screen::CollectionDetail
+                | Screen::Request
+                | Screen::SeerrCollection
         )
     }
 
@@ -76,7 +83,7 @@ impl Screen {
             Screen::Series => "Series",
             Screen::HomeList => "List",
             Screen::Collections => "Collections",
-            Screen::CollectionDetail => "Collection",
+            Screen::CollectionDetail | Screen::SeerrCollection => "Collection",
             Screen::MyList => "Lists",
             Screen::Favorites => "Favorites",
             Screen::Playlist => "Playlist",

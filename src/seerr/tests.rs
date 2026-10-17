@@ -239,6 +239,17 @@ fn a_series_is_requested_with_chosen_seasons() {
     );
 }
 
+/// Asks for `films` as the collection page does: the quota, then each film once the one before
+/// was answered.
+fn request_films(seerr: &SeerrClient, films: &[TmdbId]) -> CollectionOutcome {
+    let mut run = CollectionRun::default();
+    run.quota(seerr.quota_reached(MediaKind::Movie), films);
+    while let Some(film) = run.next(films) {
+        run.answered(film, seerr.request(&Ask::Movie(film)), films);
+    }
+    run.outcome
+}
+
 #[test]
 fn a_collection_with_two_films_in_the_library_and_two_missing_requests_only_the_two_missing_ones() {
     let fake = FakeSeerr::start();

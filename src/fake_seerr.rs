@@ -34,6 +34,10 @@ pub const HARBOUR_WATCH: TmdbId = 7003;
 pub struct Record {
     pub requests: Vec<Ask>,
     pub searches: Vec<String>,
+    /// The titles read, by TMDb id.
+    pub titles: Vec<TmdbId>,
+    /// The collections read, by TMDb id.
+    pub collections: Vec<TmdbId>,
     pub checks: u32,
     pub my_requests: u32,
 }
@@ -224,7 +228,8 @@ impl RequestServer for FakeSeerr {
     fn title(&self, kind: MediaKind, id: TmdbId) -> Result<TitleDetail, RequestError> {
         self.reach()?;
         {
-            let state = self.state();
+            let mut state = self.state();
+            state.record.titles.push(id);
             if state.titles_fail_after_a_request && !state.requested.is_empty() {
                 return Err(RequestError::Server(500));
             }
@@ -292,6 +297,7 @@ impl RequestServer for FakeSeerr {
 
     fn collection(&self, id: TmdbId) -> Result<CollectionParts, RequestError> {
         self.reach()?;
+        self.state().record.collections.push(id);
         if id != COLLECTION {
             return Err(RequestError::NotFound);
         }
@@ -346,6 +352,10 @@ impl RequestServer for FakeSeerr {
         let mut state = self.state();
         let id = match ask {
             Ask::Movie(id) => {
+                // Seerr answers 409 to a movie asked for twice.
+                if state.requested.contains(id) {
+                    return Err(RequestError::AlreadyRequested);
+                }
                 match &mut state.movie_quota {
                     Some(0) => return Err(RequestError::Quota),
                     Some(left) => *left -= 1,

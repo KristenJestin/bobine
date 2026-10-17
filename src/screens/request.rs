@@ -14,6 +14,7 @@ use gpui_kit::{
 
 use super::discover::{card, status_pill};
 use super::film_detail::{hero_frame, hero_text, meta_line, row};
+use super::seerr_collection::part_of;
 use super::{centered, note, picture};
 use crate::discover::{self, SeasonPicker};
 use crate::film_page;
@@ -98,11 +99,13 @@ pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -
             .children(seasons)
     });
     let pill = discover::status_label(detail.title.availability, in_library).map(status_pill);
+    let part_of = (detail.collection.clone()).map(|collection| part_of(collection, window, cx));
 
     let hero = hero_frame(backdrop, height).child(
         hero_text(detail.title.title.clone())
             .child(meta_line(facts(&detail), shell.font(), window))
             .children(pill.map(|pill| div().flex().child(pill)))
+            .children(part_of.map(|link| div().flex().child(link)))
             .children(detail.title.overview.clone().map(|overview| {
                 div()
                     .text_size(px(15.))
