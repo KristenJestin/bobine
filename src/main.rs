@@ -63,6 +63,10 @@ fn open_jellyfin() -> Result<Arc<dyn Connector>, ProviderError> {
 }
 
 fn main() {
+    if std::env::args().nth(1).as_deref() == Some("--version") {
+        println!("bobine {}", bobine::VERSION);
+        return;
+    }
     #[cfg(feature = "harness")]
     let harness = harness::Harness::from_args();
     gpui_kit::application()

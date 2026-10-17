@@ -95,7 +95,7 @@ impl Http {
         let agent = ureq::Agent::config_builder()
             .timeout_global(Some(timeout))
             .http_status_as_error(false)
-            .user_agent(format!("{CLIENT}/{}", env!("CARGO_PKG_VERSION")))
+            .user_agent(format!("{CLIENT}/{}", crate::VERSION))
             .build()
             .into();
         Self {
@@ -126,7 +126,7 @@ impl Http {
             "MediaBrowser Client=\"{CLIENT}\", Device=\"{}\", DeviceId=\"{}\", Version=\"{}\"",
             quoted(&self.device.name),
             quoted(&self.device.id),
-            env!("CARGO_PKG_VERSION"),
+            crate::VERSION,
         );
         if let Some(token) = &self.token {
             header.push_str(&format!(", Token=\"{}\"", token.expose_secret()));

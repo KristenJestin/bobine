@@ -46,7 +46,7 @@ impl SettingsPage {
 /// What the About section says: the program, and the server it is signed in to.
 pub fn about(server: &ServerInfo) -> [(&'static str, String); 3] {
     [
-        ("Bobine", env!("CARGO_PKG_VERSION").to_string()),
+        ("Bobine", bobine::VERSION.to_string()),
         ("Server", server.name.clone()),
         ("Server version", server.version.clone()),
     ]
@@ -560,7 +560,7 @@ mod tests {
         assert_eq!(
             about(&server),
             [
-                ("Bobine", env!("CARGO_PKG_VERSION").to_string()),
+                ("Bobine", bobine::VERSION.to_string()),
                 ("Server", "Cinéma du coin".to_string()),
                 ("Server version", "10.10.7".to_string()),
             ]

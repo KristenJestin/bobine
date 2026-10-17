@@ -37,15 +37,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      # No GPU, no display and no server here: the suites run against fakes (see AGENTS.md, Testing).
-      # GPUI (the window) builds against the system's fonts, Wayland and X11 libraries; it opens no
-      # window here, and Vulkan is only loaded at run time.
-      - run: |
-          sudo apt-get update
-          sudo apt-get install -y libmpv-dev pkg-config libfontconfig-dev libfreetype-dev \
-            libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libx11-xcb-dev libxcb1-dev libvulkan-dev
-      # GPUI takes about ten minutes to build from nothing: keep its build between runs.
+      # The one list of system libraries, shared with the beta and the release builds. No GPU, no
+      # display and no server here: the suites run against fakes (see AGENTS.md, Testing).
+      - run: tools/install-build-libraries.sh
+      # GPUI takes about ten minutes to build from nothing: keep its build between runs. Only `dev`
+      # and `main` save it; a pull request reads it and leaves the repository's cache storage alone.
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/main' }}
       - run: rustup component add rustfmt clippy
       - run: cargo fmt --check
       - run: cargo clippy --all-targets --locked -- -D warnings
