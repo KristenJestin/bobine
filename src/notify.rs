@@ -11,7 +11,12 @@ use std::sync::{Arc, Mutex};
 use std::task::{Poll, Waker};
 use std::time::Duration;
 
+use crate::config::EpisodesSeen;
 use bobine::provider::{Favourite, ImageRef, ItemId, MediaServer, NewEpisode, ProviderError};
+
+/// How far before the last check's mark an episode not seen yet is still told: an episode is
+/// dated when its file was made or downloaded, which may be well before the server scanned it.
+pub const GRACE: i64 = 48 * 3_600 * 10_000_000;
 
 /// How often the server is asked for new episodes while Bobine runs.
 pub const EVERY: Duration = Duration::from_secs(15 * 60);
@@ -106,35 +111,55 @@ pub struct Gained {
     pub episode: ItemId,
 }
 
-/// What a check found, and the newest episode it saw, which the next check starts from.
+/// What a check found, and what it saw, which the next check starts from.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Checked {
-    pub seen: i64,
+    pub seen: EpisodesSeen,
     pub gained: Vec<Gained>,
 }
 
-/// The episodes added since `seen` to the series the viewer follows: in Favorites, or with an
-/// episode up next. With no `seen` (the first check of this account ever) nothing is told, or a
-/// new install would flood the desktop: the check only marks where the next starts from.
+/// The episodes of the series the viewer follows (in Favorites, or with an episode up next) that
+/// the last check did not see, added after its mark less `GRACE`: an episode the server scanned
+/// late, dated by its file, is still told once. With no `seen` (the first check of this account
+/// ever) nothing is told, or a new install would flood the desktop: the check only keeps what it
+/// saw for the next.
 ///
-/// One request when nothing new came in; the followed series are asked only when something did.
-pub fn check(server: &dyn MediaServer, seen: Option<i64>) -> Result<Checked, ProviderError> {
-    let latest = unplayed(server, seen.unwrap_or(i64::MAX))?;
+/// What is kept stays small: the episodes within `GRACE` of the newest mark. One request when
+/// nothing new came in; the followed series are asked only when something did.
+pub fn check(
+    server: &dyn MediaServer,
+    seen: Option<&EpisodesSeen>,
+) -> Result<Checked, ProviderError> {
+    let latest = unplayed(server, seen.map(|seen| seen.mark))?;
     let newest = latest.iter().map(|new| new.added).max();
+    let mark = match (seen, newest) {
+        (Some(seen), Some(newest)) => seen.mark.max(newest),
+        (Some(seen), None) => seen.mark,
+        (None, newest) => newest.unwrap_or(0),
+    };
+    let now_seen = EpisodesSeen {
+        mark,
+        episodes: latest
+            .iter()
+            .filter(|new| new.added > mark - GRACE)
+            .map(|new| new.episode.item.id.0.clone())
+            .collect(),
+    };
+    let checked = |gained| Checked {
+        seen: now_seen,
+        gained,
+    };
     let Some(seen) = seen else {
-        return Ok(Checked {
-            seen: newest.unwrap_or(0),
-            gained: Vec::new(),
-        });
+        return Ok(checked(Vec::new()));
     };
     let fresh: Vec<NewEpisode> = latest
         .into_iter()
-        .filter(|new| new.added > seen && !new.episode.item.watched)
+        .filter(|new| {
+            new.added > seen.mark - GRACE
+                && !new.episode.item.watched
+                && !seen.episodes.contains(&new.episode.item.id.0)
+        })
         .collect();
-    let checked = |gained| Checked {
-        seen: newest.map_or(seen, |newest| newest.max(seen)),
-        gained,
-    };
     if fresh.is_empty() {
         return Ok(checked(Vec::new()));
     }
@@ -159,12 +184,16 @@ pub fn check(server: &dyn MediaServer, seen: Option<i64>) -> Result<Checked, Pro
 }
 
 /// The episodes not played, the newest added first, page after page down to the first that
-/// reaches back to `floor`, or the last, or `PAGES` of them.
-fn unplayed(server: &dyn MediaServer, floor: i64) -> Result<Vec<NewEpisode>, ProviderError> {
-    let mut found = Vec::new();
+/// reaches back to `mark` less `GRACE` (the newest episode's, with no mark yet), or the last, or
+/// `PAGES` of them.
+fn unplayed(server: &dyn MediaServer, mark: Option<i64>) -> Result<Vec<NewEpisode>, ProviderError> {
+    let mut found: Vec<NewEpisode> = Vec::new();
+    let mut floor = mark.map(|mark| mark - GRACE);
     for page in 0..PAGES {
         let start = page * LATEST;
         let read = server.new_episodes(start, LATEST)?;
+        let floor = *floor
+            .get_or_insert_with(|| read.items.first().map_or(i64::MIN, |new| new.added - GRACE));
         let reached = read.items.last().is_some_and(|new| new.added <= floor);
         found.extend(read.items);
         if reached || start + LATEST >= read.total {
@@ -259,6 +288,19 @@ mod tests {
             .extend(episodes.iter().map(|(id, at)| (ItemId((*id).into()), *at)));
     }
 
+    /// What a check that marked `mark` and saw `episodes` keeps.
+    fn seen(mark: i64, episodes: &[&str]) -> EpisodesSeen {
+        EpisodesSeen {
+            mark,
+            episodes: episodes.iter().map(|id| id.to_string()).collect(),
+        }
+    }
+
+    /// A last check at `mark` that saw nothing.
+    fn at(mark: i64) -> EpisodesSeen {
+        seen(mark, &[])
+    }
+
     fn asks(server: &FakeServer) -> (u32, u32) {
         let state = server.state.lock().unwrap();
         (state.record.new_episode_asks, state.record.list_loads)
@@ -272,7 +314,7 @@ mod tests {
         assert_eq!(
             checked,
             Checked {
-                seen: 200,
+                seen: seen(200, &["series-0-s2-e5", "series-1-s1-e3"]),
                 gained: vec![]
             }
         );
@@ -282,8 +324,8 @@ mod tests {
     fn a_new_episode_of_a_favourite_series_is_told() {
         let server = FakeServer::new(6, true);
         added(&server, &[("series-1-s1-e4", 150)]);
-        let checked = check(&server, Some(100)).unwrap();
-        assert_eq!(checked.seen, 150);
+        let checked = check(&server, Some(&at(100))).unwrap();
+        assert_eq!(checked.seen, seen(150, &["series-1-s1-e4"]));
         assert_eq!(
             checked.gained,
             [Gained {
@@ -305,7 +347,7 @@ mod tests {
     fn a_new_episode_of_a_series_in_progress_is_told() {
         let server = FakeServer::new(6, true);
         added(&server, &[("series-0-s3-e1", 150)]);
-        let checked = check(&server, Some(100)).unwrap();
+        let checked = check(&server, Some(&at(100))).unwrap();
         assert_eq!(checked.gained.len(), 1);
         assert_eq!(checked.gained[0].series, ItemId("series-0".into()));
     }
@@ -314,11 +356,11 @@ mod tests {
     fn a_series_neither_favourite_nor_in_progress_is_not_told() {
         let server = FakeServer::new(6, true);
         added(&server, &[("series-3-s1-e2", 150)]);
-        let checked = check(&server, Some(100)).unwrap();
+        let checked = check(&server, Some(&at(100))).unwrap();
         assert_eq!(
             checked,
             Checked {
-                seen: 150,
+                seen: seen(150, &["series-3-s1-e2"]),
                 gained: vec![]
             }
         );
@@ -335,21 +377,22 @@ mod tests {
                 ("series-1-s1-e2", 130),
             ],
         );
-        let checked = check(&server, Some(100)).unwrap();
+        let checked = check(&server, Some(&at(100))).unwrap();
         assert_eq!(checked.gained.len(), 1);
         assert_eq!(checked.gained[0].body, "3 new episodes");
         assert_eq!(checked.gained[0].episode, ItemId("series-1-s1-e1".into()));
     }
 
     #[test]
-    fn an_episode_added_before_the_last_check_is_not_told_again() {
+    fn an_episode_seen_by_the_last_check_is_not_told_again() {
         let server = FakeServer::new(6, true);
         added(&server, &[("series-1-s1-e4", 100)]);
-        let checked = check(&server, Some(100)).unwrap();
+        let last = seen(100, &["series-1-s1-e4"]);
+        let checked = check(&server, Some(&last)).unwrap();
         assert_eq!(
             checked,
             Checked {
-                seen: 100,
+                seen: last,
                 gained: vec![]
             }
         );
@@ -360,7 +403,7 @@ mod tests {
         let server = FakeServer::new(6, true);
         // series-0's first season is watched.
         added(&server, &[("series-0-s1-e2", 150)]);
-        let checked = check(&server, Some(100)).unwrap();
+        let checked = check(&server, Some(&at(100))).unwrap();
         assert_eq!(checked.gained, []);
     }
 
@@ -368,15 +411,15 @@ mod tests {
     fn nothing_new_costs_one_request() {
         let server = FakeServer::new(6, true);
         added(&server, &[("series-1-s1-e4", 100)]);
-        check(&server, Some(100)).unwrap();
+        check(&server, Some(&seen(100, &["series-1-s1-e4"]))).unwrap();
         assert_eq!(asks(&server), (1, 0), "no list of favourites asked");
     }
 
     #[test]
     fn a_check_of_an_empty_server_marks_the_beginning() {
         let server = FakeServer::new(6, true);
-        assert_eq!(check(&server, None).unwrap().seen, 0);
-        assert_eq!(check(&server, Some(100)).unwrap().seen, 100);
+        assert_eq!(check(&server, None).unwrap().seen, at(0));
+        assert_eq!(check(&server, Some(&at(100))).unwrap().seen, at(100));
     }
 
     #[test]
@@ -396,9 +439,92 @@ mod tests {
             }
         }
         added(&server, &[("series-1-s1-e4", 150)]);
-        let checked = check(&server, Some(100)).unwrap();
+        let checked = check(&server, Some(&at(100))).unwrap();
         let told: Vec<&ItemId> = checked.gained.iter().map(|g| &g.episode).collect();
         assert_eq!(told, [&ItemId("series-1-s1-e4".into())]);
+    }
+
+    const SECOND: i64 = 10_000_000;
+    const HOUR: i64 = 3_600 * SECOND;
+    /// 2025-09-14T08:30:05Z.
+    const T: i64 = 1_757_838_605 * SECOND;
+
+    fn told(checked: &Checked) -> Vec<&str> {
+        checked
+            .gained
+            .iter()
+            .map(|g| g.episode.0.as_str())
+            .collect()
+    }
+
+    #[test]
+    fn an_episode_dated_before_the_mark_but_seen_for_the_first_time_is_told_once() {
+        let server = FakeServer::new(6, true);
+        added(&server, &[("series-1-s1-e3", T + HOUR / 2)]);
+        let first = check(&server, Some(&at(T - HOUR))).unwrap();
+        assert_eq!(told(&first), ["series-1-s1-e3"]);
+        // Scanned after that check, but dated by its file before it.
+        added(&server, &[("series-0-s3-e1", T)]);
+        let second = check(&server, Some(&first.seen)).unwrap();
+        assert_eq!(told(&second), ["series-0-s3-e1"]);
+        let third = check(&server, Some(&second.seen)).unwrap();
+        assert_eq!(told(&third), Vec::<&str>::new(), "told once");
+    }
+
+    #[test]
+    fn two_episodes_added_in_the_same_second_across_a_check_are_both_told() {
+        let server = FakeServer::new(6, true);
+        added(&server, &[("series-1-s1-e3", T + SECOND / 2)]);
+        let first = check(&server, Some(&at(T - HOUR))).unwrap();
+        assert_eq!(told(&first), ["series-1-s1-e3"]);
+        added(&server, &[("series-0-s3-e1", T + SECOND / 10)]);
+        let second = check(&server, Some(&first.seen)).unwrap();
+        assert_eq!(told(&second), ["series-0-s3-e1"]);
+    }
+
+    #[test]
+    fn an_episode_deleted_and_older_ones_left_never_come_back() {
+        let server = FakeServer::new(6, true);
+        added(
+            &server,
+            &[("series-1-s1-e3", T), ("series-0-s3-e1", T + HOUR)],
+        );
+        let first = check(&server, Some(&at(T - HOUR))).unwrap();
+        assert_eq!(told(&first).len(), 2);
+        server
+            .state
+            .lock()
+            .unwrap()
+            .added
+            .retain(|(id, _)| id.0 != "series-0-s3-e1");
+        let second = check(&server, Some(&first.seen)).unwrap();
+        assert_eq!(told(&second), Vec::<&str>::new());
+        assert_eq!(second.seen.mark, T + HOUR, "the mark does not go back");
+        let third = check(&server, Some(&second.seen)).unwrap();
+        assert_eq!(told(&third), Vec::<&str>::new());
+    }
+
+    #[test]
+    fn an_episode_dated_more_than_two_days_before_the_mark_is_not_told() {
+        let server = FakeServer::new(6, true);
+        added(&server, &[("series-1-s1-e3", T - GRACE - SECOND)]);
+        let checked = check(&server, Some(&at(T))).unwrap();
+        assert_eq!(told(&checked), Vec::<&str>::new());
+    }
+
+    #[test]
+    fn the_episodes_kept_are_those_of_the_two_days_before_the_mark() {
+        let server = FakeServer::new(6, true);
+        added(
+            &server,
+            &[
+                ("series-1-s1-e3", T - GRACE - SECOND),
+                ("series-1-s1-e4", T - GRACE + SECOND),
+                ("series-0-s3-e1", T),
+            ],
+        );
+        let checked = check(&server, None).unwrap();
+        assert_eq!(checked.seen, seen(T, &["series-0-s3-e1", "series-1-s1-e4"]));
     }
 
     #[test]

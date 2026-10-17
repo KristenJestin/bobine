@@ -49,13 +49,13 @@ impl Shell {
         let Some(asked) = self.account() else {
             return;
         };
-        let seen = self.settings.episodes_seen.get(&asked).copied();
+        let seen = self.settings.new_episodes_seen.get(&asked).cloned();
         let dir = self.art_dir.clone();
         let account = asked.clone();
         self.ask(
             cx,
             move |server| {
-                let checked = notify::check(server, seen)?;
+                let checked = notify::check(server, seen.as_ref())?;
                 let told = checked
                     .gained
                     .into_iter()
@@ -79,8 +79,8 @@ impl Shell {
                 {
                     return;
                 }
-                if shell.settings.episodes_seen.get(&asked) != Some(&seen) {
-                    shell.settings.episodes_seen.insert(asked, seen);
+                if shell.settings.new_episodes_seen.get(&asked) != Some(&seen) {
+                    shell.settings.new_episodes_seen.insert(asked, seen);
                     shell.keep_settings();
                 }
                 if let Some(notifier) = &mut shell.notifier {
@@ -98,7 +98,7 @@ impl Shell {
         self.settings.notify_new_episodes = !self.settings.notify_new_episodes;
         if self.settings.notify_new_episodes {
             if let Some(account) = self.account() {
-                self.settings.episodes_seen.remove(&account);
+                self.settings.new_episodes_seen.remove(&account);
             }
             self.start_episode_checks(cx);
         } else {
@@ -241,6 +241,12 @@ mod tests {
             .collect()
     }
 
+    /// The mark the last check of `account` kept in the settings at `path`.
+    fn mark(path: &Path, account: &str) -> Option<i64> {
+        let seen = Settings::read(path).new_episodes_seen;
+        seen.get(account).map(|seen| seen.mark)
+    }
+
     fn settings_in(dir: &Path) -> PathBuf {
         dir.join("bobine/settings.toml")
     }
@@ -304,7 +310,7 @@ mod tests {
         add(&server, "series-1-s1-e4", 150);
         later(cx);
         assert_eq!(told(&notifier).len(), 1);
-        assert_eq!(Settings::read(&path).episodes_seen.get(ACCOUNT), Some(&150));
+        assert_eq!(mark(&path, ACCOUNT), Some(150));
         window
             .update(cx, |_, window, _| window.remove_window())
             .unwrap();
@@ -368,7 +374,7 @@ mod tests {
         let (_window, notifier) = start(&server, Some(path.clone()), cx);
         later(cx);
         assert_eq!(told(&notifier), []);
-        assert_eq!(Settings::read(&path).episodes_seen.get(ACCOUNT), Some(&150));
+        assert_eq!(mark(&path, ACCOUNT), Some(150));
     }
 
     #[gpui_kit::test]
@@ -431,9 +437,8 @@ mod tests {
         sign_out_and_in_as(&window, "user-2", &server, cx);
         assert_eq!(asks(&server), before + 1, "checked at the sign-in");
         assert_eq!(told(&notifier), []);
-        let seen = Settings::read(&path).episodes_seen;
-        assert_eq!(seen.get("server-1/user-2"), Some(&150));
-        assert_eq!(seen.get(ACCOUNT), Some(&0), "the first user's own");
+        assert_eq!(mark(&path, "server-1/user-2"), Some(150));
+        assert_eq!(mark(&path, ACCOUNT), Some(0), "the first user's own");
     }
 
     #[gpui_kit::test]
