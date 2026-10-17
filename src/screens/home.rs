@@ -530,11 +530,10 @@ impl Draw<'_> {
                     .rounded_full()
                     .overflow_hidden()
                     .children((index == current).then(|| {
-                        div()
+                        super::progress_fill()
                             .h_full()
                             .w(relative(progress))
                             .rounded_full()
-                            .bg(theme::accent())
                     }));
                 let target = self.target.clone();
                 // The mark is small, its click is not.

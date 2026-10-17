@@ -3022,6 +3022,19 @@ mod tests {
     }
 
     #[gpui_kit::test]
+    fn the_pill_bar_draws_the_brand_mark_in_its_corner_not_a_letter(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        let (_server, window) = signed_in_window(cx);
+        let mut visual = drawn(&window, cx);
+        let bar = visual.debug_bounds("pill-bar").expect("the bar");
+        let mark = visual.debug_bounds("brand-mark").expect("the mark");
+        assert!(bar.contains(&mark.origin), "{mark:?} in {bar:?}");
+        assert!(bar.contains(&mark.bottom_right()), "{mark:?} in {bar:?}");
+        assert_eq!((mark.size.width, mark.size.height), (px(32.), px(32.)));
+    }
+
+    #[gpui_kit::test]
     fn the_mouse_back_button_goes_back_and_the_forward_button_goes_forward(
         cx: &mut gpui_kit::TestAppContext,
     ) {
