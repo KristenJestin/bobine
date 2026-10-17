@@ -207,7 +207,10 @@ fn hero(
         window,
         cx,
     )
-    .on_click(cx.listener(|shell, _, window, cx| shell.play_film(From::Resume, window, cx)));
+    .on_click(cx.listener(|shell, _, window, cx| {
+        shell.clicked_on(crate::curtain::PAGE);
+        shell.play_film(From::Resume, window, cx)
+    }));
     let from_start = film.resume.is_some().then(|| {
         theme::ghost_button(
             "film-from-start",
@@ -216,7 +219,10 @@ fn hero(
             window,
             cx,
         )
-        .on_click(cx.listener(|shell, _, window, cx| shell.play_film(From::Beginning, window, cx)))
+        .on_click(cx.listener(|shell, _, window, cx| {
+            shell.clicked_on(crate::curtain::PAGE);
+            shell.play_film(From::Beginning, window, cx)
+        }))
     });
     let trailer = trailer::choose(&detail.trailers, shell.ytdlp)
         .map(|_| trailer_button(FILM_TRAILER, window, cx));

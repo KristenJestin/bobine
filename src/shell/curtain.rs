@@ -70,7 +70,7 @@ impl Shell {
     }
 
     /// A playback asked did not start: the picture pressed grows into no other.
-    pub(super) fn forget_click(&mut self) {
+    pub fn forget_click(&mut self) {
         self.clicked = None;
     }
 

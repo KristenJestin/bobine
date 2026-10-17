@@ -1479,6 +1479,7 @@ impl Shell {
         let Some(plan) = film_page::plan(&detail.film, &detail.versions, choices, from) else {
             page.error = Some("This movie has no version to play.");
             cx.notify();
+            self.forget_click();
             return;
         };
         let Some(server) = self.server.clone() else {

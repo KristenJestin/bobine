@@ -158,15 +158,15 @@ fn hero(
     let series = &detail.series;
     let backdrop = shell.image(series.backdrop.as_ref(), images::BACKDROP, cx);
     let height = (window_height * 0.62).clamp(440., 680.);
-    let play =
-        shown.next.clone().map(|next| {
-            let label = series_page::play_label(&next);
-            theme::primary_button("series-play", Some(IconName::Play), label, window, cx)
-                .when(shown.busy, |button| button.opacity(0.6))
-                .on_click(cx.listener(move |shell, _, window, cx| {
-                    shell.play_episode(next.clone(), window, cx)
-                }))
-        });
+    let play = shown.next.clone().map(|next| {
+        let label = series_page::play_label(&next);
+        theme::primary_button("series-play", Some(IconName::Play), label, window, cx)
+            .when(shown.busy, |button| button.opacity(0.6))
+            .on_click(cx.listener(move |shell, _, window, cx| {
+                shell.clicked_on(crate::curtain::PAGE);
+                shell.play_episode(next.clone(), window, cx)
+            }))
+    });
     let started = shown.next.as_ref().and_then(|next| {
         let fraction = film_page::progress(&next.item)?;
         Some(

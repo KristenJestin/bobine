@@ -402,6 +402,7 @@ impl Shell {
         // Another episode chosen while the card counts down: the card goes, unless the page
         // ignores the click.
         if !series_page::starts_episode(page.waiting(), &mut self.up_next) {
+            self.forget_click();
             return;
         }
         self.up_next_ticker = None;
@@ -415,6 +416,7 @@ impl Shell {
         else {
             page.error = Some("This episode has no version to play.");
             cx.notify();
+            self.forget_click();
             return;
         };
         let Some(server) = self.server.clone() else {

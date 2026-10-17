@@ -513,6 +513,7 @@ impl Shell {
         cx: &mut Context<Self>,
     ) {
         if self.home.busy {
+            self.forget_click();
             return;
         }
         let Some(server) = self.server.clone() else {

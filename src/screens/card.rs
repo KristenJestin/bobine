@@ -265,8 +265,9 @@ pub fn play_card(
             .title(shell.list.as_ref().map(|list| &list.grid))
             .map(|title| PlayTarget::of(&title)),
     };
-    if let Some(target) = target {
-        shell.play_from_home(target, window, cx);
+    match target {
+        Some(target) => shell.play_from_home(target, window, cx),
+        None => shell.forget_click(),
     }
 }
 
