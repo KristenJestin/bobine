@@ -1904,7 +1904,7 @@ fn play(mut args: Args, shell: &Entity<Shell>, window: &mut Window, cx: &mut App
                             let played = Libmpv::new(&[("ao", "null")])
                                 .map_err(|e| e.to_string())
                                 .and_then(|mpv| {
-                                    shell.play(Arc::new(mpv), media, film, None, window, cx)
+                                    shell.play(Arc::new(mpv), media, film, None, false, window, cx)
                                 });
                             if let Err(error) = played {
                                 eprintln!("bobine harness: the second film: {error}");
@@ -1976,7 +1976,7 @@ fn play_file(
         },
         external_subtitles: external.as_slice(),
     };
-    shell.play(mpv.clone(), media, film, None, window, cx)
+    shell.play(mpv.clone(), media, film, None, false, window, cx)
 }
 
 fn report(mpv: &Libmpv, start: &Snapshot, window: &Window) {

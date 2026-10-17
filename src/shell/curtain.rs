@@ -27,8 +27,7 @@ pub(super) struct Cover {
 impl Shell {
     /// The player opens over the page `from`: the way in starts, unless this playback follows
     /// the one that just ended.
-    pub(super) fn open_curtain(&mut self, from: Screen) {
-        let seamless = std::mem::take(&mut self.seamless);
+    pub(super) fn open_curtain(&mut self, from: Screen, seamless: bool) {
         self.curtain = (!seamless).then(|| Curtain::opening(None, Instant::now()));
         if !seamless {
             self.note_curtain("opening");
@@ -78,16 +77,6 @@ impl Shell {
         self.curtain_marks.borrow_mut().push((what, Instant::now()));
         #[cfg(not(feature = "harness"))]
         let _ = what;
-    }
-
-    /// A playback that would have followed the one that ended did not start.
-    pub(super) fn forget_seamless(&mut self) {
-        self.seamless = false;
-    }
-
-    /// The next playback follows the one that ended: no way in.
-    pub(super) fn follow_seamlessly(&mut self) {
-        self.seamless = true;
     }
 
     /// How long the player's ticker waits before it asks again.
@@ -200,6 +189,7 @@ mod tests {
     use crate::navigation::Screen;
     use crate::player::PlayerEvent;
     use crate::player::fake::FakePlayer;
+    use crate::series_page::Next;
     use crate::shell::{Loadable, Shell};
 
     fn signed_in(cx: &mut TestAppContext) -> (FakeServer, WindowHandle<Shell>) {
@@ -314,6 +304,48 @@ mod tests {
         std::thread::sleep(Duration::from_millis(400));
         tick(cx);
         assert_eq!(screen(&window, cx), Screen::FilmDetail);
+    }
+
+    #[gpui_kit::test]
+    fn an_episode_with_nothing_to_play_leaves_the_next_playback_its_transition(
+        cx: &mut TestAppContext,
+    ) {
+        let (_server, window) = signed_in(cx);
+        window
+            .update(cx, |shell, _, cx| {
+                shell.open_series(ItemId(SERIES.into()), cx)
+            })
+            .unwrap();
+        cx.run_until_parked();
+        let mut episode = window
+            .read_with(cx, |shell, _| {
+                let page = shell.series_pages.last().unwrap();
+                match &page.episodes[&page.seasons[page.season].id] {
+                    Loadable::Ready(episodes) => episodes[0].clone(),
+                    _ => panic!("the episodes are shown"),
+                }
+            })
+            .unwrap();
+        episode.versions.clear();
+        // The card of the next episode plays it, and there is no version to play.
+        window
+            .update(cx, |shell, window, cx| {
+                shell.play_next(Next::Episode(episode), window, cx)
+            })
+            .unwrap();
+        cx.run_until_parked();
+        assert_eq!(screen(&window, cx), Screen::SeriesDetail);
+        window
+            .read_with(cx, |shell, _| {
+                assert!(shell.series_pages.last().unwrap().error.is_some());
+            })
+            .unwrap();
+        // Later, a film from its page: that is a new way into the player.
+        let player = FakePlayer::default();
+        player.queued.borrow_mut().push(PlayerEvent::Loaded);
+        play_from_its_page(&window, player, cx);
+        assert_eq!(screen(&window, cx), Screen::Player);
+        assert_eq!(way(&window, cx), Some(Way::Opening));
     }
 
     #[gpui_kit::test]

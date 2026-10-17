@@ -384,6 +384,17 @@ impl Shell {
     /// chips' choices, any other with its defaults. The episode after it is looked for at the
     /// same time, for the end.
     pub fn play_episode(&mut self, episode: Episode, window: &mut Window, cx: &mut Context<Self>) {
+        self.play_episode_as(episode, false, window, cx);
+    }
+
+    /// `seamless`: it follows the episode that just ended, so the player does not open again.
+    fn play_episode_as(
+        &mut self,
+        episode: Episode,
+        seamless: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let depth = self.series_pages.len().wrapping_sub(1);
         let Some(page) = self.series_pages.last_mut() else {
             return;
@@ -431,7 +442,7 @@ impl Shell {
             let (opened, after) = task.await;
             this.update_in(cx, |shell, window, cx| {
                 let after = after.map(Next::Episode);
-                shell.start_playback(origin, plan, opened, playing, after, window, cx);
+                shell.start_playback(origin, plan, opened, playing, after, seamless, window, cx);
                 cx.notify();
             })
             .ok();
@@ -484,10 +495,9 @@ impl Shell {
 
     /// What the card offered plays, on its page.
     pub(super) fn play_next(&mut self, next: Next, window: &mut Window, cx: &mut Context<Self>) {
-        self.follow_seamlessly();
         match next {
-            Next::Episode(episode) => self.play_episode(episode, window, cx),
-            Next::Entry(entry) => self.play_entry(entry, true, window, cx),
+            Next::Episode(episode) => self.play_episode_as(episode, true, window, cx),
+            Next::Entry(entry) => self.play_entry_as(entry, true, true, window, cx),
         }
     }
 

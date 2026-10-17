@@ -276,8 +276,6 @@ pub struct Shell {
     pub pictures: crate::curtain::Drawn,
     /// The picture the playback grew from: the way out goes back to it.
     opened_from: Option<crate::curtain::Picture>,
-    /// The next playback follows the one that ended (the next episode): no way in.
-    seamless: bool,
     /// When each draw started: the harness reads the frame times of a move from it.
     #[cfg(feature = "harness")]
     pub frames: std::cell::RefCell<Vec<Instant>>,
@@ -479,7 +477,6 @@ impl Shell {
             curtain_back: None,
             pictures: Default::default(),
             opened_from: None,
-            seamless: false,
             #[cfg(feature = "harness")]
             frames: Default::default(),
             #[cfg(feature = "harness")]
@@ -552,11 +549,12 @@ impl Shell {
         media: Media<'_>,
         film: Film,
         reporting: Option<Reporting>,
+        seamless: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
         let session = self.open_session(mpv, media, film, window)?;
-        self.begin_playback(session, reporting, window, cx);
+        self.begin_playback(session, reporting, seamless, window, cx);
         Ok(())
     }
 
@@ -590,11 +588,13 @@ impl Shell {
         ))
     }
 
-    /// Puts `session` on the window: the player screen opens on it.
+    /// Puts `session` on the window: the player screen opens on it. `seamless`: it follows the
+    /// playback that just ended (the next episode), so no way in.
     fn begin_playback(
         &mut self,
         session: Session,
         reporting: Option<Reporting>,
+        seamless: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -647,7 +647,7 @@ impl Shell {
         self.mpris.commands();
         self.lay_out_video(window);
         self.forward.clear();
-        self.open_curtain(self.navigator.current());
+        self.open_curtain(self.navigator.current(), seamless);
         self.navigator.open(Screen::Player);
         cx.notify();
     }

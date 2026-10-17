@@ -556,6 +556,7 @@ impl Shell {
                     started.opened,
                     playing,
                     None,
+                    false,
                     window,
                     cx,
                 );
