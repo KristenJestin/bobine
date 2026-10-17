@@ -10,6 +10,8 @@ use gpui_kit::Rgba;
 const QUICK: Duration = Duration::from_millis(160);
 /// Going to a page and back.
 const PAGE: Duration = Duration::from_millis(220);
+/// Into the player and back out of it.
+const CURTAIN: Duration = Duration::from_millis(300);
 /// One title of the Home's header giving way to the next.
 const CROSSFADE: Duration = Duration::from_millis(700);
 
@@ -31,6 +33,10 @@ pub fn quick() -> Duration {
 
 pub fn page() -> Duration {
     slowed(PAGE)
+}
+
+pub fn curtain() -> Duration {
+    slowed(CURTAIN)
 }
 
 pub fn crossfade() -> Duration {

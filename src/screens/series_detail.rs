@@ -189,7 +189,9 @@ fn hero(
         .zip(shown.choices.as_ref())
         .map(|(next, choices)| chips_row(&next.versions, choices, menu, &shown.chips, window, cx));
     let title = heading(shell, &series.title, detail.logo.as_ref(), window, cx);
-    hero_frame(backdrop, height).child(
+    // The way into the player grows from it.
+    let mark = crate::curtain::mark(&shell.pictures, &series.id, backdrop.clone());
+    hero_frame(backdrop, height).child(mark).child(
         hero_text_under(title)
             .child(facts_line(
                 series_page::meta(detail, shown.seasons.len()),

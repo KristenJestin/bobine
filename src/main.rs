@@ -3,6 +3,7 @@
 mod brand;
 mod chrome;
 mod config;
+mod curtain;
 mod discover;
 #[cfg(any(test, feature = "harness"))]
 mod fake;

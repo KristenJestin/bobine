@@ -1,5 +1,6 @@
 //! The root view: the screen the navigator points at, framed by the pill bar or the back link.
 
+mod curtain;
 mod desktop;
 mod discover;
 mod episodes;
@@ -38,9 +39,9 @@ use std::time::{Duration, Instant};
 
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    Animation, AnimationExt, App, Context, DispatchPhase, Entity, FocusHandle, Focusable,
-    IntoElement, MouseButton, MouseDownEvent, Pixels, Render, SharedString, Size, Subscription,
-    Task, Window, canvas, div, px,
+    Animation, AnimationExt, AnyElement, App, Context, DispatchPhase, Entity, FocusHandle,
+    Focusable, IntoElement, MouseButton, MouseDownEvent, Pixels, Render, SharedString, Size,
+    Subscription, Task, Window, canvas, div, px,
 };
 
 use bobine::provider::{
@@ -267,9 +268,20 @@ pub struct Shell {
     turned_forward: bool,
     /// The window's size at the last draw: a chip menu does not follow its chip when it changes.
     viewport: Size<Pixels>,
+    /// The way into the player or back out of it, while it moves; the page under the way in.
+    pub curtain: Option<crate::curtain::Curtain<crate::curtain::Picture>>,
+    curtain_from: Screen,
+    curtain_back: Option<&'static str>,
+    /// The picture of its title the page drew last: the way into the player grows from it.
+    pub pictures: crate::curtain::Drawn,
+    /// The picture the playback grew from: the way out goes back to it.
+    opened_from: Option<crate::curtain::Picture>,
     /// When each draw started: the harness reads the frame times of a move from it.
     #[cfg(feature = "harness")]
     pub frames: std::cell::RefCell<Vec<Instant>>,
+    /// When each way into the player or out of it started, met the video and was over.
+    #[cfg(feature = "harness")]
+    pub curtain_marks: std::cell::RefCell<Vec<(&'static str, Instant)>>,
     /// When the shell and its header were drawn: the tests and the harness tell from them whether
     /// the whole window is built again while only the header moves.
     #[cfg(any(test, feature = "harness"))]
@@ -460,8 +472,15 @@ impl Shell {
             page_turns: 0,
             turned_forward: true,
             viewport: Size::default(),
+            curtain: None,
+            curtain_from: Screen::Home,
+            curtain_back: None,
+            pictures: Default::default(),
+            opened_from: None,
             #[cfg(feature = "harness")]
             frames: Default::default(),
+            #[cfg(feature = "harness")]
+            curtain_marks: Default::default(),
             #[cfg(any(test, feature = "harness"))]
             draws: Default::default(),
             mpv_options: Vec::new(),
@@ -524,17 +543,22 @@ impl Shell {
 
     /// Opens the player on `media`. Its addresses go straight to mpv: nothing here keeps or
     /// prints them.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "one playback's parts, put together once"
+    )]
     pub fn play(
         &mut self,
         mpv: Arc<Libmpv>,
         media: Media<'_>,
         film: Film,
         reporting: Option<Reporting>,
+        seamless: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
         let session = self.open_session(mpv, media, film, window)?;
-        self.begin_playback(session, reporting, window, cx);
+        self.begin_playback(session, reporting, seamless, window, cx);
         Ok(())
     }
 
@@ -568,22 +592,28 @@ impl Shell {
         ))
     }
 
-    /// Puts `session` on the window: the player screen opens on it.
+    /// Puts `session` on the window: the player screen opens on it. `seamless`: it follows the
+    /// playback that just ended (the next episode), so no way in.
     fn begin_playback(
         &mut self,
         session: Session,
         reporting: Option<Reporting>,
+        seamless: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let ticker = cx.spawn_in(window, async move |this, cx| {
+            let mut every = PLAYER_TICK;
             loop {
-                cx.background_executor().timer(PLAYER_TICK).await;
-                if this
-                    .update_in(cx, |shell, window, cx| shell.tick(window, cx))
-                    .is_err()
-                {
-                    break;
+                cx.background_executor().timer(every).await;
+                match this.update_in(cx, |shell, window, cx| {
+                    if !shell.holds_the_player_back() {
+                        shell.tick(window, cx);
+                    }
+                    shell.tick_every()
+                }) {
+                    Ok(next) => every = next,
+                    Err(_) => break,
                 }
             }
         });
@@ -623,6 +653,7 @@ impl Shell {
         self.mpris.commands();
         self.lay_out_video(window);
         self.forward.clear();
+        self.open_curtain(self.navigator.current(), seamless);
         self.navigator.open(Screen::Player);
         cx.notify();
     }
@@ -721,6 +752,7 @@ impl Shell {
             window.toggle_fullscreen();
         }
         self.release_tiles(window, cx);
+        self.close_curtain(next.is_some());
         let reports = self.stop_playback();
         self.follow_blackout(window, cx);
         self.navigator.back();
@@ -762,6 +794,15 @@ impl Shell {
         };
         let now = Instant::now();
         let ended = playback.session.update(now);
+        let shown = playback.session.first_frame_at().is_some() || playback.session.picture_shown();
+        if shown && let Some(curtain) = self.curtain.as_mut().filter(|c| c.waiting()) {
+            curtain.first_frame(now);
+            self.note_curtain("first frame");
+            cx.notify();
+        }
+        let Some(playback) = &mut self.playback else {
+            return;
+        };
         if let Some(reporting) = &mut playback.reporting {
             reporting.tick(now, &playback.session, ended);
         }
@@ -1011,12 +1052,16 @@ impl Render for Shell {
             }
         }
         let screen = self.navigator.current();
-        let back_label = self.navigator.back_label();
+        // The page the player opens over keeps its bar and its back link while it fades out.
+        let (chrome, back_label) = match self.leaving_page(screen) {
+            Some((page, label)) => (page, label),
+            None => (screen, self.navigator.back_label()),
+        };
         // The menu belongs to the pill bar: it does not wait for the bar to come back.
         if !screen.shows_pill_bar() {
             self.account_menu.close();
         }
-        let account = if screen.shows_pill_bar() {
+        let account = if chrome.shows_pill_bar() {
             self.account_view(window)
         } else {
             None
@@ -1077,8 +1122,47 @@ impl Render for Shell {
             if self.turned_forward { 32. } else { -32. },
         );
 
+        let cover = self.curtain_cover(playing, window, cx);
+        let player_shows = cover.as_ref().map_or(1., |cover| cover.player);
+        let fading_out = (chrome != screen).then(|| cover.as_ref().map_or(0., |cover| cover.page));
+        let fade_out = |element: AnyElement| match fading_out {
+            Some(level) => div()
+                .absolute()
+                .inset_0()
+                .opacity(level)
+                .child(element)
+                .into_any_element(),
+            None => element,
+        };
+        // Read by the way out above; the page drawn below says it again if it draws it.
+        self.pictures.replace(None);
         let help = screens::help::overlay(self, playing, window, cx);
         let again = self.ring_again(cx);
+        let mut bars: Vec<AnyElement> = Vec::new();
+        // A light shade over the top of a backdrop, under the bar. It comes with the page.
+        if chrome.has_backdrop() {
+            let shade = bar_fade().with_animation(
+                ("shade-turn", turns as usize),
+                Animation::new(motion::page()).with_easing(motion::ease_out),
+                |shade, t| shade.opacity(t),
+            );
+            bars.push(fade_out(shade.into_any_element()));
+        }
+        if chrome.shows_pill_bar() {
+            let bar = pill_bar(highlight, account, self.seerr.client.is_some(), window, cx);
+            bars.push(fade_out(bar.into_any_element()));
+        }
+        if let Some(label) = back_label.filter(|_| chrome.shows_back_link()) {
+            bars.push(fade_out(back_link(label, window, cx).into_any_element()));
+        }
+        // Fading out, they go under the player coming in, and answer nothing.
+        let (under_player, over_player) = match fading_out {
+            Some(_) => {
+                bars.push(div().absolute().inset_0().occlude().into_any_element());
+                (bars, Vec::new())
+            }
+            None => (Vec::new(), bars),
+        };
         let root = div()
             .id("root")
             .size_full()
@@ -1091,6 +1175,9 @@ impl Render for Shell {
             .text_color(theme::text())
             .text_size(px(14.))
             .when_some(self.font.clone(), |root, font| root.font_family(font))
+            // Under the player coming in, under the page coming back.
+            .children(cover.map(|cover| cover.element))
+            .children(under_player)
             .child(match &mut self.playback {
                 Some(playback) if playing => {
                     let now = Instant::now();
@@ -1150,7 +1237,11 @@ impl Render for Shell {
                         add: playback.playing.clone(),
                         tracks_scroll: playback.tracks_scroll.clone(),
                     };
-                    screens::player::render(session, shown, window, cx).into_any_element()
+                    div()
+                        .size_full()
+                        .opacity(player_shows)
+                        .child(screens::player::render(session, shown, window, cx))
+                        .into_any_element()
                 }
                 _ if self.starting => div().into_any_element(),
                 // A page slides in from the side it comes from, and fades in.
@@ -1192,27 +1283,7 @@ impl Render for Shell {
                 .absolute()
                 .size_full(),
             )
-            // A light shade over the top of a backdrop, under the bar. It comes with the page.
-            .when(screen.has_backdrop(), |root| {
-                root.child(bar_fade().with_animation(
-                    ("shade-turn", turns as usize),
-                    Animation::new(motion::page()).with_easing(motion::ease_out),
-                    |shade, t| shade.opacity(t),
-                ))
-            })
-            .when(screen.shows_pill_bar(), |root| {
-                root.child(pill_bar(
-                    highlight,
-                    account,
-                    self.seerr.client.is_some(),
-                    window,
-                    cx,
-                ))
-            })
-            .when_some(
-                back_label.filter(|_| screen.shows_back_link()),
-                |root, label| root.child(back_link(label, window, cx)),
-            )
+            .children(over_player)
             .children(screens::playlist::add_menu(self, window, cx))
             .children(self.notice_pill(screen, window, cx))
             .children(screens::search::palette(self, window, cx))

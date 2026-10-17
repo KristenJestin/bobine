@@ -253,7 +253,9 @@ fn hero(
     let part_of = (shell.collection_link(detail.tmdb))
         .map(|collection| super::seerr_collection::part_of(collection, window, cx));
     let title = heading(shell, &film.title, detail.logo.as_ref(), window, cx);
-    hero_frame(backdrop, height).child(
+    // The way into the player grows from it.
+    let mark = crate::curtain::mark(&shell.pictures, &film.id, backdrop.clone());
+    hero_frame(backdrop, height).child(mark).child(
         hero_text_under(title)
             .child(meta_line)
             .children(part_of.map(|link| div().flex().child(link)))

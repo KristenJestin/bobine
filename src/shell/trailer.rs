@@ -185,7 +185,7 @@ impl Shell {
     ) -> Result<(), String> {
         let options = trailer::mpv_options(&self.mpv_options, ytdl);
         let session = self.trailer_session(stream, options, playing, window)?;
-        self.begin_playback(session, None, window, cx);
+        self.begin_playback(session, None, false, window, cx);
         Ok(())
     }
 
@@ -726,7 +726,7 @@ mod tests {
                         method: PlayMethod::DirectPlay,
                     },
                 );
-                shell.begin_playback(session, Some(reporting), window, cx);
+                shell.begin_playback(session, Some(reporting), false, window, cx);
             })
             .unwrap();
         cx.run_until_parked();
