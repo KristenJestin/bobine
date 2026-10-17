@@ -743,6 +743,35 @@ mod tests {
     }
 
     #[gpui_kit::test]
+    fn the_help_closes_when_the_film_ends_under_it(cx: &mut TestAppContext) {
+        let window = signed_in(cx);
+        let player = FakePlayer::default();
+        let queued = player.queued.clone();
+        queued
+            .borrow_mut()
+            .extend([PlayerEvent::Loaded, PlayerEvent::Duration(5400.)]);
+        window
+            .update(cx, |shell, window, cx| {
+                shell.fake_player = Some(player);
+                shell.play_from_home(PlayTarget::Film(ItemId(FILM.into())), window, cx);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        cx.executor().advance_clock(super::super::PLAYER_TICK * 2);
+        let mut visual = drawn(&window, cx);
+        visual.simulate_keystrokes("?");
+        assert!(window.read_with(cx, |shell, _| shell.help_open).unwrap());
+        queued.borrow_mut().push(PlayerEvent::EndOfFile);
+        cx.executor().advance_clock(super::super::PLAYER_TICK * 2);
+        drawn(&window, cx);
+        assert_eq!(screen(&window, cx), Screen::Home);
+        assert!(
+            !window.read_with(cx, |shell, _| shell.help_open).unwrap(),
+            "the player's keys are gone with it"
+        );
+    }
+
+    #[gpui_kit::test]
     fn in_a_narrow_window_the_help_shows_whole(cx: &mut TestAppContext) {
         let window = signed_in(cx);
         let mut visual = drawn(&window, cx);

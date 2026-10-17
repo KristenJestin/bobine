@@ -1019,8 +1019,11 @@ impl Render for Shell {
                 + usize::from(screen == Screen::Settings),
         );
         if page != self.page {
-            // The ring was on a card of the page before.
+            // The ring was on a card of the page before, the help said the keys of that screen.
             self.ring = Ring::default();
+            if self.help_open {
+                self.close_help(cx);
+            }
             self.turned_forward = page.1 > self.page.1;
             self.page = page;
             self.page_turns += 1;
