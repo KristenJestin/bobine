@@ -24,7 +24,7 @@ pub struct RequestPage {
     pub kind: MediaKind,
     pub tmdb: TmdbId,
     /// Told apart from every other page ever opened, the closed ones included.
-    generation: u64,
+    pub(super) generation: u64,
     pub detail: Loadable<TitleDetail>,
     /// The server's recommendations for it.
     pub similar: Vec<Discovered>,
@@ -118,7 +118,7 @@ impl Shell {
     }
 
     /// The request page of that number, if it is still open.
-    fn request_numbered(&mut self, generation: u64) -> Option<&mut RequestPage> {
+    pub(super) fn request_numbered(&mut self, generation: u64) -> Option<&mut RequestPage> {
         self.seerr
             .requests
             .iter_mut()
@@ -334,6 +334,7 @@ mod tests {
         ASHEN_SHORE, COPPER_COAST, FakeSeerr, HARBOUR_WATCH, NORTHERN_LIGHTS, PAPER_MOONS,
     };
     use crate::navigation::NavEntry;
+    use crate::screens::REQUEST_TRAILER;
     use bobine::provider::{ItemId, ProviderError};
 
     /// A shell on Discover, then on the request page of a title.
@@ -714,6 +715,197 @@ mod tests {
                     Loadable::Failed("Seerr cannot be reached.")
                 ));
             })
+            .unwrap();
+    }
+
+    const ADDRESS: &str = "https://video.example/watch?v=abc";
+
+    /// A request page of `kind`, on a media server that is `server`, whose Seerr lists `trailer`
+    /// for every title, and `ytdlp` whether `yt-dlp` is installed.
+    fn on_request_with_trailer(
+        server: crate::fake::FakeServer,
+        kind: MediaKind,
+        tmdb: TmdbId,
+        trailer: Option<&str>,
+        ytdlp: bool,
+        cx: &mut TestAppContext,
+    ) -> WindowHandle<Shell> {
+        let seerr = FakeSeerr::default();
+        seerr.state.lock().unwrap().trailer = trailer.map(str::to_string);
+        let window = configured_on(server, &seerr, cx);
+        window
+            .update(cx, |shell, _, cx| {
+                shell.ytdlp = ytdlp;
+                shell.select(NavEntry::Discover, cx);
+                shell.open_discovered(kind, tmdb, cx);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        window
+    }
+
+    /// Each address the player was given, with whether its mpv had the `yt-dlp` hook on.
+    fn opened(window: &WindowHandle<Shell>, cx: &mut TestAppContext) -> Vec<(String, bool)> {
+        window
+            .update(cx, |shell, _, _| {
+                shell
+                    .trailers_opened
+                    .iter()
+                    .map(|(address, options)| (address.clone(), options.contains(&("ytdl", "yes"))))
+                    .collect()
+            })
+            .unwrap()
+    }
+
+    #[gpui_kit::test]
+    fn a_request_page_whose_title_lists_a_trailer_shows_the_button_and_plays_it(
+        cx: &mut TestAppContext,
+    ) {
+        let server = FakeServer::new(6, true);
+        let window = on_request_with_trailer(
+            server,
+            MediaKind::Movie,
+            NORTHERN_LIGHTS,
+            Some(ADDRESS),
+            true,
+            cx,
+        );
+        let mut visual = drawn(&window, cx);
+        assert!(visual.debug_bounds(REQUEST_TRAILER).is_some());
+        assert!(
+            visual.debug_bounds("request-button").is_some(),
+            "beside the request button"
+        );
+        click(&mut visual, REQUEST_TRAILER);
+        assert_eq!(opened(&window, cx), [(ADDRESS.to_string(), true)]);
+        assert_eq!(screen(&window, cx), Screen::Player);
+    }
+
+    #[gpui_kit::test]
+    fn a_series_request_page_plays_its_trailer_too(cx: &mut TestAppContext) {
+        let window = on_request_with_trailer(
+            FakeServer::new(6, true),
+            MediaKind::Tv,
+            COPPER_COAST,
+            Some(ADDRESS),
+            true,
+            cx,
+        );
+        let mut visual = drawn(&window, cx);
+        click(&mut visual, REQUEST_TRAILER);
+        assert_eq!(opened(&window, cx), [(ADDRESS.to_string(), true)]);
+        assert_eq!(screen(&window, cx), Screen::Player);
+    }
+
+    #[gpui_kit::test]
+    fn a_title_requested_already_still_shows_its_trailer(cx: &mut TestAppContext) {
+        let window = on_request_with_trailer(
+            FakeServer::new(6, true),
+            MediaKind::Movie,
+            PAPER_MOONS,
+            Some(ADDRESS),
+            true,
+            cx,
+        );
+        let mut visual = drawn(&window, cx);
+        assert!(visual.debug_bounds("request-button").is_none());
+        click(&mut visual, REQUEST_TRAILER);
+        assert_eq!(opened(&window, cx).len(), 1);
+    }
+
+    #[gpui_kit::test]
+    fn a_title_with_only_teasers_or_featurettes_shows_no_button(cx: &mut TestAppContext) {
+        let window = on_request_with_trailer(
+            FakeServer::new(6, true),
+            MediaKind::Movie,
+            NORTHERN_LIGHTS,
+            None,
+            true,
+            cx,
+        );
+        let mut visual = drawn(&window, cx);
+        assert!(
+            visual.debug_bounds("request-button").is_some(),
+            "the page is drawn"
+        );
+        assert!(visual.debug_bounds(REQUEST_TRAILER).is_none());
+    }
+
+    #[gpui_kit::test]
+    fn there_is_no_trailer_button_when_ytdlp_is_missing(cx: &mut TestAppContext) {
+        let window = on_request_with_trailer(
+            FakeServer::new(6, true),
+            MediaKind::Movie,
+            NORTHERN_LIGHTS,
+            Some(ADDRESS),
+            false,
+            cx,
+        );
+        let mut visual = drawn(&window, cx);
+        assert!(
+            visual.debug_bounds("request-button").is_some(),
+            "the page is drawn"
+        );
+        assert!(visual.debug_bounds(REQUEST_TRAILER).is_none());
+    }
+
+    #[gpui_kit::test]
+    fn the_trailer_reports_nothing_to_the_media_server(cx: &mut TestAppContext) {
+        let server = FakeServer::new(6, true);
+        let window = on_request_with_trailer(
+            server.clone(),
+            MediaKind::Movie,
+            NORTHERN_LIGHTS,
+            Some(ADDRESS),
+            true,
+            cx,
+        );
+        let mut visual = drawn(&window, cx);
+        click(&mut visual, REQUEST_TRAILER);
+        window
+            .update(cx, |shell, window, cx| {
+                let playback = shell.playback.as_ref().expect("the trailer plays");
+                assert!(playback.reporting.is_none(), "nothing to report to");
+                assert!(playback.fallback.is_none(), "no conversion to fall back on");
+                assert!(playback.next.is_none(), "no next episode");
+                // Long enough for any progress to be due.
+                for _ in 0..3 {
+                    shell.tick(window, cx);
+                }
+                shell.leave_player(true, window, cx);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        let state = server.state.lock().unwrap();
+        assert!(state.record.reports.is_empty());
+        assert!(
+            state.record.plays.is_empty(),
+            "no playback session was opened"
+        );
+        assert!(state.record.watched.is_empty());
+        assert!(state.record.trailer_asks.is_empty());
+    }
+
+    #[gpui_kit::test]
+    fn leaving_the_trailer_returns_to_the_request_page(cx: &mut TestAppContext) {
+        let window = on_request_with_trailer(
+            FakeServer::new(6, true),
+            MediaKind::Movie,
+            NORTHERN_LIGHTS,
+            Some(ADDRESS),
+            true,
+            cx,
+        );
+        let mut visual = drawn(&window, cx);
+        click(&mut visual, REQUEST_TRAILER);
+        window
+            .update(cx, |shell, window, cx| {
+                shell.leave_player(false, window, cx)
+            })
+            .unwrap();
+        assert_eq!(screen(&window, cx), Screen::Request);
+        window
+            .update(cx, |shell, _, _| assert!(shell.playback.is_none()))
             .unwrap();
     }
 }

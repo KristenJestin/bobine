@@ -13,7 +13,7 @@ use gpui_kit::{
 };
 
 use super::discover::{card, status_pill};
-use super::film_detail::{hero_frame, hero_text, meta_line, row};
+use super::film_detail::{hero_frame, hero_text, meta_line, row, trailer_button};
 use super::seerr_collection::part_of;
 use super::{centered, note, picture};
 use crate::discover::{self, SeasonPicker};
@@ -23,6 +23,10 @@ use crate::images;
 use crate::menu;
 use crate::shell::{Loadable, Shell};
 use crate::theme;
+use crate::trailer;
+
+/// The Trailer button of a request page: its id, which is also its selector.
+pub const REQUEST_TRAILER: &str = "request-trailer";
 
 const PHOTO: f32 = 96.;
 /// The send button at the foot of the seasons menu, and the room around it.
@@ -98,6 +102,8 @@ pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -
             )
             .children(seasons)
     });
+    let trailer = trailer::requested(detail.trailer.as_deref(), shell.ytdlp)
+        .map(|_| trailer_button(REQUEST_TRAILER, window, cx));
     let pill = discover::status_label(detail.title.availability, in_library).map(status_pill);
     let part_of = (detail.collection.clone()).map(|collection| part_of(collection, window, cx));
 
@@ -113,7 +119,14 @@ pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -
                     .text_color(rgba(0xf4f4f5d9))
                     .child(overview)
             }))
-            .children(button.map(|button| div().pt(px(6.)).flex().child(button)))
+            .children((button.is_some() || trailer.is_some()).then(|| {
+                div()
+                    .pt(px(6.))
+                    .flex()
+                    .gap(px(10.))
+                    .children(button)
+                    .children(trailer)
+            }))
             .children(error.map(|why| {
                 div()
                     .debug_selector(|| "request-error".into())

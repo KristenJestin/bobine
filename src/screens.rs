@@ -27,6 +27,8 @@ pub use card::{Card, Cards, Offer, Open, Play, Quick, open_card, play_card};
 pub use film_detail::{FILM_TRAILER, SERIES_TRAILER};
 pub use home::HeroView;
 pub use home::pill as notice_pill;
+#[cfg(test)]
+pub use request::REQUEST_TRAILER;
 pub use series_detail::up_next_card;
 
 use std::rc::Rc;

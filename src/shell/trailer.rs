@@ -14,6 +14,10 @@ impl Shell {
     /// "Trailer": plays the trailer of the page on top. A trailer file of the server is asked
     /// for off the window's thread; one hosted elsewhere goes straight to the player.
     pub fn play_trailer(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.navigator.current() == Screen::Request {
+            self.play_request_trailer(window, cx);
+            return;
+        }
         let Some(server) = self.server.clone() else {
             return;
         };
@@ -106,6 +110,32 @@ impl Shell {
         cx.notify();
     }
 
+    /// The trailer of a title the library does not hold: its page address came with the request
+    /// page, so the player starts at once.
+    fn play_request_trailer(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let ytdlp = self.ytdlp;
+        let Some(page) = self.seerr.requests.last_mut() else {
+            return;
+        };
+        let Loadable::Ready(detail) = &page.detail else {
+            return;
+        };
+        let Some(address) = trailer::requested(detail.trailer.as_deref(), ytdlp) else {
+            return;
+        };
+        let playing = Playing {
+            title: detail.title.title.clone(),
+            subtitle: Some("Trailer".into()),
+            list: None,
+            desktop: None,
+        };
+        page.error = None;
+        let origin = Origin::Request(page.generation);
+        let stream = Ok(StreamUrl::new(address));
+        self.start_trailer(origin, stream, true, None, playing, window, cx);
+        cx.notify();
+    }
+
     /// The trailer's address is known: the player starts, with no reports and no film around
     /// it. `ytdl`: the address is a page for the `yt-dlp` hook to resolve. `fallback`: the
     /// trailer hosted elsewhere, tried when this one does not play.
@@ -167,6 +197,11 @@ impl Shell {
                         .series_pages
                         .get(*depth)
                         .is_some_and(|page| &page.id == id)
+            }
+            Origin::Request(generation) => {
+                self.navigator.current() == Screen::Request
+                    && (self.seerr.requests.last())
+                        .is_some_and(|page| page.generation == *generation)
             }
             Origin::Home | Origin::Playlist(..) => false,
         }
