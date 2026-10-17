@@ -164,9 +164,6 @@ fn serve(
                 let now = &shown.state;
                 let emitter = player.signal_emitter();
                 zbus::block_on(async {
-                    if before.status != now.status {
-                        shown.playback_status_changed(emitter).await?;
-                    }
                     if before.track != now.track {
                         shown.metadata_changed(emitter).await?;
                         shown.can_play_changed(emitter).await?;
@@ -177,6 +174,10 @@ fn serve(
                     }
                     if before.can_go_next != now.can_go_next {
                         shown.can_go_next_changed(emitter).await?;
+                    }
+                    // Last: a widget that hears Playing already has the title that plays.
+                    if before.status != now.status {
+                        shown.playback_status_changed(emitter).await?;
                     }
                     zbus::Result::Ok(())
                 })?;
@@ -754,6 +755,30 @@ mod tests {
         assert_eq!(heard(&signals), [], "the position is not announced");
         dbus.seeked(600.);
         assert_eq!(heard(&signals), [("Seeked".into(), vec![])]);
+    }
+
+    #[test]
+    fn a_new_title_is_announced_before_the_status_that_plays_it() {
+        let Some(bus) = private_bus() else { return };
+        let client = client(&bus);
+        let signals = signals(&bus);
+        let mut dbus = shown(&bus, &client, &playing());
+        dbus.show(&State::default());
+        heard(&signals);
+        let mut next = playing();
+        next.track.as_mut().unwrap().item = "episode-4".into();
+        dbus.show(&next);
+        let changes = heard(&signals);
+        let at = |name: &str| {
+            changes
+                .iter()
+                .position(|(_, names)| names.iter().any(|n| n == name))
+                .unwrap_or_else(|| panic!("{name} not announced: {changes:?}"))
+        };
+        assert!(
+            at("Metadata") <= at("PlaybackStatus"),
+            "a widget must not see Playing with no track: {changes:?}"
+        );
     }
 
     #[test]
