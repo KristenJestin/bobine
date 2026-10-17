@@ -3518,6 +3518,62 @@ fn a_date_without_a_zone_is_read_as_utc() {
 }
 
 #[test]
+fn an_offset_that_crosses_midnight_and_the_month_end_is_read_in_utc() {
+    use super::dto::date_ticks;
+    const SECOND: i64 = 10_000_000;
+    assert_eq!(
+        date_ticks("2025-02-01T01:30:00+02:00"),
+        Some(1_738_366_200 * SECOND),
+        "2025-01-31T23:30:00Z"
+    );
+    assert_eq!(
+        date_ticks("2024-12-31T22:00:00-03:00"),
+        Some(1_735_693_200 * SECOND),
+        "2025-01-01T01:00:00Z"
+    );
+    assert_eq!(
+        date_ticks("2024-02-29T22:30:00-02:00"),
+        Some(1_709_253_000 * SECOND),
+        "2024-03-01T00:30:00Z, past a leap day"
+    );
+}
+
+#[test]
+fn a_leap_day_is_read_only_in_a_leap_year() {
+    use super::dto::date_ticks;
+    const SECOND: i64 = 10_000_000;
+    assert_eq!(
+        date_ticks("2024-02-29T12:00:00Z"),
+        Some(1_709_208_000 * SECOND)
+    );
+    assert_eq!(
+        date_ticks("2000-02-29T00:00:00Z"),
+        Some(951_782_400 * SECOND),
+        "a fourth century"
+    );
+    assert_eq!(date_ticks("2023-02-29T12:00:00Z"), None);
+    assert_eq!(date_ticks("1900-02-29T12:00:00Z"), None, "a century");
+}
+
+#[test]
+fn a_date_with_other_than_ascii_is_not_read() {
+    use super::dto::date_ticks;
+    for date in [
+        "２025-09-14T08:30:05Z",
+        "2025-09-14T08:30:0é",
+        "2025-09-14T08:30:05é",
+        "2025-09-14T08:30:05.é",
+        "2025-09-14T08:30:05.12é",
+        "2025-09-14T08:30:05.５Z",
+        "2025-09-14T08:30:05+0२:00",
+        "2025-09-14T08:30:05Z\u{301}",
+        "2025-09-14—08:30:05Z",
+    ] {
+        assert_eq!(date_ticks(date), None, "{date}");
+    }
+}
+
+#[test]
 fn a_malformed_date_is_not_read() {
     use super::dto::date_ticks;
     for date in [
