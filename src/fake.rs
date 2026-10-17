@@ -536,8 +536,8 @@ pub fn series() -> Vec<Series> {
 }
 
 /// What an invented viewer watched up to `now`, in seconds from 1970: a few films and series, most in the evening,
-/// a lot of them this year. Read from the played items, it holds the last play of each title
-/// only, with its play count, and no time of day.
+/// a lot of them this year. Read from the played items, as the server's adapter reads them: the
+/// last play of each title on its date, the plays before it at no known time.
 pub fn watch_history(source: HistorySource, now: i64) -> WatchHistory {
     let films = films(8);
     let series = series();
@@ -576,17 +576,26 @@ pub fn watch_history(source: HistorySource, now: i64) -> WatchHistory {
         });
     }
     if source == HistorySource::PlayedItems {
+        // The plays are the newest first: the first of each title is its last.
         let mut last: Vec<Play> = Vec::new();
+        let mut before: Vec<Play> = Vec::new();
         for play in plays {
-            match last.iter_mut().find(|kept| kept.title.id == play.title.id) {
+            if !last.iter().any(|kept| kept.title.id == play.title.id) {
+                last.push(play);
+                continue;
+            }
+            match before
+                .iter_mut()
+                .find(|kept| kept.title.id == play.title.id)
+            {
                 Some(kept) => {
                     kept.count += 1;
                     kept.seconds += play.seconds;
                 }
-                None => last.push(play),
+                None => before.push(Play { at: None, ..play }),
             }
         }
-        plays = last;
+        plays = last.into_iter().chain(before).collect();
     }
     WatchHistory { source, plays }
 }
@@ -1864,5 +1873,21 @@ mod tests {
             assert!(all[..before].iter().all(sorts_before), "{letter}");
             assert!(!all[before..].iter().any(sorts_before), "{letter}");
         }
+    }
+
+    #[test]
+    fn the_played_items_hold_one_dated_play_of_a_title_and_the_rest_undated() {
+        let history = watch_history(HistorySource::PlayedItems, 1_792_238_400);
+        let mut seen: Vec<&ItemId> = Vec::new();
+        for play in &history.plays {
+            let id = play.title.id.as_ref().unwrap();
+            let dated = play.at.is_some();
+            assert_eq!(dated, !seen.contains(&id), "{}", play.title.name);
+            if dated {
+                assert_eq!(play.count, 1, "{}", play.title.name);
+                seen.push(id);
+            }
+        }
+        assert!(history.plays.iter().any(|play| play.at.is_none()));
     }
 }
