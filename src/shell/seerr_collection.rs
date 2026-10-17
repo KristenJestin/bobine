@@ -509,6 +509,12 @@ mod tests {
             })
             .unwrap();
         cx.run_until_parked();
+        // The attempts, not the requests accepted: Seerr answers 409 to a movie asked for twice,
+        // so a second press that got through would leave no trace in the accepted ones.
+        assert_eq!(
+            seerr.attempts(),
+            [Ask::Movie(WINTER_LIGHT), Ask::Movie(WINTERS_END)]
+        );
         assert_eq!(
             seerr.requests(),
             [Ask::Movie(WINTER_LIGHT), Ask::Movie(WINTERS_END)]

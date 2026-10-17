@@ -32,7 +32,11 @@ pub const HARBOUR_WATCH: TmdbId = 7003;
 
 #[derive(Default)]
 pub struct Record {
+    /// The requests accepted.
     pub requests: Vec<Ask>,
+    /// Every request that reached the server, the ones it refused too (a movie asked for twice
+    /// is answered 409 and never lands in `requests`).
+    pub attempts: Vec<Ask>,
     pub searches: Vec<String>,
     /// The titles read, by TMDb id.
     pub titles: Vec<TmdbId>,
@@ -156,6 +160,11 @@ impl FakeSeerr {
     #[cfg(test)]
     pub fn requests(&self) -> Vec<Ask> {
         self.state().record.requests.clone()
+    }
+
+    #[cfg(test)]
+    pub fn attempts(&self) -> Vec<Ask> {
+        self.state().record.attempts.clone()
     }
 
     fn find(&self, kind: MediaKind, id: TmdbId) -> Result<Discovered, RequestError> {
@@ -350,6 +359,7 @@ impl RequestServer for FakeSeerr {
     fn request(&self, ask: &Ask) -> Result<(), RequestError> {
         self.reach()?;
         let mut state = self.state();
+        state.record.attempts.push(ask.clone());
         let id = match ask {
             Ask::Movie(id) => {
                 // Seerr answers 409 to a movie asked for twice.
