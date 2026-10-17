@@ -2,9 +2,9 @@
 
 use crate::provider::{
     AudioTrack, CastMember, CollectionCard, Episode, Feature, FeatureKind, Film, ImageKind,
-    ImageRef, ItemId, Library, LibraryKind, MediaSource, MediaSourceId, PersonHit, PersonTitles,
-    Season, Segment, SegmentKind, Series, SeriesHit, ServerInfo, SubtitleTrack, Title, Trailers,
-    Trickplay, VideoRange, VideoTrack,
+    ImageRef, ItemId, Library, LibraryKind, MediaSource, MediaSourceId, NewEpisode, PersonHit,
+    PersonTitles, Season, Segment, SegmentKind, Series, SeriesHit, ServerInfo, SubtitleTrack,
+    Title, Trailers, Trickplay, VideoRange, VideoTrack,
 };
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -17,6 +17,31 @@ pub fn duration(ticks: i64) -> Duration {
 
 pub fn ticks(position: Duration) -> i64 {
     i64::try_from(position.as_nanos() / 100).unwrap_or(i64::MAX)
+}
+
+/// Seconds since 1970 of a date as Jellyfin writes it, in UTC: `2025-09-14T08:30:05.1234567Z`.
+/// The fraction of a second is dropped.
+pub fn seconds(date: &str) -> Option<i64> {
+    let number = |range: std::ops::Range<usize>| -> Option<i64> {
+        let digits = date.get(range)?;
+        digits
+            .bytes()
+            .all(|b| b.is_ascii_digit())
+            .then(|| digits.parse().ok())?
+    };
+    let (year, month, day) = (number(0..4)?, number(5..7)?, number(8..10)?);
+    let (hour, minute, second) = (number(11..13)?, number(14..16)?, number(17..19)?);
+    if date.get(4..5) != Some("-") || date.get(10..11) != Some("T") || !date.ends_with('Z') {
+        return None;
+    }
+    // Days from the civil date (H. Hinnant's algorithm), the year starting in March.
+    let year = if month <= 2 { year - 1 } else { year };
+    let era = year.div_euclid(400);
+    let of_era = year - era * 400;
+    let of_year = (153 * ((month + 9) % 12) + 2) / 5 + day - 1;
+    let of_cycle = of_era * 365 + of_era / 4 - of_era / 100 + of_year;
+    let days = era * 146_097 + of_cycle - 719_468;
+    Some(days * 86_400 + hour * 3_600 + minute * 60 + second)
 }
 
 #[derive(Deserialize)]
@@ -153,6 +178,8 @@ pub struct Item {
     pub media_sources: Vec<MediaSourceInfo>,
     /// A series' end, `2024-05-12T00:00:00.0000000Z`.
     pub end_date: Option<String>,
+    /// When the server added the item, `2025-09-14T08:30:05.1234567Z`, when asked for.
+    pub date_created: Option<String>,
     /// A season's or an episode's number.
     pub index_number: Option<u32>,
     /// An episode's season number.
@@ -419,6 +446,18 @@ impl Item {
                 .map(MediaSourceInfo::into_source)
                 .collect(),
         }
+    }
+
+    /// An episode as the latest added list holds it, with its series' poster. None without
+    /// the date it was added, which nothing can be told from.
+    pub fn new_episode(self) -> Option<NewEpisode> {
+        let added = seconds(self.date_created.as_deref()?)?;
+        let poster = self.list_poster();
+        Some(NewEpisode {
+            episode: self.episode(),
+            added,
+            poster,
+        })
     }
 
     /// What a row of the Home lists: an episode, a series (or the season of one), else a film.

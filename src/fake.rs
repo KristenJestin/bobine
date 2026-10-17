@@ -11,7 +11,7 @@ use bobine::provider::{
     AudioTrack, CastMember, Collection, CollectionCard, CollectionDetail, Connector, EntryId,
     Episode, ExternalSubtitle, Favourite, Feature, FeatureKind, Film, FilmDetail, FilmQuery,
     FilmSort, FilterChoices, ImageKind, ImageRef, ItemId, Library, LibraryKind, MediaServer,
-    MediaSource, MediaSourceId, Page, PersonHit, PersonTitles, PlaySessionId, Playback,
+    MediaSource, MediaSourceId, NewEpisode, Page, PersonHit, PersonTitles, PlaySessionId, Playback,
     PlaybackReport, Playlist, PlaylistEntry, ProviderError, SearchResults, Season, Segment, Series,
     SeriesDetail, SeriesHit, ServerInfo, StreamUrl, SubtitleTrack, Title, TmdbIndex, Token,
     TokenStore, Trailers, TranscodeRequest, Trickplay, VideoRange, VideoTrack,
@@ -125,6 +125,8 @@ pub struct Record {
     pub trailer_asks: Vec<ItemId>,
     /// How many times the library was indexed by TMDb id.
     pub tmdb_indexes: u32,
+    /// How many times the episodes added lately were asked.
+    pub new_episode_asks: u32,
 }
 
 /// A change asked of a playlist.
@@ -245,6 +247,8 @@ pub struct State {
     pub tmdb_collection: Option<u64>,
     /// `tmdb_index` fails with this while it is set.
     pub tmdb_index_error: Option<ProviderError>,
+    /// The episodes the server added, by id, and when (seconds since 1970).
+    pub added: Vec<(ItemId, i64)>,
 }
 
 /// The TMDb id `tmdb` gives `id`.
@@ -687,6 +691,7 @@ impl FakeServer {
                 trailers: Trailers::default(),
                 trailer_stream: "file:///nowhere-trailer.mp4".into(),
                 trailer_error: None,
+                added: Vec::new(),
             })),
             info: ServerInfo {
                 id: "server-1".into(),
@@ -1258,6 +1263,28 @@ impl MediaServer for FakeServer {
             next.extend(self.next_up(series)?);
         }
         Ok(next)
+    }
+
+    /// Like Jellyfin asked for unplayed ones: the newest first, the played left out.
+    fn new_episodes(&self, limit: u32) -> Result<Vec<NewEpisode>, ProviderError> {
+        let mut state = self.state();
+        state.record.new_episode_asks += 1;
+        let mut found: Vec<NewEpisode> = state
+            .added
+            .iter()
+            .filter_map(|(id, added)| {
+                let episode = state.episodes.iter().find(|e| &e.item.id == id)?;
+                Some(NewEpisode {
+                    poster: image(&episode.series.0, ImageKind::Primary),
+                    episode: episode.clone(),
+                    added: *added,
+                })
+            })
+            .filter(|new| !new.episode.item.watched)
+            .collect();
+        found.sort_by_key(|new| std::cmp::Reverse(new.added));
+        found.truncate(limit as usize);
+        Ok(found)
     }
 
     fn latest(&self, library: &ItemId, limit: u32) -> Result<Vec<Title>, ProviderError> {

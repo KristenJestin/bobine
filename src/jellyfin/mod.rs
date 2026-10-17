@@ -12,10 +12,10 @@ mod tests;
 use crate::provider::{
     Collection, CollectionCard, CollectionDetail, Connector, EntryId, Episode, ExternalSubtitle,
     Favourite, Feature, Film, FilmDetail, FilmQuery, FilmSort, FilterChoices, ImageKind, ImageRef,
-    ItemId, Library, MediaServer, MediaSourceId, Page, PersonTitles, PlayMethod, PlaySessionId,
-    Playback, PlaybackReport, Playlist, PlaylistEntry, ProviderError, SearchResults, Season,
-    Segment, Series, SeriesDetail, ServerInfo, StreamUrl, Title, TmdbIndex, Token, TokenStore,
-    TranscodeRequest, Trickplay,
+    ItemId, Library, MediaServer, MediaSourceId, NewEpisode, Page, PersonTitles, PlayMethod,
+    PlaySessionId, Playback, PlaybackReport, Playlist, PlaylistEntry, ProviderError, SearchResults,
+    Season, Segment, Series, SeriesDetail, ServerInfo, StreamUrl, Title, TmdbIndex, Token,
+    TokenStore, TranscodeRequest, Trickplay,
 };
 use account::{AccountFile, Login};
 use dto::{
@@ -890,6 +890,27 @@ impl MediaServer for Jellyfin {
             }
         }
         Ok(titles)
+    }
+
+    /// Ungrouped, so each episode comes with its own date, whether its series gained one or
+    /// ten. Played ones are left out by the server.
+    fn new_episodes(&self, limit: u32) -> Result<Vec<NewEpisode>, ProviderError> {
+        let found: Vec<Item> = self.http.get(
+            "new episodes",
+            "/Items/Latest",
+            &[
+                self.user(),
+                ("includeItemTypes", "Episode".into()),
+                ("groupItems", "false".into()),
+                ("isPlayed", "false".into()),
+                ("enableUserData", "true".into()),
+                ("limit", limit.to_string()),
+                ("imageTypeLimit", "1".into()),
+                ("enableImageTypes", "Primary".into()),
+                ("fields", "DateCreated,SeriesPrimaryImage".into()),
+            ],
+        )?;
+        Ok(found.into_iter().filter_map(Item::new_episode).collect())
     }
 
     /// The simplest honest choice: the newest titles, films and series, that the user has not

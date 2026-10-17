@@ -1120,6 +1120,52 @@ fn the_latest_asks_for_the_series_picture_of_a_lone_new_episode() {
 }
 
 #[test]
+fn the_new_episodes_come_one_by_one_with_when_they_were_added() {
+    let s = Setup::new();
+    let found = s.signed_in().new_episodes(20).unwrap();
+    let asked = s.fake.last("GET", "/Items/Latest");
+    assert_eq!(asked.param("ParentId"), None, "every library");
+    assert_eq!(asked.param("IncludeItemTypes"), Some("Episode"));
+    assert_eq!(
+        asked.param("GroupItems"),
+        Some("false"),
+        "not grouped by series"
+    );
+    assert_eq!(asked.param("EnableUserData"), Some("true"));
+    assert_eq!(asked.param("IsPlayed"), Some("false"));
+    assert_eq!(asked.param("Limit"), Some("20"));
+    assert_eq!(
+        asked.param("Fields"),
+        Some("DateCreated,SeriesPrimaryImage")
+    );
+    assert_eq!(found.len(), 2);
+    let bell = &found[0];
+    assert_eq!(bell.episode.item.title, "Bell Tower");
+    assert_eq!(bell.episode.series, ItemId(SERIES.into()));
+    assert_eq!(bell.episode.series_title, "Tidewater");
+    assert_eq!(bell.episode.season, ItemId(SEASON.into()));
+    assert_eq!(
+        (bell.episode.season_number, bell.episode.number),
+        (Some(2), Some(2))
+    );
+    assert!(!bell.episode.item.watched);
+    assert_eq!(bell.added, 1_757_838_605, "2025-09-14T08:30:05Z");
+    assert_eq!(
+        bell.poster,
+        Some(ImageRef {
+            item: ItemId(SERIES.into()),
+            kind: ImageKind::Primary,
+            tag: "poster-tw".into(),
+        }),
+        "the series' poster"
+    );
+    let table = &found[1];
+    assert!(table.episode.item.watched);
+    assert_eq!(table.added, 1_709_251_199, "2024-02-29T23:59:59Z");
+    assert_eq!(table.poster, None);
+}
+
+#[test]
 fn a_series_that_gained_one_episode_is_listed_as_the_series() {
     let s = Setup::new();
     let latest = s
