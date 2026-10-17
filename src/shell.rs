@@ -3,6 +3,7 @@
 mod desktop;
 mod discover;
 mod home;
+mod keys;
 mod lists;
 mod pages;
 mod palette;
@@ -34,8 +35,8 @@ use std::time::{Duration, Instant};
 use gpui_kit::prelude::*;
 use gpui_kit::{
     Animation, AnimationExt, App, Context, DispatchPhase, Entity, FocusHandle, Focusable,
-    IntoElement, KeyDownEvent, MouseButton, MouseDownEvent, Pixels, Render, SharedString, Size,
-    Subscription, Task, Window, canvas, div, px,
+    IntoElement, MouseButton, MouseDownEvent, Pixels, Render, SharedString, Size, Subscription,
+    Task, Window, canvas, div, px,
 };
 
 use bobine::provider::{
@@ -49,6 +50,7 @@ use crate::images::Images;
 use crate::menu::Menus;
 use crate::motion::{self, Fade, Presence};
 use crate::navigation::{NavEntry, Navigator, Screen};
+use crate::player::controls::KeyAction;
 use crate::player::libmpv::Libmpv;
 use crate::player::mpv::MpvPlayer;
 use crate::player::segments::{Button, Label, offered};
@@ -56,8 +58,8 @@ use crate::player::session::{Session, WindowRequest};
 use crate::player::{Media, Player};
 use crate::poster_actions::Marks;
 use crate::reports::{self, Reporting};
+use crate::ring::Ring;
 use crate::screens;
-use crate::search;
 use crate::series_page::{self, Next, UpNext};
 use crate::theme;
 use crate::video::Rect;
@@ -220,6 +222,15 @@ pub struct Shell {
     pub images: Images,
     /// The cards drawn that answer the pointer, each a view of its own.
     pub cards: screens::Cards,
+    /// The keyboard's focus ring over the cards.
+    pub ring: Ring,
+    /// The rows and the pages drawn that scroll: the ring scrolls them to the card it is on.
+    pub scrolls: Vec<gpui_kit::ScrollHandle>,
+    /// The help over the screen, `?`.
+    help_open: bool,
+    help_fade: Fade,
+    /// The volume and the mute the last film was left at, carried to the next one.
+    volume: (f64, bool),
     /// What the buttons of the posters changed that their lists do not say yet.
     pub marks: Marks,
     /// What the window says over the page for a moment (a poster's button the server refused),
@@ -398,6 +409,11 @@ impl Shell {
             nav_pills: [Fade::new(motion::quick()); NavEntry::ALL.len()],
             images: Images::default(),
             cards: Default::default(),
+            ring: Ring::default(),
+            scrolls: Vec::new(),
+            help_open: false,
+            help_fade: Fade::new(motion::quick()),
+            volume: (100., false),
             marks: Marks::default(),
             notice: None,
             notice_fade: Presence::new(motion::quick()),
@@ -534,6 +550,8 @@ impl Shell {
             shell.lay_out_video(window);
             cx.notify();
         });
+        let mut session = session;
+        session.carry_volume(self.volume.0, self.volume.1);
         self.playback = Some(Playback {
             session,
             controls_fade: Fade::new(motion::quick()),
@@ -579,6 +597,7 @@ impl Shell {
                 stopping,
                 ..
             } = self.playback.take()?;
+            self.volume = session.volume();
             let reports = reports::last_reports(reporting, stopping, &session);
             drop(session);
             reports
@@ -837,19 +856,11 @@ impl Shell {
         }
     }
 
-    fn player_key(
-        &mut self,
-        key: &str,
-        with_modifier: bool,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn player_key(&mut self, action: KeyAction, window: &mut Window, cx: &mut Context<Self>) {
         let Some(playback) = &mut self.playback else {
             return;
         };
-        let request = playback
-            .session
-            .key(key, with_modifier, window.is_fullscreen());
+        let request = playback.session.key(action, window.is_fullscreen());
         self.player_request(request, window, cx);
         cx.notify();
     }
@@ -881,6 +892,16 @@ impl Shell {
                 self.tick(window, cx);
                 self.play_up_next_now(window, cx);
             }
+            Some(WindowRequest::PlayNext) => {
+                let next = self
+                    .playback
+                    .as_mut()
+                    .and_then(|playback| playback.next.take());
+                if let Some(next) = next {
+                    self.leave_to(Some(next), window, cx);
+                    self.play_up_next_now(window, cx);
+                }
+            }
             Some(WindowRequest::Quality(quality)) => {
                 let Some(playback) = &mut self.playback else {
                     return;
@@ -906,6 +927,7 @@ impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.images.new_frame();
         self.cards.new_frame();
+        self.scrolls.clear();
         if window.viewport_size() != self.viewport {
             self.viewport = window.viewport_size();
             for page in &mut self.details {
@@ -997,6 +1019,11 @@ impl Render for Shell {
                 + usize::from(screen == Screen::Settings),
         );
         if page != self.page {
+            // The ring was on a card of the page before, the help said the keys of that screen.
+            self.ring = Ring::default();
+            if self.help_open {
+                self.close_help(cx);
+            }
             self.turned_forward = page.1 > self.page.1;
             self.page = page;
             self.page_turns += 1;
@@ -1006,33 +1033,15 @@ impl Render for Shell {
             if self.turned_forward { 32. } else { -32. },
         );
 
-        div()
+        let help = screens::help::overlay(self, playing, window, cx);
+        let again = self.ring_again(cx);
+        let root = div()
+            .id("root")
             .size_full()
             .relative()
             .track_focus(&self.focus)
-            .on_key_down(cx.listener(|app, event: &KeyDownEvent, window, cx| {
-                let key = event.keystroke.key.as_str();
-                let held = &event.keystroke.modifiers;
-                let others = held.alt || held.shift || held.platform || held.function;
-                if search::is_shortcut(key, held.control, others) && app.open_search(window, cx) {
-                    return;
-                }
-                if app.search_is_open() {
-                    app.search_key(key, window, cx);
-                    return;
-                }
-                if app.playlist_menu_is_open() {
-                    app.playlist_menu_key(key, cx);
-                    return;
-                }
-                if app.navigator.current() == Screen::Player && app.playback.is_some() {
-                    let held = &event.keystroke.modifiers;
-                    let with_modifier = held.control || held.alt || held.platform || held.function;
-                    app.player_key(key, with_modifier, window, cx);
-                } else if key == "escape" {
-                    app.escape(cx);
-                }
-            }))
+            .key_context(self.key_context(screen));
+        Self::answer_keys(root, cx)
             // The player leaves the root transparent: the video is under the window.
             .when(!playing, |root| root.bg(theme::background()))
             .text_color(theme::text())
@@ -1163,6 +1172,8 @@ impl Render for Shell {
             .children(screens::playlist::add_menu(self, window, cx))
             .children(self.notice_pill(screen, window, cx))
             .children(screens::search::palette(self, window, cx))
+            .children(help)
+            .children(again)
     }
 }
 

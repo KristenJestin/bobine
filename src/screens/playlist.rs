@@ -58,6 +58,7 @@ pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -
         .when(busy, |button| button.opacity(0.6))
         .on_click(cx.listener(|shell, _, window, cx| shell.play_all(window, cx)))
     });
+    shell.scrolls_list(&scroll);
     let list = uniform_list(
         "playlist",
         len,

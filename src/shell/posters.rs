@@ -173,6 +173,7 @@ mod tests {
         change(&mut server.state.lock().unwrap());
         let connector: Arc<dyn Connector> = Arc::new(server.clone());
         let window = cx.add_window(|_, cx| {
+            crate::keys::bind(cx);
             Shell::new(
                 None,
                 Box::new(move || Ok(connector)),

@@ -151,6 +151,7 @@ mod tests {
         let connector: Arc<dyn Connector> = Arc::new(FakeServer::new(6, true));
         let secrets: Arc<dyn TokenStore> = keyring.clone();
         let window = cx.add_window(|_, cx| {
+            crate::keys::bind(cx);
             Shell::new(None, Box::new(move || Ok(connector)), path, secrets, cx)
         });
         cx.run_until_parked();
@@ -376,6 +377,7 @@ mod tests {
         let connector: Arc<dyn Connector> = Arc::new(server.clone());
         let secrets: Arc<dyn TokenStore> = keyring.clone();
         let window = cx.add_window(|_, cx| {
+            crate::keys::bind(cx);
             Shell::new(None, Box::new(move || Ok(connector)), None, secrets, cx)
         });
         cx.run_until_parked();

@@ -5,6 +5,7 @@ mod card;
 mod collection_detail;
 mod discover;
 mod film_detail;
+pub mod help;
 mod home;
 mod home_list;
 mod library;
@@ -19,7 +20,7 @@ mod series_detail;
 mod settings;
 pub mod skip;
 
-pub use card::{Card, Cards, Offer, Open, Play, Quick};
+pub use card::{Card, Cards, Offer, Open, Play, Quick, open_card, play_card};
 #[cfg(test)]
 pub use film_detail::{FILM_TRAILER, SERIES_TRAILER};
 pub use home::HeroView;
