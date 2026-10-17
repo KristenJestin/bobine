@@ -3694,7 +3694,8 @@ fn an_episode_counts_for_its_own_series_when_two_share_a_name() {
         Some(format!("{EPISODE},{OTHER_TIDEWATER_EPISODE}").as_str()),
         "each episode once"
     );
-    assert_eq!(asked.param("Fields"), Some("SeriesId"));
+    // The series comes with every episode: `SeriesId` is no field to ask for.
+    assert_eq!(asked.param("Fields"), None);
     assert_eq!(asked.param("userId"), Some(USER_ID));
 }
 

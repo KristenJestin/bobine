@@ -1352,10 +1352,7 @@ impl Jellyfin {
         for chunk in episodes.chunks(EPISODES_ASKED) {
             // A chunk that fails is unknown, not fatal: its episodes are read by name, and the
             // plugin's plays are worth more than a series matched by id.
-            let Ok(found) = self.items(
-                "the episodes played",
-                &[("Ids", chunk.join(",")), ("Fields", "SeriesId".into())],
-            ) else {
+            let Ok(found) = self.items("the episodes played", &[("Ids", chunk.join(","))]) else {
                 continue;
             };
             for item in found.items {
