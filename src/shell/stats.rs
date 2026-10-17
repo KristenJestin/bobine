@@ -334,4 +334,31 @@ mod tests {
         visual.run_until_parked();
         assert_eq!(screen(&window, cx), Screen::FilmDetail);
     }
+
+    #[gpui_kit::test]
+    fn a_history_still_loading_when_another_user_signs_in_is_not_theirs(cx: &mut TestAppContext) {
+        let history = fake::watch_history(HistorySource::PlaybackReporting, NOW);
+        let (_first, window) = start(history, cx);
+        let second = FakeServer::new(6, true);
+        second.state.lock().unwrap().history = fake::watch_history(HistorySource::PlayedItems, NOW);
+        // The first user's history is asked, and the second user is in before it comes:
+        // nothing is parked in between, so the first answer lands in the second session.
+        window
+            .update(cx, |shell, window, cx| {
+                shell.stats = None;
+                shell.load_stats(cx);
+                shell.sign_out(window, cx);
+                shell.server = Some(Arc::new(second.clone()));
+                shell.login = None;
+            })
+            .unwrap();
+        cx.run_until_parked();
+        assert_eq!(
+            source(&window, cx),
+            None,
+            "the first user's stats are dropped"
+        );
+        reload(&window, cx);
+        assert_eq!(source(&window, cx), Some(HistorySource::PlayedItems));
+    }
 }
