@@ -412,6 +412,53 @@ mod tests {
     }
 
     #[gpui_kit::test]
+    fn the_picture_of_the_films_page_grows_into_the_player_and_back(cx: &mut TestAppContext) {
+        let (_server, window) = signed_in(cx);
+        window
+            .update(cx, |shell, _, cx| shell.open_film(ItemId(FILM.into()), cx))
+            .unwrap();
+        cx.run_until_parked();
+        // The page is drawn, its backdrop asked, loaded, and drawn again.
+        let visual = gpui_kit::VisualTestContext::from_window(window.into(), cx);
+        for _ in 0..3 {
+            visual.run_until_parked();
+        }
+        let drawn = window
+            .read_with(cx, |shell, _| shell.pictures.borrow().is_some())
+            .unwrap();
+        assert!(drawn, "the page drew its backdrop, in sight");
+        let player = FakePlayer::default();
+        player
+            .queued
+            .borrow_mut()
+            .extend([PlayerEvent::Loaded, PlayerEvent::FirstFrame]);
+        window
+            .update(cx, |shell, window, cx| {
+                shell.fake_player = Some(player);
+                shell.play_film(From::Resume, window, cx);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        let grows = window
+            .read_with(cx, |shell, _| {
+                shell.curtain.as_ref().is_some_and(|c| c.picture.is_some())
+            })
+            .unwrap();
+        assert!(grows, "the way in grows from the backdrop");
+        tick(cx);
+        window
+            .update(cx, |shell, window, cx| shell.player_back(window, cx))
+            .unwrap();
+        assert_eq!(way(&window, cx), Some(Way::Closing));
+        let shrinks = window
+            .read_with(cx, |shell, _| {
+                shell.curtain.as_ref().is_some_and(|c| c.picture.is_some())
+            })
+            .unwrap();
+        assert!(shrinks, "the way out goes back to it");
+    }
+
+    #[gpui_kit::test]
     fn leaving_the_player_returns_to_the_page_with_the_reverse_transition(cx: &mut TestAppContext) {
         let (_server, window) = signed_in(cx);
         let player = FakePlayer::default();
