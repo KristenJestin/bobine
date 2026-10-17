@@ -505,27 +505,28 @@ impl Draw<'_> {
         }
     }
 
-    /// A bar for each title under the header, in line with its text: the one shown fills as its
-    /// time runs, a click on one shows its title.
+    /// A mark for each title under the header, in line with its text: a dot, and for the title
+    /// shown a pill that fills as its time runs. A click on one shows its title.
     fn marks(&self, count: usize, window: &mut Window, cx: &mut Context<HeroView>) -> Div {
-        let (current, progress) = (self.frame.current, self.frame.progress);
-        let (width, thickness) = hero::MARK;
+        let (current, progress, blend) =
+            (self.frame.current, self.frame.progress, self.frame.blend);
         let shades = theme::Shades {
-            rest: rgba(0xffffff26),
-            hover: rgba(0xffffff4d),
-            press: rgba(0xffffff66),
+            rest: rgba(0xffffff40),
+            hover: rgba(0xffffff80),
+            press: rgba(0xffffffa6),
         };
         div()
             .absolute()
-            .left(px(HERO_INSET))
-            .bottom(px(36.))
+            .left(px(HERO_INSET - MARK_PAD))
+            .bottom(px(30.))
             .flex()
-            .gap(px(8.))
+            .items_center()
             .children((0..count).map(|index| {
-                let track = theme::eased(("hero-track", index), shades, window, cx)
+                let width = hero::mark_width(index, current, blend);
+                let mark = theme::eased(("hero-track", index), shades, window, cx)
                     .debug_selector(move || format!("hero-mark {index}"))
                     .w(px(width))
-                    .h(px(thickness))
+                    .h(px(hero::DOT))
                     .rounded_full()
                     .overflow_hidden()
                     .children((index == current).then(|| {
@@ -533,27 +534,30 @@ impl Draw<'_> {
                             .h_full()
                             .w(relative(progress))
                             .rounded_full()
-                            .bg(rgba(0xffffffb3))
+                            .bg(theme::accent())
                     }));
                 let target = self.target.clone();
-                // The bar is thin, its click is not.
+                // The mark is small, its click is not.
                 div()
                     .id(("hero-mark", index))
                     .flex_none()
-                    .w(px(width))
-                    .h(px(22.))
+                    .px(px(MARK_PAD))
+                    .h(px(28.))
                     .flex()
-                    .items_end()
+                    .items_center()
                     .cursor_pointer()
                     .on_click(move |_, _, cx| {
                         target
                             .update(cx, |shell, cx| shell.jump_hero(index, cx))
                             .ok();
                     })
-                    .child(track)
+                    .child(mark)
             }))
     }
 }
+
+/// Around each mark of the header, part of its click.
+const MARK_PAD: f32 = 5.;
 
 fn title_text(title: String) -> Div {
     div()

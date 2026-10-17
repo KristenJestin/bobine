@@ -817,6 +817,92 @@ mod tests {
         assert_eq!(shell_after - shell_before, 0, "the shell was built again");
     }
 
+    /// The Home of a fake server whose header takes turns, signed in and drawn.
+    fn home_with_a_header(
+        cx: &mut gpui_kit::TestAppContext,
+    ) -> (gpui_kit::WindowHandle<Shell>, gpui_kit::VisualTestContext) {
+        let server: Arc<dyn Connector> = Arc::new(FakeServer::new(6, true));
+        let window = cx.add_window(|_, cx| {
+            crate::keys::bind(cx);
+            Shell::new(
+                None,
+                Box::new(move || Ok(server)),
+                None,
+                Arc::new(crate::fake::MemoryKeyring::default()),
+                cx,
+            )
+        });
+        cx.run_until_parked();
+        let visual = gpui_kit::VisualTestContext::from_window(window.into(), cx);
+        visual.run_until_parked();
+        (window, visual)
+    }
+
+    fn mark(
+        visual: &mut gpui_kit::VisualTestContext,
+        at: usize,
+    ) -> gpui_kit::Bounds<gpui_kit::Pixels> {
+        visual
+            .debug_bounds(Box::leak(format!("hero-mark {at}").into_boxed_str()))
+            .unwrap_or_else(|| panic!("the mark of title {at} was not drawn"))
+    }
+
+    /// The mark of the title shown is a pill several times as long as the others, which are
+    /// dots large enough to be seen and clicked.
+    #[gpui_kit::test]
+    fn the_current_hero_page_is_obvious_at_a_glance(cx: &mut gpui_kit::TestAppContext) {
+        let (_window, mut visual) = home_with_a_header(cx);
+        let (current, other) = (mark(&mut visual, 0), mark(&mut visual, 1));
+        assert!(
+            current.size.width >= other.size.width * 3.,
+            "the pill is {:?} long, a dot {:?}",
+            current.size.width,
+            other.size.width
+        );
+        assert!(
+            other.size.height >= gpui_kit::px(6.) && other.size.width >= gpui_kit::px(6.),
+            "a dot of {:?} is too small to see",
+            other.size
+        );
+    }
+
+    /// When the header turns, the pill shrinks into a dot and the next dot grows into the pill:
+    /// halfway through, both are between the two.
+    #[gpui_kit::test]
+    fn the_hero_indicator_animates_when_it_turns(cx: &mut gpui_kit::TestAppContext) {
+        let (window, mut visual) = home_with_a_header(cx);
+        let (pill, dot) = (
+            mark(&mut visual, 0).size.width,
+            mark(&mut visual, 1).size.width,
+        );
+        let current = |visual: &mut gpui_kit::VisualTestContext| {
+            window
+                .read_with(visual, |shell, _| shell.home.carousel.current())
+                .unwrap()
+        };
+        while current(&mut visual) == 0 {
+            visual.executor().advance_clock(HERO_TICK);
+            visual.run_until_parked();
+        }
+        let half = crate::motion::crossfade() / 2;
+        let mut waited = Duration::ZERO;
+        while waited < half {
+            visual.executor().advance_clock(HERO_TICK);
+            visual.run_until_parked();
+            waited += HERO_TICK;
+        }
+        let (leaving, arriving) = (
+            mark(&mut visual, 0).size.width,
+            mark(&mut visual, 1).size.width,
+        );
+        for (which, width) in [("leaving", leaving), ("arriving", arriving)] {
+            assert!(
+                width > dot && width < pill,
+                "the {which} mark is {width:?} long halfway through, not between {dot:?} and {pill:?}"
+            );
+        }
+    }
+
     /// A card of a new season opens its series on that season, not on the one to play next.
     #[gpui_kit::test]
     fn a_card_of_a_new_season_opens_its_series_on_that_season(cx: &mut gpui_kit::TestAppContext) {
