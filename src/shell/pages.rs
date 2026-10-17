@@ -1521,6 +1521,9 @@ impl Shell {
         error: Option<&'static str>,
         cx: &mut Context<Self>,
     ) {
+        if error.is_some() {
+            self.forget_seamless();
+        }
         // The header and the posters play from any page: the window says what went wrong where
         // it is, for a moment, in the pill of its other messages.
         let (busy, shown) = match origin {
@@ -1584,6 +1587,7 @@ impl Shell {
         };
         self.tried(&origin, None, cx);
         let desktop = playing.desktop.clone();
+        let item = playing.list.clone();
         // A test plays on a fake player, through the rest of this path: what the end offers, and
         // what the server is told, which the fake server records.
         #[cfg(test)]
@@ -1611,6 +1615,7 @@ impl Shell {
                 )
             });
             self.begin_playback(session, reporting, window, cx);
+            self.grow_from(item.as_ref(), window);
             if let Some(playback) = &mut self.playback {
                 playback.playing = Some(opened.film.clone());
             }
@@ -1653,6 +1658,7 @@ impl Shell {
         let list = playing.list.clone();
         match self.play(mpv, media, playing, Some(reporting), window, cx) {
             Ok(()) => {
+                self.grow_from(item.as_ref(), window);
                 self.arm_playback(fallback, window, cx);
                 if let Some(playback) = &mut self.playback {
                     playback.playing = Some(opened.film.clone());
