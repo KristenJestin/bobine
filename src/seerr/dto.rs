@@ -110,9 +110,12 @@ fn time_left(text: &str) -> Option<Duration> {
     if parts.next().is_some() || minutes > 59 || seconds > 59 {
         return None;
     }
-    Some(Duration::from_secs(
-        days * 86_400 + hours * 3600 + minutes * 60 + seconds,
-    ))
+    // Digits go through `u64`: a text past its range is no time, not a panic.
+    let seconds = days
+        .checked_mul(86_400)?
+        .checked_add(hours.checked_mul(3600)?)?
+        .checked_add(minutes * 60 + seconds)?;
+    Some(Duration::from_secs(seconds))
 }
 
 impl DownloadDto {

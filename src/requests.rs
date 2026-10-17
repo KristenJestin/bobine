@@ -93,7 +93,17 @@ pub fn progress(downloads: &[Download]) -> Option<Progress> {
 /// How many episodes the queue holds: the distinct `(season, episode)` pairs, so that one in HD
 /// and in 4K is one. When an entry does not say its episode, the longer of the HD and 4K lists.
 fn entries(downloads: &[Download]) -> u32 {
-    downloads.len() as u32
+    if let Some(mut episodes) = downloads
+        .iter()
+        .map(|d| d.episode)
+        .collect::<Option<Vec<_>>>()
+    {
+        episodes.sort_unstable();
+        episodes.dedup();
+        return episodes.len() as u32;
+    }
+    let ultra = downloads.iter().filter(|d| d.ultra_hd).count();
+    ultra.max(downloads.len() - ultra) as u32
 }
 
 /// A poster, a backdrop or a photo on TMDb, by its path there (`/abc.jpg`).
