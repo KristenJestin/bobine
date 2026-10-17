@@ -11,11 +11,11 @@ use bobine::provider::{
     AudioTrack, CastMember, Collection, CollectionCard, CollectionDetail, Connector, EntryId,
     Episode, ExternalSubtitle, Favourite, Feature, FeatureKind, Film, FilmDetail, FilmQuery,
     FilmSort, FilterChoices, HistorySource, ImageKind, ImageRef, ItemId, Library, LibraryKind,
-    MediaServer, MediaSource, MediaSourceId, Page, PersonHit, PersonTitles, PlaySessionId,
-    Playback, PlaybackReport, Playlist, PlaylistEntry, ProviderError, SearchResults, Season,
-    Segment, Series, SeriesDetail, SeriesHit, ServerInfo, StreamUrl, SubtitleTrack, Title,
+    LocalTime, MediaServer, MediaSource, MediaSourceId, Page, PersonHit, PersonTitles, Play,
+    PlaySessionId, Playback, PlaybackReport, Playlist, PlaylistEntry, ProviderError, SearchResults,
+    Season, Segment, Series, SeriesDetail, SeriesHit, ServerInfo, StreamUrl, SubtitleTrack, Title,
     TmdbIndex, Token, TokenStore, Trailers, TranscodeRequest, Trickplay, VideoRange, VideoTrack,
-    WatchHistory,
+    WatchHistory, Watched, WatchedKind,
 };
 
 pub const USER: &str = "camille";
@@ -126,6 +126,8 @@ pub struct Record {
     pub trailer_asks: Vec<ItemId>,
     /// How many times the library was indexed by TMDb id.
     pub tmdb_indexes: u32,
+    /// How many times the watch history was read.
+    pub histories: u32,
 }
 
 /// A change asked of a playlist.
@@ -246,6 +248,10 @@ pub struct State {
     pub tmdb_collection: Option<u64>,
     /// `tmdb_index` fails with this while it is set.
     pub tmdb_index_error: Option<ProviderError>,
+    /// What the user watched: nothing, unless a test or the harness says otherwise.
+    pub history: WatchHistory,
+    /// `watch_history` fails with this while it is set.
+    pub history_error: Option<ProviderError>,
 }
 
 /// The TMDb id `tmdb` gives `id`.
@@ -529,6 +535,62 @@ pub fn series() -> Vec<Series> {
         .collect()
 }
 
+/// What an invented viewer watched up to `now`, in seconds from 1970: a few films and series, most in the evening,
+/// a lot of them this year. Read from the played items, it holds the last play of each title
+/// only, with its play count, and no time of day.
+pub fn watch_history(source: HistorySource, now: i64) -> WatchHistory {
+    let films = films(8);
+    let series = series();
+    let watched = |id: &ItemId, name: &str, kind, poster: &Option<ImageRef>| Watched {
+        id: Some(id.clone()),
+        name: name.to_string(),
+        kind,
+        poster: poster.clone(),
+        genres: vec![genre_of(id).to_string()],
+    };
+    let mut plays = Vec::new();
+    for n in 0..120u32 {
+        let (title, minutes) = if n % 3 == 0 {
+            let film = &films[(n as usize * 5) % films.len()];
+            let minutes = film.runtime.map_or(100, |runtime| runtime.as_secs() / 60);
+            let title = watched(&film.id, &film.title, WatchedKind::Movie, &film.poster);
+            (title, minutes)
+        } else {
+            let one = &series[(n as usize * 7) % series.len().min(5)];
+            let title = watched(&one.id, &one.title, WatchedKind::Series, &one.poster);
+            (title, 45)
+        };
+        // Back from now, two or three days at a time, in the evening mostly.
+        let back = i64::from(n) * 5 / 2;
+        let hour = [21, 20, 22, 19, 23, 14, 21, 10][n as usize % 8];
+        let at = LocalTime {
+            hour,
+            minute: (n * 7) % 60,
+            ..LocalTime::from_unix(now - back * 86_400)
+        };
+        plays.push(Play {
+            title,
+            at: Some(at),
+            seconds: minutes * 60,
+            count: 1,
+        });
+    }
+    if source == HistorySource::PlayedItems {
+        let mut last: Vec<Play> = Vec::new();
+        for play in plays {
+            match last.iter_mut().find(|kept| kept.title.id == play.title.id) {
+                Some(kept) => {
+                    kept.count += 1;
+                    kept.seconds += play.seconds;
+                }
+                None => last.push(play),
+            }
+        }
+        plays = last;
+    }
+    WatchHistory { source, plays }
+}
+
 /// A series as a search or a person's page lists it.
 fn hit(series: &Series) -> SeriesHit {
     SeriesHit {
@@ -688,6 +750,11 @@ impl FakeServer {
                 trailers: Trailers::default(),
                 trailer_stream: "file:///nowhere-trailer.mp4".into(),
                 trailer_error: None,
+                history: WatchHistory {
+                    source: HistorySource::PlayedItems,
+                    plays: Vec::new(),
+                },
+                history_error: None,
             })),
             info: ServerInfo {
                 id: "server-1".into(),
@@ -1623,10 +1690,12 @@ impl MediaServer for FakeServer {
     }
 
     fn watch_history(&self) -> Result<WatchHistory, ProviderError> {
-        Ok(WatchHistory {
-            source: HistorySource::PlayedItems,
-            plays: Vec::new(),
-        })
+        let mut state = self.state();
+        state.record.histories += 1;
+        if let Some(error) = state.history_error.clone() {
+            return Err(error);
+        }
+        Ok(state.history.clone())
     }
 }
 

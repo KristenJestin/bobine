@@ -35,6 +35,7 @@ mod secret_field;
 mod series_page;
 mod shell;
 mod start;
+mod stats;
 mod theme;
 mod trailer;
 mod video;

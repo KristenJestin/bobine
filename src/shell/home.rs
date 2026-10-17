@@ -263,6 +263,7 @@ impl Shell {
         let stamp = self.marks.stamp();
         // What the library holds may have changed: its index by TMDb id too.
         self.load_tmdb_index(cx);
+        self.load_stats(cx);
 
         self.ask(
             cx,

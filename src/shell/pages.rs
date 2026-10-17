@@ -635,6 +635,7 @@ impl Shell {
         self.collections = Default::default();
         self.my_list = Default::default();
         self.lists = Default::default();
+        self.stats = None;
         self.details.clear();
         self.series_pages.clear();
         self.people.clear();

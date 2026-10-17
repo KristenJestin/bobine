@@ -31,6 +31,8 @@ pub struct AccountView {
     pub server: String,
     /// The menu is open: it answers the mouse.
     pub open: bool,
+    /// The menu offers the Stats page: there is something to show.
+    pub stats: bool,
     /// How much of the menu shows, from 0 to 1: it may be fading out.
     pub shown: Option<f32>,
     pub bounds: ButtonBounds,
@@ -46,8 +48,12 @@ pub const BACK_LINK_TOP: f32 = 76.;
 
 /// Where the account menu goes and how tall it is: under the button, its right edge on the
 /// button's (the button is at the bar's end), and above it when there is no room below.
-pub fn account_menu_place(button: Bounds<Pixels>, window_height: f32) -> (Point<Pixels>, f32) {
-    let wanted = menu::height(2) + MENU_HEADER + MENU_RULE;
+pub fn account_menu_place(
+    button: Bounds<Pixels>,
+    lines: usize,
+    window_height: f32,
+) -> (Point<Pixels>, f32) {
+    let wanted = menu::height(lines) + MENU_HEADER + MENU_RULE;
     let (at, height) = menu::place(button, wanted, window_height);
     (point(button.right() - px(MENU_WIDTH), at.y), height)
 }
@@ -156,17 +162,7 @@ fn account_button(
                 .absolute()
                 .inset_0(),
         )
-        .children(under.map(|(button, shown)| {
-            account_menu(
-                button,
-                shown,
-                account.open,
-                &account.user,
-                &account.server,
-                window,
-                cx,
-            )
-        }))
+        .children(under.map(|(button, shown)| account_menu(button, shown, &account, window, cx)))
 }
 
 /// Who is signed in, and the way out, over the rest of the page, `shown` of the way in. Only an
@@ -174,13 +170,14 @@ fn account_button(
 fn account_menu(
     button: Bounds<Pixels>,
     shown: f32,
-    open: bool,
-    user: &str,
-    server: &str,
+    account: &AccountView,
     window: &mut Window,
     cx: &mut Context<Shell>,
 ) -> impl IntoElement {
-    let (at, height) = account_menu_place(button, f32::from(window.viewport_size().height));
+    let (open, stats) = (account.open, account.stats);
+    let (user, server) = (account.user.as_str(), account.server.as_str());
+    let lines = 2 + usize::from(stats);
+    let (at, height) = account_menu_place(button, lines, f32::from(window.viewport_size().height));
     // It comes into place from a little nearer its button.
     let toward_button = if at.y > button.top() { -8. } else { 8. };
     let rise = point(px(0.), px(toward_button * (1. - shown)));
@@ -188,6 +185,11 @@ fn account_menu(
         .when(open, |line| {
             line.on_click(cx.listener(|shell, _, _, cx| shell.open_settings(cx)))
         });
+    let stats = stats.then(|| {
+        menu_line("account-stats", IconName::ChartBar, "Stats", window, cx).when(open, |line| {
+            line.on_click(cx.listener(|shell, _, _, cx| shell.open_stats(cx)))
+        })
+    });
     let sign_out = menu_line("sign-out", IconName::SignOut, "Sign out", window, cx)
         .when(open, |line| {
             line.on_click(cx.listener(|shell, _, window, cx| shell.sign_out(window, cx)))
@@ -253,6 +255,7 @@ fn account_menu(
                             .bg(theme::line()),
                     )
                     .child(settings)
+                    .children(stats)
                     .child(sign_out),
             ),
     )
@@ -394,7 +397,7 @@ mod tests {
 
     #[test]
     fn the_account_menu_opens_under_its_button_with_the_same_right_edge() {
-        let (at, height) = account_menu_place(button_at(16.), 810.);
+        let (at, height) = account_menu_place(button_at(16.), 2, 810.);
         assert_eq!(at, point(px(932. - MENU_WIDTH), px(54.)));
         assert_eq!(height, menu::height(2) + MENU_HEADER + MENU_RULE);
     }

@@ -13,6 +13,7 @@ mod request;
 mod series;
 mod settings;
 mod skip;
+mod stats;
 mod trailer;
 
 pub use discover::{OpenSeerr, Seerr};
@@ -198,6 +199,8 @@ pub struct Shell {
     pub collection_pages: Vec<CollectionPage>,
     pub my_list: MyListPage,
     pub lists: ListsPage,
+    /// What the viewer watched, once read: None while there is nothing to show, and no page.
+    pub stats: Option<Rc<crate::stats::Stats>>,
     /// The playlists' pages open, the last one on top: one per `Screen::Playlist`.
     pub playlist_pages: Vec<PlaylistPage>,
     /// The "Add to playlist" menu, while it shows.
@@ -386,6 +389,7 @@ impl Shell {
             collection_pages: Vec::new(),
             my_list: Default::default(),
             lists: Default::default(),
+            stats: None,
             playlist_pages: Vec::new(),
             playlist_menu: None,
             playlist_menus: 0,
@@ -765,6 +769,7 @@ impl Shell {
             user: server.user_name().to_string(),
             server: server.server().name.clone(),
             open: open.is_some(),
+            stats: self.stats.is_some(),
             shown: drawn.map(|(_, shown)| shown),
             bounds: self.account_button.clone(),
         })
@@ -994,7 +999,8 @@ impl Render for Shell {
                 + self.collection_pages.len()
                 + self.playlist_pages.len()
                 + usize::from(self.navigator.current() == Screen::Favorites)
-                + usize::from(screen == Screen::Settings),
+                + usize::from(screen == Screen::Settings)
+                + usize::from(screen == Screen::Stats),
         );
         if page != self.page {
             self.turned_forward = page.1 > self.page.1;
