@@ -19,6 +19,8 @@ use bobine::provider::{
 };
 
 pub const USER: &str = "camille";
+/// The tests' and the harness's now: Saturday 17 October 2026, at noon UTC.
+pub const NOW: i64 = 1_792_238_400;
 /// The id the fake server gives its user.
 pub const USER_ID: &str = "user-1";
 pub const PASSWORD: &str = "marée haute";
@@ -1877,7 +1879,7 @@ mod tests {
 
     #[test]
     fn the_played_items_hold_one_dated_play_of_a_title_and_the_rest_undated() {
-        let history = watch_history(HistorySource::PlayedItems, 1_792_238_400);
+        let history = watch_history(HistorySource::PlayedItems, NOW);
         let mut seen: Vec<&ItemId> = Vec::new();
         for play in &history.plays {
             let id = play.title.id.as_ref().unwrap();

@@ -4,7 +4,6 @@
 use std::rc::Rc;
 use std::sync::Arc;
 
-use bobine::provider::LocalTime;
 use gpui_kit::Context;
 
 use super::Shell;
@@ -22,6 +21,7 @@ impl Shell {
         self.stats_reading = true;
         self.stats_asked += 1;
         let asked = self.stats_asked;
+        let clock = self.clock;
         let session = self.server.clone();
         self.ask(
             cx,
@@ -29,7 +29,7 @@ impl Shell {
             move |server| {
                 server
                     .watch_history()
-                    .map(|history| stats::of(&history, LocalTime::now()))
+                    .map(|history| stats::of(&history, clock()))
             },
             move |shell, stats, cx| {
                 // An answer for a user who signed out meanwhile is not the next user's.
@@ -78,8 +78,7 @@ mod tests {
     use super::*;
     use crate::fake::{self, FakeServer, MemoryKeyring};
 
-    /// Saturday 17 October 2026, at noon UTC.
-    const NOW: i64 = 1_792_238_400;
+    use crate::fake::NOW;
 
     /// A shell on a kept session of a server that holds `history`.
     fn start(history: WatchHistory, cx: &mut TestAppContext) -> (FakeServer, WindowHandle<Shell>) {
@@ -360,5 +359,16 @@ mod tests {
         );
         reload(&window, cx);
         assert_eq!(source(&window, cx), Some(HistorySource::PlayedItems));
+    }
+
+    #[gpui_kit::test]
+    fn the_stats_are_counted_on_the_shells_clock(cx: &mut TestAppContext) {
+        let history = fake::watch_history(HistorySource::PlaybackReporting, NOW);
+        let expected = crate::stats::of(&history, bobine::provider::LocalTime::from_unix(NOW));
+        let (_server, window) = start(history, cx);
+        let shown = window
+            .read_with(cx, |shell, _| shell.stats.as_deref().cloned())
+            .unwrap();
+        assert_eq!(shown, expected);
     }
 }

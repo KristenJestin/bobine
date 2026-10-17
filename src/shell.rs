@@ -203,6 +203,8 @@ pub struct Shell {
     pub lists: ListsPage,
     /// What the viewer watched, once read: None while there is nothing to show, and no page.
     pub stats: Option<Rc<crate::stats::Stats>>,
+    /// The local clock the stats are counted on: a fixed one in the tests and the harness.
+    pub clock: fn() -> bobine::provider::LocalTime,
     /// The Stats page scrolls down, and its rows of movies and of series sideways.
     pub stats_scrolls: [gpui_kit::ScrollHandle; 3],
     /// The watch history is being read: it is not asked again meanwhile.
@@ -407,6 +409,10 @@ impl Shell {
             my_list: Default::default(),
             lists: Default::default(),
             stats: None,
+            #[cfg(not(test))]
+            clock: bobine::provider::LocalTime::now,
+            #[cfg(test)]
+            clock: || bobine::provider::LocalTime::from_unix(crate::fake::NOW),
             stats_scrolls: Default::default(),
             stats_reading: false,
             stats_asked: 0,

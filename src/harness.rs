@@ -300,10 +300,7 @@ impl Harness {
                 _ => args.stats,
             };
             if let Some(source) = stats {
-                let now = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map_or(0, |since| since.as_secs() as i64);
-                state.history = crate::fake::watch_history(source, now);
+                state.history = crate::fake::watch_history(source, crate::fake::NOW);
             }
             if args.screen.as_deref() == Some("my-list-empty") {
                 state.favourites.clear();
@@ -345,6 +342,8 @@ impl Harness {
             shell.mpv_options = vec![("ao", "null")];
             // Its fake server plays invented films: not on the user's bus, not in their cache.
             shell.without_desktop();
+            // Its invented history is dated from a fixed now: the stats are counted on it too.
+            shell.clock = || bobine::provider::LocalTime::from_unix(crate::fake::NOW);
         });
         match args.screen.clone() {
             Some(screen) => {
