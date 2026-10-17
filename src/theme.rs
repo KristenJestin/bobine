@@ -41,6 +41,16 @@ pub fn accent() -> Rgba {
     rgb(0xe5e5e5)
 }
 
+/// The brand's coral on dark (`assets/brand/couleurs.txt`).
+pub fn brand() -> Rgba {
+    rgb(0xf45246)
+}
+
+/// What is written on the coral: the interface's black, which reads there.
+pub fn on_brand() -> Rgba {
+    rgb(0x000000)
+}
+
 /// What went wrong.
 pub fn danger() -> Rgba {
     rgb(0xf87171)
@@ -173,7 +183,16 @@ fn button(
         .cursor_pointer()
 }
 
-/// White, black text: the one thing to do on a screen.
+/// Coral at rest, a little lighter under the pointer, a little darker pressed.
+pub fn primary_shades() -> Shades {
+    Shades {
+        rest: brand(),
+        hover: rgb(0xf8695e),
+        press: rgb(0xe04a3f),
+    }
+}
+
+/// Coral, black text: the one thing to do on a screen.
 pub fn primary_button(
     id: impl Into<ElementId>,
     leading: Option<IconName>,
@@ -181,13 +200,8 @@ pub fn primary_button(
     window: &mut Window,
     cx: &mut App,
 ) -> Stateful<Div> {
-    let shades = Shades {
-        rest: rgb(0xffffff),
-        hover: rgb(0xe4e4e7),
-        press: rgb(0xd4d4d8),
-    };
-    button(id, shades, window, cx)
-        .text_color(rgb(0x000000))
+    button(id, primary_shades(), window, cx)
+        .text_color(on_brand())
         .children(leading.map(|name| icon(name, BUTTON_ICON)))
         .child(label.into())
 }
@@ -231,6 +245,26 @@ pub fn ghost_button_with(
         .child(label.into())
 }
 
+/// The WCAG contrast ratio of two opaque colours, for the tests that hold text to 4.5.
+#[cfg(test)]
+pub(crate) fn contrast(a: Rgba, b: Rgba) -> f32 {
+    let (a, b) = (luminance(a), luminance(b));
+    (a.max(b) + 0.05) / (a.min(b) + 0.05)
+}
+
+/// The WCAG relative luminance of an opaque colour.
+#[cfg(test)]
+fn luminance(color: Rgba) -> f32 {
+    let channel = |c: f32| {
+        if c <= 0.03928 {
+            c / 12.92
+        } else {
+            ((c + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    0.2126 * channel(color.r) + 0.7152 * channel(color.g) + 0.0722 * channel(color.b)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -252,6 +286,21 @@ mod tests {
         // accent over a clear veil: both need contrast.
         let (accent, background) = (accent(), background());
         assert!(accent.r - background.r > 0.7);
+    }
+
+    #[test]
+    fn the_brand_colour_is_the_coral_of_the_brand_files() {
+        assert!(include_str!("../assets/brand/couleurs.txt").contains("#f45246"));
+    }
+
+    #[test]
+    fn the_primary_button_is_coral_and_its_text_reads_on_every_shade() {
+        let shades = primary_shades();
+        assert_eq!(shades.rest, brand());
+        for shade in [shades.rest, shades.hover, shades.press] {
+            let ratio = contrast(on_brand(), shade);
+            assert!(ratio >= 4.5, "{shade:?}: contrast {ratio}");
+        }
     }
 
     #[test]

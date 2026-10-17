@@ -434,9 +434,9 @@ fn episode_row(
     .map(|check| {
         if item.watched {
             check
-                .bg(theme::accent())
-                .border_color(theme::accent())
-                .text_color(theme::background())
+                .bg(theme::brand())
+                .border_color(theme::brand())
+                .text_color(theme::on_brand())
         } else {
             check.border_color(rgb(0x3a3a40)).text_color(theme::dim())
         }
@@ -606,13 +606,12 @@ pub fn up_next_card(
                     .bg(theme::line())
                     .children(picture(still, theme::RADIUS_LARGE))
                     .child(
-                        div()
+                        super::progress_fill()
                             .absolute()
                             .left_0()
                             .bottom_0()
                             .h(px(3.))
-                            .w(px(CARD_WIDTH * fraction))
-                            .bg(theme::accent()),
+                            .w(px(CARD_WIDTH * fraction)),
                     ),
             )
             .child(
