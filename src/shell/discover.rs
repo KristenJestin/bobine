@@ -948,6 +948,49 @@ pub(super) mod tests {
             .unwrap();
     }
 
+    /// Enter in either field of the form saves both, as the Save button does.
+    #[gpui_kit::test]
+    fn enter_in_either_field_saves_the_address_and_the_key(cx: &mut TestAppContext) {
+        for in_key in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("settings.toml");
+            let keyring = Arc::new(MemoryKeyring::default());
+            let seerr = FakeSeerr::default();
+            let (window, _) = start(Some(path.clone()), &keyring, &seerr, cx);
+            window
+                .update(cx, |shell, window, cx| {
+                    shell.open_settings(cx);
+                    let field = shell.seerr.address.clone().unwrap();
+                    field.update(cx, |field, cx| field.set_text(ADDRESS, cx));
+                    let key = shell.seerr.key.clone().unwrap();
+                    key.update(cx, |key, cx| key.type_in(KEY, cx));
+                    let typing = if in_key {
+                        key.read(cx).input().clone()
+                    } else {
+                        field
+                    };
+                    let focus = typing.read(cx).focus_handle(cx);
+                    window.focus(&focus, cx);
+                })
+                .unwrap();
+            let mut visual = drawn(&window, cx);
+            visual.simulate_keystrokes("enter");
+            visual.run_until_parked();
+            let which = if in_key { "key" } else { "address" };
+            assert_eq!(
+                keyring.secret(ACCOUNT).as_deref(),
+                Some(KEY),
+                "Enter in the {which}"
+            );
+            assert_eq!(
+                Settings::read(&path).seerr_address.as_deref(),
+                Some(ADDRESS),
+                "Enter in the {which}"
+            );
+            assert!(connected(&window, cx), "Enter in the {which}");
+        }
+    }
+
     #[gpui_kit::test]
     fn an_address_typed_without_a_scheme_is_kept_with_https(cx: &mut TestAppContext) {
         let dir = tempfile::tempdir().unwrap();
