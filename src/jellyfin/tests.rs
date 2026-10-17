@@ -3469,6 +3469,562 @@ fn a_remote_trailer_that_is_not_a_web_address_is_left_out() {
     assert_eq!(detail.trailers.remote, None);
 }
 
+/// Another user of the same server, whose plays the plugin holds beside ours.
+const OTHER_USER_ID: &str = "99999999999999999999999999999999";
+
+fn reporting_rows() -> Vec<[&'static str; 6]> {
+    vec![
+        [
+            "2026-10-12 21:05:00.1234567",
+            USER_ID,
+            FILM,
+            "Movie",
+            "The Quiet Harbour",
+            "6000",
+        ],
+        [
+            "2026-10-13 08:30:00",
+            USER_ID,
+            FILM,
+            "Movie",
+            "The Quiet Harbour",
+            "600",
+        ],
+        [
+            "2026-10-14 22:00:00",
+            USER_ID,
+            EPISODE,
+            "Episode",
+            "Tidewater - s01e02 - The Tide Turns",
+            "2700",
+        ],
+        [
+            "2026-10-15 20:00:00",
+            OTHER_USER_ID,
+            "f0000000000000000000000000000002",
+            "Movie",
+            "Amber Fields",
+            "5000",
+        ],
+        [
+            "2026-09-01 19:00:00",
+            USER_ID,
+            "e0000000000000000000000000000099",
+            "Episode",
+            "Lost Shore - s02e01 - Pilot",
+            "1800",
+        ],
+    ]
+}
+
+fn local(day: u32, month: u32, hour: u32, minute: u32) -> LocalTime {
+    LocalTime {
+        year: 2026,
+        month,
+        day,
+        hour,
+        minute,
+    }
+}
+
+fn names(history: &WatchHistory) -> Vec<&str> {
+    history
+        .plays
+        .iter()
+        .map(|play| play.title.name.as_str())
+        .collect()
+}
+
+#[test]
+fn with_the_plugin_its_numbers_are_shown() {
+    let s = Setup::new();
+    s.fake.state.lock().unwrap().reporting = Some(reporting_rows());
+    let history = s.signed_in().watch_history().unwrap();
+    assert_eq!(history.source, HistorySource::PlaybackReporting);
+    assert_eq!(
+        names(&history),
+        [
+            "The Quiet Harbour",
+            "The Quiet Harbour",
+            "Tidewater",
+            "Lost Shore"
+        ]
+    );
+    let first = &history.plays[0];
+    assert_eq!(
+        first.at,
+        Some(local(12, 10, 21, 5)),
+        "the plugin's own clock"
+    );
+    assert_eq!((first.seconds, first.count), (6000, 1));
+    assert_eq!(first.title.kind, WatchedKind::Movie);
+    assert_eq!(first.title.id, Some(film()));
+    assert_eq!(first.title.genres, ["Drama", "Mystery"]);
+    assert_eq!(
+        first
+            .title
+            .poster
+            .as_ref()
+            .map(|poster| poster.tag.as_str()),
+        Some("poster-quiet-harbour")
+    );
+    let episode = &history.plays[2];
+    assert_eq!(
+        episode.title.kind,
+        WatchedKind::Series,
+        "counted for its series"
+    );
+    assert_eq!(episode.title.id, Some(ItemId(SERIES.into())));
+    assert_eq!(episode.title.genres, ["Drama", "Mystery"]);
+    let gone = &history.plays[3];
+    assert_eq!(gone.title.id, None, "a series the library no longer holds");
+    assert_eq!(gone.title.kind, WatchedKind::Series);
+    assert!(
+        !s.fake
+            .seen()
+            .iter()
+            .any(|seen| seen.param("IsPlayed").is_some()),
+        "the played items are not asked when the plugin answers"
+    );
+}
+
+#[test]
+fn the_plugin_is_asked_only_a_select_of_the_signed_in_users_plays() {
+    let s = Setup::new();
+    s.fake.state.lock().unwrap().reporting = Some(reporting_rows());
+    s.signed_in().watch_history().unwrap();
+    let asked = s
+        .fake
+        .last("POST", "/user_usage_stats/submit_custom_query")
+        .json();
+    let query = asked["CustomQueryString"].as_str().unwrap();
+    assert!(query.starts_with("SELECT "), "{query}");
+    assert!(query.contains(&format!("UserId = '{USER_ID}'")), "{query}");
+    assert!(!query.contains(';'), "one statement: {query}");
+    assert_eq!(asked["ReplaceUserId"], false, "ids are kept, not names");
+}
+
+#[test]
+fn another_users_plays_are_never_counted() {
+    let s = Setup::new();
+    s.fake.state.lock().unwrap().reporting = Some(reporting_rows());
+    let history = s.signed_in().watch_history().unwrap();
+    assert!(!names(&history).contains(&"Amber Fields"));
+    assert_eq!(history.plays.len(), 4);
+}
+
+#[test]
+fn a_user_id_that_is_not_hex_is_never_put_in_a_query() {
+    assert_eq!(super::reporting_query("0f1e' OR '1'='1"), None);
+    assert_eq!(super::reporting_query(""), None);
+    let dashed = super::reporting_query("0F1E2D3C-4B5A-6978-8796-A5B4C3D2E1F0").unwrap();
+    assert!(
+        dashed.contains(&format!("UserId = '{USER_ID}'")),
+        "{dashed}"
+    );
+}
+
+#[test]
+fn without_the_plugin_the_played_items_are_used() {
+    let s = Setup::new();
+    let history = s.signed_in().watch_history().unwrap();
+    assert_eq!(history.source, HistorySource::PlayedItems);
+    let asked = s
+        .fake
+        .seen()
+        .into_iter()
+        .find(|seen| seen.path == "/Items" && seen.param("IsPlayed") == Some("true"))
+        .expect("the played items asked");
+    assert_eq!(asked.param("Recursive"), Some("true"));
+    assert_eq!(asked.param("IncludeItemTypes"), Some("Movie,Episode"));
+    assert_eq!(asked.param("Fields"), Some("UserData,Genres,RunTimeTicks"));
+    assert_eq!(asked.param("userId"), Some(USER_ID));
+    // Twice 110 minutes: the last play on its date, the one before it at no known time.
+    let harbour: Vec<_> = history
+        .plays
+        .iter()
+        .filter(|play| play.title.name == "The Quiet Harbour")
+        .map(|play| {
+            (
+                play.at.map(|at| (at.month, at.day)),
+                play.seconds,
+                play.count,
+            )
+        })
+        .collect();
+    assert_eq!(harbour, [(Some((10, 12)), 6600, 1), (None, 6600, 1)]);
+    let episode = history
+        .plays
+        .iter()
+        .find(|play| play.title.name == "Tidewater")
+        .expect("the episode counted for its series");
+    assert_eq!(episode.title.kind, WatchedKind::Series);
+    assert_eq!(episode.title.id, Some(ItemId(SERIES.into())));
+    assert_eq!(
+        episode.title.genres,
+        ["Drama", "Mystery"],
+        "the series' genres"
+    );
+    assert_eq!((episode.seconds, episode.count), (2700, 1));
+    let marked = history
+        .plays
+        .iter()
+        .find(|play| play.title.name == "Amber Fields")
+        .expect("a title marked played without a play");
+    assert_eq!((marked.at, marked.seconds, marked.count), (None, 5820, 1));
+}
+
+#[test]
+fn a_plugin_closed_to_the_user_falls_back_to_the_played_items() {
+    let s = Setup::new();
+    {
+        let mut state = s.fake.state.lock().unwrap();
+        state.reporting = Some(reporting_rows());
+        // The plugin's routes are for administrators only.
+        state
+            .broken
+            .push(("/user_usage_stats/submit_custom_query".into(), 403));
+    }
+    let history = s.signed_in().watch_history().unwrap();
+    assert_eq!(history.source, HistorySource::PlayedItems);
+}
+
+#[test]
+fn a_plugin_with_no_play_of_the_user_falls_back_to_the_played_items() {
+    let s = Setup::new();
+    s.fake.state.lock().unwrap().reporting = Some(Vec::new());
+    let history = s.signed_in().watch_history().unwrap();
+    assert_eq!(history.source, HistorySource::PlayedItems);
+    assert!(!history.plays.is_empty());
+}
+
+#[test]
+fn with_no_data_at_all_the_history_is_empty() {
+    let s = Setup::new();
+    s.fake.state.lock().unwrap().nothing_played = true;
+    let history = s.signed_in().watch_history().unwrap();
+    assert_eq!(history.plays, []);
+}
+
+#[test]
+fn a_plugin_that_fails_otherwise_is_an_error_left_to_the_caller() {
+    let s = Setup::new();
+    s.fake
+        .state
+        .lock()
+        .unwrap()
+        .broken
+        .push(("/user_usage_stats/submit_custom_query".into(), 500));
+    assert_eq!(
+        s.signed_in().watch_history(),
+        Err(ProviderError::Server(500))
+    );
+}
+
+/// A series of the library that shares its name with `SERIES`, and one of its episodes.
+const OTHER_TIDEWATER: &str = "50000000000000000000000000000003";
+const OTHER_TIDEWATER_EPISODE: &str = "e0000000000000000000000000000031";
+
+#[test]
+fn an_episode_counts_for_its_own_series_when_two_share_a_name() {
+    let s = Setup::new();
+    {
+        let mut state = s.fake.state.lock().unwrap();
+        state.episodes = vec![(OTHER_TIDEWATER_EPISODE, OTHER_TIDEWATER)];
+        state.reporting = Some(vec![
+            [
+                "2026-10-14 22:00:00",
+                USER_ID,
+                EPISODE,
+                "Episode",
+                "Tidewater - s01e02 - The Tide Turns",
+                "2700",
+            ],
+            [
+                "2026-10-15 22:00:00",
+                USER_ID,
+                OTHER_TIDEWATER_EPISODE,
+                "Episode",
+                "Tidewater - s01e01 - Pilot",
+                "2400",
+            ],
+            [
+                "2026-10-16 22:00:00",
+                USER_ID,
+                EPISODE,
+                "Episode",
+                "Tidewater - s01e02 - The Tide Turns",
+                "2700",
+            ],
+        ]);
+    }
+    let history = s.signed_in().watch_history().unwrap();
+    let series: Vec<_> = history
+        .plays
+        .iter()
+        .map(|play| play.title.id.clone())
+        .collect();
+    assert_eq!(
+        series,
+        [
+            Some(ItemId(SERIES.into())),
+            Some(ItemId(OTHER_TIDEWATER.into())),
+            Some(ItemId(SERIES.into()))
+        ]
+    );
+    let asked = s
+        .fake
+        .seen()
+        .into_iter()
+        .find(|seen| seen.path == "/Items" && seen.param("Ids").is_some())
+        .expect("the episodes asked by id");
+    assert_eq!(
+        asked.param("Ids"),
+        Some(format!("{EPISODE},{OTHER_TIDEWATER_EPISODE}").as_str()),
+        "each episode once"
+    );
+    // The series comes with every episode: `SeriesId` is no field to ask for.
+    assert_eq!(asked.param("Fields"), None);
+    assert_eq!(asked.param("userId"), Some(USER_ID));
+}
+
+/// 101 plays of episodes: `EPISODE` first, then 99 the library no longer holds, and
+/// `OTHER_TIDEWATER_EPISODE` last. Chunks of 100 put the last one alone in the second request.
+fn a_history_of_101_episodes(s: &Setup) {
+    let mut state = s.fake.state.lock().unwrap();
+    state.episodes = vec![(OTHER_TIDEWATER_EPISODE, OTHER_TIDEWATER)];
+    // The name says Glass Orchard, the id says Tidewater: which one is used shows how it was read.
+    let mut rows = vec![[
+        "2026-10-14 22:00:00",
+        USER_ID,
+        EPISODE,
+        "Episode",
+        "Glass Orchard - s01e02 - The Tide Turns",
+        "2700",
+    ]];
+    for gone in 0..99 {
+        let id: &'static str = Box::leak(format!("e1{gone:030x}").into_boxed_str());
+        rows.push([
+            "2026-10-14 23:00:00",
+            USER_ID,
+            id,
+            "Episode",
+            "Gone Show - s01e01 - Pilot",
+            "600",
+        ]);
+    }
+    rows.push([
+        "2026-10-15 22:00:00",
+        USER_ID,
+        OTHER_TIDEWATER_EPISODE,
+        "Episode",
+        "Tidewater - s01e01 - Pilot",
+        "2400",
+    ]);
+    state.reporting = Some(rows);
+}
+
+#[test]
+fn the_episodes_are_asked_by_id_in_chunks_of_100() {
+    let s = Setup::new();
+    a_history_of_101_episodes(&s);
+    s.signed_in().watch_history().unwrap();
+    let asked: Vec<usize> = s
+        .fake
+        .seen()
+        .into_iter()
+        .filter(|seen| seen.path == "/Items")
+        .filter_map(|seen| seen.param("Ids").map(|ids| ids.split(',').count()))
+        .collect();
+    assert_eq!(asked, [100, 1]);
+}
+
+#[test]
+fn a_chunk_of_episodes_that_fails_leaves_those_to_the_name_and_the_history_comes_back() {
+    let s = Setup::new();
+    a_history_of_101_episodes(&s);
+    s.fake.state.lock().unwrap().broken_episode = Some(EPISODE);
+    let history = s
+        .signed_in()
+        .watch_history()
+        .expect("one failed chunk does not fail the history");
+    assert_eq!(history.plays.len(), 101);
+    // The first chunk failed: its episode is read by its name.
+    assert_eq!(history.plays[0].title.name, "Glass Orchard");
+    assert_eq!(
+        history.plays[0].title.id,
+        Some(ItemId("50000000000000000000000000000002".into()))
+    );
+    // The second answered: its episode is read by its id, whatever the name says.
+    assert_eq!(
+        history.plays[100].title.id,
+        Some(ItemId(OTHER_TIDEWATER.into()))
+    );
+}
+
+#[test]
+fn an_episode_of_season_0_names_its_series() {
+    assert_eq!(
+        super::series_of_episode("Tidewater - s00e01 - A Special"),
+        "Tidewater"
+    );
+}
+
+#[test]
+fn an_episode_title_holding_the_pattern_keeps_its_series_name() {
+    assert_eq!(
+        super::series_of_episode("Tidewater - s02e01 - Previously - s01e09 - Recap"),
+        "Tidewater"
+    );
+}
+
+#[test]
+fn a_series_name_holding_a_dash_and_an_s_is_kept_whole() {
+    assert_eq!(
+        super::series_of_episode("Love - sick - s01e02 - Pilot"),
+        "Love - sick"
+    );
+    // The whole pattern in a series' name cannot be told from one in the title: the first one
+    // is taken, and an episode still in the library is never named this way.
+    assert_eq!(
+        super::series_of_episode("Retro - s01e01 - Redux - s02e03 - Pilot"),
+        "Retro"
+    );
+}
+
+/// 2026-10-14 21:00 UTC, in seconds from 1970.
+const PLAYED_AT_21_UTC: i64 = 1_792_011_600;
+
+fn first_play_at(offset: Option<&'static str>, written: &'static str) -> Option<LocalTime> {
+    let s = Setup::new();
+    {
+        let mut state = s.fake.state.lock().unwrap();
+        state.reporting_offsets = offset.map(|offset| vec![offset]);
+        state.reporting = Some(vec![[
+            written,
+            USER_ID,
+            FILM,
+            "Movie",
+            "The Quiet Harbour",
+            "6000",
+        ]]);
+    }
+    s.signed_in().watch_history().unwrap().plays[0].at
+}
+
+// The expected hour is the machine's own: on a client in UTC this degenerates into a server in
+// UTC, and the case no longer tells the offset from nothing.
+#[test]
+fn a_server_in_utc_and_a_client_ahead_put_a_play_at_the_clients_hour() {
+    // On a client at +02:00, 23:00: the client's own clock, whatever the server's.
+    let on_the_client = Some(LocalTime::from_unix(PLAYED_AT_21_UTC));
+    assert_eq!(
+        first_play_at(Some("0.0"), "2026-10-14 21:00:00.1234567"),
+        on_the_client,
+        "a server in UTC"
+    );
+    assert_eq!(
+        first_play_at(Some("7199.99999821186"), "2026-10-14 23:00:00"),
+        on_the_client,
+        "a server at +02:00"
+    );
+    assert_eq!(
+        first_play_at(Some("-18000.0000041723"), "2026-10-14 16:00:00"),
+        on_the_client,
+        "a server at -05:00"
+    );
+}
+
+/// The plays of `rows`, each with its own `ServerOffset` cell.
+fn plays_at(rows: [(&'static str, &'static str); 3]) -> Vec<Option<LocalTime>> {
+    let s = Setup::new();
+    {
+        let mut state = s.fake.state.lock().unwrap();
+        state.reporting_offsets = Some(rows.iter().map(|(_, offset)| *offset).collect());
+        state.reporting = Some(
+            rows.iter()
+                .map(|(written, _)| {
+                    [
+                        *written,
+                        USER_ID,
+                        FILM,
+                        "Movie",
+                        "The Quiet Harbour",
+                        "6000",
+                    ]
+                })
+                .collect(),
+        );
+    }
+    let history = s.signed_in().watch_history().unwrap();
+    history.plays.iter().map(|play| play.at).collect()
+}
+
+#[test]
+fn each_play_is_read_with_the_offset_of_its_own_row() {
+    // A server in Europe/Paris: +01:00 in January, +02:00 in July.
+    let plays = plays_at([
+        ("2026-01-21 21:00:00", "3600.0"),
+        ("2026-07-21 21:00:00", "7200.0"),
+        ("2026-01-01 00:30:00", "3599.9999994"),
+    ]);
+    assert_eq!(
+        plays,
+        [
+            Some(LocalTime::from_unix(1_769_025_600)),
+            Some(LocalTime::from_unix(1_784_660_400)),
+            Some(LocalTime::from_unix(1_767_223_800)),
+        ]
+    );
+}
+
+#[test]
+fn a_row_with_no_offset_is_read_on_the_clients_clock_and_the_others_keep_theirs() {
+    let plays = plays_at([
+        ("2026-01-21 21:00:00", "3600.0"),
+        ("2026-07-21 21:00:00", ""),
+        ("2026-07-21 21:00:00", "not a number"),
+    ]);
+    assert_eq!(plays[0], Some(LocalTime::from_unix(1_769_025_600)));
+    assert_eq!(
+        plays[1],
+        Some(LocalTime {
+            year: 2026,
+            month: 7,
+            day: 21,
+            hour: 21,
+            minute: 0
+        })
+    );
+    assert_eq!(plays[2], plays[1]);
+}
+
+#[test]
+fn without_the_servers_offset_its_time_is_taken_as_the_clients() {
+    assert_eq!(
+        first_play_at(None, "2026-10-14 21:00:00"),
+        Some(local(14, 10, 21, 0))
+    );
+}
+
+#[test]
+fn the_plugin_is_asked_the_servers_offset_from_utc() {
+    let s = Setup::new();
+    s.fake.state.lock().unwrap().reporting = Some(reporting_rows());
+    s.signed_in().watch_history().unwrap();
+    let asked = s
+        .fake
+        .last("POST", "/user_usage_stats/submit_custom_query")
+        .json();
+    let query = asked["CustomQueryString"].as_str().unwrap();
+    assert!(
+        query.contains(
+            "(julianday(DateCreated) - julianday(DateCreated, 'utc')) * 86400 AS ServerOffset"
+        ),
+        "{query}"
+    );
+}
+
 /// 2025-09-14T08:30:05Z, in ticks of 100 ns since 1970.
 const BELL_TOWER_ADDED: i64 = 1_757_838_605 * 10_000_000;
 

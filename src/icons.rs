@@ -77,6 +77,7 @@ icons! {
     PaperPlane => "paper-plane",
     Stack => "stack",
     PlayCircle => "play-circle",
+    ChartBar => "chart-bar",
     Bell => "bell",
 }
 

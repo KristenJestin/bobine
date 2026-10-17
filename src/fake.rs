@@ -10,14 +10,17 @@ use std::time::Duration;
 use bobine::provider::{
     AudioTrack, CastMember, Collection, CollectionCard, CollectionDetail, Connector, EntryId,
     Episode, ExternalSubtitle, Favourite, Feature, FeatureKind, Film, FilmDetail, FilmQuery,
-    FilmSort, FilterChoices, ImageKind, ImageRef, ItemId, Library, LibraryKind, MediaServer,
-    MediaSource, MediaSourceId, NewEpisode, Page, PersonHit, PersonTitles, PlaySessionId, Playback,
-    PlaybackReport, Playlist, PlaylistEntry, ProviderError, SearchResults, Season, Segment, Series,
-    SeriesDetail, SeriesHit, ServerInfo, StreamUrl, SubtitleTrack, Title, TmdbIndex, Token,
-    TokenStore, Trailers, TranscodeRequest, Trickplay, VideoRange, VideoTrack,
+    FilmSort, FilterChoices, HistorySource, ImageKind, ImageRef, ItemId, Library, LibraryKind,
+    LocalTime, MediaServer, MediaSource, MediaSourceId, NewEpisode, Page, PersonHit, PersonTitles,
+    Play, PlaySessionId, Playback, PlaybackReport, Playlist, PlaylistEntry, ProviderError,
+    SearchResults, Season, Segment, Series, SeriesDetail, SeriesHit, ServerInfo, StreamUrl,
+    SubtitleTrack, Title, TmdbIndex, Token, TokenStore, Trailers, TranscodeRequest, Trickplay,
+    VideoRange, VideoTrack, WatchHistory, Watched, WatchedKind,
 };
 
 pub const USER: &str = "camille";
+/// The tests' and the harness's now: Saturday 17 October 2026, at noon UTC.
+pub const NOW: i64 = 1_792_238_400;
 /// The id the fake server gives its user.
 pub const USER_ID: &str = "user-1";
 pub const PASSWORD: &str = "marée haute";
@@ -125,6 +128,8 @@ pub struct Record {
     pub trailer_asks: Vec<ItemId>,
     /// How many times the library was indexed by TMDb id.
     pub tmdb_indexes: u32,
+    /// How many times the watch history was read.
+    pub histories: u32,
     /// How many times the episodes added lately were asked.
     pub new_episode_asks: u32,
 }
@@ -250,6 +255,10 @@ pub struct State {
     pub tmdb_collection: Option<u64>,
     /// `tmdb_index` fails with this while it is set.
     pub tmdb_index_error: Option<ProviderError>,
+    /// What the user watched: nothing, unless a test or the harness says otherwise.
+    pub history: WatchHistory,
+    /// `watch_history` fails with this while it is set.
+    pub history_error: Option<ProviderError>,
     /// The episodes the server added, by id, and when (ticks of 100 ns since 1970).
     pub added: Vec<(ItemId, i64)>,
     /// What changes on the server once the first page of new episodes is read, before the next.
@@ -537,6 +546,71 @@ pub fn series() -> Vec<Series> {
         .collect()
 }
 
+/// What an invented viewer watched up to `now`, in seconds from 1970: a few films and series, most in the evening,
+/// a lot of them this year. Read from the played items, as the server's adapter reads them: the
+/// last play of each title on its date, the plays before it at no known time.
+pub fn watch_history(source: HistorySource, now: i64) -> WatchHistory {
+    let films = films(8);
+    let series = series();
+    let watched = |id: &ItemId, name: &str, kind, poster: &Option<ImageRef>| Watched {
+        id: Some(id.clone()),
+        name: name.to_string(),
+        kind,
+        poster: poster.clone(),
+        genres: vec![genre_of(id).to_string()],
+    };
+    let mut plays = Vec::new();
+    for n in 0..120u32 {
+        let (title, minutes) = if n % 3 == 0 {
+            let film = &films[(n as usize * 5) % films.len()];
+            let minutes = film.runtime.map_or(100, |runtime| runtime.as_secs() / 60);
+            let title = watched(&film.id, &film.title, WatchedKind::Movie, &film.poster);
+            (title, minutes)
+        } else {
+            let one = &series[(n as usize * 7) % series.len().min(5)];
+            let title = watched(&one.id, &one.title, WatchedKind::Series, &one.poster);
+            (title, 45)
+        };
+        // Back from now, two or three days at a time, in the evening mostly.
+        let back = i64::from(n) * 5 / 2;
+        let hour = [21, 20, 22, 19, 23, 14, 21, 10][n as usize % 8];
+        let at = LocalTime {
+            hour,
+            minute: (n * 7) % 60,
+            ..LocalTime::from_unix(now - back * 86_400)
+        };
+        plays.push(Play {
+            title,
+            at: Some(at),
+            seconds: minutes * 60,
+            count: 1,
+        });
+    }
+    if source == HistorySource::PlayedItems {
+        // The plays are the newest first: the first of each title is its last.
+        let mut last: Vec<Play> = Vec::new();
+        let mut before: Vec<Play> = Vec::new();
+        for play in plays {
+            if !last.iter().any(|kept| kept.title.id == play.title.id) {
+                last.push(play);
+                continue;
+            }
+            match before
+                .iter_mut()
+                .find(|kept| kept.title.id == play.title.id)
+            {
+                Some(kept) => {
+                    kept.count += 1;
+                    kept.seconds += play.seconds;
+                }
+                None => before.push(Play { at: None, ..play }),
+            }
+        }
+        plays = last.into_iter().chain(before).collect();
+    }
+    WatchHistory { source, plays }
+}
+
 /// A series as a search or a person's page lists it.
 fn hit(series: &Series) -> SeriesHit {
     SeriesHit {
@@ -696,6 +770,11 @@ impl FakeServer {
                 trailers: Trailers::default(),
                 trailer_stream: "file:///nowhere-trailer.mp4".into(),
                 trailer_error: None,
+                history: WatchHistory {
+                    source: HistorySource::PlayedItems,
+                    plays: Vec::new(),
+                },
+                history_error: None,
                 added: Vec::new(),
                 between_pages: None,
             })),
@@ -1665,6 +1744,15 @@ impl MediaServer for FakeServer {
         }
         Ok(StreamUrl::new(state.trailer_stream.clone()))
     }
+
+    fn watch_history(&self) -> Result<WatchHistory, ProviderError> {
+        let mut state = self.state();
+        state.record.histories += 1;
+        if let Some(error) = state.history_error.clone() {
+            return Err(error);
+        }
+        Ok(state.history.clone())
+    }
 }
 
 const COLLECTION_NAMES: [&str; 10] = [
@@ -1832,5 +1920,21 @@ mod tests {
             assert!(all[..before].iter().all(sorts_before), "{letter}");
             assert!(!all[before..].iter().any(sorts_before), "{letter}");
         }
+    }
+
+    #[test]
+    fn the_played_items_hold_one_dated_play_of_a_title_and_the_rest_undated() {
+        let history = watch_history(HistorySource::PlayedItems, NOW);
+        let mut seen: Vec<&ItemId> = Vec::new();
+        for play in &history.plays {
+            let id = play.title.id.as_ref().unwrap();
+            let dated = play.at.is_some();
+            assert_eq!(dated, !seen.contains(&id), "{}", play.title.name);
+            if dated {
+                assert_eq!(play.count, 1, "{}", play.title.name);
+                seen.push(id);
+            }
+        }
+        assert!(history.plays.iter().any(|play| play.at.is_none()));
     }
 }
