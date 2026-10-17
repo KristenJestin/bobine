@@ -78,6 +78,7 @@ icons! {
     Stack => "stack",
     PlayCircle => "play-circle",
     ChartBar => "chart-bar",
+    Bell => "bell",
 }
 
 /// The asset source of the window: the icons above and nothing else.

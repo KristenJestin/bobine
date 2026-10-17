@@ -11,11 +11,11 @@ use bobine::provider::{
     AudioTrack, CastMember, Collection, CollectionCard, CollectionDetail, Connector, EntryId,
     Episode, ExternalSubtitle, Favourite, Feature, FeatureKind, Film, FilmDetail, FilmQuery,
     FilmSort, FilterChoices, HistorySource, ImageKind, ImageRef, ItemId, Library, LibraryKind,
-    LocalTime, MediaServer, MediaSource, MediaSourceId, Page, PersonHit, PersonTitles, Play,
-    PlaySessionId, Playback, PlaybackReport, Playlist, PlaylistEntry, ProviderError, SearchResults,
-    Season, Segment, Series, SeriesDetail, SeriesHit, ServerInfo, StreamUrl, SubtitleTrack, Title,
-    TmdbIndex, Token, TokenStore, Trailers, TranscodeRequest, Trickplay, VideoRange, VideoTrack,
-    WatchHistory, Watched, WatchedKind,
+    LocalTime, MediaServer, MediaSource, MediaSourceId, NewEpisode, Page, PersonHit, PersonTitles,
+    Play, PlaySessionId, Playback, PlaybackReport, Playlist, PlaylistEntry, ProviderError,
+    SearchResults, Season, Segment, Series, SeriesDetail, SeriesHit, ServerInfo, StreamUrl,
+    SubtitleTrack, Title, TmdbIndex, Token, TokenStore, Trailers, TranscodeRequest, Trickplay,
+    VideoRange, VideoTrack, WatchHistory, Watched, WatchedKind,
 };
 
 pub const USER: &str = "camille";
@@ -130,6 +130,8 @@ pub struct Record {
     pub tmdb_indexes: u32,
     /// How many times the watch history was read.
     pub histories: u32,
+    /// How many times the episodes added lately were asked.
+    pub new_episode_asks: u32,
 }
 
 /// A change asked of a playlist.
@@ -173,6 +175,9 @@ pub fn playlists() -> Vec<KeptPlaylist> {
         ),
     ]
 }
+
+/// A change made to what the fake server holds, at a moment a test chooses.
+pub type Change = Box<dyn FnOnce(&mut State) + Send>;
 
 /// What the fake server holds, shared by the connector and its sessions.
 pub struct State {
@@ -254,6 +259,10 @@ pub struct State {
     pub history: WatchHistory,
     /// `watch_history` fails with this while it is set.
     pub history_error: Option<ProviderError>,
+    /// The episodes the server added, by id, and when (ticks of 100 ns since 1970).
+    pub added: Vec<(ItemId, i64)>,
+    /// What changes on the server once the first page of new episodes is read, before the next.
+    pub between_pages: Option<Change>,
 }
 
 /// The TMDb id `tmdb` gives `id`.
@@ -766,6 +775,8 @@ impl FakeServer {
                     plays: Vec::new(),
                 },
                 history_error: None,
+                added: Vec::new(),
+                between_pages: None,
             })),
             info: ServerInfo {
                 id: "server-1".into(),
@@ -1337,6 +1348,40 @@ impl MediaServer for FakeServer {
             next.extend(self.next_up(series)?);
         }
         Ok(next)
+    }
+
+    /// Like Jellyfin asked for unplayed ones: the newest first, the played left out.
+    fn new_episodes(&self, start: u32, limit: u32) -> Result<Page<NewEpisode>, ProviderError> {
+        let mut state = self.state();
+        state.record.new_episode_asks += 1;
+        let mut found: Vec<NewEpisode> = state
+            .added
+            .iter()
+            .filter_map(|(id, added)| {
+                let episode = state.episodes.iter().find(|e| &e.item.id == id)?;
+                Some(NewEpisode {
+                    poster: image(&episode.series.0, ImageKind::Primary),
+                    episode: episode.clone(),
+                    added: *added,
+                })
+            })
+            .filter(|new| !new.episode.item.watched)
+            .collect();
+        found.sort_by_key(|new| std::cmp::Reverse(new.added));
+        let total = found.len() as u32;
+        if start == 0
+            && let Some(change) = state.between_pages.take()
+        {
+            change(&mut state);
+        }
+        Ok(Page {
+            items: found
+                .into_iter()
+                .skip(start as usize)
+                .take(limit as usize)
+                .collect(),
+            total,
+        })
     }
 
     fn latest(&self, library: &ItemId, limit: u32) -> Result<Vec<Title>, ProviderError> {

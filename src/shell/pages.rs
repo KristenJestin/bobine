@@ -536,6 +536,7 @@ impl Shell {
         });
         self.login_focus_due = true;
         self.server = None;
+        self.episode_checks = None;
         self.seerr = Default::default();
         self.details.clear();
         self.series_pages.clear();
@@ -632,6 +633,7 @@ impl Shell {
         self.login = None;
         self.reset_session(cx);
         self.set_up_seerr(cx);
+        self.start_episode_checks(cx);
         self.navigator.switch_root(Screen::Home);
         self.load_home(cx);
         self.load_stats(cx);

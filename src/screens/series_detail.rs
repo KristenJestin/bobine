@@ -3,15 +3,16 @@
 //! or how far); below, the cast and similar series. The page scrolls; over it, after an episode
 //! ended, the "Next episode" card counts down.
 
+use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Instant;
 
-use bobine::provider::{Episode, Season, SeriesDetail};
+use bobine::provider::{Episode, ItemId, Season, SeriesDetail};
 use bobine::requests::MediaKind;
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    Animation, AnimationExt, AnyElement, Context, Div, FontWeight, IntoElement, Stateful, Window,
-    div, px, rgb, rgba,
+    Animation, AnimationExt, AnyElement, Bounds, Context, Div, FontWeight, IntoElement, Pixels,
+    ScrollHandle, Stateful, Window, canvas, div, point, px, rgb, rgba,
 };
 
 use super::card::{Offer, Open, Play};
@@ -30,6 +31,9 @@ use crate::series_page::{self, Next};
 use crate::shell::{Loadable, SeriesPage, Shell};
 use crate::theme;
 use crate::trailer;
+
+/// How far under the top of the window an episode a notification opened lands: clear of the bar.
+const IN_VIEW_TOP: f32 = 96.;
 
 const STILL_WIDTH: f32 = 190.;
 const STILL_HEIGHT: f32 = 107.;
@@ -361,6 +365,12 @@ fn episode_row(
 ) -> Stateful<Div> {
     let still = shell.image(episode.item.poster.as_ref(), images::CARD, cx);
     let item = &episode.item;
+    // The episode a notification opened the page for: the page scrolls to it once it is laid out.
+    let in_view = shell
+        .series_pages
+        .last()
+        .filter(|page| page.in_view.borrow().as_ref().map(|(id, _)| id) == Some(&item.id))
+        .map(|page| (page.in_view.clone(), page.scroll.clone()));
     let title = match episode.number {
         Some(number) => format!("{number} · {}", item.title),
         None => item.title.clone(),
@@ -487,6 +497,52 @@ fn episode_row(
                 })),
         )
         .child(check)
+        .when_some(in_view, |row, (wanted, scroll)| {
+            row.relative().child(
+                canvas(
+                    move |at, window, _| bring_into_view(at, &scroll, &wanted, window),
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .inset_0(),
+            )
+        })
+}
+
+/// How many frames a page not laid out yet is waited for before the row is no longer wanted in
+/// view: a row that never fits would otherwise ask for frames as long as the page is shown.
+const LAYOUT_FRAMES: u8 = 8;
+
+/// Scrolls the page so that the row drawn `at` shows near its top, once: the episode is then no
+/// longer wanted in view, and the viewer scrolls on from there.
+fn bring_into_view(
+    at: Bounds<Pixels>,
+    scroll: &ScrollHandle,
+    wanted: &RefCell<Option<(ItemId, u8)>>,
+    window: &mut Window,
+) {
+    let page = scroll.bounds();
+    if at.top() >= page.top() && at.bottom() <= page.bottom() {
+        wanted.take();
+        return;
+    }
+    let (offset, max) = (scroll.offset(), scroll.max_offset());
+    // Not laid out yet: the next frame tries again, asked for, since nothing else may draw one.
+    if max.y <= px(0.) {
+        let mut wanted = wanted.borrow_mut();
+        match wanted.as_mut() {
+            Some((_, frames)) if *frames < LAYOUT_FRAMES => {
+                *frames += 1;
+                window.request_animation_frame();
+            }
+            _ => *wanted = None,
+        }
+        return;
+    }
+    let y = offset.y - (at.top() - page.top() - px(IN_VIEW_TOP));
+    scroll.set_offset(point(offset.x, y.clamp(-max.y, px(0.))));
+    wanted.take();
+    window.refresh();
 }
 
 /// "Next episode", bottom right over the series page: the still, the episode, the seconds
@@ -594,4 +650,47 @@ pub fn up_next_card(
             )
             .into_any_element(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use gpui_kit::{TestAppContext, size};
+
+    use super::*;
+
+    /// A row out of a page never laid out.
+    struct Lost {
+        scroll: ScrollHandle,
+        wanted: Rc<RefCell<Option<(ItemId, u8)>>>,
+    }
+
+    impl Render for Lost {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let (scroll, wanted) = (self.scroll.clone(), self.wanted.clone());
+            let at = Bounds::new(point(px(0.), px(500.)), size(px(10.), px(10.)));
+            canvas(
+                move |_, window, _| bring_into_view(at, &scroll, &wanted, window),
+                |_, _, _, _| {},
+            )
+            .size_full()
+        }
+    }
+
+    #[gpui_kit::test]
+    fn a_row_that_never_fits_stops_asking_for_frames(cx: &mut TestAppContext) {
+        let wanted = Rc::new(RefCell::new(Some((ItemId("series-1-s1-e4".into()), 0))));
+        let lost = Lost {
+            scroll: ScrollHandle::new(),
+            wanted: wanted.clone(),
+        };
+        let (_, window) = cx.add_window_view(|_, _| lost);
+        window.run_until_parked();
+        let mut frames = 0;
+        while window.update(|window, cx| window.simulate_next_frame(cx)) > 0 && frames < 100 {
+            window.run_until_parked();
+            frames += 1;
+        }
+        assert_eq!(frames, usize::from(LAYOUT_FRAMES), "frames asked");
+        assert_eq!(*wanted.borrow(), None, "given up");
+    }
 }

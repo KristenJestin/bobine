@@ -12,7 +12,7 @@ mod tests;
 use crate::provider::{
     Collection, CollectionCard, CollectionDetail, Connector, EntryId, Episode, ExternalSubtitle,
     Favourite, Feature, Film, FilmDetail, FilmQuery, FilmSort, FilterChoices, HistorySource,
-    ImageKind, ImageRef, ItemId, Library, LocalTime, MediaServer, MediaSourceId, Page,
+    ImageKind, ImageRef, ItemId, Library, LocalTime, MediaServer, MediaSourceId, NewEpisode, Page,
     PersonTitles, Play, PlayMethod, PlaySessionId, Playback, PlaybackReport, Playlist,
     PlaylistEntry, ProviderError, SearchResults, Season, Segment, Series, SeriesDetail, ServerInfo,
     StreamUrl, Title, TmdbIndex, Token, TokenStore, TranscodeRequest, Trickplay, WatchHistory,
@@ -226,6 +226,18 @@ fn subtitle_format(codec: Option<&str>) -> String {
 /// Titles of a person asked at once, and the most of them ever asked.
 const PERSON_TITLES_PAGE: usize = 100;
 const PERSON_TITLES_CAP: usize = 1000;
+
+/// An episode whose date cannot be read is left out of the new episodes rather than told at the
+/// wrong time; said once a run, so a check every quarter of an hour does not fill the log.
+fn unread_date(date: Option<&str>) {
+    static SAID: std::sync::Once = std::sync::Once::new();
+    SAID.call_once(|| {
+        eprintln!(
+            "bobine: an episode dated {:?} is left out of the new episodes: the date cannot be read",
+            date.unwrap_or("nowhen")
+        );
+    });
+}
 
 impl Jellyfin {
     fn user(&self) -> (&'static str, String) {
@@ -892,6 +904,46 @@ impl MediaServer for Jellyfin {
             }
         }
         Ok(titles)
+    }
+
+    /// Every library's episodes, not `/Items/Latest`, which leaves out the libraries hidden from
+    /// "Latest" and has no pages. Played ones are left out by the server.
+    fn new_episodes(&self, start: u32, limit: u32) -> Result<Page<NewEpisode>, ProviderError> {
+        let found = self.items(
+            "new episodes",
+            &[
+                ("recursive", "true".into()),
+                ("includeItemTypes", "Episode".into()),
+                ("isPlayed", "false".into()),
+                // Not the episodes that have no file, listed when the user shows missing ones:
+                // Jellyfin reads it as "not virtual", which leaves the unaired out too.
+                ("isMissing", "false".into()),
+                ("sortBy", "DateCreated".into()),
+                ("sortOrder", "Descending".into()),
+                ("startIndex", start.to_string()),
+                // Never 0: Jellyfin reads it as no limit at all.
+                ("limit", limit.max(1).to_string()),
+                ("enableTotalRecordCount", "true".into()),
+                ("enableUserData", "true".into()),
+                ("imageTypeLimit", "1".into()),
+                ("enableImageTypes", "Primary".into()),
+                ("fields", "DateCreated,SeriesPrimaryImage".into()),
+            ],
+        )?;
+        let total = found.total_record_count.unwrap_or(found.items.len() as u32);
+        let items = found
+            .items
+            .into_iter()
+            .filter_map(|item| {
+                let date = item.date_created.clone();
+                let new = item.new_episode();
+                if new.is_none() {
+                    unread_date(date.as_deref());
+                }
+                new
+            })
+            .collect();
+        Ok(Page { items, total })
     }
 
     /// The simplest honest choice: the newest titles, films and series, that the user has not

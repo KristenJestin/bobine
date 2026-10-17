@@ -2,6 +2,7 @@
 
 mod desktop;
 mod discover;
+mod episodes;
 mod home;
 mod keys;
 mod lists;
@@ -277,6 +278,13 @@ pub struct Shell {
     /// written (`None`: nowhere, and none is shown).
     pub mpris: crate::mpris::Publisher,
     art_dir: Option<PathBuf>,
+    /// What tells the desktop of new episodes (`None`: nothing is told, nothing checked), the
+    /// checks of the account signed in (with whether one of theirs is asking now), and the
+    /// clicks on what was told, heard.
+    notifier: Option<Box<dyn crate::notify::Notifier>>,
+    episode_checks: Option<Task<()>>,
+    episode_checking: std::rc::Rc<std::cell::Cell<bool>>,
+    notification_clicks: Option<Task<()>>,
 }
 
 /// When the shell and its header were drawn, and, for the harness, when the shell was notified.
@@ -363,6 +371,7 @@ impl Shell {
             .map(Settings::read)
             .unwrap_or_default();
         let blackout_switch = Fade::starting_at(motion::quick(), settings.black_out_other_monitors);
+        let settings_page = SettingsPage::new(settings.notify_new_episodes);
         let this = cx.weak_entity();
         let hero_view = cx.new(|_| screens::HeroView::new(this));
         let mut shell = Self {
@@ -374,7 +383,7 @@ impl Shell {
             settings,
             settings_path,
             secrets,
-            settings_page: SettingsPage::default(),
+            settings_page,
             seerr: Seerr::default(),
             open_seerr: discover::real_seerr(),
             screens: None,
@@ -468,17 +477,28 @@ impl Shell {
             ),
             #[cfg(test)]
             art_dir: None,
+            #[cfg(not(test))]
+            notifier: Some(Box::new(crate::notify::dbus::Dbus::session())),
+            #[cfg(test)]
+            notifier: None,
+            episode_checks: None,
+            episode_checking: Default::default(),
+            notification_clicks: None,
         };
         shell.begin(open, cx);
         shell
     }
 
-    /// The desktop's media controls off: no bus taken, no poster written. The harness on its fake
-    /// server must not show invented films on the user's real bus nor fill their real cache.
+    /// The desktop's media controls and notifications off: no bus taken, no poster written, no
+    /// new episode checked. The harness on its fake server must not show invented films on the
+    /// user's real bus nor fill their real cache.
     #[cfg(any(test, feature = "harness"))]
     pub fn without_desktop(&mut self) {
         self.mpris = crate::mpris::Publisher::new(Box::new(crate::mpris::dbus::Dbus::at(None)));
         self.art_dir = None;
+        self.notifier = None;
+        self.episode_checks = None;
+        self.notification_clicks = None;
     }
 
     /// A frame was drawn: the page and its header are two views of one frame, which count once.
@@ -963,6 +983,7 @@ impl Render for Shell {
             self.settings_page.menus.close();
         }
         self.follow_playlist_menu(window);
+        self.listen_to_notifications(window, cx);
         #[cfg(feature = "harness")]
         self.note_frame();
         #[cfg(any(test, feature = "harness"))]

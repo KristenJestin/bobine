@@ -1120,6 +1120,95 @@ fn the_latest_asks_for_the_series_picture_of_a_lone_new_episode() {
 }
 
 #[test]
+fn the_new_episodes_come_one_by_one_with_when_they_were_added() {
+    let s = Setup::new();
+    let found = s.signed_in().new_episodes(0, 20).unwrap();
+    let asked = s.fake.last("GET", "/Items");
+    assert_eq!(asked.param("UserId"), Some(USER_ID));
+    assert_eq!(asked.param("ParentId"), None, "every library");
+    assert_eq!(asked.param("Recursive"), Some("true"));
+    assert_eq!(asked.param("IncludeItemTypes"), Some("Episode"));
+    assert_eq!(asked.param("IsPlayed"), Some("false"));
+    assert_eq!(asked.param("SortBy"), Some("DateCreated"));
+    assert_eq!(asked.param("SortOrder"), Some("Descending"));
+    assert_eq!(asked.param("StartIndex"), Some("0"));
+    assert_eq!(asked.param("Limit"), Some("20"));
+    assert_eq!(asked.param("EnableTotalRecordCount"), Some("true"));
+    assert_eq!(asked.param("EnableUserData"), Some("true"));
+    assert_eq!(
+        asked.param("Fields"),
+        Some("DateCreated,SeriesPrimaryImage")
+    );
+    assert_eq!(found.total, 3);
+    let found = found.items;
+    assert_eq!(
+        found.len(),
+        2,
+        "the one whose date cannot be read is left out"
+    );
+    let bell = &found[0];
+    assert_eq!(bell.episode.item.title, "Bell Tower");
+    assert_eq!(bell.episode.series, ItemId(SERIES.into()));
+    assert_eq!(bell.episode.series_title, "Tidewater");
+    assert_eq!(bell.episode.season, ItemId(SEASON.into()));
+    assert_eq!(
+        (bell.episode.season_number, bell.episode.number),
+        (Some(2), Some(2))
+    );
+    assert!(!bell.episode.item.watched);
+    assert_eq!(bell.added, BELL_TOWER_ADDED + 1_234_567);
+    assert_eq!(
+        bell.poster,
+        Some(ImageRef {
+            item: ItemId(SERIES.into()),
+            kind: ImageKind::Primary,
+            tag: "poster-tw".into(),
+        }),
+        "the series' poster"
+    );
+    let table = &found[1];
+    assert!(table.episode.item.watched);
+    assert_eq!(
+        table.added,
+        1_709_251_199 * 10_000_000,
+        "2024-02-29T23:59:59Z"
+    );
+    assert_eq!(table.poster, None);
+}
+
+#[test]
+fn the_new_episodes_are_asked_page_by_page() {
+    let s = Setup::new();
+    let found = s.signed_in().new_episodes(1, 1).unwrap();
+    let asked = s.fake.last("GET", "/Items");
+    assert_eq!(asked.param("StartIndex"), Some("1"));
+    assert_eq!(asked.param("Limit"), Some("1"));
+    assert_eq!(found.total, 3);
+    let titles: Vec<&str> = found
+        .items
+        .iter()
+        .map(|n| n.episode.item.title.as_str())
+        .collect();
+    assert_eq!(titles, ["The Long Table"]);
+}
+
+#[test]
+fn an_episode_not_aired_yet_is_never_a_new_episode() {
+    let s = Setup::new();
+    let found = s.signed_in().new_episodes(0, 20).unwrap();
+    assert_eq!(
+        s.fake.last("GET", "/Items").param("IsMissing"),
+        Some("false")
+    );
+    let titles: Vec<&str> = found
+        .items
+        .iter()
+        .map(|n| n.episode.item.title.as_str())
+        .collect();
+    assert!(!titles.contains(&"Not Aired Yet"), "{titles:?}");
+}
+
+#[test]
 fn a_series_that_gained_one_episode_is_listed_as_the_series() {
     let s = Setup::new();
     let latest = s
@@ -3934,4 +4023,139 @@ fn the_plugin_is_asked_the_servers_offset_from_utc() {
         ),
         "{query}"
     );
+}
+
+/// 2025-09-14T08:30:05Z, in ticks of 100 ns since 1970.
+const BELL_TOWER_ADDED: i64 = 1_757_838_605 * 10_000_000;
+
+#[test]
+fn a_date_in_utc_is_read_to_the_tick() {
+    use super::dto::date_ticks;
+    assert_eq!(
+        date_ticks("2025-09-14T08:30:05.1234567Z"),
+        Some(BELL_TOWER_ADDED + 1_234_567)
+    );
+    assert_eq!(
+        date_ticks("2025-09-14T08:30:05.5Z"),
+        Some(BELL_TOWER_ADDED + 5_000_000)
+    );
+    assert_eq!(date_ticks("2025-09-14T08:30:05Z"), Some(BELL_TOWER_ADDED));
+    assert_eq!(
+        date_ticks("2024-02-29T23:59:59Z"),
+        Some(1_709_251_199 * 10_000_000)
+    );
+}
+
+#[test]
+fn a_date_with_an_offset_is_read_in_utc() {
+    use super::dto::date_ticks;
+    assert_eq!(
+        date_ticks("2025-09-14T10:30:05.1234567+02:00"),
+        Some(BELL_TOWER_ADDED + 1_234_567)
+    );
+    assert_eq!(
+        date_ticks("2025-09-14T03:30:05-05:00"),
+        Some(BELL_TOWER_ADDED)
+    );
+    assert_eq!(
+        date_ticks("2025-09-14T08:30:05+00:00"),
+        Some(BELL_TOWER_ADDED)
+    );
+}
+
+#[test]
+fn a_date_without_a_zone_is_read_as_utc() {
+    use super::dto::date_ticks;
+    assert_eq!(
+        date_ticks("2025-09-14T08:30:05.1234567"),
+        Some(BELL_TOWER_ADDED + 1_234_567)
+    );
+    assert_eq!(date_ticks("2025-09-14T08:30:05"), Some(BELL_TOWER_ADDED));
+}
+
+#[test]
+fn an_offset_that_crosses_midnight_and_the_month_end_is_read_in_utc() {
+    use super::dto::date_ticks;
+    const SECOND: i64 = 10_000_000;
+    assert_eq!(
+        date_ticks("2025-02-01T01:30:00+02:00"),
+        Some(1_738_366_200 * SECOND),
+        "2025-01-31T23:30:00Z"
+    );
+    assert_eq!(
+        date_ticks("2024-12-31T22:00:00-03:00"),
+        Some(1_735_693_200 * SECOND),
+        "2025-01-01T01:00:00Z"
+    );
+    assert_eq!(
+        date_ticks("2024-02-29T22:30:00-02:00"),
+        Some(1_709_253_000 * SECOND),
+        "2024-03-01T00:30:00Z, past a leap day"
+    );
+}
+
+#[test]
+fn a_leap_day_is_read_only_in_a_leap_year() {
+    use super::dto::date_ticks;
+    const SECOND: i64 = 10_000_000;
+    assert_eq!(
+        date_ticks("2024-02-29T12:00:00Z"),
+        Some(1_709_208_000 * SECOND)
+    );
+    assert_eq!(
+        date_ticks("2000-02-29T00:00:00Z"),
+        Some(951_782_400 * SECOND),
+        "a fourth century"
+    );
+    assert_eq!(date_ticks("2023-02-29T12:00:00Z"), None);
+    assert_eq!(date_ticks("1900-02-29T12:00:00Z"), None, "a century");
+}
+
+#[test]
+fn a_date_with_other_than_ascii_is_not_read() {
+    use super::dto::date_ticks;
+    for date in [
+        "２025-09-14T08:30:05Z",
+        "2025-09-14T08:30:0é",
+        "2025-09-14T08:30:05é",
+        "2025-09-14T08:30:05.é",
+        "2025-09-14T08:30:05.12é",
+        "2025-09-14T08:30:05.５Z",
+        "2025-09-14T08:30:05+0२:00",
+        "2025-09-14T08:30:05Z\u{301}",
+        "2025-09-14—08:30:05Z",
+    ] {
+        assert_eq!(date_ticks(date), None, "{date}");
+    }
+}
+
+#[test]
+fn a_malformed_date_is_not_read() {
+    use super::dto::date_ticks;
+    for date in [
+        "2025-09-14T08X30X05Z",
+        "2025X09-14T08:30:05Z",
+        "2025-09X14T08:30:05Z",
+        "2025-09-14 08:30:05Z",
+        "2025-13-14T08:30:05Z",
+        "2025-00-14T08:30:05Z",
+        "2025-02-29T08:30:05Z",
+        "2025-09-31T08:30:05Z",
+        "2025-09-00T08:30:05Z",
+        "2025-09-14T24:30:05Z",
+        "2025-09-14T08:60:05Z",
+        "2025-09-14T08:30:60Z",
+        "2025-09-14T08:30:05.Z",
+        "2025-09-14T08:30:05.12345678Z",
+        "2025-09-14T08:30:05.12a4Z",
+        "2025-09-14T08:30:05+02",
+        "2025-09-14T08:30:05+24:00",
+        "2025-09-14T08:30:05+02:60",
+        "2025-09-14T08:30:05Zjunk",
+        "2025-09-14T08:30",
+        "+025-09-14T08:30:05Z",
+        "",
+    ] {
+        assert_eq!(date_ticks(date), None, "{date}");
+    }
 }
