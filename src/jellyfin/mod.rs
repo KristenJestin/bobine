@@ -1315,6 +1315,8 @@ impl Jellyfin {
             .iter()
             .position(|column| column == "ServerOffset");
         // How far ahead of UTC the server's clock is, to the minute: SQLite's sum is not exact.
+        // The plugin reads the cell with SQLite's own text (`sqlite3_column_text`), which always
+        // writes the point, whatever the culture of the server: no comma to read.
         let offset = |row: &[serde_json::Value]| {
             let seconds = text(row, offset_at?).parse::<f64>().ok()?;
             Some((seconds / 60.).round() as i64 * 60)
