@@ -12,7 +12,7 @@
 //! `bobine --screen login|home|home-rows|home-list-resume|home-list-next|home-list-latest|home-list-empty|library|detail|
 //! detail-rows|detail-cast|playing|series|series-page|series-rows|up-next|collections|collection-page|
 //! my-list|my-list-empty|lists|playlist|film-list|series-list|discover|request|seasons|similar|settings-seerr|stats|stats-played [--films N]
-//! [--media FILE] [--segments SECONDS] [--direct-fails] [--trailer] [--image-delay-ms N] [--photos-fail-once] [--scenario menu|scroll|select|panel|blackout|search|search-slow|search-keys|tools|tools-keys|home-rotate|home-hover|home-jump|home-scroll|home-lists|home-play|home-poster-hover|grid-poster-hover|playlist-menu|cast-hover|genre-hover|episode-hover|skip|settings|settings-screen|long-tracks|segment-marks]
+//! [--media FILE] [--segments SECONDS] [--direct-fails] [--trailer] [--image-delay-ms N] [--photos-fail-once] [--scenario menu|scroll|select|panel|blackout|search|search-slow|search-keys|tools|tools-keys|home-rotate|home-hover|home-jump|home-scroll|home-lists|home-play|home-poster-hover|grid-poster-hover|playlist-menu|cast-hover|genre-hover|episode-hover|skip|settings|settings-screen|long-tracks|segment-marks|stats-scroll]
 //! [--stats plugin|played] [--search-delay-ms N] [--favourite-delay-ms N] [--logout-delay-ms N] [--favourite-fails] [--slower N] --quit-at S`
 //!
 //! A scenario sends clicks, keys and scroll events to the window as the compositor would, at set
@@ -491,7 +491,12 @@ fn show_screen(
     };
     let mut done_steps = 0;
     // A scenario starts once the screen is reached: the login at once, a film page after it opened.
-    let ready_after = if to_film || to_series_page || list.is_some() || to_collection || to_playlist
+    let ready_after = if to_film
+        || to_series_page
+        || list.is_some()
+        || to_collection
+        || to_playlist
+        || to_stats
     {
         3
     } else {
@@ -1001,6 +1006,15 @@ impl Acts {
                 (5.0, "click the first mark again", Click(HeroMark(0))),
             ],
             // The wheel over a row goes sideways, over the header it goes down.
+            "stats-scroll" => vec![(
+                0.5,
+                "wheel down to the foot of the stats",
+                Wheel {
+                    over: At(720., 400.),
+                    lines: -60.,
+                    shift: false,
+                },
+            )],
             "home-scroll" => vec![
                 // Before any move the window takes the pointer for being at its corner, over
                 // the header: it goes where it is out of the way.
