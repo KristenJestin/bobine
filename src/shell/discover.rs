@@ -571,7 +571,7 @@ pub(super) mod tests {
 
     use bobine::provider::{Connector, TokenStore};
     use bobine::requests::RequestError;
-    use gpui_kit::{Modifiers, TestAppContext, VisualTestContext, WindowHandle};
+    use gpui_kit::{Focusable, Modifiers, TestAppContext, VisualTestContext, WindowHandle};
 
     use super::*;
     use crate::config::Settings;
@@ -764,6 +764,55 @@ pub(super) mod tests {
         assert!(visual.debug_bounds("seerr-check").is_some());
         assert!(visual.debug_bounds("seerr-owner").is_none());
         assert_eq!(seerr.state.lock().unwrap().record.checks, 0);
+    }
+
+    /// A long address and a long key stay in their fields: their text is cut at the field's
+    /// edge, and the field scrolls to keep the caret, at the end of the text, in view.
+    #[gpui_kit::test]
+    fn a_200_character_address_and_a_64_character_key_stay_inside_their_fields(
+        cx: &mut TestAppContext,
+    ) {
+        let seerr = FakeSeerr::default();
+        let (window, _) = start(None, &Arc::new(MemoryKeyring::default()), &seerr, cx);
+        let address = format!("https://{}.example.org", "a".repeat(200 - 20));
+        assert_eq!(address.len(), 200);
+        let (address_field, key_field) = window
+            .update(cx, |shell, window, cx| {
+                shell.open_settings(cx);
+                let field = shell.seerr.address.clone().unwrap();
+                field.update(cx, |field, cx| field.set_text(&address, cx));
+                let key = shell.seerr.key.clone().unwrap();
+                key.update(cx, |key, cx| key.type_in(&"k".repeat(64), cx));
+                let key = key.read(cx).input().clone();
+                // The caret shows only in the field that has the focus.
+                let focus = field.read(cx).focus_handle(cx);
+                window.focus(&focus, cx);
+                (field, key)
+            })
+            .unwrap();
+        let mut visual = drawn(&window, cx);
+        let check = |name: &str, field: &Entity<TextInput>, visual: &mut VisualTestContext| {
+            let crate::input::Drawn { room, caret, clip } =
+                visual.read(|cx| field.read(cx).drawn().expect("the field was drawn"));
+            assert!(
+                caret.left() >= room.left() && caret.right() <= room.right(),
+                "the {name}'s caret at {caret:?} is out of its field {room:?}"
+            );
+            let clip = clip.unwrap_or_else(|| panic!("the {name}'s text is not clipped"));
+            assert!(
+                clip.left() >= room.left() && clip.right() <= room.right(),
+                "the {name}'s text is clipped to {clip:?}, wider than its field {room:?}"
+            );
+        };
+        check("address", &address_field, &mut visual);
+        window
+            .update(cx, |_, window, cx| {
+                let focus = key_field.read(cx).focus_handle(cx);
+                window.focus(&focus, cx);
+            })
+            .unwrap();
+        visual.run_until_parked();
+        check("key", &key_field, &mut visual);
     }
 
     #[gpui_kit::test]

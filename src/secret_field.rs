@@ -121,6 +121,11 @@ impl SecretField {
         self.input.update(cx, |input, cx| input.set_text(text, cx));
     }
 
+    #[cfg(test)]
+    pub fn input(&self) -> &Entity<TextInput> {
+        &self.input
+    }
+
     /// Keeps what was typed in the keyring. The field is emptied first: from here the value
     /// lives only in the call.
     pub fn save(&mut self, cx: &mut Context<Self>) {
