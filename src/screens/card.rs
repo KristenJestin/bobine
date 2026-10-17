@@ -8,16 +8,18 @@
 use std::cell::Cell;
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::Instant;
 
 use bobine::provider::{Episode, ItemId};
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    AnyElement, App, Bounds, Context, Div, ElementId, Entity, IntoElement, Pixels, Render, Rgba,
-    SharedString, Stateful, WeakEntity, Window, canvas, div, px, rgb, rgba,
+    AnyElement, App, Bounds, Context, Div, ElementId, Entity, IntoElement, Pixels, Render,
+    RenderImage, Rgba, SharedString, Stateful, WeakEntity, Window, canvas, div, px, rgb, rgba,
 };
 
 use super::home::Pick;
+use crate::curtain::Picture;
 use crate::home_page::PlayTarget;
 use crate::icons::{IconName, icon};
 use crate::motion::{self, Fade};
@@ -101,6 +103,8 @@ pub type Draw = Rc<dyn Fn(Stateful<Div>) -> Div>;
 #[derive(Clone)]
 pub struct Offer {
     pub open: Open,
+    /// The picture the card shows: the way into the player grows from it.
+    pub image: Option<Arc<RenderImage>>,
     pub play: Play,
     pub quick: Option<Quick>,
     pub draw: Draw,
@@ -190,6 +194,19 @@ impl Cards {
         self.views.get(id).map(|kept| kept.offer.clone())
     }
 
+    /// The picture of the card `id`, as the last draw left it: where the way into the player
+    /// grows from, and where the way out goes back to. The shell asks it while it draws as well,
+    /// before the cards have been given again: the draw before still stands then.
+    pub fn picture(&self, id: &ElementId) -> Option<Picture> {
+        let kept = (self.views.get(id)).filter(|kept| kept.drawn + 1 >= self.frame)?;
+        Some(Picture {
+            at: id.clone(),
+            item: kept.offer.open.item()?.clone(),
+            image: kept.offer.image.clone()?,
+            bounds: kept.place.get()?,
+        })
+    }
+
     /// The cards of the last draw, and where their pictures were: one drawn by the draw before
     /// it is still kept, at a place it is no longer at.
     pub fn places(&self) -> Vec<(ElementId, Bounds<Pixels>)> {
@@ -232,8 +249,15 @@ pub fn open_card(shell: &mut Shell, open: Open, cx: &mut Context<Shell>) {
     }
 }
 
-/// What the card's play button starts; P on the card the ring is on.
-pub fn play_card(shell: &mut Shell, play: Play, window: &mut Window, cx: &mut Context<Shell>) {
+/// What the play button of the card `at` starts; P on the card the ring is on.
+pub fn play_card(
+    shell: &mut Shell,
+    at: &ElementId,
+    play: Play,
+    window: &mut Window,
+    cx: &mut Context<Shell>,
+) {
+    shell.clicked_on(at.clone());
     let target = match play {
         Play::Episode(episode) => return shell.play_episode(*episode, window, cx),
         Play::Target(target) => Some(target),
@@ -241,8 +265,9 @@ pub fn play_card(shell: &mut Shell, play: Play, window: &mut Window, cx: &mut Co
             .title(shell.list.as_ref().map(|list| &list.grid))
             .map(|title| PlayTarget::of(&title)),
     };
-    if let Some(target) = target {
-        shell.play_from_home(target, window, cx);
+    match target {
+        Some(target) => shell.play_from_home(target, window, cx),
+        None => shell.forget_click(),
     }
 }
 
@@ -339,7 +364,7 @@ impl Card {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
-        let shell = self.shell.clone();
+        let (shell, name) = (self.shell.clone(), self.name.clone());
         theme::eased(
             "play",
             theme::Shades {
@@ -363,7 +388,7 @@ impl Card {
             cx.stop_propagation();
             let play = play.clone();
             shell
-                .update(cx, |shell, cx| play_card(shell, play, window, cx))
+                .update(cx, |shell, cx| play_card(shell, &name, play, window, cx))
                 .ok();
         })
         .child(icon(IconName::Play, 22.))

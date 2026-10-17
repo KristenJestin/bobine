@@ -41,6 +41,8 @@ const GAP: f32 = 16.;
 /// The left of the header's text, after the design.
 const HERO_INSET: f32 = 150.;
 const HERO_TEXT_WIDTH: f32 = 560.;
+/// Where the header's picture is drawn, for the way into the player.
+const HERO: &str = "hero";
 /// The space between two rows, and under the heading of a row.
 const BETWEEN_ROWS: f32 = 40.;
 const HEADING: f32 = 28.;
@@ -290,6 +292,7 @@ impl Render for HeroView {
                     .map(|f| shell.peek_image(f.logo.as_ref(), images::LOGO))
                     .collect(),
                 font: shell.font(),
+                pictures: shell.pictures.clone(),
             };
             (features, frame)
         };
@@ -316,6 +319,8 @@ struct Frame {
     backdrops: Vec<Option<Arc<RenderImage>>>,
     logos: Vec<Option<Arc<RenderImage>>>,
     font: Option<SharedString>,
+    /// Where the header says its picture is drawn.
+    pictures: crate::curtain::Drawn,
 }
 
 /// One draw of the header: it holds what it read of the shell, and writes nothing to it.
@@ -366,8 +371,16 @@ impl Draw<'_> {
 
         let target = self.target.clone();
         let marks = (features.len() > 1).then(|| self.marks(features.len(), window, cx));
+        // The way into the player grows from the backdrop on show.
+        let mark = crate::curtain::mark(
+            &self.frame.pictures,
+            HERO.into(),
+            &features[current].id,
+            self.frame.backdrops[current].clone(),
+        );
         div()
             .id("hero")
+            .debug_selector(|| HERO.into())
             .relative()
             .w_full()
             .h(px(height))
@@ -379,6 +392,7 @@ impl Draw<'_> {
                     .ok();
             })
             .children(layers)
+            .child(mark)
             .children(marks)
             // The header comes in with a fade the first time it is drawn.
             .with_animation(
@@ -419,7 +433,10 @@ impl Draw<'_> {
             button.on_click(move |_, window, cx| {
                 let what = what.clone();
                 target
-                    .update(cx, |shell, cx| shell.play_from_home(what, window, cx))
+                    .update(cx, |shell, cx| {
+                        shell.clicked_on(HERO);
+                        shell.play_from_home(what, window, cx)
+                    })
                     .ok();
             })
         });
@@ -817,6 +834,7 @@ pub(super) fn wide_offer(
     let (heading, detail) = home_page::card_lines(title);
     let left = home_page::time_left(title);
     let progress = home_page::progress(title);
+    let shown = image.clone();
     let draw = move |layer: Stateful<Div>| {
         let picture_box = div()
             .relative()
@@ -881,6 +899,7 @@ pub(super) fn wide_offer(
     };
     Offer {
         open: Open::Pick(pick.clone()),
+        image: shown,
         play: Play::Pick(pick),
         quick: None,
         draw: Rc::new(draw),

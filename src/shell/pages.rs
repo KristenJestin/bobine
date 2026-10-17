@@ -1479,6 +1479,7 @@ impl Shell {
         let Some(plan) = film_page::plan(&detail.film, &detail.versions, choices, from) else {
             page.error = Some("This movie has no version to play.");
             cx.notify();
+            self.forget_click();
             return;
         };
         let Some(server) = self.server.clone() else {
@@ -1523,6 +1524,9 @@ impl Shell {
         error: Option<&'static str>,
         cx: &mut Context<Self>,
     ) {
+        if error.is_some() {
+            self.forget_click();
+        }
         // The header and the posters play from any page: the window says what went wrong where
         // it is, for a moment, in the pill of its other messages.
         let (busy, shown) = match origin {

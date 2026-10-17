@@ -158,15 +158,15 @@ fn hero(
     let series = &detail.series;
     let backdrop = shell.image(series.backdrop.as_ref(), images::BACKDROP, cx);
     let height = (window_height * 0.62).clamp(440., 680.);
-    let play =
-        shown.next.clone().map(|next| {
-            let label = series_page::play_label(&next);
-            theme::primary_button("series-play", Some(IconName::Play), label, window, cx)
-                .when(shown.busy, |button| button.opacity(0.6))
-                .on_click(cx.listener(move |shell, _, window, cx| {
-                    shell.play_episode(next.clone(), window, cx)
-                }))
-        });
+    let play = shown.next.clone().map(|next| {
+        let label = series_page::play_label(&next);
+        theme::primary_button("series-play", Some(IconName::Play), label, window, cx)
+            .when(shown.busy, |button| button.opacity(0.6))
+            .on_click(cx.listener(move |shell, _, window, cx| {
+                shell.clicked_on(crate::curtain::PAGE);
+                shell.play_episode(next.clone(), window, cx)
+            }))
+    });
     let started = shown.next.as_ref().and_then(|next| {
         let fraction = film_page::progress(&next.item)?;
         Some(
@@ -190,7 +190,12 @@ fn hero(
         .map(|(next, choices)| chips_row(&next.versions, choices, menu, &shown.chips, window, cx));
     let title = heading(shell, &series.title, detail.logo.as_ref(), window, cx);
     // The way into the player grows from it.
-    let mark = crate::curtain::mark(&shell.pictures, &series.id, backdrop.clone());
+    let mark = crate::curtain::mark(
+        &shell.pictures,
+        crate::curtain::PAGE.into(),
+        &series.id,
+        backdrop.clone(),
+    );
     hero_frame(backdrop, height).child(mark).child(
         hero_text_under(title)
             .child(facts_line(
@@ -382,6 +387,7 @@ fn episode_row(
     // The pointer over the picture brings the veil and the play button of the cards; the click
     // anywhere on the row, the picture included, plays.
     let progress = film_page::progress(item);
+    let image = still.clone();
     let draw = move |layer: Stateful<Div>| {
         div()
             .relative()
@@ -403,6 +409,7 @@ fn episode_row(
     };
     let offer = Offer {
         open: Open::Row(item.id.clone()),
+        image,
         play: Play::Episode(Box::new(episode.clone())),
         quick: None,
         draw: Rc::new(draw),

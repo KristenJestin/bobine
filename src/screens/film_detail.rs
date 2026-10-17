@@ -207,7 +207,10 @@ fn hero(
         window,
         cx,
     )
-    .on_click(cx.listener(|shell, _, window, cx| shell.play_film(From::Resume, window, cx)));
+    .on_click(cx.listener(|shell, _, window, cx| {
+        shell.clicked_on(crate::curtain::PAGE);
+        shell.play_film(From::Resume, window, cx)
+    }));
     let from_start = film.resume.is_some().then(|| {
         theme::ghost_button(
             "film-from-start",
@@ -216,7 +219,10 @@ fn hero(
             window,
             cx,
         )
-        .on_click(cx.listener(|shell, _, window, cx| shell.play_film(From::Beginning, window, cx)))
+        .on_click(cx.listener(|shell, _, window, cx| {
+            shell.clicked_on(crate::curtain::PAGE);
+            shell.play_film(From::Beginning, window, cx)
+        }))
     });
     let trailer = trailer::choose(&detail.trailers, shell.ytdlp)
         .map(|_| trailer_button(FILM_TRAILER, window, cx));
@@ -254,7 +260,12 @@ fn hero(
         .map(|collection| super::seerr_collection::part_of(collection, window, cx));
     let title = heading(shell, &film.title, detail.logo.as_ref(), window, cx);
     // The way into the player grows from it.
-    let mark = crate::curtain::mark(&shell.pictures, &film.id, backdrop.clone());
+    let mark = crate::curtain::mark(
+        &shell.pictures,
+        crate::curtain::PAGE.into(),
+        &film.id,
+        backdrop.clone(),
+    );
     hero_frame(backdrop, height).child(mark).child(
         hero_text_under(title)
             .child(meta_line)

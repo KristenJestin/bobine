@@ -134,12 +134,21 @@ fn line(
         playlists::caption(&entry.title),
     );
     let group = SharedString::from(format!("playlist-entry-{at}"));
-    let play = round_button(("playlist-entry-play", at), IconName::Play, window, cx).on_click(
-        cx.listener(move |shell, _, window, cx| {
-            cx.stop_propagation();
-            shell.play_entry(entry.clone(), false, window, cx);
-        }),
+    // The way into the player grows from the line's picture.
+    let picture_at = ("playlist-still", at);
+    let mark = crate::curtain::mark(
+        &shell.pictures,
+        picture_at.into(),
+        entry.title.id(),
+        still.clone(),
     );
+    let play = round_button(("playlist-entry-play", at), IconName::Play, window, cx)
+        .debug_selector(move || format!("playlist-entry-play {at}"))
+        .on_click(cx.listener(move |shell, _, window, cx| {
+            cx.stop_propagation();
+            shell.clicked_on(picture_at);
+            shell.play_entry(entry.clone(), false, window, cx);
+        }));
     let remove = theme::ghost_button(("playlist-entry-remove", at), None, "Remove", window, cx)
         .debug_selector(move || format!("playlist-entry-remove {at}"))
         .invisible()
@@ -169,6 +178,7 @@ fn line(
             )
             .child(
                 div()
+                    .debug_selector(move || format!("playlist-still {at}"))
                     .relative()
                     .flex_none()
                     .w(px(STILL_WIDTH))
@@ -176,7 +186,8 @@ fn line(
                     .rounded(px(6.))
                     .overflow_hidden()
                     .bg(theme::panel())
-                    .children(super::picture(still, 6.)),
+                    .children(super::picture(still, 6.))
+                    .child(mark),
             )
             .child(
                 div()
