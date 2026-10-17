@@ -13,6 +13,8 @@ use crate::shell::Shell;
 use crate::theme;
 
 const WIDTH: f32 = 760.;
+/// What it leaves at the sides of a window narrower than it.
+const MARGIN: f32 = 24.;
 /// The size it grows from, against its own.
 const FROM_SCALE: f32 = 0.94;
 
@@ -52,7 +54,9 @@ pub fn overlay(
     };
     let panel = div()
         .id("help")
+        .debug_selector(|| "help-panel".into())
         .w(at(WIDTH))
+        .max_w(at(f32::from(window.viewport_size().width) - 2. * MARGIN))
         .flex()
         .flex_col()
         .gap(at(20.))

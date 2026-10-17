@@ -743,6 +743,28 @@ mod tests {
     }
 
     #[gpui_kit::test]
+    fn in_a_narrow_window_the_help_shows_whole(cx: &mut TestAppContext) {
+        let window = signed_in(cx);
+        let mut visual = drawn(&window, cx);
+        visual.simulate_resize(gpui_kit::size(px(560.), px(900.)));
+        visual.simulate_keystrokes("?");
+        cx.executor().advance_clock(Duration::from_secs(1));
+        let mut visual = drawn(&window, cx);
+        let panel = visual
+            .debug_bounds("help-panel")
+            .expect("the help is drawn");
+        // Whole, with room left at its sides.
+        assert!(
+            f32::from(panel.left()) >= 16. && f32::from(panel.right()) <= 544.,
+            "{panel:?}"
+        );
+        for line in ["help-line Search", "help-line Show or hide the keys"] {
+            let line = visual.debug_bounds(line).unwrap();
+            assert!(line.right() <= panel.right(), "{line:?} out of {panel:?}");
+        }
+    }
+
+    #[gpui_kit::test]
     fn typing_in_a_field_does_not_trigger_keys(cx: &mut TestAppContext) {
         let window = signed_in(cx);
         let mut visual = drawn(&window, cx);
