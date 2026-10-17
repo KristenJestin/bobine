@@ -62,6 +62,7 @@ fn fixture(name: &str) -> Value {
         "playback_info" => include_str!("fixtures/playback_info.json"),
         "series" => include_str!("fixtures/series.json"),
         "latest_series" => include_str!("fixtures/latest_series.json"),
+        "new_episodes" => include_str!("fixtures/new_episodes.json"),
         "series_detail" => include_str!("fixtures/series_detail.json"),
         "series_similar" => include_str!("fixtures/series_similar.json"),
         "seasons" => include_str!("fixtures/seasons.json"),
@@ -396,6 +397,26 @@ fn person_titles(seen: &Seen) -> Value {
     json!({ "Items": page, "TotalRecordCount": total, "StartIndex": start })
 }
 
+/// The episodes not played, the newest added first, as the server pages them. The fixture keeps
+/// a played one and one whose date cannot be read, to show what the client makes of them, and
+/// one not aired yet that only "show missing episodes" lists, which `IsMissing=false` leaves out.
+fn new_episodes(seen: &Seen) -> Value {
+    let items: Vec<Value> = fixture("new_episodes")
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|item| {
+            seen.param("IsMissing") != Some("false") || item["LocationType"] != "Virtual"
+        })
+        .cloned()
+        .collect();
+    let total = items.len();
+    let start: usize = seen.param("StartIndex").map_or(0, |s| s.parse().unwrap());
+    let limit: usize = seen.param("Limit").map_or(total, |s| s.parse().unwrap());
+    let page: Vec<Value> = items.into_iter().skip(start).take(limit).collect();
+    json!({ "Items": page, "TotalRecordCount": total, "StartIndex": start })
+}
+
 fn generated_films(count: usize) -> Vec<Value> {
     (0..count)
         .map(|i| {
@@ -515,6 +536,9 @@ fn answer(state: &State, seen: &Seen) -> Answer {
             (Some(FILMS_LIBRARY), _) => Answer::Json(200, films(seen, "films")),
             (Some(LETTERS_LIBRARY), _) => Answer::Json(200, films(seen, "letters")),
             (Some(SERIES_LIBRARY), Some("Series")) => Answer::Json(200, films(seen, "series")),
+            (None, Some("Episode")) if seen.param("IsPlayed") == Some("false") => {
+                Answer::Json(200, new_episodes(seen))
+            }
             (None, Some("BoxSet")) => Answer::Json(200, fixture("boxsets")),
             (None, Some("Playlist")) => Answer::Json(200, fixture("playlists")),
             (None, Some("Movie,Series")) => Answer::Json(200, limited(fixture("featured"), seen)),

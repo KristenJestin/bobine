@@ -103,6 +103,10 @@ pub trait MediaServer: Send + Sync {
     fn next_episodes(&self, limit: u32) -> Result<Vec<Episode>, ProviderError>;
     /// What was added to a library lately, the newest first, at most `limit` titles.
     fn latest(&self, library: &ItemId, limit: u32) -> Result<Vec<Title>, ProviderError>;
+    /// The episodes of every library the user has not played, each on its own, the newest added
+    /// first, `limit` of them from `start`, and how many there are: what the desktop is told of
+    /// the series the user follows.
+    fn new_episodes(&self, start: u32, limit: u32) -> Result<Page<NewEpisode>, ProviderError>;
     /// A few recent titles the user has not watched, films and series, each with a backdrop:
     /// what the top of the Home shows in turn. At most `limit`.
     fn featured(&self, limit: u32) -> Result<Vec<Feature>, ProviderError>;
@@ -306,6 +310,17 @@ pub struct Episode {
     pub number: Option<u32>,
     pub overview: Option<String>,
     pub versions: Vec<MediaSource>,
+}
+
+/// An episode the server added, and when.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NewEpisode {
+    pub episode: Episode,
+    /// Ticks of 100 ns since 1970, by the server's clock: two episodes added in the same second
+    /// still come apart.
+    pub added: i64,
+    /// The poster of its series.
+    pub poster: Option<ImageRef>,
 }
 
 /// What a search found, group by group.

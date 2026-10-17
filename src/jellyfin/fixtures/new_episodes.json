@@ -1,0 +1,31 @@
+[
+  {
+    "Name": "Bell Tower", "Id": "e0000000000000000000000000000022", "Type": "Episode",
+    "IndexNumber": 2, "ParentIndexNumber": 2, "DateCreated": "2025-09-14T08:30:05.1234567Z",
+    "SeasonId": "5e000000000000000000000000000002", "SeriesId": "50000000000000000000000000000001", "SeriesName": "Tidewater",
+    "SeriesPrimaryImageTag": "poster-tw",
+    "UserData": { "PlaybackPositionTicks": 0, "Played": false },
+    "ImageTags": { "Primary": "still-bt" }
+  },
+  {
+    "Name": "The Long Table", "Id": "e0000000000000000000000000000031", "Type": "Episode",
+    "IndexNumber": 4, "ParentIndexNumber": 1, "DateCreated": "2024-02-29T23:59:59Z",
+    "SeasonId": "5e000000000000000000000000000003", "SeriesId": "50000000000000000000000000000002", "SeriesName": "Glass Orchard",
+    "UserData": { "PlaybackPositionTicks": 0, "Played": true },
+    "ImageTags": { "Primary": "still-lt" }
+  },
+  {
+    "Name": "Low Water", "Id": "e0000000000000000000000000000032", "Type": "Episode",
+    "IndexNumber": 5, "ParentIndexNumber": 1, "DateCreated": "2024-02-29T23X59X59Z",
+    "SeasonId": "5e000000000000000000000000000003", "SeriesId": "50000000000000000000000000000002", "SeriesName": "Glass Orchard",
+    "UserData": { "PlaybackPositionTicks": 0, "Played": false },
+    "ImageTags": { "Primary": "still-lw" }
+  },
+  {
+    "Name": "Not Aired Yet", "Id": "e0000000000000000000000000000033", "Type": "Episode",
+    "IndexNumber": 6, "ParentIndexNumber": 1, "DateCreated": "2025-09-14T09:00:00Z",
+    "LocationType": "Virtual",
+    "SeasonId": "5e000000000000000000000000000003", "SeriesId": "50000000000000000000000000000002", "SeriesName": "Glass Orchard",
+    "UserData": { "PlaybackPositionTicks": 0, "Played": false }
+  }
+]
