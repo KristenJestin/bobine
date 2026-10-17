@@ -382,7 +382,8 @@ impl RequestServer for SeerrClient {
             acting.viewer.then_some(acting.id),
         )?;
         // A request names its title by id only: each is read, as Seerr's own page does, a few
-        // at a time. One that cannot be read is left out, not the whole list.
+        // at a time. One that cannot be read is left out, not the whole list; when none can,
+        // the first error is the answer, not a list that looks empty.
         let wanted: Vec<(MediaKind, TmdbId, RequestStatus)> = requests
             .results
             .into_iter()
@@ -395,7 +396,8 @@ impl RequestServer for SeerrClient {
                 Some((kind, media.tmdb_id, dto::request_status(request.status)))
             })
             .collect();
-        let read: Vec<Mutex<Option<MyRequest>>> = wanted.iter().map(|_| Mutex::new(None)).collect();
+        let read: Vec<Mutex<Option<Result<MyRequest, RequestError>>>> =
+            wanted.iter().map(|_| Mutex::new(None)).collect();
         let next = AtomicUsize::new(0);
         std::thread::scope(|scope| {
             for _ in 0..TITLE_READERS.min(wanted.len()) {
@@ -405,20 +407,30 @@ impl RequestServer for SeerrClient {
                         let Some(&(kind, id, status)) = wanted.get(at) else {
                             break;
                         };
-                        if let Ok(detail) = self.title(kind, id) {
-                            *read[at].lock().unwrap() = Some(MyRequest {
-                                title: detail.title,
-                                status,
-                            });
-                        }
+                        let title = self.title(kind, id).map(|detail| MyRequest {
+                            title: detail.title,
+                            status,
+                        });
+                        *read[at].lock().unwrap() = Some(title);
                     }
                 });
             }
         });
-        Ok(read
-            .into_iter()
-            .filter_map(|slot| slot.into_inner().unwrap())
-            .collect())
+        let mut mine = Vec::new();
+        let mut first_error = None;
+        for slot in read {
+            match slot.into_inner().unwrap() {
+                Some(Ok(request)) => mine.push(request),
+                Some(Err(error)) => {
+                    first_error.get_or_insert(error);
+                }
+                None => {}
+            }
+        }
+        match first_error {
+            Some(error) if mine.is_empty() => Err(error),
+            _ => Ok(mine),
+        }
     }
 
     fn quota_reached(&self, kind: MediaKind) -> Result<bool, RequestError> {

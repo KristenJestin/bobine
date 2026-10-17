@@ -62,8 +62,8 @@ pub struct State {
     pub not_seerr: bool,
     /// Discover refuses the viewer, the key working elsewhere.
     pub discover_forbidden: bool,
-    /// The title of this TMDb id cannot be read: its page answers 500.
-    pub failing_title: Option<u64>,
+    /// The titles of these TMDb ids cannot be read: their pages answer 500.
+    pub failing_titles: Vec<u64>,
     /// Answers every route with a redirect there, as a proxy moved elsewhere would.
     pub redirect_to: Option<String>,
     /// No Seerr user has the viewer's Jellyfin id.
@@ -387,7 +387,9 @@ fn answer(state: &mut State, seen: &Seen) -> Answer {
                 .collect();
             Answer::Json(200, page(series))
         }
-        ("GET", ["movie" | "tv", _]) if number(1) == state.failing_title => {
+        ("GET", ["movie" | "tv", _])
+            if number(1).is_some_and(|id| state.failing_titles.contains(&id)) =>
+        {
             Answer::Json(500, json!({ "message": "Something went wrong" }))
         }
         ("GET", ["movie", _]) => found(number(1).and_then(|id| movie_details(state, id))),
@@ -483,7 +485,7 @@ impl FakeSeerr {
             seen: Vec::new(),
             not_seerr: false,
             redirect_to: None,
-            failing_title: None,
+            failing_titles: Vec::new(),
             discover_forbidden: false,
             no_viewer: false,
             movie_quota: None,

@@ -327,11 +327,21 @@ fn my_requests_are_the_viewers_with_their_titles_and_status() {
 #[test]
 fn a_request_whose_title_cannot_be_read_is_left_out_and_the_others_still_show() {
     let fake = FakeSeerr::start();
-    fake.state.lock().unwrap().failing_title = Some(NORTHERN_LINE);
+    fake.state.lock().unwrap().failing_titles = vec![NORTHERN_LINE];
     let shown = client(&fake)
         .my_requests()
         .map(|mine| mine.into_iter().map(|r| r.title.title).collect::<Vec<_>>());
     assert_eq!(shown, Ok(vec!["Paper Moons".to_string()]));
+}
+
+#[test]
+fn requests_none_of_whose_titles_can_be_read_are_an_error_not_an_empty_list() {
+    let fake = FakeSeerr::start();
+    fake.state.lock().unwrap().failing_titles = vec![NORTHERN_LINE, PAPER_MOONS];
+    let shown = client(&fake)
+        .my_requests()
+        .map(|mine| mine.into_iter().map(|r| r.title.title).collect::<Vec<_>>());
+    assert_eq!(shown, Err(RequestError::Server(500)));
 }
 
 #[test]
