@@ -263,7 +263,6 @@ impl Shell {
         let stamp = self.marks.stamp();
         // What the library holds may have changed: its index by TMDb id too.
         self.load_tmdb_index(cx);
-        self.load_stats(cx);
 
         self.ask(
             cx,
@@ -580,6 +579,8 @@ impl Shell {
                 let _ = reports.join();
             },
             |shell, (), cx| {
+                // What was just watched counts now.
+                shell.load_stats(cx);
                 if shell.navigator.current() == Screen::Home {
                     shell.load_home(cx);
                 }

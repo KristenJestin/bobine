@@ -203,6 +203,10 @@ pub struct Shell {
     pub lists: ListsPage,
     /// What the viewer watched, once read: None while there is nothing to show, and no page.
     pub stats: Option<Rc<crate::stats::Stats>>,
+    /// The watch history is being read: it is not asked again meanwhile.
+    stats_reading: bool,
+    /// Each read of the watch history is numbered: only the newest one's answer is shown.
+    stats_asked: u64,
     /// The playlists' pages open, the last one on top: one per `Screen::Playlist`.
     pub playlist_pages: Vec<PlaylistPage>,
     /// The "Add to playlist" menu, while it shows.
@@ -401,6 +405,8 @@ impl Shell {
             my_list: Default::default(),
             lists: Default::default(),
             stats: None,
+            stats_reading: false,
+            stats_asked: 0,
             playlist_pages: Vec::new(),
             playlist_menu: None,
             playlist_menus: 0,

@@ -12,9 +12,16 @@ use crate::navigation::Screen;
 use crate::stats;
 
 impl Shell {
-    /// Reads the watch history again; the stats before stay shown until it comes. Nothing to
-    /// show, or a history that cannot be read, takes the page away.
+    /// Reads the watch history again, at sign-in, after a playback and when the page opens, not
+    /// at each arrival on the Home: a long history takes a while. The stats before stay shown
+    /// until it comes. Nothing to show, or a history that cannot be read, takes the page away.
     pub(super) fn load_stats(&mut self, cx: &mut Context<Self>) {
+        if self.server.is_none() || self.stats_reading {
+            return;
+        }
+        self.stats_reading = true;
+        self.stats_asked += 1;
+        let asked = self.stats_asked;
         let session = self.server.clone();
         self.ask(
             cx,
@@ -30,9 +37,10 @@ impl Shell {
                     (Some(asked), Some(now)) => Arc::ptr_eq(asked, now),
                     _ => false,
                 };
-                if !same {
+                if !same || shell.stats_asked != asked {
                     return;
                 }
+                shell.stats_reading = false;
                 shell.stats = stats.ok().flatten().map(Rc::new);
                 if shell.stats.is_none() {
                     shell.navigator.forget(|screen| screen == Screen::Stats);
@@ -51,6 +59,7 @@ impl Shell {
         }
         self.forward.clear();
         self.navigator.open(Screen::Stats);
+        self.load_stats(cx);
         cx.notify();
     }
 }
@@ -119,9 +128,13 @@ mod tests {
 
     fn reload(window: &WindowHandle<Shell>, cx: &mut TestAppContext) {
         window
-            .update(cx, |shell, _, cx| shell.load_home(cx))
+            .update(cx, |shell, _, cx| shell.load_stats(cx))
             .unwrap();
         cx.run_until_parked();
+    }
+
+    fn reads(server: &FakeServer) -> u32 {
+        server.state.lock().unwrap().record.histories
     }
 
     #[gpui_kit::test]
@@ -211,5 +224,54 @@ mod tests {
         server.state.lock().unwrap().history_error = Some(ProviderError::Server(500));
         reload(&window, cx);
         assert_eq!(source(&window, cx), None);
+    }
+
+    #[gpui_kit::test]
+    fn home_arrivals_do_not_read_the_history_again_opening_the_page_does(cx: &mut TestAppContext) {
+        let history = fake::watch_history(HistorySource::PlaybackReporting, NOW);
+        let (server, window) = start(history, cx);
+        assert_eq!(reads(&server), 1, "read at sign-in");
+        let mut visual = drawn(&window, cx);
+        window
+            .update(cx, |shell, _, cx| shell.open_settings(cx))
+            .unwrap();
+        visual.simulate_keystrokes("escape");
+        assert_eq!(screen(&window, cx), Screen::Home);
+        assert_eq!(reads(&server), 1, "back on the Home");
+        window
+            .update(cx, |shell, _, cx| shell.open_stats(cx))
+            .unwrap();
+        cx.run_until_parked();
+        assert_eq!(reads(&server), 2, "the page opened");
+        visual.simulate_keystrokes("escape");
+        assert_eq!(screen(&window, cx), Screen::Home);
+        assert_eq!(reads(&server), 2, "back on the Home again");
+    }
+
+    #[gpui_kit::test]
+    fn a_playback_ended_on_the_home_reads_the_history_again(cx: &mut TestAppContext) {
+        let (server, window) = start(fake::watch_history(HistorySource::PlayedItems, NOW), cx);
+        window
+            .update(cx, |shell, _, cx| {
+                shell.after_playback(std::thread::spawn(|| {}), cx)
+            })
+            .unwrap();
+        cx.run_until_parked();
+        assert_eq!(reads(&server), 2);
+    }
+
+    #[gpui_kit::test]
+    fn no_second_read_while_one_runs(cx: &mut TestAppContext) {
+        let (server, window) = start(fake::watch_history(HistorySource::PlayedItems, NOW), cx);
+        window
+            .update(cx, |shell, _, cx| {
+                shell.load_stats(cx);
+                shell.load_stats(cx);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        assert_eq!(reads(&server), 2, "one more read, not two");
+        reload(&window, cx);
+        assert_eq!(reads(&server), 3, "once it landed, the next one is read");
     }
 }

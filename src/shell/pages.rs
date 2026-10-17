@@ -620,6 +620,7 @@ impl Shell {
         self.set_up_seerr(cx);
         self.navigator.switch_root(Screen::Home);
         self.load_home(cx);
+        self.load_stats(cx);
     }
 
     /// Forgets what the session before showed: the pages, the images, the menus.
@@ -636,6 +637,9 @@ impl Shell {
         self.my_list = Default::default();
         self.lists = Default::default();
         self.stats = None;
+        // A read still running is the session before's.
+        self.stats_reading = false;
+        self.stats_asked += 1;
         self.details.clear();
         self.series_pages.clear();
         self.people.clear();
