@@ -8,13 +8,14 @@
 use std::cell::Cell;
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::Instant;
 
 use bobine::provider::{Episode, ItemId};
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    AnyElement, App, Bounds, Context, Div, ElementId, Entity, IntoElement, Pixels, Render, Rgba,
-    SharedString, Stateful, WeakEntity, Window, canvas, div, px, rgb, rgba,
+    AnyElement, App, Bounds, Context, Div, ElementId, Entity, IntoElement, Pixels, Render,
+    RenderImage, Rgba, SharedString, Stateful, WeakEntity, Window, canvas, div, px, rgb, rgba,
 };
 
 use super::home::Pick;
@@ -101,6 +102,8 @@ pub type Draw = Rc<dyn Fn(Stateful<Div>) -> Div>;
 #[derive(Clone)]
 pub struct Offer {
     pub open: Open,
+    /// The picture the card shows: the way into the player grows from it.
+    pub image: Option<Arc<RenderImage>>,
     pub play: Play,
     pub quick: Option<Quick>,
     pub draw: Draw,
@@ -232,8 +235,15 @@ pub fn open_card(shell: &mut Shell, open: Open, cx: &mut Context<Shell>) {
     }
 }
 
-/// What the card's play button starts; P on the card the ring is on.
-pub fn play_card(shell: &mut Shell, play: Play, window: &mut Window, cx: &mut Context<Shell>) {
+/// What the play button of the card `at` starts; P on the card the ring is on.
+pub fn play_card(
+    shell: &mut Shell,
+    at: &ElementId,
+    play: Play,
+    window: &mut Window,
+    cx: &mut Context<Shell>,
+) {
+    shell.clicked_on(at.clone());
     let target = match play {
         Play::Episode(episode) => return shell.play_episode(*episode, window, cx),
         Play::Target(target) => Some(target),
@@ -264,7 +274,7 @@ impl Render for Card {
         let Some(shell) = self.shell.upgrade() else {
             return div().into_any_element();
         };
-        let (offer, ringed) = {
+        let (offer, ringed, pictures) = {
             let shell = shell.read(cx);
             #[cfg(any(test, feature = "harness"))]
             shell
@@ -272,7 +282,11 @@ impl Render for Card {
                 .borrow_mut()
                 .cards
                 .push((self.name.clone(), now));
-            (shell.cards.offer(&self.name), shell.ring.on(&self.name))
+            (
+                shell.cards.offer(&self.name),
+                shell.ring.on(&self.name),
+                shell.pictures.clone(),
+            )
         };
         let Some(offer) = offer else {
             return div().into_any_element();
@@ -294,6 +308,8 @@ impl Render for Card {
             .filter(|_| shown)
             .map(|quick| self.corner(quick, window, cx));
         let name = &self.name;
+        let mark = (offer.open.item())
+            .map(|item| crate::curtain::mark(&pictures, name.clone(), item, offer.image.clone()));
         let layer = div()
             .id("card-hover")
             .debug_selector(|| format!("card-hover {name}"))
@@ -311,6 +327,7 @@ impl Render for Card {
             .children(play.map(|play| play.opacity(level)))
             .children(quick.map(|quick| quick.opacity(level)))
             .children((ring > 0.).then(|| ring_outline(name, ring)))
+            .children(mark)
             .child({
                 let place = self.place.clone();
                 canvas(move |bounds, _, _| place.set(Some(bounds)), |_, _, _, _| {})
@@ -339,7 +356,7 @@ impl Card {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
-        let shell = self.shell.clone();
+        let (shell, name) = (self.shell.clone(), self.name.clone());
         theme::eased(
             "play",
             theme::Shades {
@@ -363,7 +380,7 @@ impl Card {
             cx.stop_propagation();
             let play = play.clone();
             shell
-                .update(cx, |shell, cx| play_card(shell, play, window, cx))
+                .update(cx, |shell, cx| play_card(shell, &name, play, window, cx))
                 .ok();
         })
         .child(icon(IconName::Play, 22.))

@@ -4,10 +4,12 @@ use std::time::{Duration, Instant};
 
 use bobine::provider::ItemId;
 use gpui_kit::prelude::*;
-use gpui_kit::{AnyElement, Bounds, Context, ObjectFit, Window, div, img, point, px};
+use gpui_kit::{
+    AnyElement, Bounds, Context, ElementId, ObjectFit, Pixels, Window, div, img, point, px,
+};
 
 use super::Shell;
-use crate::curtain::{Curtain, Picture, Way, between};
+use crate::curtain::{Curtain, PAGE, Picture, Way, back, between, in_sight};
 use crate::navigation::Screen;
 use crate::{screens, theme};
 
@@ -37,21 +39,49 @@ impl Shell {
         self.opened_from = None;
     }
 
-    /// The way in grows from the picture of `item`, when the page drew it in sight; the way out
-    /// goes back to it.
+    /// Play was pressed on the picture drawn at `at`: the playback it starts grows from it.
+    pub fn clicked_on(&mut self, at: impl Into<ElementId>) {
+        self.clicked = self.pictures.borrow().get(&at.into()).cloned();
+    }
+
+    /// The way in grows from the picture whose Play was pressed, or else from the picture of
+    /// `item` the page drew, when it is in sight; the way out goes back to it.
     pub(super) fn grow_from(&mut self, item: Option<&ItemId>, window: &Window) {
-        let height = window.viewport_size().height;
-        let picture = self.pictures.borrow().clone().filter(|picture| {
-            Some(&picture.item) == item
-                && picture.bounds.bottom() > px(0.)
-                && picture.bounds.top() < height
-        });
+        let drawn = self.pictures.borrow();
+        let still_drawn = |picture: &Picture| {
+            (drawn.get(&picture.at)).is_some_and(|drawn| drawn.item == picture.item)
+        };
+        // A press whose playback never started is left behind with the page it was on.
+        let clicked = self.clicked.take().filter(still_drawn);
+        let page = || {
+            (drawn.get(&PAGE.into()))
+                .filter(|picture| Some(&picture.item) == item)
+                .cloned()
+        };
+        let picture = (clicked.or_else(page))
+            .filter(|picture| in_sight(picture.bounds, window.viewport_size()));
+        drop(drawn);
         if let Some(curtain) = &mut self.curtain
             && curtain.way() == Way::Opening
         {
             curtain.picture = picture.clone();
         }
         self.opened_from = picture;
+    }
+
+    /// A playback asked did not start: the picture pressed grows into no other.
+    pub(super) fn forget_click(&mut self) {
+        self.clicked = None;
+    }
+
+    /// Where the page draws `picture` now, if it shows it in sight: the way out shrinks back
+    /// there, and fades out otherwise.
+    pub(super) fn back_to(&self, picture: &Picture, window: &Window) -> Option<Bounds<Pixels>> {
+        let drawn = self.pictures.borrow();
+        (drawn.get(&picture.at))
+            .filter(|drawn| drawn.item == picture.item)
+            .map(|drawn| drawn.bounds)
+            .filter(|bounds| in_sight(*bounds, window.viewport_size()))
     }
 
     /// While the player opens over it, the page it opens over, and the label of that page's
@@ -157,12 +187,14 @@ impl Shell {
                 })
             }
             Way::Closing => {
-                let picture = curtain.picture.as_ref()?;
+                let picture = curtain.picture.clone()?;
                 // Back to where the page draws it now: the window may have changed meanwhile.
-                let place = (self.pictures.borrow().as_ref())
-                    .filter(|drawn| drawn.item == picture.item)
-                    .map_or(picture.bounds, |drawn| drawn.bounds);
-                let element = drawn_at(picture, between(place, whole, frame.grown));
+                let (at, shows) = back(self.back_to(&picture, window), whole, frame.grown);
+                let element = div()
+                    .absolute()
+                    .inset_0()
+                    .opacity(shows)
+                    .child(drawn_at(&picture, at));
                 Some(Cover {
                     element: element.into_any_element(),
                     player: 0.,
@@ -191,13 +223,16 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use bobine::provider::{Episode, ItemId, ProviderError};
-    use gpui_kit::{TestAppContext, WindowHandle};
+    use gpui_kit::{
+        Bounds, ElementId, Modifiers, Pixels, TestAppContext, VisualTestContext, WindowHandle, px,
+        size,
+    };
 
     use crate::curtain::Way;
     use crate::fake::{FILM, FakeServer, SERIES};
     use crate::film_page::From;
     use crate::home_page::PlayTarget;
-    use crate::navigation::Screen;
+    use crate::navigation::{NavEntry, Screen};
     use crate::player::PlayerEvent;
     use crate::player::fake::FakePlayer;
     use crate::player::session::WindowRequest;
@@ -297,6 +332,193 @@ mod tests {
     ) {
         open_film_page(window, cx);
         press_play(window, player, cx);
+    }
+
+    /// The window, large enough for the rows, drawn until the pictures it asked are in.
+    fn drawn(
+        window: &WindowHandle<Shell>,
+        cx: &mut TestAppContext,
+    ) -> &'static mut VisualTestContext {
+        let visual = VisualTestContext::from_window((*window).into(), cx).into_mut();
+        visual.simulate_resize(size(px(1600.), px(1200.)));
+        for _ in 0..3 {
+            visual.run_until_parked();
+        }
+        // The page slides in on the real clock: a picture is measured once it is in place.
+        std::thread::sleep(crate::motion::page());
+        visual.update(|window, _| window.refresh());
+        visual.run_until_parked();
+        visual
+    }
+
+    fn bounds(visual: &mut VisualTestContext, selector: String) -> Bounds<Pixels> {
+        let selector: &'static str = Box::leak(selector.into_boxed_str());
+        (visual.debug_bounds(selector)).unwrap_or_else(|| panic!("{selector} was not drawn"))
+    }
+
+    /// A click on the Play button `button`, the pointer over it first: where the picture
+    /// `picture` was drawn when it was clicked.
+    fn play_at(visual: &mut VisualTestContext, button: String, picture: String) -> Bounds<Pixels> {
+        let at = bounds(visual, button).center();
+        visual.simulate_mouse_move(at, None, Modifiers::none());
+        visual.run_until_parked();
+        let picture = bounds(visual, picture);
+        visual.simulate_click(at, Modifiers::none());
+        visual.run_until_parked();
+        picture
+    }
+
+    /// The next playback starts on a fake player that opens and shows its first frame.
+    fn arm(window: &WindowHandle<Shell>, cx: &mut VisualTestContext) {
+        let player = FakePlayer::default();
+        (player.queued.borrow_mut()).extend([PlayerEvent::Loaded, PlayerEvent::FirstFrame]);
+        (window.update(cx, |shell, _, _| shell.fake_player = Some(player))).unwrap();
+    }
+
+    /// Where the picture the way in grows from starts, if it grows one.
+    fn grown_from(
+        window: &WindowHandle<Shell>,
+        cx: &mut VisualTestContext,
+    ) -> Option<Bounds<Pixels>> {
+        window
+            .read_with(cx, |shell, _| {
+                let curtain = shell.curtain.as_ref()?;
+                assert_eq!(curtain.way(), Way::Opening);
+                Some(curtain.picture.as_ref()?.bounds)
+            })
+            .unwrap()
+    }
+
+    /// The card drawn highest in the window among those `named`.
+    fn a_card(window: &WindowHandle<Shell>, cx: &mut VisualTestContext, named: &str) -> ElementId {
+        let ids = window
+            .read_with(cx, |shell, _| {
+                (shell.cards.ids().into_iter())
+                    .filter(|id| id.to_string().contains(named))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap();
+        (ids.into_iter())
+            .filter_map(|id| {
+                let selector = format!("card-hover {id}");
+                let drawn = cx.debug_bounds(Box::leak(selector.into_boxed_str()))?;
+                let window = size(px(1600.), px(1200.));
+                crate::curtain::in_sight(drawn, window).then(|| (f32::from(drawn.top()), id))
+            })
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+            .map(|(_, id)| id)
+            .unwrap_or_else(|| panic!("no card {named}"))
+    }
+
+    /// Play on the card `id`: where its picture was.
+    fn play_on_card(
+        window: &WindowHandle<Shell>,
+        cx: &mut VisualTestContext,
+        id: &ElementId,
+    ) -> Bounds<Pixels> {
+        arm(window, cx);
+        // The pointer over the card brings its Play button.
+        let card = bounds(cx, format!("card-hover {id}"));
+        cx.simulate_mouse_move(card.center(), None, Modifiers::none());
+        cx.run_until_parked();
+        let picture = play_at(cx, format!("card-play {id}"), format!("card-hover {id}"));
+        assert_eq!(screen(window, cx), Screen::Player);
+        picture
+    }
+
+    /// Back from the player, onto the page drawn again: where the way out takes the picture
+    /// back, if the page shows it.
+    fn back_onto(
+        window: &WindowHandle<Shell>,
+        cx: &mut VisualTestContext,
+    ) -> Option<Bounds<Pixels>> {
+        tick(cx);
+        let picture = window
+            .update(cx, |shell, window, cx| {
+                shell.player_back(window, cx);
+                assert_eq!(shell.curtain.as_ref().map(|c| c.way()), Some(Way::Closing));
+                shell.curtain.as_ref().unwrap().picture.clone()
+            })
+            .unwrap()
+            .expect("a picture to take back");
+        for _ in 0..3 {
+            cx.run_until_parked();
+        }
+        (window.update(cx, |shell, window, _| shell.back_to(&picture, window))).unwrap()
+    }
+
+    #[gpui_kit::test]
+    fn play_in_the_home_header_grows_its_backdrop_into_the_player(cx: &mut TestAppContext) {
+        let (_server, window) = signed_in(cx);
+        let visual = drawn(&window, cx);
+        arm(&window, visual);
+        let header = play_at(visual, "hero-play".into(), "hero".into());
+        assert_eq!(screen(&window, visual), Screen::Player);
+        assert_eq!(grown_from(&window, visual), Some(header));
+    }
+
+    #[gpui_kit::test]
+    fn play_on_a_card_of_a_home_row_grows_its_picture_into_the_player(cx: &mut TestAppContext) {
+        let (_server, window) = signed_in(cx);
+        let visual = drawn(&window, cx);
+        let card = a_card(&window, visual, "home-");
+        let picture = play_on_card(&window, visual, &card);
+        assert_eq!(grown_from(&window, visual), Some(picture));
+    }
+
+    #[gpui_kit::test]
+    fn play_on_a_poster_of_a_library_grows_it_into_the_player(cx: &mut TestAppContext) {
+        let (_server, window) = signed_in(cx);
+        (window.update(cx, |shell, _, cx| shell.select(NavEntry::Films, cx))).unwrap();
+        let visual = drawn(&window, cx);
+        assert_eq!(screen(&window, visual), Screen::Library);
+        let card = a_card(&window, visual, "film");
+        let picture = play_on_card(&window, visual, &card);
+        assert_eq!(grown_from(&window, visual), Some(picture));
+    }
+
+    #[gpui_kit::test]
+    fn play_on_a_playlist_entry_grows_its_picture_into_the_player(cx: &mut TestAppContext) {
+        let (_server, window) = signed_in(cx);
+        window
+            .update(cx, |shell, _, cx| {
+                shell.select(NavEntry::MyList, cx);
+                shell.open_playlist(ItemId("playlist-watchlist".into()), cx);
+            })
+            .unwrap();
+        let visual = drawn(&window, cx);
+        arm(&window, visual);
+        let play = "playlist-entry-play 0".into();
+        let still = play_at(visual, play, "playlist-still 0".into());
+        assert_eq!(screen(&window, visual), Screen::Player);
+        assert_eq!(grown_from(&window, visual), Some(still));
+    }
+
+    #[gpui_kit::test]
+    fn leaving_the_player_shrinks_the_picture_back_to_its_card_still_in_sight(
+        cx: &mut TestAppContext,
+    ) {
+        let (_server, window) = signed_in(cx);
+        let visual = drawn(&window, cx);
+        let card = a_card(&window, visual, "home-");
+        let picture = play_on_card(&window, visual, &card);
+        let back = back_onto(&window, visual).expect("back to the card");
+        // Where the card is now: the page may be sliding in.
+        assert_eq!(back, bounds(visual, format!("card-hover {card}")));
+        assert_eq!(back.size, picture.size);
+    }
+
+    #[gpui_kit::test]
+    fn leaving_the_player_fades_the_picture_out_when_its_card_is_out_of_sight(
+        cx: &mut TestAppContext,
+    ) {
+        let (_server, window) = signed_in(cx);
+        let visual = drawn(&window, cx);
+        let card = a_card(&window, visual, "home-");
+        play_on_card(&window, visual, &card);
+        // The window got lower meanwhile: the card is under its bottom.
+        visual.simulate_resize(size(px(1600.), px(500.)));
+        assert_eq!(back_onto(&window, visual), None);
     }
 
     #[gpui_kit::test]
@@ -436,7 +658,12 @@ mod tests {
         open_film_page(&window, cx);
         draw_page(&window, cx);
         let drawn = window
-            .read_with(cx, |shell, _| shell.pictures.borrow().is_some())
+            .read_with(cx, |shell, _| {
+                shell
+                    .pictures
+                    .borrow()
+                    .contains_key(&crate::curtain::PAGE.into())
+            })
             .unwrap();
         assert!(drawn, "the page drew its backdrop, in sight");
         let player = FakePlayer::default();
@@ -491,7 +718,7 @@ mod tests {
             .queued
             .borrow_mut()
             .extend([PlayerEvent::Loaded, PlayerEvent::FirstFrame]);
-        // The Home page draws no picture the way in could grow from.
+        // Played with no picture pressed: the way in only fades.
         window
             .update(cx, |shell, window, cx| {
                 shell.fake_player = Some(player);

@@ -282,7 +282,7 @@ fn film_offer(
     let quick = Quick::new(marks, &film.id, false, film.favourite, film.watched);
     let look = film_look(
         film,
-        image,
+        image.clone(),
         width,
         name,
         false,
@@ -291,6 +291,7 @@ fn film_offer(
     );
     Offer {
         open: Open::Film(film.id.clone()),
+        image,
         play: Play::Target(PlayTarget::Film(film.id.clone())),
         quick: Some(quick),
         draw: Rc::new(move |layer| look.draw(Some(layer))),
@@ -314,8 +315,9 @@ fn series_offer(
         .zip(series.watched)
         .map(|(in_list, watched)| Quick::new(marks, &series.id, true, in_list, watched));
     let watched = quick.as_ref().is_some_and(|quick| quick.watched.now);
-    let look = series_look(series, image, width, name, watched, fresh);
+    let look = series_look(series, image.clone(), width, name, watched, fresh);
     Offer {
+        image,
         open: Open::Series(
             series.id.clone(),
             series.season.as_ref().map(|season| season.id.clone()),

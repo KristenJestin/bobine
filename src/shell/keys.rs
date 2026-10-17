@@ -314,12 +314,15 @@ impl Shell {
     /// Enter or P on the card the ring shows on: what a click on it, or on its play button,
     /// does. An episode's row plays either way.
     fn press_ringed(&mut self, play: bool, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(offer) = self.ring.shown_on().and_then(|id| self.cards.offer(id)) else {
+        let Some(id) = self.ring.shown_on().cloned() else {
+            return;
+        };
+        let Some(offer) = self.cards.offer(&id) else {
             return;
         };
         self.ring.hide();
         if play || matches!(offer.open, Open::Row(_)) {
-            play_card(self, offer.play, window, cx);
+            play_card(self, &id, offer.play, window, cx);
         } else {
             open_card(self, offer.open, cx);
         }

@@ -272,8 +272,10 @@ pub struct Shell {
     pub curtain: Option<crate::curtain::Curtain<crate::curtain::Picture>>,
     curtain_from: Screen,
     curtain_back: Option<&'static str>,
-    /// The picture of its title the page drew last: the way into the player grows from it.
+    /// The pictures the last draw drew that the way into the player may grow from.
     pub pictures: crate::curtain::Drawn,
+    /// The picture whose Play was pressed: the playback it starts grows from it.
+    clicked: Option<crate::curtain::Picture>,
     /// The picture the playback grew from: the way out goes back to it.
     opened_from: Option<crate::curtain::Picture>,
     /// When each draw started: the harness reads the frame times of a move from it.
@@ -476,6 +478,7 @@ impl Shell {
             curtain_from: Screen::Home,
             curtain_back: None,
             pictures: Default::default(),
+            clicked: None,
             opened_from: None,
             #[cfg(feature = "harness")]
             frames: Default::default(),
@@ -1135,7 +1138,7 @@ impl Render for Shell {
             None => element,
         };
         // Read by the way out above; the page drawn below says it again if it draws it.
-        self.pictures.replace(None);
+        self.pictures.borrow_mut().clear();
         let help = screens::help::overlay(self, playing, window, cx);
         let again = self.ring_again(cx);
         let mut bars: Vec<AnyElement> = Vec::new();

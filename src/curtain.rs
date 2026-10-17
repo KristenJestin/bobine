@@ -4,45 +4,85 @@
 //! whole window while the page fades out over it and the player's controls fade in; the cover
 //! fades out onto the video once its first frame is there, never before, never later. Closing,
 //! the video is gone at once: the picture shrinks back from the whole window to its place on the
-//! page, which is already there.
+//! page, which is already there; when the page no longer shows it, it fades out instead.
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use bobine::provider::ItemId;
 use gpui_kit::prelude::*;
-use gpui_kit::{Bounds, IntoElement, Pixels, RenderImage, canvas, point, size};
+use gpui_kit::{
+    Bounds, ElementId, IntoElement, Pixels, RenderImage, Size, canvas, point, px, size,
+};
 
 use crate::motion;
 
 /// A title's picture where a page drew it: the way into the player grows from it.
 #[derive(Clone)]
 pub struct Picture {
+    /// Where it is drawn: the way out looks for it there.
+    pub at: ElementId,
     pub item: ItemId,
     pub image: Arc<RenderImage>,
     pub bounds: Bounds<Pixels>,
 }
 
-/// The picture the last frame drew of the page's title.
-pub type Drawn = Rc<RefCell<Option<Picture>>>;
+/// Where the page's own title has its picture: a film's or a series' backdrop.
+pub const PAGE: &str = "curtain-page";
 
-/// Laid over the picture of `item` a page draws: where it is, kept at each frame.
-pub fn mark(drawn: &Drawn, item: &ItemId, image: Option<Arc<RenderImage>>) -> impl IntoElement {
+/// The pictures the last frame drew that the way into the player may grow from, by where they
+/// are drawn: the page's title, the Home's header, each card, each line of a playlist.
+pub type Drawn = Rc<RefCell<HashMap<ElementId, Picture>>>;
+
+/// Laid over the picture of `item` drawn at `at`: where it is, kept at each frame.
+pub fn mark(
+    drawn: &Drawn,
+    at: ElementId,
+    item: &ItemId,
+    image: Option<Arc<RenderImage>>,
+) -> impl IntoElement + use<> {
     let (drawn, item) = (drawn.clone(), item.clone());
     canvas(
         move |bounds, _, _| {
-            *drawn.borrow_mut() = image.map(|image| Picture {
-                item,
-                image,
-                bounds,
-            });
+            if let Some(image) = image {
+                let picture = Picture {
+                    at: at.clone(),
+                    item,
+                    image,
+                    bounds,
+                };
+                drawn.borrow_mut().insert(at, picture);
+            }
         },
         |_, _, _, _| {},
     )
     .absolute()
     .size_full()
+}
+
+/// Some of `bounds` shows in a window of `window`.
+pub fn in_sight(bounds: Bounds<Pixels>, window: Size<Pixels>) -> bool {
+    bounds.bottom() > px(0.)
+        && bounds.top() < window.height
+        && bounds.right() > px(0.)
+        && bounds.left() < window.width
+}
+
+/// Where the way out draws its picture `grown` of the way, and how much of it shows: shrinking
+/// back to `place`, the picture's place on the page in sight; with none, fading out where it
+/// covers the whole window.
+pub fn back(
+    place: Option<Bounds<Pixels>>,
+    whole: Bounds<Pixels>,
+    grown: f32,
+) -> (Bounds<Pixels>, f32) {
+    match place {
+        Some(place) => (between(place, whole, grown), 1.),
+        None => (whole, grown),
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -329,6 +369,28 @@ mod tests {
         curtain.first_frame(start + 400 * MS);
         assert!(curtain.animating(start + 450 * MS), "the cover fades out");
         assert!(!curtain.animating(start + 400 * MS + motion::quick()));
+    }
+
+    #[test]
+    fn the_way_out_shrinks_to_a_place_in_sight_and_fades_out_without_one() {
+        let window = Bounds::new(point(px(0.), px(0.)), size(px(1000.), px(600.)));
+        let card = Bounds::new(point(px(100.), px(400.)), size(px(200.), px(100.)));
+        assert!(in_sight(card, window.size));
+        assert_eq!(
+            back(Some(card), window, 0.5),
+            (between(card, window, 0.5), 1.)
+        );
+        let under = Bounds::new(point(px(100.), px(600.)), size(px(200.), px(100.)));
+        assert!(!in_sight(under, window.size));
+        let aside = Bounds::new(point(px(-200.), px(100.)), size(px(200.), px(100.)));
+        assert!(!in_sight(aside, window.size));
+        assert_eq!(back(None, window, 1.), (window, 1.));
+        assert_eq!(
+            back(None, window, 0.25),
+            (window, 0.25),
+            "it fades where it was grown"
+        );
+        assert_eq!(back(None, window, 0.).1, 0.);
     }
 
     #[test]

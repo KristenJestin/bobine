@@ -1521,6 +1521,9 @@ impl Shell {
         error: Option<&'static str>,
         cx: &mut Context<Self>,
     ) {
+        if error.is_some() {
+            self.forget_click();
+        }
         // The header and the posters play from any page: the window says what went wrong where
         // it is, for a moment, in the pill of its other messages.
         let (busy, shown) = match origin {

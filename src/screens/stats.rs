@@ -229,6 +229,7 @@ fn titles(
                 ranked.title.name.clone(),
                 format!("{} · {plays}", stats::length(ranked.seconds)),
             );
+            let shown = image.clone();
             let draw = {
                 let name = name.clone();
                 move |layer: Option<Stateful<Div>>| {
@@ -265,6 +266,7 @@ fn titles(
             };
             let offer = Offer {
                 open,
+                image: shown,
                 play: Play::Target(play),
                 quick: None,
                 draw: Rc::new(move |layer| draw(Some(layer))),

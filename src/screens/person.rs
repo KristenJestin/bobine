@@ -165,6 +165,7 @@ fn series_card(
         series.title.clone(),
         series.year.map(|year| year.to_string()).unwrap_or_default(),
     );
+    let shown = image.clone();
     let draw = move |layer: Stateful<Div>| {
         div()
             .w(px(POSTER))
@@ -186,6 +187,7 @@ fn series_card(
     };
     let offer = Offer {
         open: Open::Series(series.id.clone(), None),
+        image: shown,
         play: Play::Target(PlayTarget::Series(series.id.clone())),
         // A series found through one of the person's episodes says nothing of its state.
         quick: series
