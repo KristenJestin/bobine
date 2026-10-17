@@ -218,8 +218,8 @@ fn trailer(videos: Vec<RelatedVideo>) -> Option<String> {
         .filter(|video| video.kind == "Trailer")
         .filter_map(|video| Some((video.official(), video.address()?)))
         .collect();
-    let first = trailers.iter().find(|(official, _)| *official);
-    first
+    let official = trailers.iter().find(|(official, _)| *official);
+    official
         .or(trailers.first())
         .map(|(_, address)| address.clone())
 }
