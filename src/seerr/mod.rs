@@ -144,7 +144,7 @@ impl SeerrClient {
             .http_status_as_error(false)
             // ureq would send the key on to wherever a redirect points.
             .max_redirects(0)
-            .user_agent(format!("Bobine/{}", env!("CARGO_PKG_VERSION")))
+            .user_agent(format!("Bobine/{}", crate::VERSION))
             .build()
             .into();
         Ok(Self {
