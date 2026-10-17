@@ -790,14 +790,15 @@ impl Shell {
         };
         let now = Instant::now();
         let ended = playback.session.update(now);
-        if (playback.session.first_frame_at().is_some() || playback.session.picture_shown())
-            && let Some(curtain) = self.curtain.as_mut().filter(|c| c.waiting())
-        {
+        let shown = playback.session.first_frame_at().is_some() || playback.session.picture_shown();
+        if shown && let Some(curtain) = self.curtain.as_mut().filter(|c| c.waiting()) {
             curtain.first_frame(now);
-            #[cfg(feature = "harness")]
-            self.curtain_marks.borrow_mut().push(("first frame", now));
+            self.note_curtain("first frame");
             cx.notify();
         }
+        let Some(playback) = &mut self.playback else {
+            return;
+        };
         if let Some(reporting) = &mut playback.reporting {
             reporting.tick(now, &playback.session, ended);
         }
