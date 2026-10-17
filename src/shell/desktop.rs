@@ -21,13 +21,15 @@ impl Shell {
         let (Some(poster), Some(dir)) = (poster, self.art_dir.clone()) else {
             return;
         };
-        let path = mpris::art_path(&dir, &item);
+        let asked = item.clone();
         self.ask(
             cx,
             move |server| {
+                if let Some(path) = mpris::cached_art(&dir, &asked, &poster.tag) {
+                    return Some(path);
+                }
                 let bytes = server.image(&poster, images::POSTER).ok()?;
-                mpris::write_art(&path, &bytes).ok()?;
-                Some(path)
+                mpris::store_art(&dir, &asked, &poster.tag, &bytes).ok()
             },
             move |shell, path, _| {
                 // The viewer may have moved on to another title meanwhile.
@@ -356,7 +358,7 @@ mod tests {
             .track
             .and_then(|track| track.art)
             .expect("the poster is shown");
-        assert_eq!(art, cache.path().join("bobine/mpris/film-0.jpg"));
+        assert_eq!(art, cache.path().join("bobine/mpris/film-0.t1.bmp"));
         use bobine::provider::MediaServer;
         assert_eq!(
             std::fs::read(&art).unwrap(),
@@ -391,6 +393,71 @@ mod tests {
             !cache.path().join("bobine").exists(),
             "no poster is written to the cache"
         );
+    }
+
+    /// The server's requests for `title`'s poster so far.
+    fn poster_requests(server: &FakeServer, title: &Title) -> usize {
+        let poster = title.poster.clone().expect("the film has a poster");
+        let state = server.state.lock().unwrap();
+        state
+            .record
+            .images
+            .iter()
+            .filter(|(image, width)| *image == poster && *width == images::POSTER)
+            .count()
+    }
+
+    #[gpui_kit::test]
+    fn the_poster_already_on_disk_is_not_fetched_again(cx: &mut TestAppContext) {
+        let (server, window, controls) = signed_in_window(cx);
+        let cache = tempfile::tempdir().unwrap();
+        let dir = cache.path().join("bobine").join("mpris");
+        window
+            .update(cx, |shell, _, _| shell.art_dir = Some(dir.clone()))
+            .unwrap();
+        // The home page may ask for the same poster: only what playing asks is counted.
+        let before = poster_requests(&server, &film());
+        play(&window, cx, Some(film()), None);
+        tick(&window, cx);
+        assert_eq!(poster_requests(&server, &film()), before + 1);
+        let first = controls.last().track.and_then(|t| t.art).expect("a poster");
+        // The same film, played again.
+        play(&window, cx, Some(film()), None);
+        tick(&window, cx);
+        assert_eq!(
+            poster_requests(&server, &film()),
+            before + 1,
+            "no second request"
+        );
+        let again = controls.last().track.and_then(|t| t.art).expect("a poster");
+        assert_eq!(again, first);
+    }
+
+    #[gpui_kit::test]
+    fn a_new_poster_of_the_item_is_fetched_and_replaces_the_old_file(cx: &mut TestAppContext) {
+        let (server, window, controls) = signed_in_window(cx);
+        let cache = tempfile::tempdir().unwrap();
+        let dir = cache.path().join("bobine").join("mpris");
+        window
+            .update(cx, |shell, _, _| shell.art_dir = Some(dir.clone()))
+            .unwrap();
+        play(&window, cx, Some(film()), None);
+        tick(&window, cx);
+        let old = controls.last().track.and_then(|t| t.art).expect("a poster");
+        let mut renewed = film();
+        renewed.poster.as_mut().unwrap().tag = "t2".into();
+        play(&window, cx, Some(renewed.clone()), None);
+        tick(&window, cx);
+        assert_eq!(
+            poster_requests(&server, &renewed),
+            1,
+            "the new tag is asked for"
+        );
+        let new = controls.last().track.and_then(|t| t.art).expect("a poster");
+        assert_ne!(new, old);
+        assert!(new.to_string_lossy().contains(".t2."), "{new:?}");
+        assert!(new.exists());
+        assert!(!old.exists(), "the item's older poster is replaced");
     }
 
     #[gpui_kit::test]

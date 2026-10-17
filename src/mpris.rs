@@ -221,10 +221,9 @@ pub fn art_dir(xdg_cache_home: Option<OsString>, home: Option<OsString>) -> Opti
     Some(cache.join("bobine").join("mpris"))
 }
 
-/// Where the poster of `item` is written: its name keeps only what is safe in a file name.
-pub fn art_path(dir: &Path, item: &str) -> PathBuf {
-    let name: String = item
-        .chars()
+/// What is safe in a file name of `text`; the rest is written `_`.
+fn safe(text: &str) -> String {
+    text.chars()
         .map(|c| {
             if c.is_ascii_alphanumeric() || c == '-' {
                 c
@@ -232,16 +231,71 @@ pub fn art_path(dir: &Path, item: &str) -> PathBuf {
                 '_'
             }
         })
-        .collect();
-    dir.join(format!("{name}.jpg"))
+        .collect()
 }
 
-/// Writes the poster's bytes where the desktop reads them.
-pub fn write_art(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir)?;
+/// The extension of an image by its first bytes, which is what the server sent whatever it was
+/// asked for.
+fn image_extension(bytes: &[u8]) -> &'static str {
+    match bytes {
+        [0xFF, 0xD8, 0xFF, ..] => "jpg",
+        [0x89, b'P', b'N', b'G', ..] => "png",
+        [b'G', b'I', b'F', b'8', ..] => "gif",
+        [b'B', b'M', ..] => "bmp",
+        [
+            b'R',
+            b'I',
+            b'F',
+            b'F',
+            _,
+            _,
+            _,
+            _,
+            b'W',
+            b'E',
+            b'B',
+            b'P',
+            ..,
+        ] => "webp",
+        _ => "img",
     }
-    std::fs::write(path, bytes)
+}
+
+/// The poster of `item` at image tag `tag`, if it is already written: the tag is in the name, so
+/// a new poster of the item is not mistaken for it.
+pub fn cached_art(dir: &Path, item: &str, tag: &str) -> Option<PathBuf> {
+    let stem = format!("{}.{}.", safe(item), safe(tag));
+    std::fs::read_dir(dir)
+        .ok()?
+        .flatten()
+        .map(|entry| entry.path())
+        .find(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .and_then(|name| name.strip_prefix(&stem))
+                .is_some_and(|extension| !extension.contains('.'))
+        })
+}
+
+/// Writes the poster's bytes where the desktop reads them, named by item, tag and real format,
+/// and drops the item's older posters.
+pub fn store_art(dir: &Path, item: &str, tag: &str, bytes: &[u8]) -> std::io::Result<PathBuf> {
+    std::fs::create_dir_all(dir)?;
+    let item = safe(item);
+    let path = dir.join(format!("{item}.{}.{}", safe(tag), image_extension(bytes)));
+    // Whole or not at all: a half-written file is never taken for the poster.
+    let partial = path.with_extension("part");
+    std::fs::write(&partial, bytes)?;
+    std::fs::rename(&partial, &path)?;
+    let own = format!("{item}.");
+    for entry in std::fs::read_dir(dir)?.flatten() {
+        let older = entry.path();
+        let name = entry.file_name();
+        if older != path && name.to_str().is_some_and(|name| name.starts_with(&own)) {
+            let _ = std::fs::remove_file(older);
+        }
+    }
+    Ok(path)
 }
 
 /// `file://` and the path, every byte that is not plain written as `%` and two hex digits.
@@ -506,9 +560,40 @@ mod tests {
             Some(PathBuf::from("/home/camille/.cache/bobine/mpris"))
         );
         assert_eq!(art_dir(None, None), None);
-        assert_eq!(
-            art_path(Path::new("/c"), "../film 0"),
-            PathBuf::from("/c/___film_0.jpg")
+    }
+
+    #[test]
+    fn a_poster_is_named_by_item_tag_and_real_format() {
+        let dir = tempfile::tempdir().unwrap();
+        let png = [0x89, b'P', b'N', b'G', 1, 2];
+        let path = store_art(dir.path(), "../film 0", "t:1", &png).unwrap();
+        assert_eq!(path, dir.path().join("___film_0.t_1.png"));
+        assert_eq!(std::fs::read(&path).unwrap(), png);
+        assert_eq!(cached_art(dir.path(), "../film 0", "t:1"), Some(path));
+        assert_eq!(cached_art(dir.path(), "../film 0", "t2"), None);
+        let webp = *b"RIFF\0\0\0\0WEBPVP8 ";
+        let jpg = [0xFF, 0xD8, 0xFF, 0xE0];
+        let name = |bytes: &[u8]| {
+            let path = store_art(dir.path(), "x", "t", bytes).unwrap();
+            path.extension().unwrap().to_str().unwrap().to_string()
+        };
+        assert_eq!(name(&webp), "webp");
+        assert_eq!(name(&jpg), "jpg");
+        assert_eq!(name(b"GIF89a"), "gif");
+        assert_eq!(name(b"???"), "img");
+    }
+
+    #[test]
+    fn a_new_poster_replaces_the_item_older_ones_and_no_other_item() {
+        let dir = tempfile::tempdir().unwrap();
+        let old = store_art(dir.path(), "film-0", "t1", b"BM1").unwrap();
+        let other = store_art(dir.path(), "film-0-1", "t1", b"BM2").unwrap();
+        let new = store_art(dir.path(), "film-0", "t2", b"BM3").unwrap();
+        assert!(!old.exists());
+        assert!(new.exists());
+        assert!(
+            other.exists(),
+            "an item whose id starts the same is not touched"
         );
     }
 
