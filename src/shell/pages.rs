@@ -651,6 +651,7 @@ impl Shell {
         self.my_list = Default::default();
         self.lists = Default::default();
         self.stats = None;
+        self.stats_scrolls = Default::default();
         // A read still running is the session before's.
         self.stats_reading = false;
         self.stats_asked += 1;

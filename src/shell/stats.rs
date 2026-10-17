@@ -395,6 +395,29 @@ mod tests {
     }
 
     #[gpui_kit::test]
+    fn the_next_user_finds_the_stats_page_at_its_top(cx: &mut TestAppContext) {
+        let history = fake::watch_history(HistorySource::PlaybackReporting, NOW);
+        let (_server, window) = start(history, cx);
+        let scrolled = |shell: &Shell| -> Vec<f32> {
+            shell
+                .stats_scrolls
+                .iter()
+                .map(|scroll| f32::from(scroll.offset().y) + f32::from(scroll.offset().x))
+                .collect()
+        };
+        window
+            .update(cx, |shell, window, cx| {
+                for scroll in &shell.stats_scrolls {
+                    scroll.set_offset(gpui_kit::point(gpui_kit::px(-40.), gpui_kit::px(-300.)));
+                }
+                assert!(scrolled(shell).iter().all(|offset| *offset != 0.));
+                shell.sign_out(window, cx);
+                assert_eq!(scrolled(shell), [0., 0., 0.]);
+            })
+            .unwrap();
+    }
+
+    #[gpui_kit::test]
     fn the_stats_are_counted_on_the_shells_clock(cx: &mut TestAppContext) {
         let history = fake::watch_history(HistorySource::PlaybackReporting, NOW);
         let expected = crate::stats::of(&history, bobine::provider::LocalTime::from_unix(NOW));
