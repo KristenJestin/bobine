@@ -536,9 +536,8 @@ mod tests {
         later(cx);
         let open = notifier.shown.borrow()[0].open.clone();
         notifier.clicks.push(open);
-        visual.run_until_parked();
-        // Drawn twice: the page scrolls to the episode once it is laid out.
-        visual.update(|window, _| window.refresh());
+        // Nothing else draws the window again: the page asks for the frames it needs to be laid
+        // out and scroll to the episode.
         visual.run_until_parked();
         window
             .update(cx, |shell, _, _| {

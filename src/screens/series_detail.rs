@@ -520,8 +520,9 @@ fn bring_into_view(
         return;
     }
     let (offset, max) = (scroll.offset(), scroll.max_offset());
-    // Not laid out yet: the next frame tries again.
+    // Not laid out yet: the next frame tries again, asked for, since nothing else may draw one.
     if max.y <= px(0.) {
+        window.request_animation_frame();
         return;
     }
     let y = offset.y - (at.top() - page.top() - px(IN_VIEW_TOP));
