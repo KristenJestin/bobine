@@ -531,7 +531,7 @@ mod tests {
     fn a_click_opens_the_episode_on_its_series_page(cx: &mut TestAppContext) {
         let server = FakeServer::new(6, true);
         let (window, notifier) = start(&server, None, cx);
-        let mut visual = drawn(&window, cx);
+        let visual = drawn(&window, cx);
         add(&server, "series-1-s1-e4", 150);
         later(cx);
         let open = notifier.shown.borrow()[0].open.clone();
