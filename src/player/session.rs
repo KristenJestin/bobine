@@ -316,6 +316,12 @@ impl Session {
         self.player.seek(Seek::By(seconds));
     }
 
+    /// Seconds from the start.
+    pub fn seek_to(&mut self, seconds: f64) {
+        self.seeks += 1;
+        self.player.seek(Seek::To(seconds));
+    }
+
     /// A click on the seek bar, `fraction` of the way along it.
     pub fn seek_to_fraction(&mut self, fraction: f32) {
         let fraction = f64::from(fraction.clamp(0., 1.));

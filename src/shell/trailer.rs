@@ -73,6 +73,8 @@ impl Shell {
             subtitle: Some("Trailer".into()),
             // Not a title the viewer can put in their list from here.
             list: None,
+            // Nor one the desktop shows.
+            desktop: None,
         };
         match trailer {
             Trailer::Remote(address) => {
@@ -213,6 +215,7 @@ impl Shell {
             title: playing.title.clone(),
             subtitle: playing.subtitle.clone(),
             list: None,
+            desktop: None,
         };
         self.open_session(std::sync::Arc::new(mpv), media, playing, window)
     }
@@ -414,6 +417,37 @@ mod tests {
         );
         assert_eq!(opened(&window, cx).len(), 1);
         assert_eq!(current(&window, cx), Screen::Player);
+    }
+
+    #[gpui_kit::test]
+    fn a_trailer_publishes_nothing_to_the_desktop(cx: &mut TestAppContext) {
+        use crate::mpris::Publisher;
+        use crate::mpris::fake::FakeControls;
+        let (_server, window) = signed_in_window(local(), false, cx);
+        let controls = FakeControls::default();
+        let fake = controls.clone();
+        window
+            .update(cx, |shell, _, _| {
+                shell.mpris = Publisher::new(Box::new(fake))
+            })
+            .unwrap();
+        on_film(&window, cx);
+        press_trailer(&window, cx);
+        cx.run_until_parked();
+        window
+            .update(cx, |shell, window, cx| {
+                assert!(shell.playback.is_some(), "the trailer plays");
+                for _ in 0..3 {
+                    shell.tick(window, cx);
+                }
+                shell.leave_player(false, window, cx);
+            })
+            .unwrap();
+        assert_eq!(
+            *controls.shown.borrow(),
+            [],
+            "no title, no status, nothing reaches the bus"
+        );
     }
 
     #[gpui_kit::test]

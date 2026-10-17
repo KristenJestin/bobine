@@ -9,6 +9,7 @@ use std::rc::Rc;
 use std::time::Instant;
 
 use bobine::provider::{CastMember, Film, FilmDetail, ImageRef, ItemId, MediaSource, PersonHit};
+use bobine::requests::MediaKind;
 use gpui_kit::prelude::*;
 use gpui_kit::{
     AnyElement, Bounds, Context, Div, FontWeight, IntoElement, MouseButton, MouseDownEvent,
@@ -91,7 +92,12 @@ pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -
     let chips = page.chips.clone();
     let collection = page.collection.clone();
     let scroll = page.scroll.clone();
-    let [cast_scroll, collection_scroll, similar_scroll] = page.rows.clone();
+    let [
+        cast_scroll,
+        collection_scroll,
+        similar_scroll,
+        missing_scroll,
+    ] = page.rows.clone();
     shell.scrolls.extend([
         scroll.clone(),
         collection_scroll.clone(),
@@ -142,6 +148,13 @@ pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -
             .into_any_element(),
         );
     }
+    let missing = shell.similar_not_in_library(MediaKind::Movie, detail.tmdb);
+    rows.extend(super::discover::similar_row(
+        shell,
+        &missing,
+        &missing_scroll,
+        cx,
+    ));
 
     // The page scrolls itself and its rows by hand (`Shell::scroll_film_page`): GPUI's own
     // scrolling moves every container under the pointer on both axes at once.

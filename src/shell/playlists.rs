@@ -498,6 +498,7 @@ impl Shell {
                             title: started.title,
                             subtitle: Some(started.subtitle),
                             list: Some(started.list),
+                            desktop: Some(started.desktop),
                         };
                         shell.start_playback(
                             origin,
@@ -739,6 +740,49 @@ mod tests {
         }
         end_of_title(&queued, cx);
         assert_eq!(offered(&window, cx), None, "nothing after the last");
+    }
+
+    #[gpui_kit::test]
+    fn next_from_mpris_plays_the_playlist_entry_after(cx: &mut TestAppContext) {
+        use crate::mpris::fake::FakeControls;
+        use crate::mpris::{Command, Publisher, Status};
+        use crate::player::PlayerEvent;
+
+        let (server, window) = on_watchlist(cx, |_| {});
+        let entries = shown(&window, cx);
+        let controls = FakeControls::default();
+        let fake = controls.clone();
+        window
+            .update(cx, |shell, _, _| {
+                shell.mpris = Publisher::new(Box::new(fake))
+            })
+            .unwrap();
+        let queued = arm_player(&window, cx);
+        window
+            .update(cx, |shell, window, cx| shell.play_all(window, cx))
+            .unwrap();
+        cx.run_until_parked();
+        queued.borrow_mut().extend([
+            PlayerEvent::Loaded,
+            PlayerEvent::Duration(2820.),
+            PlayerEvent::Position(100.),
+        ]);
+        cx.executor().advance_clock(super::super::PLAYER_TICK * 2);
+        cx.run_until_parked();
+        let shown = controls.last();
+        assert_eq!(shown.status, Status::Playing);
+        assert_eq!(
+            shown.track.map(|track| track.item),
+            Some(entries[0].title.id().0.clone())
+        );
+        assert!(shown.can_go_next, "a title follows in the playlist");
+
+        arm_player(&window, cx);
+        controls.queued.borrow_mut().push(Command::Next);
+        cx.executor().advance_clock(super::super::PLAYER_TICK * 2);
+        cx.run_until_parked();
+        assert_eq!(played(&server).last(), Some(entries[1].title.id()));
+        assert_eq!(screen(&window, cx), Screen::Player);
     }
 
     #[gpui_kit::test]

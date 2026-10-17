@@ -113,7 +113,6 @@ impl Shell {
     /// A field for a secret the settings keep in the keyring under `key`, for the signed-in user
     /// of this server, at the end of the Integrations section. None without a session: the
     /// secret belongs to someone.
-    #[cfg_attr(not(any(test, feature = "harness")), allow(dead_code))]
     pub fn add_secret_field(
         &mut self,
         label: &'static str,
@@ -256,6 +255,7 @@ mod tests {
             Settings {
                 black_out_other_monitors: true,
                 default_quality: Quality::Cap(8),
+                ..Settings::default()
             }
         );
     }
@@ -430,16 +430,17 @@ mod tests {
         let keyring = Arc::new(MemoryKeyring::default());
         let server = FakeServer::new(6, true);
         let window = start_on(&server, &keyring, cx);
-        save_a_secret(&window, "k3y-A", cx);
+        let old = save_a_secret(&window, "k3y-A", cx);
         window
             .update(cx, |shell, _, _| {
-                assert_eq!(shell.settings_page.secrets.len(), 1)
+                assert!(shell.settings_page.secrets.contains(&old))
             })
             .unwrap();
         sign_out_and_in_as(&window, "user-2", &server, cx);
+        // The new session has its own fields (the request server's key), none of the old ones.
         window
             .update(cx, |shell, _, _| {
-                assert!(shell.settings_page.secrets.is_empty())
+                assert!(!shell.settings_page.secrets.contains(&old))
             })
             .unwrap();
     }

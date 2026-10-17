@@ -11,7 +11,7 @@
 //!
 //! `bobine --screen login|home|home-rows|home-list-resume|home-list-next|home-list-latest|home-list-empty|library|detail|
 //! detail-rows|detail-cast|playing|series|series-page|series-rows|up-next|collections|collection-page|
-//! my-list|my-list-empty|lists|playlist|film-list|series-list [--films N]
+//! my-list|my-list-empty|lists|playlist|film-list|series-list|discover|request|seasons|similar|settings-seerr [--films N]
 //! [--media FILE] [--segments SECONDS] [--direct-fails] [--trailer] [--image-delay-ms N] [--photos-fail-once] [--scenario menu|scroll|select|panel|blackout|search|search-slow|search-keys|help|ring|tools|tools-keys|home-rotate|home-hover|home-jump|home-scroll|home-lists|home-play|home-poster-hover|grid-poster-hover|playlist-menu|cast-hover|genre-hover|episode-hover|skip|settings|settings-screen|long-tracks|segment-marks]
 //! [--search-delay-ms N] [--favourite-delay-ms N] [--logout-delay-ms N] [--favourite-fails] [--slower N] --quit-at S`
 //!
@@ -320,7 +320,11 @@ impl Harness {
         let Some(args) = self.args else {
             return;
         };
-        shell.update(cx, |shell, _| shell.mpv_options = vec![("ao", "null")]);
+        shell.update(cx, |shell, _| {
+            shell.mpv_options = vec![("ao", "null")];
+            // Its fake server plays invented films: not on the user's bus, not in their cache.
+            shell.without_desktop();
+        });
         match args.screen.clone() {
             Some(screen) => {
                 let fake = self.fake.expect("the harness always has its fake server");
@@ -328,6 +332,47 @@ impl Harness {
             }
             None => play(args, shell, window, cx),
         }
+    }
+}
+
+/// The fake request server behind the Settings' fields, filled and saved as a user would: an
+/// invented address and key, kept in the harness's own keyring.
+fn configure_seerr(shell: &mut Shell, cx: &mut gpui_kit::Context<Shell>) {
+    let fake = crate::fake_seerr::FakeSeerr::default();
+    shell.open_seerr = Arc::new(move |_, _, _| {
+        Ok(Arc::new(fake.clone()) as Arc<dyn bobine::requests::RequestServer>)
+    });
+    if let Some(address) = shell.seerr.address.clone() {
+        address.update(cx, |field, cx| {
+            field.set_text("https://seerr.example.org", cx)
+        });
+    }
+    shell.save_seerr_address(cx);
+    if let Some(key) = shell.seerr.key.clone() {
+        key.update(cx, |field, cx| {
+            field.type_in("invented-harness-key", cx);
+            field.save(cx);
+        });
+    }
+}
+
+/// The page of the request server's screen asked for, once its client is there.
+fn open_seerr_screen(screen: &str, shell: &mut Shell, cx: &mut gpui_kit::Context<Shell>) {
+    use crate::fake_seerr::{COPPER_COAST, NORTHERN_LIGHTS};
+    use bobine::requests::MediaKind;
+    match screen {
+        "discover" => shell.select(NavEntry::Discover, cx),
+        "request" => {
+            shell.select(NavEntry::Discover, cx);
+            shell.open_request(MediaKind::Movie, NORTHERN_LIGHTS, cx);
+        }
+        "seasons" => {
+            shell.select(NavEntry::Discover, cx);
+            shell.open_request(MediaKind::Tv, COPPER_COAST, cx);
+        }
+        "similar" => shell.open_film(ItemId(FILM.into()), cx),
+        "settings-seerr" => shell.open_settings(cx),
+        _ => {}
     }
 }
 
@@ -402,6 +447,14 @@ fn show_screen(
     let press_list = wants(&["film-list", "series-list"]);
     let (series_rows, up_next) = (wants(&["series-rows"]), wants(&["up-next"]));
     let home_rows = wants(&["home-rows"]);
+    // The request server's screens, with the fake one configured as a user would.
+    let seerr = wants(&[
+        "discover",
+        "request",
+        "seasons",
+        "similar",
+        "settings-seerr",
+    ]);
     let list = match screen.as_str() {
         "home-list-resume" | "home-list-empty" => Some((ListKind::Resume, None)),
         "home-list-next" => Some((ListKind::NextUp, None)),
@@ -467,6 +520,9 @@ fn show_screen(
                                 if to_list {
                                     shell.select(NavEntry::MyList, cx);
                                 }
+                                if seerr {
+                                    configure_seerr(shell, cx);
+                                }
                                 true
                             }
                             1 if elapsed >= 1.5 => {
@@ -475,6 +531,9 @@ fn show_screen(
                                 }
                                 if to_series_page {
                                     shell.open_series(ItemId(SERIES.into()), cx);
+                                }
+                                if seerr {
+                                    open_seerr_screen(&screen, shell, cx);
                                 }
                                 if let Some((kind, library)) = list.clone() {
                                     shell.open_list(kind, library, cx);
@@ -498,6 +557,15 @@ fn show_screen(
                                 }
                                 if press_list {
                                     shell.toggle_favourite(cx);
+                                }
+                                if screen == "seasons" {
+                                    shell.request_title(cx);
+                                }
+                                if screen == "similar"
+                                    && let Some(page) = shell.details.last()
+                                {
+                                    let bottom = page.scroll.max_offset().y;
+                                    page.scroll.set_offset(point(px(0.), -bottom));
                                 }
                                 if play {
                                     // The local file is shorter than the fake film's resume point.
@@ -1693,6 +1761,7 @@ fn play(mut args: Args, shell: &Entity<Shell>, window: &mut Window, cx: &mut App
                                 title: "Second movie".to_string(),
                                 subtitle: None,
                                 list: None,
+                                desktop: None,
                             };
                             let played = Libmpv::new(&[("ao", "null")])
                                 .map_err(|e| e.to_string())
@@ -1748,6 +1817,7 @@ fn play_file(
             .unwrap_or_else(|| "Test movie".to_string()),
         subtitle: Some("local file · direct play".to_string()),
         list: None,
+        desktop: None,
     };
     let external = args.sub.as_deref().map(|url| ExternalSubtitle {
         url,

@@ -727,6 +727,7 @@ dependencies = [
  "wayland-egl",
  "wayland-protocols",
  "wayland-protocols-wlr",
+ "zbus",
 ]
 
 [[package]]

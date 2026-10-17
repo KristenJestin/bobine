@@ -2,8 +2,11 @@
 
 mod chrome;
 mod config;
+mod discover;
 #[cfg(any(test, feature = "harness"))]
 mod fake;
+#[cfg(any(test, feature = "harness"))]
+mod fake_seerr;
 mod fallback;
 mod favourite;
 mod film_page;
@@ -20,6 +23,7 @@ mod library_tools;
 mod lists;
 mod menu;
 mod motion;
+mod mpris;
 mod navigation;
 mod player;
 mod playlists;

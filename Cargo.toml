@@ -27,6 +27,9 @@ wayland-protocols = { version = "0.32", features = ["client", "staging", "unstab
 # GPUI's id for the window's monitor, a v5 UUID of its name. Both already come with GPUI.
 uuid = { version = "1", features = ["v5"] }
 wayland-protocols-wlr = { version = "0.3", features = ["client"] }
+# The desktop's media controls (MPRIS, #64). Already in the tree through GPUI, on the async-io
+# executor its other users run: no second async runtime.
+zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"] }
 
 [features]
 default = ["fast"]
