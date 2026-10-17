@@ -29,6 +29,9 @@ use crate::trailer;
 pub const REQUEST_TRAILER: &str = "request-trailer";
 
 const PHOTO: f32 = 96.;
+/// The thin bar under the status of a title that downloads, and its height.
+const BAR: f32 = 220.;
+const BAR_HEIGHT: f32 = 3.;
 /// The send button at the foot of the seasons menu, and the room around it.
 const MENU_FOOT: f32 = 60.;
 
@@ -104,13 +107,37 @@ pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -
     });
     let trailer = trailer::requested(detail.trailer.as_deref(), shell.ytdlp)
         .map(|_| trailer_button(REQUEST_TRAILER, window, cx));
-    let pill = discover::status_label(detail.title.availability, in_library).map(status_pill);
+    let availability = detail.title.availability;
+    let pill =
+        discover::page_status(kind, availability, in_library, &detail.downloads).map(status_pill);
+    let bar = discover::download_progress(availability, in_library, &detail.downloads)
+        .map(|progress| download_bar(progress.percent));
+    // Once the title is in the library, the page leads there.
+    let open_library = in_library.then(|| {
+        theme::primary_button(
+            "request-open-library",
+            Some(IconName::Play),
+            "Open in library",
+            window,
+            cx,
+        )
+        .debug_selector(|| "request-open-library".into())
+        .on_click(cx.listener(move |shell, _, _, cx| shell.open_discovered(kind, tmdb, cx)))
+    });
     let part_of = (detail.collection.clone()).map(|collection| part_of(collection, window, cx));
 
     let hero = hero_frame(backdrop, height).child(
         hero_text(detail.title.title.clone())
             .child(meta_line(facts(&detail), shell.font(), window))
-            .children(pill.map(|pill| div().flex().child(pill)))
+            .children(pill.map(|pill| {
+                div()
+                    .flex()
+                    .flex_col()
+                    .items_start()
+                    .gap(px(8.))
+                    .child(pill)
+                    .children(bar)
+            }))
             .children(part_of.map(|link| div().flex().child(link)))
             .children(detail.title.overview.clone().map(|overview| {
                 div()
@@ -119,14 +146,17 @@ pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -
                     .text_color(rgba(0xf4f4f5d9))
                     .child(overview)
             }))
-            .children((button.is_some() || trailer.is_some()).then(|| {
-                div()
-                    .pt(px(6.))
-                    .flex()
-                    .gap(px(10.))
-                    .children(button)
-                    .children(trailer)
-            }))
+            .children(
+                (button.is_some() || trailer.is_some() || open_library.is_some()).then(|| {
+                    div()
+                        .pt(px(6.))
+                        .flex()
+                        .gap(px(10.))
+                        .children(open_library)
+                        .children(button)
+                        .children(trailer)
+                }),
+            )
             .children(error.map(|why| {
                 div()
                     .debug_selector(|| "request-error".into())
@@ -169,6 +199,24 @@ pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -
                 .children(rows),
         )
         .into_any_element()
+}
+
+/// A thin bar filled to `percent` of its width.
+fn download_bar(percent: u8) -> Div {
+    div()
+        .debug_selector(|| "download-bar".into())
+        .w(px(BAR))
+        .h(px(BAR_HEIGHT))
+        .rounded_full()
+        .bg(theme::line())
+        .child(
+            div()
+                .debug_selector(|| "download-fill".into())
+                .w(px(BAR * f32::from(percent.min(100)) / 100.))
+                .h_full()
+                .rounded_full()
+                .bg(theme::accent()),
+        )
 }
 
 /// `2025 | ★ 7.1 | 1h 48m | Drama, Mystery`; a series says its seasons instead of a length.

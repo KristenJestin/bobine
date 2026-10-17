@@ -6,8 +6,8 @@ use bobine::provider::{ItemId, TmdbIndex};
 use std::time::Duration;
 
 use bobine::requests::{
-    Availability, CollectionOutcome, Discovered, Download, MediaKind, RequestError, RequestStatus,
-    SeasonOffer, ServerCheck, TmdbId, progress,
+    Availability, CollectionOutcome, Discovered, Download, MediaKind, MyRequest, Progress,
+    RequestError, RequestStatus, SeasonOffer, ServerCheck, TmdbId, progress,
 };
 
 /// The library page of a title of the request server, when the library holds it.
@@ -45,8 +45,35 @@ pub fn status_label(availability: Availability, in_library: bool) -> Option<&'st
 
 /// How long a download has left, as a pill says it: "2 min left".
 pub fn left_text(left: Duration) -> String {
-    let _ = left;
-    String::new()
+    // Rounded up, so that a download never has "0 min" left.
+    let minutes = left.as_secs().div_ceil(60);
+    match minutes {
+        _ if left.as_secs() < 60 => "less than a minute left".into(),
+        1..=59 => format!("{minutes} min left"),
+        60..=1439 => match (minutes / 60, minutes % 60) {
+            (hours, 0) => format!("{hours} h left"),
+            (hours, minutes) => format!("{hours} h {minutes} min left"),
+        },
+        _ => format!("{} d {} h left", minutes / 1440, minutes % 1440 / 60),
+    }
+}
+
+/// Whether the downloads count for a title in this state: it is on its way, not there.
+fn is_downloading(availability: Availability, in_library: bool) -> bool {
+    !in_library
+        && matches!(
+            availability,
+            Availability::Processing | Availability::PartiallyAvailable
+        )
+}
+
+/// What the downloads of a title come to, while they count.
+pub fn download_progress(
+    availability: Availability,
+    in_library: bool,
+    downloads: &[Download],
+) -> Option<Progress> {
+    progress(downloads).filter(|_| is_downloading(availability, in_library))
 }
 
 /// The pill of a request page: the library's word, else what is downloading, else the status.
@@ -58,22 +85,42 @@ pub fn page_status(
     in_library: bool,
     downloads: &[Download],
 ) -> Option<String> {
-    let _ = (kind, downloads);
-    status_label(availability, in_library).map(str::to_string)
+    if let Some(sum) = download_progress(availability, in_library, downloads) {
+        return Some(match (kind, sum.entries, sum.time_left) {
+            (MediaKind::Tv, 2.., _) => {
+                format!("Downloading {} episodes · {} %", sum.entries, sum.percent)
+            }
+            (_, _, Some(left)) => {
+                format!("Downloading · {} % · {}", sum.percent, left_text(left))
+            }
+            _ => format!("Downloading · {} %", sum.percent),
+        });
+    }
+    match (availability, in_library) {
+        (Availability::Processing, false) => Some("Approved, waiting for a download".into()),
+        _ => status_label(availability, in_library).map(str::to_string),
+    }
 }
 
 /// The short pill of a card of the viewer's requests while the title downloads.
 pub fn card_status(downloads: &[Download]) -> Option<String> {
-    let _ = downloads;
-    None
+    progress(downloads).map(|sum| format!("Downloading · {} %", sum.percent))
+}
+
+/// The pill of a card in the viewer's requests: the short download status of an approved one
+/// that downloads, else the request's own word.
+pub fn my_request_label(request: &MyRequest) -> String {
+    let downloading = (request.status == RequestStatus::Approved)
+        .then(|| card_status(&request.downloads))
+        .flatten();
+    downloading.unwrap_or_else(|| request_label(request.status).to_string())
 }
 
 /// Whether a request page keeps reading its title: from the first download seen until the title
 /// is available. A title still waiting for its download is not watched, and one the library
 /// holds is done.
 pub fn keeps_watching(availability: Availability, in_library: bool, downloading: bool) -> bool {
-    let _ = (availability, in_library, downloading);
-    false
+    downloading && is_downloading(availability, in_library)
 }
 
 /// What a request of the viewer's list says of itself.

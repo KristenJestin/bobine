@@ -77,7 +77,7 @@ pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -
                     .iter()
                     .enumerate()
                     .map(|(at, request)| {
-                        let label = discover::request_label(request.status);
+                        let label = discover::my_request_label(request);
                         card(shell, &request.title, ("mine", at), Some(label), cx)
                     })
                     .collect();
@@ -211,10 +211,12 @@ pub(super) fn similar_row(
 }
 
 /// A small pill over a poster or beside a title: what the request server or the library says.
-pub(super) fn status_pill(label: &'static str) -> Div {
-    let had = matches!(label, "In library" | "Available");
+pub(super) fn status_pill(label: impl Into<SharedString>) -> Div {
+    let label: SharedString = label.into();
+    let had = matches!(&*label, "In library" | "Available");
+    let selector = format!("status {label}");
     div()
-        .debug_selector(move || format!("status {label}"))
+        .debug_selector(move || selector.clone())
         .flex()
         .items_center()
         .gap(px(5.))
@@ -244,7 +246,7 @@ pub(super) fn card(
     shell: &mut Shell,
     title: &Discovered,
     id: (impl Into<SharedString>, usize),
-    said: Option<&'static str>,
+    said: Option<String>,
     cx: &mut Context<Shell>,
 ) -> Stateful<Div> {
     let (name, index) = id;
@@ -252,7 +254,8 @@ pub(super) fn card(
     let width = ROW_POSTER;
     let image = shell.tmdb_image(title.poster.as_ref(), images::POSTER, cx);
     let in_library = shell.library_page_of(title.kind, title.tmdb).is_some();
-    let label = said.or_else(|| discover::status_label(title.availability, in_library));
+    let label =
+        said.or_else(|| discover::status_label(title.availability, in_library).map(str::to_string));
     let (kind, tmdb) = (title.kind, title.tmdb);
     let caption = match (title.year, kind) {
         (Some(year), MediaKind::Movie) => format!("{year} · Movie"),

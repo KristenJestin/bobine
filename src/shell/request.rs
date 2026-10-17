@@ -7,7 +7,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use bobine::requests::{Ask, Availability, Discovered, MediaKind, TitleDetail, TmdbId};
-use gpui_kit::{Context, Pixels, Point, ScrollHandle, ScrollWheelEvent, Window};
+use gpui_kit::{Context, Pixels, Point, ScrollHandle, ScrollWheelEvent, Task, Window};
 
 use super::pages::{ChipBounds, route_wheel};
 use super::{Loadable, Shell};
@@ -42,6 +42,10 @@ pub struct RequestPage {
     pub busy: bool,
     /// Why the last request failed.
     pub error: Option<&'static str>,
+    /// A download was seen for this title while the page was open.
+    downloading: bool,
+    /// The next reading of the title, while it downloads; it goes with the page.
+    refresh: Option<Task<()>>,
     pub scroll: ScrollHandle,
     /// The cast and the similar titles: each scrolls sideways.
     pub rows: [ScrollHandle; 2],
@@ -62,6 +66,8 @@ impl RequestPage {
             button: Rc::new(Cell::new(None)),
             busy: false,
             error: None,
+            downloading: false,
+            refresh: None,
             scroll: ScrollHandle::new(),
             rows: Default::default(),
             gesture: scroll::Gesture::default(),
@@ -138,7 +144,7 @@ impl Shell {
         self.ask_seerr(
             cx,
             move |seerr| seerr.title(kind, tmdb),
-            move |shell, detail, _| {
+            move |shell, detail, cx| {
                 let Some(page) = shell.request_numbered(generation) else {
                     return;
                 };
@@ -147,6 +153,7 @@ impl Shell {
                         page.picker =
                             (kind == MediaKind::Tv).then(|| SeasonPicker::new(&detail.seasons));
                         page.detail = Loadable::Ready(detail);
+                        shell.watch_request(generation, cx);
                     }
                     // A page already shown stays: only a first read says it failed.
                     Err(error) if !matches!(page.detail, Loadable::Ready(_)) => {
@@ -164,6 +171,65 @@ impl Shell {
                 if let (Some(page), Ok(similar)) = (shell.request_numbered(generation), similar) {
                     page.similar = similar;
                 }
+            },
+        );
+    }
+
+    /// Reads the title again in a moment, if a download was seen and the title is not there yet.
+    /// One reading at a time: the timer is the page's own, so it goes when the page closes.
+    fn watch_request(&mut self, generation: u64, cx: &mut Context<Self>) {
+        let Some(page) = self.request_numbered(generation) else {
+            return;
+        };
+        let (kind, tmdb) = (page.kind, page.tmdb);
+        let Loadable::Ready(detail) = &page.detail else {
+            return;
+        };
+        let availability = detail.title.availability;
+        page.downloading |= !detail.downloads.is_empty();
+        let downloading = page.downloading;
+        let in_library = self.library_page_of(kind, tmdb).is_some();
+        let Some(page) = self.request_numbered(generation) else {
+            return;
+        };
+        page.refresh = None;
+        if !discover::keeps_watching(availability, in_library, downloading) {
+            return;
+        }
+        page.refresh = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(REFRESH).await;
+            this.update(cx, |shell, cx| shell.refresh_request(generation, cx))
+                .ok();
+        }));
+    }
+
+    /// Reads the title for a page that watches it. Only its status and its downloads are taken:
+    /// the seasons the viewer is choosing stay as they are. A title that became available has
+    /// the library indexed again, for the page to lead there.
+    fn refresh_request(&mut self, generation: u64, cx: &mut Context<Self>) {
+        let Some(page) = self.request_numbered(generation) else {
+            return;
+        };
+        let (kind, tmdb) = (page.kind, page.tmdb);
+        self.ask_seerr(
+            cx,
+            move |seerr| seerr.title(kind, tmdb),
+            move |shell, read, cx| {
+                let Some(page) = shell.request_numbered(generation) else {
+                    return;
+                };
+                let mut arrived = false;
+                if let (Ok(read), Loadable::Ready(shown)) = (read, &mut page.detail) {
+                    arrived = read.title.availability == Availability::Available
+                        && shown.title.availability != Availability::Available;
+                    shown.title.availability = read.title.availability;
+                    shown.downloads = read.downloads;
+                }
+                if arrived {
+                    shell.load_tmdb_index(cx);
+                }
+                // A reading that failed is tried again at the next turn.
+                shell.watch_request(generation, cx);
             },
         );
     }
