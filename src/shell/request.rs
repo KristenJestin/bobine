@@ -814,7 +814,7 @@ mod tests {
     }
 
     #[gpui_kit::test]
-    fn a_title_with_only_teasers_or_featurettes_shows_no_button(cx: &mut TestAppContext) {
+    fn a_title_without_a_trailer_shows_no_button(cx: &mut TestAppContext) {
         let window = on_request_with_trailer(
             FakeServer::new(6, true),
             MediaKind::Movie,
