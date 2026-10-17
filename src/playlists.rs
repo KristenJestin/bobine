@@ -48,6 +48,31 @@ pub fn mosaic<'a>(posters: impl IntoIterator<Item = Option<&'a ImageRef>>) -> Ve
         .collect()
 }
 
+/// A place in a card's mosaic, in pixels from the card's top left: `x`, `y`, width, height.
+pub type Cell = [f32; 4];
+
+/// Where the `posters` of a card `width` by `height` go, `gap` apart: one covers the card, two
+/// share it side by side, three take three quarters and leave the fourth (the last cell) to a
+/// fill, four take a quarter each. Placed, not wrapped: a fraction of a pixel never pushes one
+/// onto a line of its own.
+pub fn mosaic_cells(posters: usize, width: f32, height: f32, gap: f32) -> Vec<Cell> {
+    let left = (width - gap) / 2.;
+    let top = (height - gap) / 2.;
+    let (right, bottom) = (left + gap, top + gap);
+    let quarters = [
+        [0., 0., left, top],
+        [right, 0., width - right, top],
+        [0., bottom, left, height - bottom],
+        [right, bottom, width - right, height - bottom],
+    ];
+    match posters {
+        0 => Vec::new(),
+        1 => vec![[0., 0., width, height]],
+        2 => vec![[0., 0., left, height], [right, 0., width - right, height]],
+        _ => quarters.to_vec(),
+    }
+}
+
 /// The posters of a playlist's card: an episode shows its series' poster.
 pub fn playlist_mosaic(entries: &[PlaylistEntry]) -> Vec<ImageRef> {
     mosaic(entries.iter().map(|entry| entry.poster.as_ref()))
@@ -267,6 +292,23 @@ mod tests {
     use super::*;
     use crate::fake::FakeServer;
     use bobine::provider::{ImageKind, ItemId, MediaServer};
+
+    #[test]
+    fn a_playlist_of_one_or_two_titles_covers_its_card() {
+        assert_eq!(mosaic_cells(1, 100., 150., 2.), [[0., 0., 100., 150.]]);
+        assert_eq!(
+            mosaic_cells(2, 100., 150., 2.),
+            [[0., 0., 49., 150.], [51., 0., 49., 150.]]
+        );
+        assert!(mosaic_cells(0, 100., 150., 2.).is_empty());
+    }
+
+    #[test]
+    fn a_playlist_of_three_titles_shows_three_posters_and_a_fill() {
+        let cells = mosaic_cells(3, 100., 150., 2.);
+        assert_eq!(cells.len(), 4, "three posters and the fill");
+        assert_eq!(cells[3], [51., 76., 49., 74.]);
+    }
 
     fn watchlist(server: &FakeServer) -> Vec<PlaylistEntry> {
         server

@@ -273,7 +273,7 @@ fn section(title: &'static str, count: Option<String>, see_all: Option<impl Into
         .children(see_all)
 }
 
-/// A playlist as a poster: a mosaic of its first posters, two by two, its name and its count.
+/// A playlist as a poster: a mosaic of its first posters, its name and its count.
 fn list_card(
     shell: &mut Shell,
     card: ListCard,
@@ -282,16 +282,26 @@ fn list_card(
     cx: &mut Context<Shell>,
 ) -> Stateful<gpui_kit::Div> {
     let id: ElementId = ("list-card", index).into();
-    let half = (width - MOSAIC_GAP) / 2.;
-    let cells: Vec<AnyElement> = card
-        .posters
+    let height = width * 1.5;
+    let named = card.name.clone();
+    let places = playlists::mosaic_cells(card.posters.len(), width, height, MOSAIC_GAP);
+    let cells: Vec<AnyElement> = places
         .iter()
-        .map(|poster| {
-            let image = shell.image(Some(poster), images::POSTER, cx);
+        .enumerate()
+        .map(|(at, &[x, y, w, h])| {
+            // Past the posters, the fill of a card of three.
+            let image = card
+                .posters
+                .get(at)
+                .and_then(|poster| shell.image(Some(poster), images::POSTER, cx));
+            let named = named.clone();
             div()
-                .relative()
-                .w(px(half))
-                .h(px(half * 1.5))
+                .debug_selector(move || format!("list-mosaic {named} {at}"))
+                .absolute()
+                .left(px(x))
+                .top(px(y))
+                .w(px(w))
+                .h(px(h))
                 .bg(theme::line())
                 .children(super::picture(image, 0.))
                 .into_any_element()
@@ -312,14 +322,17 @@ fn list_card(
         .on_click(cx.listener(move |shell, _, _, cx| shell.open_playlist(opens.clone(), cx)))
         .child(
             div()
+                .debug_selector({
+                    let named = named.clone();
+                    move || format!("list-mosaic {named}")
+                })
+                .relative()
                 .w(px(width))
-                .h(px(width * 1.5))
+                .h(px(height))
                 .rounded(px(theme::RADIUS))
                 .overflow_hidden()
                 .bg(theme::panel())
                 .flex()
-                .flex_wrap()
-                .gap(px(MOSAIC_GAP))
                 .when(empty, |frame| {
                     frame
                         .items_center()

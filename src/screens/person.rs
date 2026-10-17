@@ -8,7 +8,7 @@ use std::rc::Rc;
 use gpui_kit::{Context, Div, FontWeight, IntoElement, Stateful, Window, div, px};
 
 use super::card::{Offer, Open, Play, Quick};
-use super::{card, note, picture, poster, row_heading};
+use super::{UNDER_POSTER, card, note, picture, poster, poster_caption, row_heading};
 use crate::film_page;
 use crate::home_page::PlayTarget;
 use crate::images;
@@ -170,7 +170,7 @@ fn series_card(
             .w(px(POSTER))
             .flex()
             .flex_col()
-            .gap(px(8.))
+            .gap(px(UNDER_POSTER))
             .child(
                 div()
                     .relative()
@@ -182,25 +182,7 @@ fn series_card(
                     .children(picture(image.clone(), theme::RADIUS))
                     .child(layer),
             )
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(2.))
-                    .child(
-                        div()
-                            .text_size(px(13.))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .truncate()
-                            .child(title.clone()),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(12.))
-                            .text_color(theme::dim())
-                            .child(year.clone()),
-                    ),
-            )
+            .child(poster_caption(title.clone(), year.clone()))
     };
     let offer = Offer {
         open: Open::Series(series.id.clone(), None),

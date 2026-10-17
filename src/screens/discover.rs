@@ -294,23 +294,5 @@ pub(super) fn card(
                         .child(status_pill(label))
                 })),
         )
-        .child(
-            div()
-                .flex()
-                .flex_col()
-                .gap(px(2.))
-                .child(
-                    div()
-                        .text_size(px(13.))
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .truncate()
-                        .child(title.title.clone()),
-                )
-                .child(
-                    div()
-                        .text_size(px(12.))
-                        .text_color(theme::dim())
-                        .child(caption),
-                ),
-        )
+        .child(super::poster_caption(title.title.clone(), caption))
 }

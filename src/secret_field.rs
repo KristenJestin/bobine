@@ -19,6 +19,9 @@ use crate::motion;
 use crate::start;
 use crate::theme;
 
+/// The width of the text field.
+pub const FIELD: f32 = 240.;
+
 /// What a saved secret shows instead of itself.
 const DOTS: &str = "••••";
 
@@ -48,6 +51,8 @@ pub struct SecretField {
     error: Option<&'static str>,
     /// How many times the field changed state: each change fades the new content in.
     changes: usize,
+    /// Part of a form whose own Save keeps it: the field has no Save, and Enter goes to the form.
+    in_form: bool,
 }
 
 impl SecretField {
@@ -87,6 +92,7 @@ impl SecretField {
             state: State::Checking,
             error: None,
             changes: 0,
+            in_form: false,
         }
     }
 
@@ -95,8 +101,18 @@ impl SecretField {
         self.changes += 1;
     }
 
+    /// The field is part of a form, which saves it with the rest.
+    pub fn in_form(&mut self) {
+        self.in_form = true;
+    }
+
     pub fn is_saved(&self) -> bool {
         self.state == State::Saved
+    }
+
+    /// Whether the keyring is saving or clearing.
+    pub fn is_busy(&self) -> bool {
+        self.state == State::Busy
     }
 
     /// Whether the keyring was looked in and is not at work: the field says what it holds.
@@ -119,6 +135,11 @@ impl SecretField {
     #[cfg(any(test, feature = "harness"))]
     pub fn type_in(&mut self, text: &str, cx: &mut Context<Self>) {
         self.input.update(cx, |input, cx| input.set_text(text, cx));
+    }
+
+    #[cfg(test)]
+    pub fn input(&self) -> &Entity<TextInput> {
+        &self.input
     }
 
     /// Keeps what was typed in the keyring. The field is emptied first: from here the value
@@ -214,6 +235,8 @@ impl Render for SecretField {
                     })
                     .child("Clear"),
                 )
+        } else if self.in_form {
+            div().w(px(FIELD)).child(self.input.clone())
         } else {
             div()
                 .flex()
@@ -225,7 +248,7 @@ impl Render for SecretField {
                         cx.stop_propagation();
                     }
                 }))
-                .child(div().w(px(240.)).child(self.input.clone()))
+                .child(div().w(px(FIELD)).child(self.input.clone()))
                 .child(
                     theme::eased(
                         ElementId::from((self.label, 2usize)),

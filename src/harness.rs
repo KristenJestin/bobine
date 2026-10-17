@@ -11,7 +11,7 @@
 //!
 //! `bobine --screen login|home|home-rows|home-list-resume|home-list-next|home-list-latest|home-list-empty|library|detail|
 //! detail-rows|detail-cast|playing|series|series-page|series-rows|up-next|collections|collection-page|
-//! my-list|my-list-empty|lists|playlist|film-list|series-list|discover|request|seasons|seerr-collection|similar|settings-seerr|stats|stats-played [--films N]
+//! my-list|my-list-empty|lists|playlist|film-list|series-list|discover|request|seasons|seerr-collection|similar|settings-seerr|settings-seerr-long|stats|stats-played [--films N]
 //! [--media FILE] [--segments SECONDS] [--direct-fails] [--trailer] [--image-delay-ms N] [--photos-fail-once] [--scenario menu|scroll|select|panel|blackout|search|search-slow|search-keys|help|ring|ring-wheel|tools|tools-keys|home-rotate|home-hover|home-jump|home-scroll|home-lists|home-play|home-poster-hover|grid-poster-hover|playlist-menu|cast-hover|genre-hover|episode-hover|skip|settings|settings-screen|long-tracks|segment-marks|stats-scroll]
 //! [--stats plugin|played] [--search-delay-ms N] [--favourite-delay-ms N] [--logout-delay-ms N] [--favourite-fails] [--slower N] --quit-at S`
 //!
@@ -356,22 +356,30 @@ impl Harness {
 }
 
 /// The fake request server behind the Settings' fields, filled and saved as a user would: an
-/// invented address and key, kept in the harness's own keyring.
-fn configure_seerr(shell: &mut Shell, cx: &mut gpui_kit::Context<Shell>) {
+/// invented address and key, kept in the harness's own keyring. `long`: a 200-character address
+/// saved alone, and a 64-character key typed but not saved, as a form half filled.
+fn configure_seerr(shell: &mut Shell, long: bool, cx: &mut gpui_kit::Context<Shell>) {
     let fake = crate::fake_seerr::FakeSeerr::default();
     shell.open_seerr = Arc::new(move |_, _, _| {
         Ok(Arc::new(fake.clone()) as Arc<dyn bobine::requests::RequestServer>)
     });
     if let Some(address) = shell.seerr.address.clone() {
-        address.update(cx, |field, cx| {
-            field.set_text("https://seerr.example.org", cx)
-        });
+        let typed = if long {
+            format!("https://{}.example.org/requests", "seerr".repeat(35))
+        } else {
+            "https://seerr.example.org".into()
+        };
+        address.update(cx, |field, cx| field.set_text(&typed, cx));
     }
     shell.save_seerr_address(cx);
     if let Some(key) = shell.seerr.key.clone() {
         key.update(cx, |field, cx| {
-            field.type_in("invented-harness-key", cx);
-            field.save(cx);
+            if long {
+                field.type_in(&"0123456789abcdef".repeat(4), cx);
+            } else {
+                field.type_in("invented-harness-key", cx);
+                field.save(cx);
+            }
         });
     }
 }
@@ -396,7 +404,7 @@ fn open_seerr_screen(screen: &str, shell: &mut Shell, cx: &mut gpui_kit::Context
             shell.open_seerr_collection(COLLECTION, cx);
         }
         "similar" => shell.open_film(ItemId(FILM.into()), cx),
-        "settings-seerr" => shell.open_settings(cx),
+        "settings-seerr" | "settings-seerr-long" => shell.open_settings(cx),
         _ => {}
     }
 }
@@ -481,6 +489,7 @@ fn show_screen(
         "seerr-collection",
         "similar",
         "settings-seerr",
+        "settings-seerr-long",
     ]);
     let list = match screen.as_str() {
         "home-list-resume" | "home-list-empty" => Some((ListKind::Resume, None)),
@@ -553,7 +562,7 @@ fn show_screen(
                                     shell.select(NavEntry::MyList, cx);
                                 }
                                 if seerr {
-                                    configure_seerr(shell, cx);
+                                    configure_seerr(shell, screen == "settings-seerr-long", cx);
                                 }
                                 true
                             }

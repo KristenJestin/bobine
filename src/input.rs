@@ -10,11 +10,11 @@ use std::ops::Range;
 
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    App, Bounds, ClipboardItem, Context, CursorStyle, ElementId, ElementInputHandler, Entity,
-    EntityInputHandler, FocusHandle, Focusable, GlobalElementId, KeyBinding, LayoutId, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point, Rgba, ShapedLine,
-    SharedString, Style, TextRun, UTF16Selection, UnderlineStyle, Window, actions, div, fill,
-    point, px, relative, size,
+    App, Bounds, ClipboardItem, ContentMask, Context, CursorStyle, ElementId, ElementInputHandler,
+    Entity, EntityInputHandler, FocusHandle, Focusable, GlobalElementId, KeyBinding, LayoutId,
+    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point, Rgba,
+    ShapedLine, SharedString, Style, TextRun, UTF16Selection, UnderlineStyle, Window, actions, div,
+    fill, point, px, relative, size,
 };
 
 use crate::theme;
@@ -64,6 +64,16 @@ pub fn bind_keys(cx: &mut App) {
     ]);
 }
 
+/// What a field drew last: its text's room, its caret, where its whole line was painted (it
+/// starts left of the room once scrolled), and the mask that was in force while it was.
+#[cfg(test)]
+pub struct Drawn {
+    pub room: Bounds<Pixels>,
+    pub caret: Bounds<Pixels>,
+    pub line: Bounds<Pixels>,
+    pub clip: Bounds<Pixels>,
+}
+
 pub struct TextInput {
     focus: FocusHandle,
     editor: Editor,
@@ -76,6 +86,13 @@ pub struct TextInput {
     selecting: bool,
     last_layout: Option<ShapedLine>,
     last_bounds: Option<Bounds<Pixels>>,
+    /// How far the line is scrolled left, so that the caret of a text longer than the field
+    /// stays in view.
+    scroll: Pixels,
+    #[cfg(test)]
+    last_caret: Option<Bounds<Pixels>>,
+    #[cfg(test)]
+    last_painted: Option<(Bounds<Pixels>, Bounds<Pixels>)>,
 }
 
 impl TextInput {
@@ -89,11 +106,28 @@ impl TextInput {
             selecting: false,
             last_layout: None,
             last_bounds: None,
+            scroll: px(0.),
+            #[cfg(test)]
+            last_caret: None,
+            #[cfg(test)]
+            last_painted: None,
         }
     }
 
     pub fn text(&self) -> &str {
         self.editor.text()
+    }
+
+    /// What was drawn last.
+    #[cfg(test)]
+    pub fn drawn(&self) -> Option<Drawn> {
+        let (line, clip) = self.last_painted?;
+        Some(Drawn {
+            room: self.last_bounds?,
+            caret: self.last_caret?,
+            line,
+            clip,
+        })
     }
 
     /// The text, leaving the field empty: a password is handed over, not kept.
@@ -215,7 +249,7 @@ impl TextInput {
         if self.editor.text().is_empty() {
             return 0;
         }
-        let shown = layout.closest_index_for_x(position.x - bounds.left());
+        let shown = layout.closest_index_for_x(position.x - bounds.left() + self.scroll);
         content_offset(self.editor.text(), self.masked, shown)
     }
 
@@ -331,7 +365,7 @@ impl EntityInputHandler for TextInput {
     ) -> Option<Bounds<Pixels>> {
         let layout = self.last_layout.as_ref()?;
         let range = self.range_offset_from_utf16(&range);
-        let x = |offset| layout.x_for_index(self.shown_offset(offset));
+        let x = |offset| layout.x_for_index(self.shown_offset(offset)) - self.scroll;
         Some(Bounds::from_corners(
             point(bounds.left() + x(range.start), bounds.top()),
             point(bounds.left() + x(range.end), bounds.bottom()),
@@ -452,7 +486,10 @@ impl Element for TextLine {
                 line.x_for_index(input.shown_offset(offset))
             }
         };
-        let x = x_of(input.editor.cursor());
+        let caret = x_of(input.editor.cursor());
+        let scroll = scrolled(input.scroll, caret, line.width, bounds.size.width);
+        let x_of = |offset| x_of(offset) - scroll;
+        let x = caret - scroll;
         let selected = input.editor.selection();
         let selection = (!selected.is_empty()).then(|| {
             let (start, end) = (x_of(selected.start), x_of(selected.end));
@@ -470,10 +507,11 @@ impl Element for TextLine {
         let cursor = fill(
             Bounds::new(
                 point(bounds.left() + x, bounds.top()),
-                size(px(1.5), bounds.bottom() - bounds.top()),
+                size(px(CARET), bounds.bottom() - bounds.top()),
             ),
             theme::text(),
         );
+        self.input.update(cx, |input, _| input.scroll = scroll);
         Prepaint {
             line: Some(line),
             cursor: Some(cursor),
@@ -500,26 +538,46 @@ impl Element for TextLine {
         let Some(line) = prepaint.line.take() else {
             return;
         };
-        if focus.is_focused(window)
-            && let Some(selection) = prepaint.selection.take()
-        {
-            window.paint_quad(selection);
-        }
-        line.paint(
-            bounds.origin,
-            window.line_height(),
-            gpui_kit::TextAlign::Left,
-            None,
-            window,
-            cx,
-        )
-        .ok();
-        if focus.is_focused(window)
-            && let Some(cursor) = prepaint.cursor.take()
-        {
-            window.paint_quad(cursor);
-        }
+        let scroll = self.input.read(cx).scroll;
+        #[cfg(test)]
+        let caret = prepaint.cursor.as_ref().map(|cursor| cursor.bounds);
+        let origin = point(bounds.left() - scroll, bounds.top());
+        #[cfg(test)]
+        let painted_at = Bounds::new(origin, size(line.width, window.line_height()));
+        #[cfg(test)]
+        let mut mask = bounds;
+        // The text goes no further than the field, whatever its length.
+        window.with_content_mask(Some(ContentMask { bounds }), |window| {
+            #[cfg(test)]
+            {
+                mask = window.content_mask().bounds;
+            }
+            if focus.is_focused(window)
+                && let Some(selection) = prepaint.selection.take()
+            {
+                window.paint_quad(selection);
+            }
+            line.paint(
+                origin,
+                window.line_height(),
+                gpui_kit::TextAlign::Left,
+                None,
+                window,
+                cx,
+            )
+            .ok();
+            if focus.is_focused(window)
+                && let Some(cursor) = prepaint.cursor.take()
+            {
+                window.paint_quad(cursor);
+            }
+        });
         self.input.update(cx, |input, _| {
+            #[cfg(test)]
+            {
+                input.last_caret = caret;
+                input.last_painted = Some((painted_at, mask));
+            }
             input.last_layout = Some(line);
             input.last_bounds = Some(bounds);
         });
@@ -568,6 +626,22 @@ impl Render for TextInput {
     }
 }
 
+/// The width of the caret.
+const CARET: f32 = 1.5;
+
+/// How far a line `line` wide is scrolled left in a field `room` wide, so that the caret at
+/// `caret` on the line shows: as it was while the caret is in view, else just enough to bring it
+/// back, and never so far that room is left empty after the end of the text.
+fn scrolled(scroll: Pixels, caret: Pixels, line: Pixels, room: Pixels) -> Pixels {
+    let caret_room = room - px(CARET);
+    let end = (line + px(CARET) - room).max(px(0.));
+    scroll
+        .min(caret)
+        .max(caret - caret_room)
+        .min(end)
+        .max(px(0.))
+}
+
 /// What is drawn: the text, or a dot per character of a password.
 fn shown(content: &str, masked: bool) -> String {
     if masked {
@@ -610,6 +684,19 @@ fn marked_lengths(marked: &Range<usize>, len: usize) -> [usize; 3] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_long_text_scrolls_to_keep_its_caret_in_the_field() {
+        let (room, line) = (px(100.), px(400.));
+        // At the end of the text, the end shows.
+        assert_eq!(scrolled(px(0.), line, line, room), px(301.5));
+        // Back to the start, the start shows.
+        assert_eq!(scrolled(px(301.5), px(0.), line, room), px(0.));
+        // A caret already in view moves nothing.
+        assert_eq!(scrolled(px(200.), px(250.), line, room), px(200.));
+        // A text shorter than the field never scrolls.
+        assert_eq!(scrolled(px(40.), px(60.), px(60.), room), px(0.));
+    }
 
     #[test]
     fn a_password_shows_one_dot_per_character() {
