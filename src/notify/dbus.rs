@@ -325,22 +325,11 @@ mod tests {
         }
     }
 
-    /// The clicks heard within a moment.
+    /// The clicks heard within a moment, taken from the inbox without waiting on it: no thread
+    /// is left parked behind.
     fn heard(clicks: &Clicks) -> Vec<Open> {
-        let (to, from) = mpsc::channel();
-        let clicks = clicks.clone();
-        std::thread::spawn(move || {
-            loop {
-                if to.send(zbus::block_on(clicks.next())).is_err() {
-                    break;
-                }
-            }
-        });
-        let mut heard = Vec::new();
-        while let Ok(open) = from.recv_timeout(Duration::from_millis(500)) {
-            heard.push(open);
-        }
-        heard
+        std::thread::sleep(Duration::from_millis(500));
+        clicks.0.lock().unwrap().heard.drain(..).collect()
     }
 
     #[test]
