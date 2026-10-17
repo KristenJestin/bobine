@@ -321,6 +321,15 @@ mod tests {
         play_from_its_page(&window, player, cx);
         let visual = gpui_kit::VisualTestContext::from_window(window.into(), cx);
         visual.run_until_parked();
+        // The clock of the move is the real one: the test says where it stands.
+        let starts = |at: Instant, cx: &mut TestAppContext| {
+            window
+                .update(cx, |shell, _, _| {
+                    shell.curtain.as_mut().unwrap().started_at(at)
+                })
+                .unwrap()
+        };
+        starts(Instant::now() + Duration::from_secs(3600), cx);
         queued.borrow_mut().push(PlayerEvent::EndOfFile);
         tick(cx);
         assert_eq!(
@@ -329,7 +338,7 @@ mod tests {
             "not asked while it moves"
         );
         // Grown, the cover waits without moving: the player is asked again.
-        std::thread::sleep(Duration::from_millis(400));
+        starts(Instant::now() - Duration::from_secs(60), cx);
         tick(cx);
         assert_eq!(screen(&window, cx), Screen::FilmDetail);
     }

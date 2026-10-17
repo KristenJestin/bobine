@@ -102,6 +102,12 @@ impl<P> Curtain<P> {
         self.way
     }
 
+    /// A test sets where the move stands against the real clock, which it cannot wait for.
+    #[cfg(test)]
+    pub fn started_at(&mut self, at: Instant) {
+        self.since = at;
+    }
+
     /// The video's first frame is on the window: the cover goes. Only the first one counts.
     pub fn first_frame(&mut self, now: Instant) {
         if self.way == Way::Opening {
