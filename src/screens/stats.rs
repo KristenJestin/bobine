@@ -31,7 +31,8 @@ pub fn source_note(source: HistorySource) -> &'static str {
     match source {
         HistorySource::PlaybackReporting => "From the server's Playback Reporting plugin.",
         HistorySource::PlayedItems => {
-            "From your played items: each title counts its length once per play."
+            "From your played items: each title counts its length once per play. A season marked \
+             played at once counts as watched that day."
         }
     }
 }

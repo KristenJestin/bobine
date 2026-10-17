@@ -181,7 +181,12 @@ mod tests {
             "no empty charts: the page says why there are none"
         );
         assert!(visual.debug_bounds("stats-days").is_none());
-        assert!(crate::screens::stats::source_note(HistorySource::PlayedItems).contains("played"));
+        let note = crate::screens::stats::source_note(HistorySource::PlayedItems);
+        assert!(note.contains("played"));
+        assert!(
+            note.contains("A season marked played at once counts as watched that day."),
+            "{note}"
+        );
     }
 
     #[gpui_kit::test]
