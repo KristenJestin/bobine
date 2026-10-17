@@ -203,6 +203,8 @@ pub struct Shell {
     pub lists: ListsPage,
     /// What the viewer watched, once read: None while there is nothing to show, and no page.
     pub stats: Option<Rc<crate::stats::Stats>>,
+    /// The Stats page scrolls down, and its rows of movies and of series sideways.
+    pub stats_scrolls: [gpui_kit::ScrollHandle; 3],
     /// The watch history is being read: it is not asked again meanwhile.
     stats_reading: bool,
     /// Each read of the watch history is numbered: only the newest one's answer is shown.
@@ -405,6 +407,7 @@ impl Shell {
             my_list: Default::default(),
             lists: Default::default(),
             stats: None,
+            stats_scrolls: Default::default(),
             stats_reading: false,
             stats_asked: 0,
             playlist_pages: Vec::new(),

@@ -298,4 +298,40 @@ mod tests {
         reload(&window, cx);
         assert_eq!(reads(&server), 3, "once it landed, the next one is read");
     }
+
+    #[gpui_kit::test]
+    fn the_arrows_put_the_ring_on_a_poster_and_enter_opens_it(cx: &mut TestAppContext) {
+        let history = fake::watch_history(HistorySource::PlaybackReporting, NOW);
+        let (_server, window) = start(history, cx);
+        window
+            .update(cx, |shell, _, cx| shell.open_stats(cx))
+            .unwrap();
+        let mut visual = drawn(&window, cx);
+        visual.simulate_keystrokes("right");
+        let ringed = window
+            .read_with(cx, |shell, _| shell.ring.shown_on().cloned())
+            .unwrap();
+        assert_eq!(ringed, Some(("stats-movies", 0usize).into()));
+        // The row below, further down the page: the page scrolls to it.
+        visual.simulate_keystrokes("down");
+        visual.run_until_parked();
+        let ringed = window
+            .read_with(cx, |shell, _| shell.ring.shown_on().cloned())
+            .unwrap();
+        assert_eq!(ringed, Some(("stats-series", 0usize).into()));
+        let bounds = visual
+            .debug_bounds("stats-series")
+            .expect("the row is drawn");
+        let height = window
+            .update(cx, |_, window, _| f32::from(window.viewport_size().height))
+            .unwrap();
+        assert!(
+            f32::from(bounds.bottom()) <= height,
+            "{bounds:?} in {height}"
+        );
+        visual.simulate_keystrokes("up");
+        visual.simulate_keystrokes("enter");
+        visual.run_until_parked();
+        assert_eq!(screen(&window, cx), Screen::FilmDetail);
+    }
 }

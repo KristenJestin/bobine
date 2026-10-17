@@ -2,16 +2,20 @@
 //! genres watched most, and when, as quiet monochrome bars. Each part fades in a little after
 //! the one above it, its bars growing.
 
+use std::rc::Rc;
+
 use bobine::provider::{HistorySource, WatchedKind};
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    Animation, AnimationExt, AnyElement, Context, Div, ElementId, FontWeight, IntoElement, Window,
-    div, px,
+    Animation, AnimationExt, AnyElement, Context, Div, ElementId, FontWeight, IntoElement,
+    ScrollHandle, Stateful, Window, div, px,
 };
 
+use super::card::{Offer, Open, Play};
 use super::film_detail::{EDGE, ROW_POSTER};
 use super::library::GRID_TOP;
 use super::{Corner, note, poster_caption, poster_image, row_heading};
+use crate::home_page::PlayTarget;
 use crate::images;
 use crate::motion;
 use crate::shell::Shell;
@@ -40,6 +44,10 @@ pub fn render(
     let Some(stats) = shell.stats.clone() else {
         return div().into_any_element();
     };
+    let [scroll, movies, series] = shell.stats_scrolls.clone();
+    shell
+        .scrolls
+        .extend([scroll.clone(), movies.clone(), series.clone()]);
     let header = div()
         .px(px(EDGE))
         .flex()
@@ -62,16 +70,16 @@ pub fn render(
         periods(&stats).into_any_element(),
         review(&stats).into_any_element(),
     ];
-    for (kind, heading) in [
-        (WatchedKind::Movie, "Most watched movies"),
-        (WatchedKind::Series, "Most watched series"),
+    for (kind, heading, row) in [
+        (WatchedKind::Movie, "Most watched movies", movies),
+        (WatchedKind::Series, "Most watched series", series),
     ] {
         let list = match kind {
             WatchedKind::Movie => &stats.movies,
             WatchedKind::Series => &stats.series,
         };
         if !list.is_empty() {
-            parts.push(titles(shell, heading, kind, list, cx).into_any_element());
+            parts.push(titles(shell, heading, kind, list, &row, cx).into_any_element());
         }
     }
     if !stats.genres.is_empty() {
@@ -84,6 +92,7 @@ pub fn render(
         .id("stats")
         .size_full()
         .overflow_y_scroll()
+        .track_scroll(&scroll)
         .child(
             div()
                 .flex()
@@ -191,12 +200,14 @@ fn review(stats: &Stats) -> Div {
     )
 }
 
-/// A row of posters that scrolls sideways; a click opens the title, when the library holds it.
+/// A row of posters that scrolls sideways; each is a card, as on the other pages, when the
+/// library holds its title.
 fn titles(
     shell: &mut Shell,
     heading: &'static str,
     kind: WatchedKind,
     list: &[Ranked],
+    scroll: &ScrollHandle,
     cx: &mut Context<Shell>,
 ) -> Div {
     let row_id = match kind {
@@ -213,35 +224,51 @@ fn titles(
                 1 => "1 play".to_string(),
                 plays => format!("{plays} plays"),
             };
-            let poster = div()
-                .id(name.clone())
-                .flex_none()
-                .w(px(ROW_POSTER))
-                .flex()
-                .flex_col()
-                .gap(px(8.))
-                .child(poster_image(
-                    &name,
-                    image,
-                    None,
-                    Corner::Nothing,
-                    ROW_POSTER,
-                    false,
-                ))
-                .child(poster_caption(
-                    ranked.title.name.clone(),
-                    format!("{} · {plays}", stats::length(ranked.seconds)),
-                ));
-            match ranked.title.id.clone() {
-                Some(id) => poster
-                    .cursor_pointer()
-                    .on_click(cx.listener(move |shell, _, _, cx| match kind {
-                        WatchedKind::Movie => shell.open_film(id.clone(), cx),
-                        WatchedKind::Series => shell.open_series(id.clone(), cx),
-                    }))
-                    .into_any_element(),
-                None => poster.into_any_element(),
-            }
+            let (title, caption) = (
+                ranked.title.name.clone(),
+                format!("{} · {plays}", stats::length(ranked.seconds)),
+            );
+            let draw = {
+                let name = name.clone();
+                move |layer: Option<Stateful<Div>>| {
+                    div()
+                        .w(px(ROW_POSTER))
+                        .flex()
+                        .flex_col()
+                        .gap(px(8.))
+                        .child(
+                            poster_image(
+                                &name,
+                                image.clone(),
+                                None,
+                                Corner::Nothing,
+                                ROW_POSTER,
+                                false,
+                            )
+                            .children(layer),
+                        )
+                        .child(poster_caption(title.clone(), caption.clone()))
+                }
+            };
+            // A title the library lost opens nothing: it is no card for the arrows.
+            let Some(id) = ranked.title.id.clone() else {
+                return div()
+                    .id(name)
+                    .flex_none()
+                    .child(draw(None))
+                    .into_any_element();
+            };
+            let (open, play) = match kind {
+                WatchedKind::Movie => (Open::Film(id.clone()), PlayTarget::Film(id)),
+                WatchedKind::Series => (Open::Series(id.clone(), None), PlayTarget::Series(id)),
+            };
+            let offer = Offer {
+                open,
+                play: Play::Target(play),
+                quick: None,
+                draw: Rc::new(move |layer| draw(Some(layer))),
+            };
+            super::card(shell, name, offer, cx).into_any_element()
         })
         .collect();
     div()
@@ -257,6 +284,7 @@ fn titles(
                 .gap(px(16.))
                 .px(px(EDGE))
                 .overflow_x_scroll()
+                .track_scroll(scroll)
                 .children(posters),
         )
 }
