@@ -2617,6 +2617,32 @@ fn the_next_episode_of_a_series_is_next_up() {
 }
 
 #[test]
+fn a_title_named_by_its_id_alone_is_a_film_a_series_or_an_episode() {
+    let s = Setup::new();
+    let server = s.signed_in();
+    match server.title(&film()).unwrap() {
+        Title::Film(found) => assert_eq!(found.id, film()),
+        other => panic!("a film, not {other:?}"),
+    }
+    match server.title(&series()).unwrap() {
+        Title::Series(found) => assert_eq!(found.id, series()),
+        other => panic!("a series, not {other:?}"),
+    }
+    match server.title(&ItemId(EPISODE.into())).unwrap() {
+        Title::Episode(found) => {
+            assert_eq!(found.item.id, ItemId(EPISODE.into()));
+            assert_eq!(found.series, series());
+            assert_eq!(found.season, ItemId(SEASON.into()));
+            assert_eq!(found.versions.len(), 1);
+        }
+        other => panic!("an episode, not {other:?}"),
+    }
+    let asked = s.fake.last("GET", &format!("/Items/{EPISODE}"));
+    assert_eq!(asked.param("userId"), Some(USER_ID));
+    assert!(asked.param("Fields").unwrap().contains("MediaSources"));
+}
+
+#[test]
 fn a_series_watched_to_the_end_has_no_next_episode() {
     let s = Setup::new();
     s.fake.state.lock().unwrap().all_watched = true;

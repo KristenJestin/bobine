@@ -536,7 +536,7 @@ impl Shell {
         cx.notify();
     }
 
-    fn home_started(
+    pub(super) fn home_started(
         &mut self,
         started: Result<home_page::Started, StartError>,
         window: &mut Window,

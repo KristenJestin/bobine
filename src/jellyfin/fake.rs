@@ -689,6 +689,9 @@ fn answer(state: &State, seen: &Seen) -> Answer {
             "POST",
             "/Sessions/Playing" | "/Sessions/Playing/Progress" | "/Sessions/Playing/Stopped",
         ) => Answer::Empty(204),
+        ("GET", path) if path == format!("/Items/{EPISODE}") => {
+            Answer::Json(200, fixture("episodes")["Items"][0].clone())
+        }
         ("GET", path) if path == format!("/Items/{SERIES}") => Answer::Json(
             200,
             trailers_of(state, favourite_of(state, SERIES, fixture("series_detail"))),

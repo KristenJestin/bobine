@@ -20,7 +20,9 @@ mod home_page;
 mod icons;
 mod images;
 mod input;
+mod instance;
 mod keys;
+mod launcher;
 mod library_tools;
 mod lists;
 mod menu;
@@ -63,13 +65,40 @@ fn open_jellyfin() -> Result<Arc<dyn Connector>, ProviderError> {
     Ok(Arc::new(connector))
 }
 
+/// What a command of the launcher prints, and its exit code.
+fn exit_with(outcome: launcher::Outcome) -> ! {
+    println!("{}", outcome.json());
+    std::process::exit(outcome.code);
+}
+
 fn main() {
-    if std::env::args().nth(1).as_deref() == Some("--version") {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().map(String::as_str) == Some("--version") {
         println!("bobine {}", bobine::VERSION);
         return;
     }
+    let socket = instance::socket_path(std::env::var_os("XDG_RUNTIME_DIR"));
+    // `open` and `play` go to the window running, else open one for themselves.
+    let first = match launcher::parse(&args) {
+        None => None,
+        Some(Err(said)) => exit_with(launcher::Outcome::usage(&said)),
+        Some(Ok(launcher::Command::Ask(request))) => {
+            if socket
+                .as_deref()
+                .is_some_and(|path| instance::hand_off(path, &request))
+            {
+                return;
+            }
+            Some(request)
+        }
+        Some(Ok(command)) => exit_with(launcher::run(&command, open_jellyfin)),
+    };
     #[cfg(feature = "harness")]
     let harness = harness::Harness::from_args();
+    // The headless harness on its fake server never takes the commands of the real one.
+    #[cfg(feature = "harness")]
+    let socket = socket.filter(|_| harness.connector().is_none());
+    let commands = socket.as_deref().and_then(instance::listen);
     gpui_kit::application()
         .with_assets(icons::Icons)
         .run(move |cx: &mut App| {
@@ -112,7 +141,11 @@ fn main() {
             #[cfg(not(feature = "harness"))]
             let secrets: Arc<dyn TokenStore> = Arc::new(SecretServiceStore);
             let opened = cx.open_window(options, move |window, cx| {
-                let shell = cx.new(|cx| shell::Shell::new(font, open, settings, secrets, cx));
+                let shell = cx.new(|cx| {
+                    let mut shell = shell::Shell::new(font, open, settings, secrets, cx);
+                    shell.hear_commands(commands, first);
+                    shell
+                });
                 // The video surface and mpv go before the window's surface does.
                 let closing = shell.downgrade();
                 window.on_window_should_close(cx, move |_, cx| {

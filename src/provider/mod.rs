@@ -95,6 +95,9 @@ pub trait MediaServer: Send + Sync {
     /// The episode the user would watch next: the one started, else the one after the last
     /// watched, across seasons; the first when none was watched; none when all were.
     fn next_up(&self, series: &ItemId) -> Result<Option<Episode>, ProviderError>;
+    /// A film, a series or an episode named by its id alone, whichever it is: what the
+    /// launcher's commands ask for. An episode comes with its versions, to play.
+    fn title(&self, item: &ItemId) -> Result<Title, ProviderError>;
     /// The films, series and people whose name matches `query`, at most `per_group` of each.
     fn search(&self, query: &str, per_group: u32) -> Result<SearchResults, ProviderError>;
     /// The films and series a person took part in, the newest first.

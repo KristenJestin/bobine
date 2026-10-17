@@ -632,7 +632,7 @@ impl Shell {
         cx.notify();
     }
 
-    fn signed_in(&mut self, server: Arc<dyn MediaServer>, cx: &mut Context<Self>) {
+    pub(super) fn signed_in(&mut self, server: Arc<dyn MediaServer>, cx: &mut Context<Self>) {
         self.server = Some(server);
         self.login = None;
         self.reset_session(cx);
