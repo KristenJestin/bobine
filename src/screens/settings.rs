@@ -221,6 +221,9 @@ fn seerr_block(shell: &Shell, window: &mut Window, cx: &mut Context<Shell>) -> O
                 )
         });
     let (said, failed) = match &shell.seerr.check {
+        None if shell.seerr_connecting(cx) && shell.seerr.hint.is_none() => {
+            (Some("Connecting…".to_string()), false)
+        }
         None => (None, false),
         Some(Loadable::Loading) => (Some("Testing…".to_string()), false),
         Some(Loadable::Ready(line)) => (Some(line.clone()), false),

@@ -110,6 +110,11 @@ impl SecretField {
         self.state == State::Saved
     }
 
+    /// Whether the keyring is saving or clearing.
+    pub fn is_busy(&self) -> bool {
+        self.state == State::Busy
+    }
+
     /// Whether the keyring was looked in and is not at work: the field says what it holds.
     pub fn is_settled(&self) -> bool {
         matches!(self.state, State::Saved | State::Empty)

@@ -62,6 +62,8 @@ pub struct Seerr {
     pub owner_line: Option<String>,
     /// The number of the client being made: an older making that ends late is dropped.
     making: u64,
+    /// A client is being made: the keyring read and the server asked.
+    connecting: bool,
     _key_changed: Option<Subscription>,
     /// The library by TMDb id: what of the request server's titles is in it. Kept for the
     /// session, read again with the Home; while there is none, nothing is said not in it.
@@ -207,6 +209,7 @@ impl Shell {
         }
         self.seerr.making += 1;
         let making = self.seerr.making;
+        self.seerr.connecting = false;
         self.seerr.check = None;
         self.seerr.owner_line = None;
         let key_saved = self.seerr.key_saved == Some(true);
@@ -216,6 +219,7 @@ impl Shell {
             self.seerr_gone(cx);
             return;
         };
+        self.seerr.connecting = true;
         let account = secret_field::account(&server.server().id, server.user_id(), SEERR_KEY);
         let (store, open): (Arc<dyn TokenStore>, _) =
             (self.secrets.clone(), self.open_seerr.clone());
@@ -235,6 +239,7 @@ impl Shell {
                 if shell.seerr.making != making {
                     return;
                 }
+                shell.seerr.connecting = false;
                 match made {
                     Ok((client, check)) => {
                         shell.seerr.client = Some(client);
@@ -567,9 +572,26 @@ impl Shell {
         }
     }
 
-    /// The Settings' "Test": the version, or why the connection failed.
+    /// Whether a client is being made, or the key is being written to the keyring, which makes
+    /// one when it ends.
+    pub fn seerr_connecting(&self, cx: &Context<Self>) -> bool {
+        self.seerr.connecting
+            || self
+                .seerr
+                .key
+                .as_ref()
+                .is_some_and(|key| key.read(cx).is_busy())
+    }
+
+    /// The Settings' "Test": the form saved as it stands, then the version, or why the
+    /// connection failed. A connection being made is the test: it asks the server too.
     pub fn test_seerr(&mut self, cx: &mut Context<Self>) {
+        self.save_seerr(cx);
         let Some(client) = self.seerr.client.clone() else {
+            if self.seerr_connecting(cx) {
+                cx.notify();
+                return;
+            }
             // Why there is no client was said already; without a word, both are missing.
             if self.seerr.check.is_none() && self.seerr.hint.is_none() {
                 self.seerr.hint = Some("Add the address and the API key to connect.");
@@ -989,6 +1011,74 @@ pub(super) mod tests {
             );
             assert!(connected(&window, cx), "Enter in the {which}");
         }
+    }
+
+    /// Test on a form not saved yet saves it first, then tests what it saved.
+    #[gpui_kit::test]
+    fn test_on_unsaved_fields_saves_them_then_tests(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.toml");
+        let keyring = Arc::new(MemoryKeyring::default());
+        let seerr = FakeSeerr::default();
+        let (window, _) = start(Some(path.clone()), &keyring, &seerr, cx);
+        window
+            .update(cx, |shell, _, cx| {
+                shell.open_settings(cx);
+                let field = shell.seerr.address.clone().unwrap();
+                field.update(cx, |field, cx| field.set_text(ADDRESS, cx));
+                let key = shell.seerr.key.clone().unwrap();
+                key.update(cx, |key, cx| key.type_in(KEY, cx));
+            })
+            .unwrap();
+        let mut visual = drawn(&window, cx);
+        click(&mut visual, "seerr-test");
+        cx.run_until_parked();
+        assert_eq!(keyring.secret(ACCOUNT).as_deref(), Some(KEY));
+        assert_eq!(
+            Settings::read(&path).seerr_address.as_deref(),
+            Some(ADDRESS)
+        );
+        assert!(connected(&window, cx));
+        window
+            .update(cx, |shell, _, _| {
+                assert!(
+                    matches!(shell.seerr.check, Some(Loadable::Ready(_))),
+                    "the test did not end on a version"
+                );
+                assert_eq!(shell.seerr.hint, None);
+            })
+            .unwrap();
+        assert_eq!(seerr.state.lock().unwrap().record.checks, 1);
+    }
+
+    /// While the connection is being made, Test does not claim that the form is incomplete: it
+    /// says it is connecting, and the connection's own answer is the test's.
+    #[gpui_kit::test]
+    fn test_while_connecting_does_not_say_the_form_is_incomplete(cx: &mut TestAppContext) {
+        let seerr = FakeSeerr::default();
+        let (window, _) = start(None, &Arc::new(MemoryKeyring::default()), &seerr, cx);
+        window
+            .update(cx, |shell, _, cx| {
+                shell.open_settings(cx);
+                let field = shell.seerr.address.clone().unwrap();
+                field.update(cx, |field, cx| field.set_text(ADDRESS, cx));
+                let key = shell.seerr.key.clone().unwrap();
+                key.update(cx, |key, cx| key.type_in(KEY, cx));
+                shell.save_seerr(cx);
+                // Nothing in the background has run: the key is still being written.
+                shell.test_seerr(cx);
+                assert_eq!(shell.seerr.hint, None, "Test says the form is incomplete");
+                assert!(shell.seerr_connecting(cx), "Test does not say it connects");
+            })
+            .unwrap();
+        cx.run_until_parked();
+        window
+            .update(cx, |shell, _, cx| {
+                assert!(matches!(shell.seerr.check, Some(Loadable::Ready(_))));
+                assert!(!shell.seerr_connecting(cx));
+            })
+            .unwrap();
+        assert_eq!(seerr.state.lock().unwrap().record.checks, 1);
     }
 
     #[gpui_kit::test]
