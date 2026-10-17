@@ -3735,7 +3735,7 @@ fn first_play_at(offset: Option<&'static str>, written: &'static str) -> Option<
     let s = Setup::new();
     {
         let mut state = s.fake.state.lock().unwrap();
-        state.reporting_offset = offset;
+        state.reporting_offsets = offset.map(|offset| vec![offset]);
         state.reporting = Some(vec![[
             written,
             USER_ID,
@@ -3769,6 +3769,70 @@ fn a_server_in_utc_and_a_client_ahead_put_a_play_at_the_clients_hour() {
     );
 }
 
+/// The plays of `rows`, each with its own `ServerOffset` cell.
+fn plays_at(rows: [(&'static str, &'static str); 3]) -> Vec<Option<LocalTime>> {
+    let s = Setup::new();
+    {
+        let mut state = s.fake.state.lock().unwrap();
+        state.reporting_offsets = Some(rows.iter().map(|(_, offset)| *offset).collect());
+        state.reporting = Some(
+            rows.iter()
+                .map(|(written, _)| {
+                    [
+                        *written,
+                        USER_ID,
+                        FILM,
+                        "Movie",
+                        "The Quiet Harbour",
+                        "6000",
+                    ]
+                })
+                .collect(),
+        );
+    }
+    let history = s.signed_in().watch_history().unwrap();
+    history.plays.iter().map(|play| play.at).collect()
+}
+
+#[test]
+fn each_play_is_read_with_the_offset_of_its_own_row() {
+    // A server in Europe/Paris: +01:00 in January, +02:00 in July.
+    let plays = plays_at([
+        ("2026-01-21 21:00:00", "3600.0"),
+        ("2026-07-21 21:00:00", "7200.0"),
+        ("2026-01-01 00:30:00", "3599.9999994"),
+    ]);
+    assert_eq!(
+        plays,
+        [
+            Some(LocalTime::from_unix(1_769_025_600)),
+            Some(LocalTime::from_unix(1_784_660_400)),
+            Some(LocalTime::from_unix(1_767_223_800)),
+        ]
+    );
+}
+
+#[test]
+fn a_row_with_no_offset_is_read_on_the_clients_clock_and_the_others_keep_theirs() {
+    let plays = plays_at([
+        ("2026-01-21 21:00:00", "3600.0"),
+        ("2026-07-21 21:00:00", ""),
+        ("2026-07-21 21:00:00", "not a number"),
+    ]);
+    assert_eq!(plays[0], Some(LocalTime::from_unix(1_769_025_600)));
+    assert_eq!(
+        plays[1],
+        Some(LocalTime {
+            year: 2026,
+            month: 7,
+            day: 21,
+            hour: 21,
+            minute: 0
+        })
+    );
+    assert_eq!(plays[2], plays[1]);
+}
+
 #[test]
 fn without_the_servers_offset_its_time_is_taken_as_the_clients() {
     assert_eq!(
@@ -3788,8 +3852,9 @@ fn the_plugin_is_asked_the_servers_offset_from_utc() {
         .json();
     let query = asked["CustomQueryString"].as_str().unwrap();
     assert!(
-        query
-            .contains("(julianday('now', 'localtime') - julianday('now')) * 86400 AS ServerOffset"),
+        query.contains(
+            "(julianday(DateCreated) - julianday(DateCreated, 'utc')) * 86400 AS ServerOffset"
+        ),
         "{query}"
     );
 }

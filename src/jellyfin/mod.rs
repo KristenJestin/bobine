@@ -1426,10 +1426,11 @@ const REPORTING_COLUMNS: [&str; 6] = [
     "PlayDuration",
 ];
 
-/// How many seconds the server's clock is ahead of UTC, beside each row: SQLite's `localtime`
-/// is the clock the plugin dates its plays with.
+/// How many seconds the server's clock was ahead of UTC at each row's own date: the offset
+/// changes with daylight saving, so one read at query time would be wrong for half the year.
+/// SQLite's `utc` takes the date as the server's local time, the clock the plugin dates with.
 const SERVER_OFFSET: &str =
-    "(julianday('now', 'localtime') - julianday('now')) * 86400 AS ServerOffset";
+    "(julianday(DateCreated) - julianday(DateCreated, 'utc')) * 86400 AS ServerOffset";
 
 /// A play the plugin recorded, at its time on the local clock. The plugin writes the server's
 /// own clock (`DateTime.Now`), which in a container without a time zone is UTC.

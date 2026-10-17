@@ -154,9 +154,10 @@ pub struct State {
     /// query: `DateCreated, UserId, ItemId, ItemType, ItemName, PlayDuration`. None: the plugin
     /// is not installed, its routes answer 404.
     pub reporting: Option<Vec<[&'static str; 6]>>,
-    /// The plugin's server is this many seconds ahead of UTC, as its query's `ServerOffset`
-    /// says (`"7200.0000001"`). None: the column is missing from its answer.
-    pub reporting_offset: Option<&'static str>,
+    /// How many seconds each row of `reporting` is ahead of UTC, as its query's `ServerOffset`
+    /// cell says (`"7200.0000001"`; an empty text is a row the server could not date). None:
+    /// the column is missing from its answer.
+    pub reporting_offsets: Option<Vec<&'static str>>,
     /// The user has played nothing.
     pub nothing_played: bool,
     /// Episodes the library holds beside `EPISODE`, with their series: (episode, series).
@@ -521,7 +522,7 @@ fn answer(state: &State, seen: &Seen) -> Answer {
                 "ItemName",
                 "PlayDuration",
             ];
-            names.extend(state.reporting_offset.map(|_| "ServerOffset"));
+            names.extend(state.reporting_offsets.as_ref().map(|_| "ServerOffset"));
             let columns = if rows.is_empty() {
                 json!([])
             } else {
@@ -529,7 +530,11 @@ fn answer(state: &State, seen: &Seen) -> Answer {
             };
             let results: Vec<Vec<&str>> = rows
                 .iter()
-                .map(|row| row.iter().copied().chain(state.reporting_offset).collect())
+                .enumerate()
+                .map(|(at, row)| {
+                    let offset = state.reporting_offsets.as_ref().map(|offsets| offsets[at]);
+                    row.iter().copied().chain(offset).collect()
+                })
                 .collect();
             let message = if rows.is_empty() {
                 "Query executed, no data returned.</br>Number of rows effected : 0"
