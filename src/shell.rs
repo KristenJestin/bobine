@@ -1,5 +1,6 @@
 //! The root view: the screen the navigator points at, framed by the pill bar or the back link.
 
+mod discover;
 mod home;
 mod lists;
 mod pages;
@@ -7,16 +8,19 @@ mod palette;
 mod playlists;
 mod posters;
 mod preview;
+mod request;
 mod series;
 mod settings;
 mod skip;
 mod trailer;
 
+pub use discover::{OpenSeerr, Seerr};
 pub use home::{HomePage, ListPage};
 pub use lists::{CollectionPage, CollectionsPage, ListCard, ListsPage, MyListPage, PlayerList};
 pub use pages::{Chip, DetailPage, GONE, LibraryPage, Loadable, LoginForm, OpenConnector, Tool};
 pub use palette::{PersonPage, SearchState};
 pub use playlists::{PlaylistMenu, PlaylistPage};
+pub use request::RequestPage;
 pub use series::SeriesPage;
 pub use settings::{QualityMenu, SettingsPage};
 
@@ -136,6 +140,9 @@ pub struct Shell {
     /// Where the secrets the settings hold are kept: the system keyring.
     secrets: Arc<dyn TokenStore>,
     pub settings_page: SettingsPage,
+    /// The request server, when one is configured (#63), and how its client is made.
+    pub seerr: Seerr,
+    pub open_seerr: OpenSeerr,
     /// What turns the other monitors black, from the first film on; `None` after that when the
     /// compositor cannot (no layer shell): the switch is not offered.
     screens: Option<Screens>,
@@ -337,6 +344,8 @@ impl Shell {
             settings_path,
             secrets,
             settings_page: SettingsPage::default(),
+            seerr: Seerr::default(),
+            open_seerr: discover::real_seerr(),
             screens: None,
             screens_tried: false,
             window_seen: blackout::Steady::default(),
@@ -1092,7 +1101,13 @@ impl Render for Shell {
                 ))
             })
             .when(screen.shows_pill_bar(), |root| {
-                root.child(pill_bar(highlight, account, window, cx))
+                root.child(pill_bar(
+                    highlight,
+                    account,
+                    self.seerr.client.is_some(),
+                    window,
+                    cx,
+                ))
             })
             .when_some(
                 back_label.filter(|_| screen.shows_back_link()),

@@ -13,8 +13,8 @@ use bobine::provider::{
     FilmSort, FilterChoices, ImageKind, ImageRef, ItemId, Library, LibraryKind, MediaServer,
     MediaSource, MediaSourceId, Page, PersonHit, PersonTitles, PlaySessionId, Playback,
     PlaybackReport, Playlist, PlaylistEntry, ProviderError, SearchResults, Season, Segment, Series,
-    SeriesDetail, SeriesHit, ServerInfo, StreamUrl, SubtitleTrack, Title, Token, TokenStore,
-    Trailers, TranscodeRequest, Trickplay, VideoRange, VideoTrack,
+    SeriesDetail, SeriesHit, ServerInfo, StreamUrl, SubtitleTrack, Title, TmdbIndex, Token,
+    TokenStore, Trailers, TranscodeRequest, Trickplay, VideoRange, VideoTrack,
 };
 
 pub const USER: &str = "camille";
@@ -30,6 +30,10 @@ pub const TRANSCODE_SESSION: &str = "session-converted";
 /// The series every series page of the tests opens: three seasons, the first watched, the second
 /// stopped in its fourth episode.
 pub const SERIES: &str = "series-0";
+/// The TMDb ids of the film of the tests, of the next film, and of the series of the tests.
+pub const IN_LIBRARY_FILM: u64 = 9001;
+pub const OTHER_LIBRARY_FILM: u64 = 9002;
+pub const IN_LIBRARY_SERIES: u64 = 7001;
 
 /// The system keyring in memory: the tests and the harness never reach the real one. Beside the
 /// library's `MemoryStore`, which is `cfg(test)` of the library and so out of reach of this
@@ -119,6 +123,8 @@ pub struct Record {
     pub playlist_reads: Vec<ItemId>,
     /// The titles whose trailer file was asked for, in order.
     pub trailer_asks: Vec<ItemId>,
+    /// How many times the library was indexed by TMDb id.
+    pub tmdb_indexes: u32,
 }
 
 /// A change asked of a playlist.
@@ -233,6 +239,19 @@ pub struct State {
     pub trailer_stream: String,
     /// `local_trailer` fails with this once it was asked.
     pub trailer_error: Option<ProviderError>,
+    /// The TMDb ids of the films and series that have one.
+    pub tmdb: Vec<(ItemId, u64)>,
+    /// The TMDb collection of the films that have a TMDb id.
+    pub tmdb_collection: Option<u64>,
+    /// `tmdb_index` fails with this while it is set.
+    pub tmdb_index_error: Option<ProviderError>,
+}
+
+/// The TMDb id `tmdb` gives `id`.
+fn state_tmdb(tmdb: &[(ItemId, u64)], id: &ItemId) -> Option<u64> {
+    tmdb.iter()
+        .find(|(item, _)| item == id)
+        .map(|(_, tmdb)| *tmdb)
 }
 
 /// Where the fake server pretends to be.
@@ -658,6 +677,13 @@ impl FakeServer {
                 unreadable_playlists: Vec::new(),
                 playlists_made: 0,
                 user_id: USER_ID.into(),
+                tmdb: vec![
+                    (ItemId(FILM.into()), IN_LIBRARY_FILM),
+                    (ItemId("film-1".into()), OTHER_LIBRARY_FILM),
+                    (ItemId(SERIES.into()), IN_LIBRARY_SERIES),
+                ],
+                tmdb_collection: None,
+                tmdb_index_error: None,
                 trailers: Trailers::default(),
                 trailer_stream: "file:///nowhere-trailer.mp4".into(),
                 trailer_error: None,
@@ -900,8 +926,11 @@ impl MediaServer for FakeServer {
         let found = self.find(film)?;
         self.state().record.film_pages.push(film.clone());
         let others = self.state().films.clone();
+        let tmdb = state_tmdb(&self.state().tmdb, &found.id);
         let trailers = self.state().trailers.clone();
         Ok(FilmDetail {
+            tmdb,
+            tmdb_collection: tmdb.and_then(|_| self.state().tmdb_collection),
             overview: Some(FILM_OVERVIEW.into()),
             genres: vec!["Drame".into(), "Aventure".into()],
             official_rating: Some("12+".into()),
@@ -1091,6 +1120,7 @@ impl MediaServer for FakeServer {
             .find(|s| &s.id == series)
             .ok_or(ProviderError::NotFound)?;
         Ok(SeriesDetail {
+            tmdb: state_tmdb(&state.tmdb, series),
             series: Self::counted(&state, found),
             favourite: state.favourites.contains(series),
             trailers: state.trailers.clone(),
@@ -1563,6 +1593,23 @@ impl MediaServer for FakeServer {
         let mut state = self.state();
         state.record.segment_asks.push(item.clone());
         Ok(state.segments.clone())
+    }
+
+    fn tmdb_index(&self) -> Result<TmdbIndex, ProviderError> {
+        let mut state = self.state();
+        state.record.tmdb_indexes += 1;
+        if let Some(error) = state.tmdb_index_error.clone() {
+            return Err(error);
+        }
+        let mut index = TmdbIndex::default();
+        for (item, tmdb) in &state.tmdb {
+            if state.series.iter().any(|series| &series.id == item) {
+                index.series.insert(*tmdb, item.clone());
+            } else {
+                index.films.insert(*tmdb, item.clone());
+            }
+        }
+        Ok(index)
     }
 
     fn local_trailer(&self, item: &ItemId) -> Result<StreamUrl, ProviderError> {

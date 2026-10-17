@@ -2,6 +2,7 @@
   "Name": "Tidewater",
   "Id": "50000000000000000000000000000001",
   "Type": "Series",
+  "ProviderIds": { "Tvdb": "123456", "Tmdb": "7001" },
   "ProductionYear": 2021,
   "EndDate": "2024-05-12T00:00:00.0000000Z",
   "Status": "Ended",

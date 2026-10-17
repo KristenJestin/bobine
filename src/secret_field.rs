@@ -99,6 +99,11 @@ impl SecretField {
         self.state == State::Saved
     }
 
+    /// Whether the keyring was looked in and is not at work: the field says what it holds.
+    pub fn is_settled(&self) -> bool {
+        matches!(self.state, State::Saved | State::Empty)
+    }
+
     /// The dots of a saved secret, never the secret. #63 reads it; until then only tests do.
     #[cfg_attr(not(any(test, feature = "harness")), allow(dead_code))]
     pub fn shown(&self) -> Option<&'static str> {

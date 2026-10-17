@@ -58,15 +58,22 @@ pub fn account_menu_place(button: Bounds<Pixels>, window_height: f32) -> (Point<
 pub fn pill_bar(
     highlight: [f32; NavEntry::ALL.len()],
     account: Option<AccountView>,
+    discover: bool,
     window: &mut Window,
     cx: &mut Context<Shell>,
 ) -> impl IntoElement {
-    let entries = NavEntry::ALL.into_iter().enumerate().map(|(index, entry)| {
+    // Discover is there only while a request server is configured.
+    let shown = NavEntry::ALL
+        .into_iter()
+        .enumerate()
+        .filter(move |(_, entry)| discover || *entry != NavEntry::Discover);
+    let entries = shown.map(|(index, entry)| {
         let level = highlight[index];
         let live = entry.target().is_some();
         let rest = if live { theme::muted() } else { theme::dim() };
         let item = div()
             .id(("nav-entry", index))
+            .debug_selector(move || format!("nav {}", entry.label()))
             .px(px(12.))
             .py(px(8.))
             .rounded(px(theme::RADIUS))

@@ -3,6 +3,7 @@
 
 mod card;
 mod collection_detail;
+mod discover;
 mod film_detail;
 mod home;
 mod home_list;
@@ -12,6 +13,7 @@ mod login;
 mod person;
 pub mod player;
 pub mod playlist;
+mod request;
 pub mod search;
 mod series_detail;
 mod settings;
@@ -66,6 +68,8 @@ pub fn render(
         Screen::Favorites => lists::render_my_list(shell, window, cx).into_any_element(),
         Screen::Playlist => playlist::render(shell, window, cx).into_any_element(),
         Screen::Settings => settings::render(shell, window, cx).into_any_element(),
+        Screen::Discover => discover::render(shell, window, cx).into_any_element(),
+        Screen::Request => request::render(shell, window, cx).into_any_element(),
     }
 }
 

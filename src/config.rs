@@ -30,6 +30,8 @@ pub struct Settings {
     /// What the player asks of the server for a film that is converted: the file as it is, or
     /// a cap on the bitrate. The player's quality menu reads it; nothing does yet.
     pub default_quality: Quality,
+    /// Where the request server (Seerr) answers. Its API key is in the keyring, never here.
+    pub seerr_address: Option<String>,
 }
 
 /// How much of the picture the viewer wants when the server converts a film.
@@ -174,6 +176,7 @@ mod tests {
         let changed = Settings {
             black_out_other_monitors: true,
             default_quality: Quality::Cap(8),
+            seerr_address: Some("https://seerr.example.org".into()),
         };
         changed.save(&path).unwrap();
         assert_eq!(Settings::read(&path), changed);

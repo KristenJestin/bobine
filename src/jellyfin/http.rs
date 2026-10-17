@@ -57,7 +57,7 @@ pub fn encode(value: &str) -> String {
 }
 
 /// What failed in words, without the URL that `ureq`'s own messages carry.
-fn transport(what: &str, e: ureq::Error) -> ProviderError {
+pub(crate) fn transport(what: &str, e: ureq::Error) -> ProviderError {
     let why = match e {
         ureq::Error::Io(io) => io.kind().to_string(),
         ureq::Error::Timeout(_) => "timed out".to_string(),

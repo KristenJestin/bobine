@@ -47,8 +47,9 @@ pub struct SeriesPage {
     /// "My list".
     pub favourite: Toggle,
     pub scroll: ScrollHandle,
-    /// The rows that scroll sideways: the cast, similar series.
-    pub rows: [ScrollHandle; 2],
+    /// The rows that scroll sideways: the cast, similar series, and those of the request server
+    /// not in the library.
+    pub rows: [ScrollHandle; 3],
     gesture: scroll::Gesture,
     pub error: Option<&'static str>,
     pub busy: bool,
@@ -217,6 +218,7 @@ impl Shell {
                 page.next = fresh.next;
                 page.seasons = fresh.seasons;
                 page.favourite.sync(fresh.detail.favourite, read_at);
+                let tmdb = fresh.detail.tmdb;
                 page.detail = Loadable::Ready(fresh.detail);
                 // What was watched may have changed in every season: the one shown is asked
                 // again, and stays drawn as it was until it comes; the others are forgotten.
@@ -224,6 +226,7 @@ impl Shell {
                 page.episodes
                     .retain(|season, _| Some(season) == shown.as_ref());
                 shell.load_episodes(depth, true, cx);
+                shell.load_similar(bobine::requests::MediaKind::Tv, tmdb, cx);
             },
         );
     }
