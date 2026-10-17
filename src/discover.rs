@@ -3,9 +3,11 @@
 //! here: the views read it, the tests drive it.
 
 use bobine::provider::{ItemId, TmdbIndex};
+use std::time::Duration;
+
 use bobine::requests::{
-    Availability, CollectionOutcome, Discovered, MediaKind, RequestError, RequestStatus,
-    SeasonOffer, ServerCheck, TmdbId,
+    Availability, CollectionOutcome, Discovered, Download, MediaKind, MyRequest, Progress,
+    RequestError, RequestStatus, SeasonOffer, ServerCheck, TmdbId, progress,
 };
 
 /// The library page of a title of the request server, when the library holds it.
@@ -39,6 +41,108 @@ pub fn status_label(availability: Availability, in_library: bool) -> Option<&'st
         Availability::Available => Some("Available"),
         Availability::Blocked => Some("Blocked"),
     }
+}
+
+/// How long a download has left, as a pill says it: "2 min left".
+pub fn left_text(left: Duration) -> String {
+    // Rounded up, so that a download never has "0 min" left.
+    let minutes = left.as_secs().div_ceil(60);
+    match minutes {
+        _ if left.as_secs() < 60 => "less than a minute left".into(),
+        1..=59 => format!("{minutes} min left"),
+        60..=1439 => match (minutes / 60, minutes % 60) {
+            (hours, 0) => format!("{hours} h left"),
+            (hours, minutes) => format!("{hours} h {minutes} min left"),
+        },
+        _ => format!("{} d {} h left", minutes / 1440, minutes % 1440 / 60),
+    }
+}
+
+/// Whether the downloads count for a title in this state: it is on its way, not there.
+fn is_downloading(availability: Availability, in_library: bool) -> bool {
+    !in_library
+        && matches!(
+            availability,
+            Availability::Processing | Availability::PartiallyAvailable
+        )
+}
+
+/// What the downloads of a title come to, while they count.
+pub fn download_progress(
+    availability: Availability,
+    in_library: bool,
+    downloads: &[Download],
+) -> Option<Progress> {
+    progress(downloads).filter(|_| is_downloading(availability, in_library))
+}
+
+/// The pill of a request page: the library's word, else what is downloading, else the status.
+/// Downloads count while the title is on its way (processing, or partly available with more
+/// coming); a title that is available says so whatever the queue still holds.
+pub fn page_status(
+    kind: MediaKind,
+    availability: Availability,
+    in_library: bool,
+    downloads: &[Download],
+) -> Option<String> {
+    if let Some(sum) = download_progress(availability, in_library, downloads) {
+        return Some(match (kind, sum.entries, sum.time_left) {
+            (MediaKind::Tv, 2.., _) => {
+                format!("Downloading {} episodes · {}%", sum.entries, sum.percent)
+            }
+            (_, _, Some(left)) => {
+                format!("Downloading · {}% · {}", sum.percent, left_text(left))
+            }
+            _ => format!("Downloading · {}%", sum.percent),
+        });
+    }
+    match (availability, in_library) {
+        (Availability::Processing, false) => Some("Approved, waiting for a download".into()),
+        _ => status_label(availability, in_library).map(str::to_string),
+    }
+}
+
+/// The short pill of a card of the viewer's requests while the title downloads.
+pub fn card_status(
+    availability: Availability,
+    in_library: bool,
+    downloads: &[Download],
+) -> Option<String> {
+    download_progress(availability, in_library, downloads)
+        .map(|sum| format!("Downloading · {}%", sum.percent))
+}
+
+/// The pill of a card in the viewer's requests: the short download status of an approved one
+/// that downloads, else the request's own word.
+pub fn my_request_label(request: &MyRequest, in_library: bool) -> String {
+    let downloading = (request.status == RequestStatus::Approved)
+        .then(|| card_status(request.title.availability, in_library, &request.downloads))
+        .flatten();
+    downloading.unwrap_or_else(|| request_label(request.status).to_string())
+}
+
+/// Whether a request page keeps reading its title. A processing one is watched from the first
+/// download seen until it is available, even between two downloads. A partly available series
+/// is watched while something downloads for it: its next seasons may never come. A title still
+/// waiting for its download is not watched, and one the library holds is done.
+pub fn keeps_watching(
+    availability: Availability,
+    in_library: bool,
+    seen_download: bool,
+    downloads: &[Download],
+) -> bool {
+    match availability {
+        Availability::Processing => seen_download && !in_library,
+        Availability::PartiallyAvailable => !downloads.is_empty() && !in_library,
+        _ => false,
+    }
+}
+
+/// Whether a request page whose title is available waits for the library to hold it: Seerr
+/// marks a title available when its files are in place, a moment before the media server has
+/// scanned them. Only a title that was seen downloading is waited for.
+pub fn awaits_library(availability: Availability, in_library: bool, seen_download: bool) -> bool {
+    availability == Availability::Available && !in_library && seen_download
 }
 
 /// What a request of the viewer's list says of itself.
@@ -476,5 +580,184 @@ mod tests {
         assert!(!can_request(Availability::Missing, true));
         assert!(!can_request(Availability::Pending, false));
         assert!(!can_request(Availability::Blocked, false));
+    }
+
+    fn download(id: &str, size: u64, left: u64, seconds: Option<u64>) -> Download {
+        Download {
+            id: Some(id.to_string()),
+            size,
+            size_left: left,
+            time_left: seconds.map(Duration::from_secs),
+            episode: None,
+            ultra_hd: false,
+        }
+    }
+
+    /// An episode of a series in the queue, in HD or in 4K.
+    fn episode(season: u32, number: u32, ultra_hd: bool) -> Download {
+        Download {
+            episode: Some((season, number)),
+            ultra_hd,
+            ..download(&format!("e{number}{ultra_hd}"), 1000, 380, Some(120))
+        }
+    }
+
+    #[test]
+    fn a_time_left_is_said_in_minutes_then_hours_then_days() {
+        assert_eq!(left_text(Duration::from_secs(0)), "less than a minute left");
+        assert_eq!(
+            left_text(Duration::from_secs(59)),
+            "less than a minute left"
+        );
+        assert_eq!(left_text(Duration::from_secs(60)), "1 min left");
+        assert_eq!(left_text(Duration::from_secs(61)), "2 min left");
+        assert_eq!(left_text(Duration::from_secs(120)), "2 min left");
+        assert_eq!(left_text(Duration::from_secs(3600)), "1 h left");
+        assert_eq!(left_text(Duration::from_secs(4800)), "1 h 20 min left");
+        assert_eq!(left_text(Duration::from_secs(90_000)), "1 d 1 h left");
+    }
+
+    #[test]
+    fn a_title_downloading_says_its_percentage_and_its_time_left() {
+        let one = [download("a", 1000, 380, Some(120))];
+        assert_eq!(
+            page_status(MediaKind::Movie, Availability::Processing, false, &one).as_deref(),
+            Some("Downloading · 62% · 2 min left")
+        );
+        // A queue that gives no time says the percentage only.
+        let unknown = [download("a", 1000, 380, None)];
+        assert_eq!(
+            page_status(MediaKind::Movie, Availability::Processing, false, &unknown).as_deref(),
+            Some("Downloading · 62%")
+        );
+        // A single episode is one download like a film.
+        assert_eq!(
+            page_status(MediaKind::Tv, Availability::Processing, false, &one).as_deref(),
+            Some("Downloading · 62% · 2 min left")
+        );
+    }
+
+    #[test]
+    fn the_episodes_of_a_series_downloading_are_one_line() {
+        let pack = [
+            download("pack", 3000, 1800, Some(600)),
+            download("pack", 3000, 1800, Some(600)),
+            download("pack", 3000, 1800, Some(600)),
+        ];
+        assert_eq!(
+            page_status(MediaKind::Tv, Availability::Processing, false, &pack).as_deref(),
+            Some("Downloading 3 episodes · 40%")
+        );
+        // A film in HD and in 4K is still a film: no episodes.
+        assert_eq!(
+            page_status(MediaKind::Movie, Availability::Processing, false, &pack).as_deref(),
+            Some("Downloading · 40% · 10 min left")
+        );
+    }
+
+    #[test]
+    fn without_a_download_the_status_is_worded_by_what_seerr_says() {
+        let words = |availability| page_status(MediaKind::Movie, availability, false, &[]);
+        assert_eq!(
+            words(Availability::Processing).as_deref(),
+            Some("Approved, waiting for a download")
+        );
+        assert_eq!(words(Availability::Pending).as_deref(), Some("Pending"));
+        assert_eq!(words(Availability::Missing), None);
+        assert_eq!(words(Availability::Blocked).as_deref(), Some("Blocked"));
+        assert_eq!(
+            words(Availability::PartiallyAvailable).as_deref(),
+            Some("Partially available")
+        );
+    }
+
+    #[test]
+    fn a_title_that_is_there_does_not_say_downloading() {
+        let one = [download("a", 1000, 380, Some(120))];
+        let said =
+            |availability, in_library| page_status(MediaKind::Tv, availability, in_library, &one);
+        assert_eq!(
+            said(Availability::Available, false).as_deref(),
+            Some("Available")
+        );
+        assert_eq!(
+            said(Availability::Processing, true).as_deref(),
+            Some("In library")
+        );
+        // A series with a season here and another coming.
+        assert_eq!(
+            said(Availability::PartiallyAvailable, false).as_deref(),
+            Some("Downloading · 62% · 2 min left")
+        );
+    }
+
+    #[test]
+    fn a_card_of_the_viewer_s_requests_says_the_short_status() {
+        let one = [download("a", 1000, 380, Some(120))];
+        let said = |availability, in_library, downloads: &[Download]| {
+            card_status(availability, in_library, downloads)
+        };
+        assert_eq!(
+            said(Availability::Processing, false, &one).as_deref(),
+            Some("Downloading · 62%")
+        );
+        assert_eq!(said(Availability::Processing, false, &[]), None);
+        // A title that is there does not say downloading, whatever the queue still holds.
+        assert_eq!(said(Availability::Available, false, &one), None);
+        assert_eq!(said(Availability::Processing, true, &one), None);
+    }
+
+    #[test]
+    fn a_page_is_watched_from_the_first_download_until_the_title_is_available() {
+        use Availability::*;
+        let one = [download("a", 1000, 380, Some(120))];
+        // Processing: from the first download seen, even between two downloads.
+        assert!(keeps_watching(Processing, false, true, &one));
+        assert!(keeps_watching(Processing, false, true, &[]));
+        assert!(!keeps_watching(Available, false, true, &one));
+        assert!(!keeps_watching(Processing, true, true, &one));
+        // Never watched without a download seen: waiting for approval or for a grab.
+        assert!(!keeps_watching(Processing, false, false, &[]));
+        assert!(!keeps_watching(Pending, false, false, &[]));
+        assert!(!keeps_watching(Missing, false, true, &[]));
+        assert!(!keeps_watching(Blocked, false, true, &[]));
+    }
+
+    #[test]
+    fn a_partly_available_series_is_watched_only_while_something_downloads() {
+        use Availability::PartiallyAvailable;
+        let one = [download("a", 1000, 380, Some(120))];
+        assert!(keeps_watching(PartiallyAvailable, false, true, &one));
+        assert!(keeps_watching(PartiallyAvailable, false, false, &one));
+        // The queue is empty: the next seasons may never come, so the page stops reading.
+        assert!(!keeps_watching(PartiallyAvailable, false, true, &[]));
+        assert!(!keeps_watching(PartiallyAvailable, true, true, &one));
+    }
+
+    #[test]
+    fn an_available_title_the_library_does_not_hold_is_waited_for_only_after_a_download() {
+        use Availability::*;
+        assert!(awaits_library(Available, false, true));
+        assert!(!awaits_library(Available, false, false));
+        assert!(!awaits_library(Available, true, true));
+        assert!(!awaits_library(Processing, false, true));
+    }
+
+    #[test]
+    fn an_episode_in_hd_and_in_4k_is_one_episode() {
+        let both = [episode(1, 1, false), episode(1, 1, true)];
+        assert_eq!(
+            page_status(MediaKind::Tv, Availability::Processing, false, &both).as_deref(),
+            Some("Downloading · 62% · 2 min left")
+        );
+        let two = [
+            episode(1, 1, false),
+            episode(1, 1, true),
+            episode(1, 2, false),
+        ];
+        assert_eq!(
+            page_status(MediaKind::Tv, Availability::Processing, false, &two).as_deref(),
+            Some("Downloading 2 episodes · 62%")
+        );
     }
 }

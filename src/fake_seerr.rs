@@ -3,13 +3,14 @@
 //! never touches a network. Two of its films and one of its series are the fake media server's
 //! (`crate::fake`), by TMDb id.
 
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use bobine::requests::{
     ActingAs, Ask, Availability, CastPerson, CollectionParts, CollectionRef, DiscoverRow,
-    Discovered, MediaKind, MyRequest, RequestError, RequestServer, RequestStatus, SeasonOffer,
-    ServerCheck, TitleDetail, TmdbId, TmdbImage,
+    Discovered, Download, MediaKind, MyRequest, RequestError, RequestServer, RequestStatus,
+    SeasonOffer, ServerCheck, TitleDetail, TmdbId, TmdbImage,
 };
 
 use crate::fake::{IN_LIBRARY_FILM, IN_LIBRARY_SERIES, OTHER_LIBRARY_FILM, gradient};
@@ -62,6 +63,11 @@ pub struct State {
     pub titles_fail_after_a_request: bool,
     /// The trailer every title lists, when it lists one.
     pub trailer: Option<String>,
+    /// What Radarr or Sonarr downloads for a title, by TMDb id; a test changes it between two
+    /// reads of the title, as the queue moves.
+    pub downloads: HashMap<TmdbId, Vec<Download>>,
+    /// The availability the server now gives a title, in place of the catalogue's.
+    pub availability: HashMap<TmdbId, Availability>,
 }
 
 #[derive(Clone)]
@@ -81,6 +87,8 @@ impl Default for FakeSeerr {
                 delay: Duration::ZERO,
                 titles_fail_after_a_request: false,
                 trailer: None,
+                downloads: HashMap::new(),
+                availability: HashMap::new(),
             })),
         }
     }
@@ -148,12 +156,18 @@ impl FakeSeerr {
 
     /// The titles as the server shows them now: what was asked for is pending.
     fn titles(&self) -> Vec<Discovered> {
-        let requested = self.state().requested.clone();
+        let (requested, now) = {
+            let state = self.state();
+            (state.requested.clone(), state.availability.clone())
+        };
         catalogue()
             .into_iter()
             .map(|mut title| {
                 if requested.contains(&title.tmdb) && title.availability == Availability::Missing {
                     title.availability = Availability::Pending;
+                }
+                if let Some(availability) = now.get(&title.tmdb) {
+                    title.availability = *availability;
                 }
                 title
             })
@@ -175,6 +189,10 @@ impl FakeSeerr {
             .into_iter()
             .find(|title| title.kind == kind && title.tmdb == id)
             .ok_or(RequestError::NotFound)
+    }
+
+    fn downloads_of(&self, id: TmdbId) -> Vec<Download> {
+        self.state().downloads.get(&id).cloned().unwrap_or_default()
     }
 
     fn of(&self, ids: &[TmdbId]) -> Vec<Discovered> {
@@ -255,6 +273,7 @@ impl RequestServer for FakeSeerr {
         ];
         let requested = self.state().requested.contains(&id);
         let trailer = self.state().trailer.clone();
+        let downloads = self.downloads_of(id);
         let seasons = match kind {
             MediaKind::Movie => Vec::new(),
             MediaKind::Tv => (1..=3)
@@ -290,6 +309,7 @@ impl RequestServer for FakeSeerr {
             }),
             seasons,
             trailer,
+            downloads,
             title,
         })
     }
@@ -333,25 +353,21 @@ impl RequestServer for FakeSeerr {
         self.reach()?;
         self.state().record.my_requests += 1;
         let asked: Vec<TmdbId> = self.state().requested.iter().rev().copied().collect();
-        let mut mine: Vec<MyRequest> = self
-            .of(&asked)
-            .into_iter()
-            .map(|title| MyRequest {
-                title,
-                status: RequestStatus::Pending,
-            })
-            .collect();
-        mine.extend(self.of(&[PAPER_MOONS]).into_iter().map(|title| MyRequest {
+        let request = |title: Discovered, status| MyRequest {
+            downloads: self.downloads_of(title.tmdb),
             title,
-            status: RequestStatus::Pending,
-        }));
+            status,
+        };
+        let mut mine: Vec<MyRequest> = (self.of(&asked).into_iter())
+            .map(|title| request(title, RequestStatus::Pending))
+            .collect();
         mine.extend(
-            self.of(&[HARBOUR_WATCH, 9006])
-                .into_iter()
-                .map(|title| MyRequest {
-                    title,
-                    status: RequestStatus::Approved,
-                }),
+            (self.of(&[PAPER_MOONS]).into_iter())
+                .map(|title| request(title, RequestStatus::Pending)),
+        );
+        mine.extend(
+            (self.of(&[HARBOUR_WATCH, 9006]).into_iter())
+                .map(|title| request(title, RequestStatus::Approved)),
         );
         Ok(mine)
     }

@@ -410,6 +410,7 @@ impl RequestServer for SeerrClient {
                         let title = self.title(kind, id).map(|detail| MyRequest {
                             title: detail.title,
                             status,
+                            downloads: detail.downloads,
                         });
                         *read[at].lock().unwrap() = Some(title);
                     }
