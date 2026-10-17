@@ -4,7 +4,8 @@
 //! "Part of …" on a request page and on a library movie's page.
 
 use bobine::requests::{
-    self, Ask, CollectionParts, CollectionRef, CollectionRun, MediaKind, RequestServer, TmdbId,
+    self, Ask, CollectionParts, CollectionRef, CollectionRun, MediaKind, RequestError,
+    RequestServer, TmdbId,
 };
 use gpui_kit::{Context, ScrollHandle, ScrollWheelEvent, Window};
 
@@ -51,7 +52,15 @@ impl SeerrCollectionPage {
         self.run.is_some()
     }
 
-    /// The movies checked, at this moment.
+    /// A movie asked for, from this page or elsewhere, is offered no more.
+    pub(super) fn asked(&mut self, film: TmdbId) {
+        if let Some(picker) = &mut self.picker {
+            picker.asked(&[film]);
+        }
+    }
+
+    /// The movies checked, at this moment: a run asks for one of them at a time, so that one
+    /// asked for elsewhere meanwhile is not asked for again.
     fn wanted(&self) -> Vec<TmdbId> {
         self.picker
             .as_ref()
@@ -183,17 +192,14 @@ impl Shell {
                 let all = outcome.not_requested.is_empty();
                 page.outcome = Some((discover::collection_line(&outcome, &parts.films), all));
             }
-            // What was asked for is offered no more; what was not stays checked.
-            if let Some(picker) = &mut page.picker {
-                picker.asked(&outcome.requested);
-            }
             return;
         };
         self.ask_seerr(
             cx,
             move |seerr| seerr.request(&Ask::Movie(film)),
             move |shell, answer, cx| {
-                if answer.is_ok() {
+                // What was asked for is offered no more; what was not stays checked.
+                if matches!(answer, Ok(()) | Err(RequestError::AlreadyRequested)) {
                     shell.mark_requested(MediaKind::Movie, film);
                 }
                 let Some(page) = shell.seerr_collection_numbered(generation) else {
@@ -270,6 +276,7 @@ impl Shell {
 #[cfg(test)]
 mod tests {
     use bobine::provider::{ItemId, ProviderError};
+    use bobine::requests::Ask;
     use gpui_kit::{TestAppContext, WindowHandle};
 
     use super::super::discover::tests::{address_only, click, configured, configured_on, drawn};
@@ -361,6 +368,62 @@ mod tests {
         assert!(visual.debug_bounds("collection-outcome").is_some());
         assert!(visual.debug_bounds("status Pending").is_some());
         // Nothing is left to ask for.
+        assert!(visual.debug_bounds("collection-request").is_none());
+    }
+
+    #[gpui_kit::test]
+    fn a_movie_requested_from_its_own_page_is_left_out_of_the_collection_request(
+        cx: &mut TestAppContext,
+    ) {
+        let seerr = FakeSeerr::default();
+        let window = on_collection(&seerr, cx);
+        drawn(&window, cx);
+        window
+            .update(cx, |shell, _, cx| {
+                shell.open_request(MediaKind::Movie, WINTER_LIGHT, cx)
+            })
+            .unwrap();
+        cx.run_until_parked();
+        let mut visual = drawn(&window, cx);
+        click(&mut visual, "request-button");
+        window
+            .update(cx, |shell, _, cx| assert!(shell.go_back(cx)))
+            .unwrap();
+        let mut visual = drawn(&window, cx);
+        assert!(
+            visual
+                .debug_bounds("collection-check Winter Light")
+                .is_none(),
+            "requested: no box any more"
+        );
+        click(&mut visual, "collection-request");
+        assert_eq!(
+            seerr.requests(),
+            [Ask::Movie(WINTER_LIGHT), Ask::Movie(WINTERS_END)]
+        );
+        assert_eq!(
+            outcome(&window, cx).as_deref(),
+            Some("Requested: Winter's End.")
+        );
+    }
+
+    #[gpui_kit::test]
+    fn a_movie_requested_already_does_not_stop_the_collection_request(cx: &mut TestAppContext) {
+        let seerr = FakeSeerr::default();
+        let window = on_collection(&seerr, cx);
+        let mut visual = drawn(&window, cx);
+        // Asked for elsewhere (Seerr's own pages) since the page was read: Seerr answers 409.
+        seerr.request(&Ask::Movie(WINTER_LIGHT)).unwrap();
+        click(&mut visual, "collection-request");
+        assert_eq!(
+            seerr.requests(),
+            [Ask::Movie(WINTER_LIGHT), Ask::Movie(WINTERS_END)]
+        );
+        assert_eq!(
+            outcome(&window, cx).as_deref(),
+            Some("Requested: Winter's End. Already requested: Winter Light.")
+        );
+        let mut visual = drawn(&window, cx);
         assert!(visual.debug_bounds("collection-request").is_none());
     }
 

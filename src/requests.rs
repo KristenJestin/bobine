@@ -182,6 +182,8 @@ pub trait RequestServer: Send + Sync {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct CollectionOutcome {
     pub requested: Vec<TmdbId>,
+    /// The films Seerr said were asked for already, by someone else or elsewhere.
+    pub already_requested: Vec<TmdbId>,
     /// The films not asked for, from the first one that failed.
     pub not_requested: Vec<TmdbId>,
     /// Why they were not.
@@ -190,8 +192,9 @@ pub struct CollectionOutcome {
 
 /// A collection request on its way. Seerr has no request for a whole collection: its films are
 /// asked for one after the other, as Seerr's own collection request does, each once the answer
-/// for the one before came. It stops at the first failure, a quota reached before or during, so
-/// that the films after it are said not requested rather than refused one by one.
+/// for the one before came. A film asked for already is said so and the run goes on; it stops at
+/// any other failure, a quota reached before or during, so that the films after it are said not
+/// requested rather than refused one by one.
 #[derive(Debug, Default)]
 pub struct CollectionRun {
     pub outcome: CollectionOutcome,
@@ -223,6 +226,7 @@ impl CollectionRun {
     pub fn answered(&mut self, film: TmdbId, answer: Result<(), RequestError>, wanted: &[TmdbId]) {
         match answer {
             Ok(()) => self.outcome.requested.push(film),
+            Err(RequestError::AlreadyRequested) => self.outcome.already_requested.push(film),
             Err(why) => {
                 self.outcome.not_requested.push(film);
                 self.stop(why, wanted);
@@ -336,6 +340,19 @@ mod tests {
         assert_eq!(outcome.not_requested, [3, 4]);
         assert_eq!(outcome.failure, Some(RequestError::Quota));
         assert_eq!(asked, [1, 2, 3], "nothing after the quota");
+    }
+
+    #[test]
+    fn a_film_requested_already_does_not_stop_a_collection_request() {
+        let (outcome, asked) = run(Ok(false), &[1, 2, 3], |film| match film {
+            2 => Err(RequestError::AlreadyRequested),
+            _ => Ok(()),
+        });
+        assert_eq!(asked, [1, 2, 3]);
+        assert_eq!(outcome.requested, [1, 3]);
+        assert_eq!(outcome.already_requested, [2]);
+        assert!(outcome.not_requested.is_empty());
+        assert_eq!(outcome.failure, None);
     }
 
     #[test]

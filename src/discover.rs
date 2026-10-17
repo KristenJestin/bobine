@@ -201,6 +201,10 @@ pub fn collection_line(outcome: &CollectionOutcome, films: &[Discovered]) -> Str
     if !outcome.requested.is_empty() {
         parts.push(format!("Requested: {}.", named(&outcome.requested)));
     }
+    if !outcome.already_requested.is_empty() {
+        let already = named(&outcome.already_requested);
+        parts.push(format!("Already requested: {already}."));
+    }
     if !outcome.not_requested.is_empty() {
         let missed = named(&outcome.not_requested);
         parts.push(match &outcome.failure {
@@ -391,6 +395,7 @@ mod tests {
             requested: vec![3],
             not_requested: vec![4, 5],
             failure: Some(RequestError::Quota),
+            ..CollectionOutcome::default()
         };
         assert_eq!(
             collection_line(&quota, &winter_saga()),
@@ -400,6 +405,7 @@ mod tests {
             requested: vec![3, 4],
             not_requested: Vec::new(),
             failure: None,
+            ..CollectionOutcome::default()
         };
         assert_eq!(
             collection_line(&all, &winter_saga()),
@@ -409,6 +415,7 @@ mod tests {
             requested: Vec::new(),
             not_requested: vec![3, 4],
             failure: Some(RequestError::Unreachable("down".into())),
+            ..CollectionOutcome::default()
         };
         assert_eq!(
             collection_line(&down, &winter_saga()),
@@ -418,10 +425,20 @@ mod tests {
             requested: vec![3],
             not_requested: vec![4],
             failure: Some(RequestError::Forbidden),
+            ..CollectionOutcome::default()
         };
         assert_eq!(
             collection_line(&refused, &winter_saga()),
             "Requested: Winter Light. Not requested (refused for your account): Winter's End."
+        );
+        let already = CollectionOutcome {
+            requested: vec![4],
+            already_requested: vec![3],
+            ..CollectionOutcome::default()
+        };
+        assert_eq!(
+            collection_line(&already, &winter_saga()),
+            "Requested: Winter's End. Already requested: Winter Light."
         );
     }
 

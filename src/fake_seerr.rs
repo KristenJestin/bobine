@@ -349,6 +349,10 @@ impl RequestServer for FakeSeerr {
         let mut state = self.state();
         let id = match ask {
             Ask::Movie(id) => {
+                // Seerr answers 409 to a movie asked for twice.
+                if state.requested.contains(id) {
+                    return Err(RequestError::AlreadyRequested);
+                }
                 match &mut state.movie_quota {
                     Some(0) => return Err(RequestError::Quota),
                     Some(left) => *left -= 1,

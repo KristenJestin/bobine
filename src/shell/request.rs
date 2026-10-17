@@ -249,7 +249,7 @@ impl Shell {
     }
 
     /// A title just asked for shows pending wherever it was missing, until the rows are read
-    /// again.
+    /// again, and no collection page offers it any more.
     pub(super) fn mark_requested(&mut self, kind: MediaKind, tmdb: TmdbId) {
         let mark = |titles: &mut Vec<Discovered>| {
             for title in titles {
@@ -273,6 +273,9 @@ impl Shell {
         for page in &mut self.seerr.collections {
             if let Loadable::Ready(parts) = &mut page.parts {
                 mark(&mut parts.films);
+            }
+            if kind == MediaKind::Movie {
+                page.asked(tmdb);
             }
         }
     }
