@@ -171,6 +171,9 @@ pub fn playlists() -> Vec<KeptPlaylist> {
     ]
 }
 
+/// A change made to what the fake server holds, at a moment a test chooses.
+pub type Change = Box<dyn FnOnce(&mut State) + Send>;
+
 /// What the fake server holds, shared by the connector and its sessions.
 pub struct State {
     /// The token the "keyring" keeps: the session restored at the next start.
@@ -250,7 +253,7 @@ pub struct State {
     /// The episodes the server added, by id, and when (ticks of 100 ns since 1970).
     pub added: Vec<(ItemId, i64)>,
     /// What changes on the server once the first page of new episodes is read, before the next.
-    pub between_pages: Option<Box<dyn FnOnce(&mut State) + Send>>,
+    pub between_pages: Option<Change>,
 }
 
 /// The TMDb id `tmdb` gives `id`.
