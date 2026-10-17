@@ -189,7 +189,9 @@ impl Shell {
             Way::Closing => {
                 let picture = curtain.picture.clone()?;
                 // Back to where the page draws it now: the window may have changed meanwhile.
-                let (at, shows) = back(self.back_to(&picture, window), whole, frame.grown);
+                let found = self.back_to(&picture, window);
+                let place = self.curtain.as_mut()?.place(found);
+                let (at, shows) = back(place, whole, frame.grown);
                 let element = div()
                     .absolute()
                     .inset_0()

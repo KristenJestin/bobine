@@ -114,6 +114,9 @@ pub struct Curtain<P> {
     length: Duration,
     reveal: Duration,
     first_frame: Option<Instant>,
+    /// Closing: the page has shown the picture's place, then no longer shows it.
+    placed: bool,
+    lost: bool,
     pub picture: Option<P>,
 }
 
@@ -134,6 +137,8 @@ impl<P> Curtain<P> {
             length: motion::curtain(),
             reveal: motion::quick(),
             first_frame: None,
+            placed: false,
+            lost: false,
             picture,
         }
     }
@@ -152,6 +157,24 @@ impl<P> Curtain<P> {
     #[cfg(test)]
     pub fn lasting(&mut self, length: Duration) {
         self.length = length;
+    }
+
+    /// Closing: where the picture shrinks back to, given where the page draws it now. It shrinks
+    /// while the page shows it; once the page has shown it and no longer does, it fades out to
+    /// the end, even if the page brings it back into sight meanwhile. Before the page is drawn
+    /// there is nothing to lose yet.
+    pub fn place(&mut self, found: Option<Bounds<Pixels>>) -> Option<Bounds<Pixels>> {
+        match found {
+            Some(_) if self.lost => None,
+            Some(_) => {
+                self.placed = true;
+                found
+            }
+            None => {
+                self.lost = self.placed;
+                None
+            }
+        }
     }
 
     /// The video's first frame is on the window: the cover goes. Only the first one counts.
@@ -397,6 +420,19 @@ mod tests {
             "it fades where it was grown"
         );
         assert_eq!(back(None, window, 0.).1, 0.);
+    }
+
+    #[test]
+    fn a_picture_that_loses_its_place_fades_out_to_the_end_without_shrinking_back() {
+        let card = Bounds::new(point(px(100.), px(400.)), size(px(200.), px(100.)));
+        let mut curtain: Curtain<()> = Curtain::closing(Some(()), Instant::now());
+        // The first frame comes before the page is drawn: it has not lost anything yet.
+        assert_eq!(curtain.place(None), None);
+        assert_eq!(curtain.place(Some(card)), Some(card));
+        assert_eq!(curtain.place(Some(card)), Some(card));
+        assert_eq!(curtain.place(None), None);
+        assert_eq!(curtain.place(Some(card)), None, "it does not come back");
+        assert_eq!(curtain.place(None), None);
     }
 
     #[test]
