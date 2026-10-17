@@ -603,7 +603,9 @@ impl Shell {
             loop {
                 cx.background_executor().timer(every).await;
                 match this.update_in(cx, |shell, window, cx| {
-                    shell.tick(window, cx);
+                    if !shell.holds_the_player_back() {
+                        shell.tick(window, cx);
+                    }
                     shell.tick_every()
                 }) {
                     Ok(next) => every = next,
@@ -778,11 +780,6 @@ impl Shell {
     }
 
     fn tick(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        // mpv opening a file answers slowly: asking it now would cost the way in its frames.
-        let slow = (self.playback.as_ref()).is_some_and(|p| p.session.answers_slowly());
-        if slow && (self.curtain.as_ref()).is_some_and(|c| c.animating(Instant::now())) {
-            return;
-        }
         self.follow_blackout(window, cx);
         if self.playback.is_none() {
             return;

@@ -79,6 +79,14 @@ impl Shell {
         let _ = what;
     }
 
+    /// The player's ticker does not ask now: mpv opening a file answers slowly, and asking it
+    /// while the way in moves would cost that move its frames. What the viewer presses is not
+    /// held back.
+    pub(super) fn holds_the_player_back(&self) -> bool {
+        let slow = (self.playback.as_ref()).is_some_and(|p| p.session.answers_slowly());
+        slow && (self.curtain.as_ref()).is_some_and(|c| c.animating(Instant::now()))
+    }
+
     /// How long the player's ticker waits before it asks again.
     pub(super) fn tick_every(&self) -> Duration {
         if self.curtain.as_ref().is_some_and(Curtain::waiting) {
@@ -180,7 +188,7 @@ mod tests {
     use std::sync::Arc;
     use std::time::{Duration, Instant};
 
-    use bobine::provider::{ItemId, ProviderError};
+    use bobine::provider::{Episode, ItemId, ProviderError};
     use gpui_kit::{TestAppContext, WindowHandle};
 
     use crate::curtain::Way;
@@ -189,6 +197,7 @@ mod tests {
     use crate::navigation::Screen;
     use crate::player::PlayerEvent;
     use crate::player::fake::FakePlayer;
+    use crate::player::session::WindowRequest;
     use crate::series_page::Next;
     use crate::shell::{Loadable, Shell};
 
@@ -230,6 +239,25 @@ mod tests {
     fn tick(cx: &mut TestAppContext) {
         cx.executor().advance_clock(super::super::PLAYER_TICK * 2);
         cx.run_until_parked();
+    }
+
+    /// The series page open on the episodes of its first season.
+    fn series_episodes(window: &WindowHandle<Shell>, cx: &mut TestAppContext) -> Vec<Episode> {
+        window
+            .update(cx, |shell, _, cx| {
+                shell.open_series(ItemId(SERIES.into()), cx)
+            })
+            .unwrap();
+        cx.run_until_parked();
+        window
+            .read_with(cx, |shell, _| {
+                let page = shell.series_pages.last().unwrap();
+                match &page.episodes[&page.seasons[page.season].id] {
+                    Loadable::Ready(episodes) => episodes.clone(),
+                    _ => panic!("the episodes are shown"),
+                }
+            })
+            .unwrap()
     }
 
     /// The film's page open, then its Play pressed, on `player`.
@@ -311,21 +339,7 @@ mod tests {
         cx: &mut TestAppContext,
     ) {
         let (_server, window) = signed_in(cx);
-        window
-            .update(cx, |shell, _, cx| {
-                shell.open_series(ItemId(SERIES.into()), cx)
-            })
-            .unwrap();
-        cx.run_until_parked();
-        let mut episode = window
-            .read_with(cx, |shell, _| {
-                let page = shell.series_pages.last().unwrap();
-                match &page.episodes[&page.seasons[page.season].id] {
-                    Loadable::Ready(episodes) => episodes[0].clone(),
-                    _ => panic!("the episodes are shown"),
-                }
-            })
-            .unwrap();
+        let mut episode = series_episodes(&window, cx).remove(0);
         episode.versions.clear();
         // The card of the next episode plays it, and there is no version to play.
         window
@@ -346,6 +360,46 @@ mod tests {
         play_from_its_page(&window, player, cx);
         assert_eq!(screen(&window, cx), Screen::Player);
         assert_eq!(way(&window, cx), Some(Way::Opening));
+    }
+
+    #[gpui_kit::test]
+    fn next_pressed_while_the_player_opens_goes_to_the_next_episode_at_once(
+        cx: &mut TestAppContext,
+    ) {
+        let (_server, window) = signed_in(cx);
+        let episodes = series_episodes(&window, cx);
+        let player = FakePlayer {
+            slow: true,
+            ..Default::default()
+        };
+        let queued = player.queued.clone();
+        queued
+            .borrow_mut()
+            .extend([PlayerEvent::Loaded, PlayerEvent::Duration(1800.)]);
+        window
+            .update(cx, |shell, window, cx| {
+                shell.fake_player = Some(player);
+                shell.play_episode(episodes[0].clone(), window, cx);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        // The way in is drawn and moving.
+        let visual = gpui_kit::VisualTestContext::from_window(window.into(), cx);
+        visual.run_until_parked();
+        queued
+            .borrow_mut()
+            .extend([PlayerEvent::Position(1799.), PlayerEvent::EndOfFile]);
+        window
+            .update(cx, |shell, window, cx| {
+                shell.fake_player = Some(FakePlayer::default());
+                shell.player_request(Some(WindowRequest::NextEpisode), window, cx);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        let playing = window
+            .read_with(cx, |shell, _| shell.playback.as_ref()?.playing.clone())
+            .unwrap();
+        assert_eq!(playing, Some(episodes[1].item.id.clone()));
     }
 
     #[gpui_kit::test]
