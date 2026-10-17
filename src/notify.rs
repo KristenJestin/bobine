@@ -143,7 +143,7 @@ pub fn check(
     seen: Option<&EpisodesSeen>,
     now: i64,
 ) -> Result<Checked, ProviderError> {
-    let latest = unplayed(server, seen.map(|seen| seen.mark), now)?;
+    let latest = unplayed(server, seen, now)?;
     let newest = latest
         .iter()
         .map(|new| new.added)
@@ -203,16 +203,22 @@ pub fn check(
 }
 
 /// The episodes not played, each once, the newest added first, page after page down to the first
-/// that reaches back to `mark` less `GRACE` (with no mark yet, the newest's not dated past
-/// `AHEAD`), or the last, or `PAGES` of them.
+/// that reaches back to the last check's mark less `GRACE` (with no check yet, the newest's not
+/// dated past `AHEAD`), or the last, or the first that brings nothing the last check had not seen,
+/// or `PAGES` of them.
+///
+/// Neither of the last two stops is exact. Past `PAGES` (a bulk import of more than two thousand
+/// episodes not played within `GRACE`), the older ones are never read, so never told. And the
+/// stop on a page already seen trusts the order: an episode the server scanned late, dated by
+/// its file before the episodes of a page that brings nothing new, is not read either.
 fn unplayed(
     server: &dyn MediaServer,
-    mark: Option<i64>,
+    seen: Option<&EpisodesSeen>,
     now: i64,
 ) -> Result<Vec<NewEpisode>, ProviderError> {
     let mut found: Vec<NewEpisode> = Vec::new();
     let mut ids: HashSet<String> = HashSet::new();
-    let mut floor = mark.map(|mark| mark - GRACE);
+    let mut floor = seen.map(|seen| seen.mark - GRACE);
     for page in 0..PAGES {
         let start = page * LATEST;
         let read = server.new_episodes(start, LATEST)?;
@@ -223,13 +229,20 @@ fn unplayed(
                 .map_or(i64::MIN, |new| new.added - GRACE)
         });
         let reached = read.items.last().is_some_and(|new| new.added <= floor);
+        // After a bulk import, every check would read the whole window again.
+        let nothing_new = seen.is_some_and(|seen| {
+            read.items.iter().all(|new| {
+                let id = &new.episode.item.id.0;
+                new.added <= floor || ids.contains(id) || seen.added.contains_key(id)
+            })
+        });
         // A page that shifted between two reads gives an episode twice.
         found.extend(
             read.items
                 .into_iter()
                 .filter(|new| ids.insert(new.episode.item.id.0.clone())),
         );
-        if reached || start + LATEST >= read.total {
+        if reached || nothing_new || start + LATEST >= read.total {
             break;
         }
     }
@@ -660,6 +673,16 @@ mod tests {
         added(&server, &[("series-1-s1-e4", T)]);
         let second = super::check(&server, Some(&first.seen), T + HOUR).unwrap();
         assert_eq!(told(&second), ["series-1-s1-e4"]);
+    }
+
+    #[test]
+    fn the_check_after_a_big_import_reads_one_page() {
+        let server = FakeServer::new(6, true);
+        unfollowed(&server, (PAGES * LATEST) as i64 + 500, T);
+        let first = check(&server, Some(&at(T - HOUR))).unwrap();
+        assert_eq!(asks(&server).0, PAGES, "no more than the hard stop");
+        check(&server, Some(&first.seen)).unwrap();
+        assert_eq!(asks(&server).0, PAGES + 1);
     }
 
     #[test]
