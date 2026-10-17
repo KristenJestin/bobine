@@ -90,8 +90,20 @@ pub struct DownloadDto {
 /// The time a queue says is left, `hh:mm:ss` with days before a dot (`d.hh:mm:ss`) and
 /// fractions of a second after the seconds; none for what is not a time span.
 fn time_left(text: &str) -> Option<Duration> {
-    let _ = text;
-    None
+    let (days, clock) = match text.split_once('.') {
+        Some((days, rest)) if !days.contains(':') => (days.parse::<u64>().ok()?, rest),
+        _ => (0, text),
+    };
+    let mut parts = clock.split(':');
+    let hours: u64 = parts.next()?.parse().ok()?;
+    let minutes: u64 = parts.next()?.parse().ok()?;
+    let seconds: u64 = parts.next()?.split('.').next()?.parse().ok()?;
+    if parts.next().is_some() || minutes > 59 || seconds > 59 {
+        return None;
+    }
+    Some(Duration::from_secs(
+        days * 86_400 + hours * 3600 + minutes * 60 + seconds,
+    ))
 }
 
 impl DownloadDto {
@@ -344,7 +356,7 @@ impl Details {
             status: info.status,
             ..MediaInfo::default()
         });
-        let downloads = Vec::new();
+        let downloads = info.downloads();
         let title = self.result.discovered(Some(kind))?;
         Some(TitleDetail {
             title,

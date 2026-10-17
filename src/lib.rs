@@ -1,8 +1,6 @@
 //! `bobine`: a native client for films and series. The library holds what the window is built
 //! on: the port to a media server and its implementations.
 
-#![allow(dead_code)] // the stubs of the first commit: removed with the implementation
-
 pub mod jellyfin;
 pub mod provider;
 pub mod requests;

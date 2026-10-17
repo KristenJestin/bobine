@@ -58,8 +58,31 @@ pub struct Progress {
 /// season pack is listed once per episode, with the pack's size each time), the longest time
 /// left. `None` when nothing downloads.
 pub fn progress(downloads: &[Download]) -> Option<Progress> {
-    let _ = downloads;
-    None
+    if downloads.is_empty() {
+        return None;
+    }
+    let mut seen: Vec<&str> = Vec::new();
+    let (mut size, mut left) = (0u64, 0u64);
+    for download in downloads {
+        if let Some(id) = download.id.as_deref() {
+            if seen.contains(&id) {
+                continue;
+            }
+            seen.push(id);
+        }
+        size = size.saturating_add(download.size);
+        left = left.saturating_add(download.size_left.min(download.size));
+    }
+    let percent = if size == 0 {
+        0
+    } else {
+        ((size - left) as f64 / size as f64 * 100.).round() as u8
+    };
+    Some(Progress {
+        entries: downloads.len() as u32,
+        percent,
+        time_left: downloads.iter().filter_map(|d| d.time_left).max(),
+    })
 }
 
 /// A poster, a backdrop or a photo on TMDb, by its path there (`/abc.jpg`).
