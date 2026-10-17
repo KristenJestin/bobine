@@ -731,6 +731,72 @@ mod tests {
         assert_eq!(screen(&window, cx), Screen::Library);
     }
 
+    /// Types `?pk`, then the arrows, Backspace and Alt+2, in `field` on the screen shown: the
+    /// field takes them all.
+    fn typed_in_a_page_field(
+        window: &WindowHandle<Shell>,
+        field: impl Fn(&Shell) -> gpui_kit::Entity<crate::input::TextInput>,
+        cx: &mut TestAppContext,
+    ) {
+        let shown = screen(window, cx);
+        let mut visual = drawn(window, cx);
+        window
+            .update(cx, |shell, window, cx| {
+                let field = field(shell);
+                field.update(cx, |field, cx| field.set_text("", cx));
+                window.focus(&gpui_kit::Focusable::focus_handle(&field, cx), cx);
+            })
+            .unwrap();
+        visual.simulate_input("?pk");
+        visual.simulate_keystrokes("left right up down backspace alt-2");
+        visual.run_until_parked();
+        window
+            .read_with(cx, |shell, cx| {
+                assert_eq!(
+                    field(shell).read(cx).text(),
+                    "?p",
+                    "the field took the keys"
+                );
+                assert!(!shell.help_open, "no help");
+                assert_eq!(shell.ring.shown_on(), None, "no ring");
+                assert_eq!(shell.navigator.current(), shown, "the same screen");
+            })
+            .unwrap();
+    }
+
+    #[gpui_kit::test]
+    fn typing_in_a_settings_field_does_not_trigger_keys(cx: &mut TestAppContext) {
+        let seerr = crate::fake_seerr::FakeSeerr::default();
+        let window = super::super::discover::tests::configured(&seerr, cx);
+        cx.update(|cx| {
+            crate::input::bind_keys(cx);
+            crate::keys::bind(cx);
+        });
+        window
+            .update(cx, |shell, _, cx| shell.open_settings(cx))
+            .unwrap();
+        typed_in_a_page_field(&window, |shell| shell.seerr.address.clone().unwrap(), cx);
+    }
+
+    #[gpui_kit::test]
+    fn typing_in_discovers_search_does_not_trigger_keys(cx: &mut TestAppContext) {
+        let seerr = crate::fake_seerr::FakeSeerr::default();
+        let window = super::super::discover::tests::configured(&seerr, cx);
+        cx.update(|cx| {
+            crate::input::bind_keys(cx);
+            crate::keys::bind(cx);
+        });
+        window
+            .update(cx, |shell, _, cx| shell.select(NavEntry::Discover, cx))
+            .unwrap();
+        cx.run_until_parked();
+        typed_in_a_page_field(
+            &window,
+            |shell| shell.seerr.discover.field.clone().unwrap(),
+            cx,
+        );
+    }
+
     #[gpui_kit::test]
     fn ctrl_k_alone_opens_and_closes_the_palette(cx: &mut TestAppContext) {
         let window = signed_in(cx);
