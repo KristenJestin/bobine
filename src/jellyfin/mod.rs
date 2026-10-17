@@ -863,8 +863,13 @@ impl MediaServer for Jellyfin {
         Ok(found.items.into_iter().next().map(Item::episode))
     }
 
-    fn title(&self, _item: &ItemId) -> Result<Title, ProviderError> {
-        todo!()
+    fn title(&self, item: &ItemId) -> Result<Title, ProviderError> {
+        let found: Item = self.http.get(
+            "title",
+            &format!("/Items/{}", encode(&item.0)),
+            &[self.user(), ("fields", EPISODE_FIELDS.into())],
+        )?;
+        found.title().ok_or(ProviderError::NotFound)
     }
 
     fn next_episodes(&self, limit: u32) -> Result<Vec<Episode>, ProviderError> {
