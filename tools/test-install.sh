@@ -20,6 +20,7 @@ check_not() { name=$1; shift; if "$@"; then fail "$name"; else ok "$name"; fi; }
 
 # A fake `bobine` that prints the version the way the real one does.
 fake_bobine() { # <path> <version-exit-status>
+  # shellcheck disable=SC2016 # the script written must expand its own variables, not this one's
   printf '#!/bin/sh\n[ "${1:-}" = --version ] || exit 0\n[ %s = 0 ] && echo "bobine 9.9.9"\nexit %s\n' "$2" "$2" > "$1"
   chmod 755 "$1"
 }
@@ -35,7 +36,7 @@ pack() {
 
 # A command that is run with a temporary HOME; PATH keeps the system's tools.
 run_install() { # <home> <prefix or empty> <archive>
-  if [ -n "$2" ]; then PREFIX=$2 HOME=$1 "$3/install.sh"; else env -u PREFIX HOME=$1 "$3/install.sh"; fi
+  if [ -n "$2" ]; then PREFIX="$2" HOME="$1" "$3/install.sh"; else env -u PREFIX HOME="$1" "$3/install.sh"; fi
 }
 
 # --- the archive carries the script -------------------------------------------------------------
@@ -76,11 +77,11 @@ mkdir -p "$prefix/bin" "$home"
 cp "$(command -v sleep)" "$prefix/bin/bobine"
 "$prefix/bin/bobine" 60 &
 running=$!
-old_inode=$(ls -i "$prefix/bin/bobine" | cut -d' ' -f1)
+old_inode=$(stat -c %i "$prefix/bin/bobine")
 run_install "$home" "$prefix" "$good" >"$work/second.out" 2>&1
 check "an install over a running Bobine succeeds" test "$?" = 0
 check "the running Bobine is still alive" kill -0 "$running"
-check "the binary was replaced by rename (new file)" test "$(ls -i "$prefix/bin/bobine" | cut -d' ' -f1)" != "$old_inode"
+check "the binary was replaced by rename (new file)" test "$(stat -c %i "$prefix/bin/bobine")" != "$old_inode"
 check "the new binary is the packed one" sh -c "\"$prefix/bin/bobine\" --version | grep -q '^bobine 9.9.9\$'"
 kill "$running" 2>/dev/null; wait "$running" 2>/dev/null
 
@@ -98,6 +99,7 @@ check "a missing libmpv does not fail the install" test -x "$prefix/bin/bobine"
 # root: a fake `id` stands for the superuser, so the test does not need to be one.
 home=$work/home5 prefix=$work/prefix5
 mkdir -p "$home" "$work/rootbin"
+# shellcheck disable=SC2016 # same: expanded by the fake `id`, not here
 printf '#!/bin/sh\n[ "${1:-}" = -u ] && { echo 0; exit 0; }\nexec /usr/bin/id "$@"\n' > "$work/rootbin/id"
 chmod 755 "$work/rootbin/id"
 PATH="$work/rootbin:$PATH" run_install "$home" "$prefix" "$good" >"$work/root.out" 2>&1
