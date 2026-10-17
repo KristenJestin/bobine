@@ -1,6 +1,7 @@
 //! Each scenario of the provider port against the fake Jellyfin server and an in-memory keyring.
 
 use super::JellyfinConnector;
+use super::account::AccountFile;
 use super::fake::*;
 use crate::provider::*;
 use std::sync::Arc;
@@ -16,8 +17,22 @@ struct Setup {
 
 impl Setup {
     fn new() -> Self {
+        Self::with_device_id(None)
+    }
+
+    /// A start whose account file already holds `device_id`, when given.
+    fn with_device_id(device_id: Option<&str>) -> Self {
         let fake = FakeServer::start();
         let dir = tempfile::tempdir().unwrap();
+        if let Some(device_id) = device_id {
+            AccountFile {
+                device_id: device_id.to_string(),
+                login: None,
+                last_address: None,
+            }
+            .save(&dir.path().join("jellyfin.toml"))
+            .unwrap();
+        }
         let store = Arc::new(MemoryStore::default());
         let connector =
             JellyfinConnector::open(dir.path().join("jellyfin.toml"), store.clone()).unwrap();
@@ -209,7 +224,18 @@ fn logout_without_the_server_still_forgets_the_token() {
 
 #[test]
 fn signing_out_keeps_the_server_address_for_the_next_login() {
-    let s = Setup::new();
+    assert_signing_out_keeps_only_the_address(Setup::new());
+}
+
+#[test]
+fn signing_out_passes_when_the_device_id_holds_the_user_name() {
+    // A device id is 32 random hex digits: this one holds the fake user name by chance.
+    assert_signing_out_keeps_only_the_address(Setup::with_device_id(Some(
+        "054ada9f054ada9f054ada9f054ada9f",
+    )));
+}
+
+fn assert_signing_out_keeps_only_the_address(s: Setup) {
     assert_eq!(s.connector.last_address(), None);
     let server = s.signed_in();
     server.logout().unwrap();
