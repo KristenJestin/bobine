@@ -3,7 +3,7 @@
 //!
 //! The root of the window names the screen in its key context (`Player` or `Browse`; neither
 //! on the login, before there is a server), adds `Modal` while something over the page takes
-//! the keys (the help, the palette, the playlist menu), and a text field adds `TextInput` under
+//! the keys (the help, the palette, the playlist menu, a menu of the page), and a text field adds `TextInput` under
 //! it. While a text field has the focus, only
 //! Escape (and the palette's own keys) fire.
 

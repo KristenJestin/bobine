@@ -45,6 +45,8 @@ impl Shell {
             Some("Palette")
         } else if self.playlist_menu_is_open() {
             Some("PlaylistMenu")
+        } else if self.page_menu_is_open(screen) {
+            Some("Menu")
         } else {
             None
         };
@@ -53,6 +55,23 @@ impl Shell {
             context.add(over);
         }
         context
+    }
+
+    /// A menu of the page is open: a chip's, a tool's, the account's, the seasons' or the
+    /// quality's. The cards under it do not take the keys meanwhile.
+    fn page_menu_is_open(&self, screen: Screen) -> bool {
+        let page = match screen {
+            Screen::FilmDetail => self.details.last().map(|page| page.menus.open().is_some()),
+            Screen::SeriesDetail => {
+                (self.series_pages.last()).map(|page| page.menus.open().is_some())
+            }
+            Screen::Library => Some(self.library.menus.open().is_some()),
+            Screen::Series => Some(self.series.menus.open().is_some()),
+            Screen::Request => (self.seerr.requests.last()).map(|page| page.menus.open().is_some()),
+            Screen::Settings => Some(self.settings_page.menus.open().is_some()),
+            _ => None,
+        };
+        page.unwrap_or(false) || self.account_menu.open().is_some()
     }
 
     /// The root of the window, answering every key of the keymap.
@@ -632,6 +651,30 @@ mod tests {
             f32::from(bounds.bottom()) <= height,
             "{bounds:?} in {height}"
         );
+    }
+
+    #[gpui_kit::test]
+    fn under_an_open_menu_the_arrows_and_enter_leave_the_cards_alone(cx: &mut TestAppContext) {
+        let window = signed_in(cx);
+        let mut visual = drawn(&window, cx);
+        visual.simulate_keystrokes("alt-2");
+        let mut visual = drawn(&window, cx);
+        visual.simulate_keystrokes("right");
+        assert_eq!(ringed(&window, cx), Some(("film", 0usize).into()));
+        window
+            .update(cx, |shell, _, cx| {
+                shell.toggle_tool_menu(super::super::pages::Tool::Sort, cx)
+            })
+            .unwrap();
+        let mut visual = drawn(&window, cx);
+        visual.simulate_keystrokes("right down enter p");
+        visual.run_until_parked();
+        assert_eq!(ringed(&window, cx), Some(("film", 0usize).into()));
+        assert_eq!(screen(&window, cx), Screen::Library);
+        // Escape closes the menu; the arrows are the cards' again.
+        visual.simulate_keystrokes("escape right");
+        assert_eq!(screen(&window, cx), Screen::Library);
+        assert_eq!(ringed(&window, cx), Some(("film", 1usize).into()));
     }
 
     #[gpui_kit::test]
