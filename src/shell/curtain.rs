@@ -39,28 +39,28 @@ impl Shell {
         self.opened_from = None;
     }
 
+    /// The picture the last frame drew at `at`. A card is not marked by a canvas of its own: its
+    /// view already measures its place, and the shell's cards hold the rest.
+    fn picture_at(&self, at: &ElementId) -> Option<Picture> {
+        let marked = self.pictures.borrow().get(at).cloned();
+        marked.or_else(|| self.cards.picture(at))
+    }
+
     /// Play was pressed on the picture drawn at `at`: the playback it starts grows from it.
     pub fn clicked_on(&mut self, at: impl Into<ElementId>) {
-        self.clicked = self.pictures.borrow().get(&at.into()).cloned();
+        self.clicked = self.picture_at(&at.into());
     }
 
     /// The way in grows from the picture whose Play was pressed, or else from the picture of
     /// `item` the page drew, when it is in sight; the way out goes back to it.
     pub(super) fn grow_from(&mut self, item: Option<&ItemId>, window: &Window) {
-        let drawn = self.pictures.borrow();
-        let still_drawn = |picture: &Picture| {
-            (drawn.get(&picture.at)).is_some_and(|drawn| drawn.item == picture.item)
-        };
         // A press whose playback never started is left behind with the page it was on.
-        let clicked = self.clicked.take().filter(still_drawn);
-        let page = || {
-            (drawn.get(&PAGE.into()))
-                .filter(|picture| Some(&picture.item) == item)
-                .cloned()
-        };
+        let clicked = self.clicked.take().filter(|picture| {
+            (self.picture_at(&picture.at)).is_some_and(|drawn| drawn.item == picture.item)
+        });
+        let page = || (self.picture_at(&PAGE.into())).filter(|picture| Some(&picture.item) == item);
         let picture = (clicked.or_else(page))
             .filter(|picture| in_sight(picture.bounds, window.viewport_size()));
-        drop(drawn);
         if let Some(curtain) = &mut self.curtain
             && curtain.way() == Way::Opening
         {
@@ -77,8 +77,7 @@ impl Shell {
     /// Where the page draws `picture` now, if it shows it in sight: the way out shrinks back
     /// there, and fades out otherwise.
     pub(super) fn back_to(&self, picture: &Picture, window: &Window) -> Option<Bounds<Pixels>> {
-        let drawn = self.pictures.borrow();
-        (drawn.get(&picture.at))
+        (self.picture_at(&picture.at))
             .filter(|drawn| drawn.item == picture.item)
             .map(|drawn| drawn.bounds)
             .filter(|bounds| in_sight(*bounds, window.viewport_size()))
@@ -601,6 +600,10 @@ mod tests {
         let visual = drawn(&window, cx);
         // The still of an episode is pressed, and the episode has no version to play.
         let still = a_card(&window, visual, "episode-still");
+        let ready = window
+            .read_with(visual, |shell, _| shell.cards.picture(&still).is_some())
+            .unwrap();
+        assert!(ready, "the still is drawn, with its picture");
         window
             .update(visual, |shell, window, cx| {
                 play_card(shell, &still, Play::Episode(Box::new(episode)), window, cx)

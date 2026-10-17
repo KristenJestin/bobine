@@ -34,7 +34,8 @@ pub struct Picture {
 pub const PAGE: &str = "curtain-page";
 
 /// The pictures the last frame drew that the way into the player may grow from, by where they
-/// are drawn: the page's title, the Home's header, each card, each line of a playlist.
+/// are drawn: the page's title, the Home's header, each line of a playlist. A card's picture is
+/// not here: the shell's cards hold it (`Cards::picture`).
 pub type Drawn = Rc<RefCell<HashMap<ElementId, Picture>>>;
 
 /// Laid over the picture of `item` drawn at `at`: where it is, kept at each frame.

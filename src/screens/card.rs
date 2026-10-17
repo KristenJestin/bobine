@@ -19,6 +19,7 @@ use gpui_kit::{
 };
 
 use super::home::Pick;
+use crate::curtain::Picture;
 use crate::home_page::PlayTarget;
 use crate::icons::{IconName, icon};
 use crate::motion::{self, Fade};
@@ -193,6 +194,18 @@ impl Cards {
         self.views.get(id).map(|kept| kept.offer.clone())
     }
 
+    /// The picture of the card `id`, as the last draw left it: where the way into the player
+    /// grows from, and where the way out goes back to.
+    pub fn picture(&self, id: &ElementId) -> Option<Picture> {
+        let kept = self.views.get(id).filter(|kept| kept.drawn == self.frame)?;
+        Some(Picture {
+            at: id.clone(),
+            item: kept.offer.open.item()?.clone(),
+            image: kept.offer.image.clone()?,
+            bounds: kept.place.get()?,
+        })
+    }
+
     /// The cards of the last draw, and where their pictures were: one drawn by the draw before
     /// it is still kept, at a place it is no longer at.
     pub fn places(&self) -> Vec<(ElementId, Bounds<Pixels>)> {
@@ -274,7 +287,7 @@ impl Render for Card {
         let Some(shell) = self.shell.upgrade() else {
             return div().into_any_element();
         };
-        let (offer, ringed, pictures) = {
+        let (offer, ringed) = {
             let shell = shell.read(cx);
             #[cfg(any(test, feature = "harness"))]
             shell
@@ -282,11 +295,7 @@ impl Render for Card {
                 .borrow_mut()
                 .cards
                 .push((self.name.clone(), now));
-            (
-                shell.cards.offer(&self.name),
-                shell.ring.on(&self.name),
-                shell.pictures.clone(),
-            )
+            (shell.cards.offer(&self.name), shell.ring.on(&self.name))
         };
         let Some(offer) = offer else {
             return div().into_any_element();
@@ -308,8 +317,6 @@ impl Render for Card {
             .filter(|_| shown)
             .map(|quick| self.corner(quick, window, cx));
         let name = &self.name;
-        let mark = (offer.open.item())
-            .map(|item| crate::curtain::mark(&pictures, name.clone(), item, offer.image.clone()));
         let layer = div()
             .id("card-hover")
             .debug_selector(|| format!("card-hover {name}"))
@@ -327,7 +334,6 @@ impl Render for Card {
             .children(play.map(|play| play.opacity(level)))
             .children(quick.map(|quick| quick.opacity(level)))
             .children((ring > 0.).then(|| ring_outline(name, ring)))
-            .children(mark)
             .child({
                 let place = self.place.clone();
                 canvas(move |bounds, _, _| place.set(Some(bounds)), |_, _, _, _| {})
