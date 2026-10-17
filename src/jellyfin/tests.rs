@@ -3823,6 +3823,8 @@ fn first_play_at(offset: Option<&'static str>, written: &'static str) -> Option<
     s.signed_in().watch_history().unwrap().plays[0].at
 }
 
+// The expected hour is the machine's own: on a client in UTC this degenerates into a server in
+// UTC, and the case no longer tells the offset from nothing.
 #[test]
 fn a_server_in_utc_and_a_client_ahead_put_a_play_at_the_clients_hour() {
     // On a client at +02:00, 23:00: the client's own clock, whatever the server's.
