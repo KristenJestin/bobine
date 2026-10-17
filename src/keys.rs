@@ -58,7 +58,8 @@ pub enum Scope {
     Browse,
     /// On every screen.
     Both,
-    /// The keys of a field (the palette, the playlist menu): not listed.
+    /// The keys of a field (the palette, the playlist menu), or another layout's spelling of
+    /// a listed key: not listed.
     Hidden,
 }
 
@@ -150,6 +151,13 @@ pub const KEYS: &[Key] = &[
     key!(&["alt-4"], BROWSE, Browse, "Collections", Pill4),
     key!(&["alt-5"], BROWSE, Browse, "Lists", Pill5),
     key!(&["alt-6"], BROWSE, Browse, "Discover", Pill6),
+    // The same on AZERTY, whose number row gives these without Shift: one line in the help.
+    key!(&["alt-&"], BROWSE, Hidden, "Home", Pill1),
+    key!(&["alt-eacute"], BROWSE, Hidden, "Movies", Pill2),
+    key!(&["alt-\""], BROWSE, Hidden, "Series", Pill3),
+    key!(&["alt-'"], BROWSE, Hidden, "Collections", Pill4),
+    key!(&["alt-("], BROWSE, Hidden, "Lists", Pill5),
+    key!(&["alt--"], BROWSE, Hidden, "Discover", Pill6),
     // Escape fires in a text field too: it closes what is open first.
     key!(
         &["escape"],

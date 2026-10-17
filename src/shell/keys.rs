@@ -778,6 +778,24 @@ mod tests {
     }
 
     #[gpui_kit::test]
+    fn on_azerty_alt_and_the_unshifted_number_row_go_to_the_pills(cx: &mut TestAppContext) {
+        let window = signed_in(cx);
+        let mut visual = drawn(&window, cx);
+        // What the number row produces on AZERTY, without Shift.
+        for (keys, screen_reached) in [
+            ("alt-eacute", Screen::Library),
+            ("alt-\"", Screen::Series),
+            ("alt-'", Screen::Collections),
+            ("alt-(", Screen::MyList),
+            ("alt-&", Screen::Home),
+        ] {
+            visual.simulate_keystrokes(keys);
+            visual.run_until_parked();
+            assert_eq!(screen(&window, cx), screen_reached, "{keys}");
+        }
+    }
+
+    #[gpui_kit::test]
     fn alt_6_goes_to_discover_when_a_request_server_is_configured(cx: &mut TestAppContext) {
         let seerr = crate::fake_seerr::FakeSeerr::default();
         let window = super::super::discover::tests::configured(&seerr, cx);
@@ -786,6 +804,12 @@ mod tests {
         visual.simulate_keystrokes("alt-6");
         visual.run_until_parked();
         assert_eq!(screen(&window, cx), Screen::Discover);
+        visual.simulate_keystrokes("alt-1");
+        visual.run_until_parked();
+        let mut visual = drawn(&window, cx);
+        visual.simulate_keystrokes("alt--");
+        visual.run_until_parked();
+        assert_eq!(screen(&window, cx), Screen::Discover, "AZERTY's 6");
         visual.simulate_keystrokes("?");
         cx.executor().advance_clock(Duration::from_secs(1));
         let mut visual = drawn(&window, cx);
