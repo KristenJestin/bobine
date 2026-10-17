@@ -136,7 +136,7 @@ mod tests {
             shell.hear_commands(Some(heard), first);
             shell
         });
-        let visual = VisualTestContext::from_window((*window).into(), cx);
+        let visual = VisualTestContext::from_window(*window, cx);
         visual.run_until_parked();
         (window, inbox, visual)
     }
