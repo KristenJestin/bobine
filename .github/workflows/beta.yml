@@ -14,6 +14,12 @@ name: beta
 on:
   push:
     branches: [dev]
+    # A push that changes no code builds no beta.
+    paths-ignore:
+      - '**.md'
+      - 'LICENSE'
+      - '.githooks/**'
+      - 'docs/**'
 
 # One beta at a time, in the order of the pushes. Never cancelled: a run killed between the
 # deletion of the old beta and the creation of the new one would leave no beta at all. A run
