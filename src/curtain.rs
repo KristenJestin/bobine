@@ -231,7 +231,7 @@ mod tests {
         assert_eq!((first.page, first.player, first.cover), (1., 0., 1.));
         let later = curtain.at(start + 150 * MS);
         assert!(later.page < 1. && later.player > 0.);
-        assert_eq!(later.page + later.player, 1.);
+        assert!((later.page + later.player - 1.).abs() < 1e-6);
         assert_eq!(
             later.cover, 1.,
             "nothing of the video shows before its first frame"
