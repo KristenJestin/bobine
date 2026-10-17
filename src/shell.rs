@@ -1136,6 +1136,31 @@ impl Render for Shell {
         self.pictures.replace(None);
         let help = screens::help::overlay(self, playing, window, cx);
         let again = self.ring_again(cx);
+        let mut bars: Vec<AnyElement> = Vec::new();
+        // A light shade over the top of a backdrop, under the bar. It comes with the page.
+        if chrome.has_backdrop() {
+            let shade = bar_fade().with_animation(
+                ("shade-turn", turns as usize),
+                Animation::new(motion::page()).with_easing(motion::ease_out),
+                |shade, t| shade.opacity(t),
+            );
+            bars.push(fade_out(shade.into_any_element()));
+        }
+        if chrome.shows_pill_bar() {
+            let bar = pill_bar(highlight, account, self.seerr.client.is_some(), window, cx);
+            bars.push(fade_out(bar.into_any_element()));
+        }
+        if let Some(label) = back_label.filter(|_| chrome.shows_back_link()) {
+            bars.push(fade_out(back_link(label, window, cx).into_any_element()));
+        }
+        // Fading out, they go under the player coming in, and answer nothing.
+        let (under_player, over_player) = match fading_out {
+            Some(_) => {
+                bars.push(div().absolute().inset_0().occlude().into_any_element());
+                (bars, Vec::new())
+            }
+            None => (Vec::new(), bars),
+        };
         let root = div()
             .id("root")
             .size_full()
@@ -1150,6 +1175,7 @@ impl Render for Shell {
             .when_some(self.font.clone(), |root, font| root.font_family(font))
             // Under the player coming in, under the page coming back.
             .children(cover.map(|cover| cover.element))
+            .children(under_player)
             .child(match &mut self.playback {
                 Some(playback) if playing => {
                     let now = Instant::now();
@@ -1255,30 +1281,7 @@ impl Render for Shell {
                 .absolute()
                 .size_full(),
             )
-            // A light shade over the top of a backdrop, under the bar. It comes with the page.
-            .when(chrome.has_backdrop(), |root| {
-                root.child(fade_out(
-                    bar_fade()
-                        .with_animation(
-                            ("shade-turn", turns as usize),
-                            Animation::new(motion::page()).with_easing(motion::ease_out),
-                            |shade, t| shade.opacity(t),
-                        )
-                        .into_any_element(),
-                ))
-            })
-            .when(chrome.shows_pill_bar(), |root| {
-                let bar = pill_bar(highlight, account, self.seerr.client.is_some(), window, cx);
-                root.child(fade_out(bar.into_any_element()))
-            })
-            .when_some(
-                back_label.filter(|_| chrome.shows_back_link()),
-                |root, label| root.child(fade_out(back_link(label, window, cx).into_any_element())),
-            )
-            // The bar and the back link fading out answer nothing.
-            .when(fading_out.is_some(), |root| {
-                root.child(div().absolute().inset_0().occlude())
-            })
+            .children(over_player)
             .children(screens::playlist::add_menu(self, window, cx))
             .children(self.notice_pill(screen, window, cx))
             .children(screens::search::palette(self, window, cx))
