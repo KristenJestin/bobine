@@ -495,6 +495,62 @@ mod tests {
         assert_eq!(screen.unwrap(), Screen::Favorites);
     }
 
+    /// The card of a playlist of four titles or more shows four posters, two by two, over the
+    /// whole of its picture.
+    #[gpui_kit::test]
+    fn a_playlist_of_four_titles_shows_four_posters(cx: &mut TestAppContext) {
+        let (_server, window) = signed_in(cx);
+        window
+            .update(cx, |shell, _, cx| shell.select(NavEntry::MyList, cx))
+            .unwrap();
+        cx.run_until_parked();
+        let mut visual = gpui_kit::VisualTestContext::from_window(window.into(), cx);
+        // At any width of the window, whatever fraction of a pixel the cards come to.
+        for width in [1920., 1921., 1923., 1925., 1927., 1931., 1333.] {
+            visual.simulate_resize(gpui_kit::size(gpui_kit::px(width), gpui_kit::px(1080.)));
+            visual.run_until_parked();
+            four_posters_in_four_quarters(&mut visual, width);
+        }
+    }
+
+    fn four_posters_in_four_quarters(visual: &mut gpui_kit::VisualTestContext, width: f32) {
+        let frame = visual
+            .debug_bounds("list-mosaic Late night")
+            .expect("the mosaic");
+        let cells: Vec<_> = (0..4)
+            .map(|at| {
+                let selector = format!("list-mosaic Late night {at}");
+                visual
+                    .debug_bounds(Box::leak(selector.into_boxed_str()))
+                    .unwrap_or_else(|| panic!("poster {at} was not drawn"))
+            })
+            .collect();
+        let half_width = frame.size.width / 2.;
+        let half_height = frame.size.height / 2.;
+        let quadrant = |cell: &gpui_kit::Bounds<gpui_kit::Pixels>| {
+            let center = cell.center();
+            (
+                center.x > frame.left() + half_width,
+                center.y > frame.top() + half_height,
+            )
+        };
+        let quadrants: Vec<_> = cells.iter().map(quadrant).collect();
+        assert_eq!(
+            quadrants,
+            [(false, false), (true, false), (false, true), (true, true)],
+            "at {width} px, the four posters do not fill the four quarters of the card: \
+             {cells:?} in {frame:?}"
+        );
+        for cell in &cells {
+            assert!(
+                cell.size.width > half_width * 0.9 && cell.size.height > half_height * 0.9,
+                "at {width} px, a poster of {:?} does not fill its quarter of {:?}",
+                cell.size,
+                frame.size
+            );
+        }
+    }
+
     #[gpui_kit::test]
     fn a_playlist_card_reads_only_its_first_titles_and_counts_them_all(cx: &mut TestAppContext) {
         let (_server, window) = signed_in(cx);
