@@ -1,5 +1,5 @@
-//! The Stats page: what the viewer watched, read with the Home, and offered in the account menu
-//! only while there is something to show.
+//! The Stats page: what the viewer watched, read at sign-in, after a playback and when the page
+//! opens, and offered in the account menu only while there is something to show.
 
 use std::rc::Rc;
 use std::sync::Arc;
@@ -14,7 +14,7 @@ use crate::stats;
 impl Shell {
     /// Reads the watch history again, at sign-in, after a playback and when the page opens, not
     /// at each arrival on the Home: a long history takes a while. The stats before stay shown
-    /// until it comes. Nothing to show, or a history that cannot be read, takes the page away.
+    /// until it comes, or stay if it cannot be read. Nothing to show takes the page away.
     pub(super) fn load_stats(&mut self, cx: &mut Context<Self>) {
         if self.server.is_none() || self.stats_reading {
             return;
@@ -41,7 +41,11 @@ impl Shell {
                     return;
                 }
                 shell.stats_reading = false;
-                shell.stats = stats.ok().flatten().map(Rc::new);
+                // A read that failed leaves what was shown: the next one may well succeed.
+                let Ok(stats) = stats else {
+                    return;
+                };
+                shell.stats = stats.map(Rc::new);
                 if shell.stats.is_none() {
                     shell.navigator.forget(|screen| screen == Screen::Stats);
                 }
@@ -81,6 +85,11 @@ mod tests {
     fn start(history: WatchHistory, cx: &mut TestAppContext) -> (FakeServer, WindowHandle<Shell>) {
         let server = FakeServer::new(6, true);
         server.state.lock().unwrap().history = history;
+        let window = start_on(&server, cx);
+        (server, window)
+    }
+
+    fn start_on(server: &FakeServer, cx: &mut TestAppContext) -> WindowHandle<Shell> {
         let connector: Arc<dyn Connector> = Arc::new(server.clone());
         let window = cx.add_window(|_, cx| {
             crate::keys::bind(cx);
@@ -93,7 +102,7 @@ mod tests {
             )
         });
         cx.run_until_parked();
-        (server, window)
+        window
     }
 
     fn drawn(window: &WindowHandle<Shell>, cx: &mut TestAppContext) -> VisualTestContext {
@@ -217,13 +226,28 @@ mod tests {
     }
 
     #[gpui_kit::test]
-    fn a_history_that_cannot_be_read_shows_no_page(cx: &mut TestAppContext) {
+    fn a_history_that_cannot_be_read_keeps_the_stats_and_the_page(cx: &mut TestAppContext) {
         let history = fake::watch_history(HistorySource::PlaybackReporting, NOW);
         let (server, window) = start(history, cx);
-        assert!(source(&window, cx).is_some());
+        window
+            .update(cx, |shell, _, cx| shell.open_stats(cx))
+            .unwrap();
+        cx.run_until_parked();
         server.state.lock().unwrap().history_error = Some(ProviderError::Server(500));
         reload(&window, cx);
+        assert_eq!(source(&window, cx), Some(HistorySource::PlaybackReporting));
+        assert_eq!(screen(&window, cx), Screen::Stats);
+    }
+
+    #[gpui_kit::test]
+    fn a_first_read_that_fails_shows_no_page(cx: &mut TestAppContext) {
+        let server = FakeServer::new(6, true);
+        server.state.lock().unwrap().history_error = Some(ProviderError::Server(500));
+        let window = start_on(&server, cx);
         assert_eq!(source(&window, cx), None);
+        let mut visual = drawn(&window, cx);
+        click(&mut visual, "nav-account");
+        assert!(visual.debug_bounds("account-stats").is_none());
     }
 
     #[gpui_kit::test]
