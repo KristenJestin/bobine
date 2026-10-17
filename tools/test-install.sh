@@ -90,10 +90,12 @@ home=$work/home4 prefix=$work/prefix4
 mkdir -p "$home" "$work/fakebin"
 printf '#!/bin/sh\necho "\\tlibmpv.so.2 => not found"\n' > "$work/fakebin/ldd"
 chmod 755 "$work/fakebin/ldd"
-PATH="$work/fakebin:$PATH" run_install "$home" "$prefix" "$good" >"$work/notes.out" 2>&1
+notes=0
+PATH="$work/fakebin:$PATH" run_install "$home" "$prefix" "$good" >"$work/notes.out" 2>&1 || notes=$?
 check "it says when the bin folder is not in PATH" grep -q "is not in your PATH" "$work/notes.out"
 check "it says when libmpv is missing" grep -q "libmpv" "$work/notes.out"
-check "a missing libmpv does not fail the install" test -x "$prefix/bin/bobine"
+check "a missing libmpv does not fail the install" test "$notes" = 0
+check "a missing libmpv still installs the binary" test -x "$prefix/bin/bobine"
 
 # --- the refusals ----------------------------------------------------------------------------------------
 # root: a fake `id` stands for the superuser, so the test does not need to be one.
