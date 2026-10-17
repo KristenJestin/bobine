@@ -65,8 +65,10 @@ impl Shell {
     /// The player is left: the way out, unless the card of the next episode is offered there.
     pub(super) fn close_curtain(&mut self, next_offered: bool) {
         let picture = self.opened_from.take();
-        self.curtain = (!next_offered).then(|| Curtain::closing(picture, Instant::now()));
-        if !next_offered {
+        // With no picture to shrink back, there is nothing of the way out to draw.
+        let closes = !next_offered && picture.is_some();
+        self.curtain = closes.then(|| Curtain::closing(picture, Instant::now()));
+        if closes {
             self.note_curtain("closing");
         }
     }
@@ -194,6 +196,7 @@ mod tests {
     use crate::curtain::Way;
     use crate::fake::{FILM, FakeServer, SERIES};
     use crate::film_page::From;
+    use crate::home_page::PlayTarget;
     use crate::navigation::Screen;
     use crate::player::PlayerEvent;
     use crate::player::fake::FakePlayer;
@@ -260,17 +263,23 @@ mod tests {
             .unwrap()
     }
 
-    /// The film's page open, then its Play pressed, on `player`.
-    fn play_from_its_page(
-        window: &WindowHandle<Shell>,
-        player: FakePlayer,
-        cx: &mut TestAppContext,
-    ) {
+    fn open_film_page(window: &WindowHandle<Shell>, cx: &mut TestAppContext) {
         window
             .update(cx, |shell, _, cx| shell.open_film(ItemId(FILM.into()), cx))
             .unwrap();
         cx.run_until_parked();
         assert_eq!(screen(window, cx), Screen::FilmDetail);
+    }
+
+    /// The page is drawn, its backdrop asked, loaded, and drawn again.
+    fn draw_page(window: &WindowHandle<Shell>, cx: &mut TestAppContext) {
+        let visual = gpui_kit::VisualTestContext::from_window((*window).into(), cx);
+        for _ in 0..3 {
+            visual.run_until_parked();
+        }
+    }
+
+    fn press_play(window: &WindowHandle<Shell>, player: FakePlayer, cx: &mut TestAppContext) {
         window
             .update(cx, |shell, window, cx| {
                 shell.fake_player = Some(player);
@@ -278,6 +287,16 @@ mod tests {
             })
             .unwrap();
         cx.run_until_parked();
+    }
+
+    /// The film's page open, then its Play pressed, on `player`: the page was never drawn.
+    fn play_from_its_page(
+        window: &WindowHandle<Shell>,
+        player: FakePlayer,
+        cx: &mut TestAppContext,
+    ) {
+        open_film_page(window, cx);
+        press_play(window, player, cx);
     }
 
     #[gpui_kit::test]
@@ -414,15 +433,8 @@ mod tests {
     #[gpui_kit::test]
     fn the_picture_of_the_films_page_grows_into_the_player_and_back(cx: &mut TestAppContext) {
         let (_server, window) = signed_in(cx);
-        window
-            .update(cx, |shell, _, cx| shell.open_film(ItemId(FILM.into()), cx))
-            .unwrap();
-        cx.run_until_parked();
-        // The page is drawn, its backdrop asked, loaded, and drawn again.
-        let visual = gpui_kit::VisualTestContext::from_window(window.into(), cx);
-        for _ in 0..3 {
-            visual.run_until_parked();
-        }
+        open_film_page(&window, cx);
+        draw_page(&window, cx);
         let drawn = window
             .read_with(cx, |shell, _| shell.pictures.borrow().is_some())
             .unwrap();
@@ -432,13 +444,7 @@ mod tests {
             .queued
             .borrow_mut()
             .extend([PlayerEvent::Loaded, PlayerEvent::FirstFrame]);
-        window
-            .update(cx, |shell, window, cx| {
-                shell.fake_player = Some(player);
-                shell.play_film(From::Resume, window, cx);
-            })
-            .unwrap();
-        cx.run_until_parked();
+        press_play(&window, player, cx);
         let grows = window
             .read_with(cx, |shell, _| {
                 shell.curtain.as_ref().is_some_and(|c| c.picture.is_some())
@@ -466,13 +472,40 @@ mod tests {
             .queued
             .borrow_mut()
             .extend([PlayerEvent::Loaded, PlayerEvent::FirstFrame]);
-        play_from_its_page(&window, player, cx);
+        open_film_page(&window, cx);
+        draw_page(&window, cx);
+        press_play(&window, player, cx);
         tick(cx);
         window
             .update(cx, |shell, window, cx| shell.player_back(window, cx))
             .unwrap();
         assert_eq!(screen(&window, cx), Screen::FilmDetail);
         assert_eq!(way(&window, cx), Some(Way::Closing));
+    }
+
+    #[gpui_kit::test]
+    fn leaving_a_player_opened_from_home_has_no_way_out_to_draw(cx: &mut TestAppContext) {
+        let (_server, window) = signed_in(cx);
+        let player = FakePlayer::default();
+        player
+            .queued
+            .borrow_mut()
+            .extend([PlayerEvent::Loaded, PlayerEvent::FirstFrame]);
+        // The Home page draws no picture the way in could grow from.
+        window
+            .update(cx, |shell, window, cx| {
+                shell.fake_player = Some(player);
+                shell.play_from_home(PlayTarget::Film(ItemId(FILM.into())), window, cx);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        assert_eq!(screen(&window, cx), Screen::Player);
+        tick(cx);
+        window
+            .update(cx, |shell, window, cx| shell.player_back(window, cx))
+            .unwrap();
+        assert_eq!(screen(&window, cx), Screen::Home);
+        assert_eq!(way(&window, cx), None, "nothing to shrink back");
     }
 
     #[gpui_kit::test]
