@@ -36,7 +36,8 @@ pub struct Settings {
     /// The desktop is told when a series the viewer follows gains an episode.
     pub notify_new_episodes: bool,
     /// For each account (`<server id>/<user id>`), the newest episode the last check of new
-    /// episodes saw: seconds since 1970, by the server's clock, which the episodes are dated by.
+    /// episodes saw: ticks of 100 ns since 1970, by the server's clock, which the episodes are
+    /// dated by.
     /// Last: a table goes after the plain values.
     pub episodes_seen: BTreeMap<String, i64>,
 }

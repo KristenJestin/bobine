@@ -225,6 +225,18 @@ fn subtitle_format(codec: Option<&str>) -> String {
 const PERSON_TITLES_PAGE: usize = 100;
 const PERSON_TITLES_CAP: usize = 1000;
 
+/// An episode whose date cannot be read is left out of the new episodes rather than told at the
+/// wrong time; said once a run, so a check every quarter of an hour does not fill the log.
+fn unread_date(date: Option<&str>) {
+    static SAID: std::sync::Once = std::sync::Once::new();
+    SAID.call_once(|| {
+        eprintln!(
+            "bobine: an episode dated {:?} is left out of the new episodes: the date cannot be read",
+            date.unwrap_or("nowhen")
+        );
+    });
+}
+
 impl Jellyfin {
     fn user(&self) -> (&'static str, String) {
         ("userId", self.login.user_id.clone())
@@ -910,7 +922,17 @@ impl MediaServer for Jellyfin {
                 ("fields", "DateCreated,SeriesPrimaryImage".into()),
             ],
         )?;
-        Ok(found.into_iter().filter_map(Item::new_episode).collect())
+        Ok(found
+            .into_iter()
+            .filter_map(|item| {
+                let date = item.date_created.clone();
+                let new = item.new_episode();
+                if new.is_none() {
+                    unread_date(date.as_deref());
+                }
+                new
+            })
+            .collect())
     }
 
     /// The simplest honest choice: the newest titles, films and series, that the user has not

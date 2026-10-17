@@ -315,7 +315,8 @@ pub struct Episode {
 #[derive(Debug, Clone, PartialEq)]
 pub struct NewEpisode {
     pub episode: Episode,
-    /// Seconds since 1970, by the server's clock.
+    /// Ticks of 100 ns since 1970, by the server's clock: two episodes added in the same second
+    /// still come apart.
     pub added: i64,
     /// The poster of its series.
     pub poster: Option<ImageRef>,

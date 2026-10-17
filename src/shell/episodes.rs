@@ -216,7 +216,7 @@ mod tests {
         (window, notifier)
     }
 
-    /// The server adds `episode` at `at`, seconds since 1970.
+    /// The server adds `episode` at `at`, ticks since 1970.
     fn add(server: &FakeServer, episode: &str, at: i64) {
         let mut state = server.state.lock().unwrap();
         state.added.push((ItemId(episode.into()), at));

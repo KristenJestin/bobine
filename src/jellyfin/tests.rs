@@ -1149,7 +1149,7 @@ fn the_new_episodes_come_one_by_one_with_when_they_were_added() {
         (Some(2), Some(2))
     );
     assert!(!bell.episode.item.watched);
-    assert_eq!(bell.added, 1_757_838_605, "2025-09-14T08:30:05Z");
+    assert_eq!(bell.added, BELL_TOWER_ADDED + 1_234_567);
     assert_eq!(
         bell.poster,
         Some(ImageRef {
@@ -1161,7 +1161,11 @@ fn the_new_episodes_come_one_by_one_with_when_they_were_added() {
     );
     let table = &found[1];
     assert!(table.episode.item.watched);
-    assert_eq!(table.added, 1_709_251_199, "2024-02-29T23:59:59Z");
+    assert_eq!(
+        table.added,
+        1_709_251_199 * 10_000_000,
+        "2024-02-29T23:59:59Z"
+    );
     assert_eq!(table.poster, None);
 }
 
@@ -3424,4 +3428,83 @@ fn a_remote_trailer_that_is_not_a_web_address_is_left_out() {
     with_remote_trailers(&s, &["file:///etc/passwd"]);
     let detail = s.signed_in().film(&film()).unwrap();
     assert_eq!(detail.trailers.remote, None);
+}
+
+/// 2025-09-14T08:30:05Z, in ticks of 100 ns since 1970.
+const BELL_TOWER_ADDED: i64 = 1_757_838_605 * 10_000_000;
+
+#[test]
+fn a_date_in_utc_is_read_to_the_tick() {
+    use super::dto::date_ticks;
+    assert_eq!(
+        date_ticks("2025-09-14T08:30:05.1234567Z"),
+        Some(BELL_TOWER_ADDED + 1_234_567)
+    );
+    assert_eq!(
+        date_ticks("2025-09-14T08:30:05.5Z"),
+        Some(BELL_TOWER_ADDED + 5_000_000)
+    );
+    assert_eq!(date_ticks("2025-09-14T08:30:05Z"), Some(BELL_TOWER_ADDED));
+    assert_eq!(
+        date_ticks("2024-02-29T23:59:59Z"),
+        Some(1_709_251_199 * 10_000_000)
+    );
+}
+
+#[test]
+fn a_date_with_an_offset_is_read_in_utc() {
+    use super::dto::date_ticks;
+    assert_eq!(
+        date_ticks("2025-09-14T10:30:05.1234567+02:00"),
+        Some(BELL_TOWER_ADDED + 1_234_567)
+    );
+    assert_eq!(
+        date_ticks("2025-09-14T03:30:05-05:00"),
+        Some(BELL_TOWER_ADDED)
+    );
+    assert_eq!(
+        date_ticks("2025-09-14T08:30:05+00:00"),
+        Some(BELL_TOWER_ADDED)
+    );
+}
+
+#[test]
+fn a_date_without_a_zone_is_read_as_utc() {
+    use super::dto::date_ticks;
+    assert_eq!(
+        date_ticks("2025-09-14T08:30:05.1234567"),
+        Some(BELL_TOWER_ADDED + 1_234_567)
+    );
+    assert_eq!(date_ticks("2025-09-14T08:30:05"), Some(BELL_TOWER_ADDED));
+}
+
+#[test]
+fn a_malformed_date_is_not_read() {
+    use super::dto::date_ticks;
+    for date in [
+        "2025-09-14T08X30X05Z",
+        "2025X09-14T08:30:05Z",
+        "2025-09X14T08:30:05Z",
+        "2025-09-14 08:30:05Z",
+        "2025-13-14T08:30:05Z",
+        "2025-00-14T08:30:05Z",
+        "2025-02-29T08:30:05Z",
+        "2025-09-31T08:30:05Z",
+        "2025-09-00T08:30:05Z",
+        "2025-09-14T24:30:05Z",
+        "2025-09-14T08:60:05Z",
+        "2025-09-14T08:30:60Z",
+        "2025-09-14T08:30:05.Z",
+        "2025-09-14T08:30:05.12345678Z",
+        "2025-09-14T08:30:05.12a4Z",
+        "2025-09-14T08:30:05+02",
+        "2025-09-14T08:30:05+24:00",
+        "2025-09-14T08:30:05+02:60",
+        "2025-09-14T08:30:05Zjunk",
+        "2025-09-14T08:30",
+        "+025-09-14T08:30:05Z",
+        "",
+    ] {
+        assert_eq!(date_ticks(date), None, "{date}");
+    }
 }

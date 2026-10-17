@@ -247,7 +247,7 @@ pub struct State {
     pub tmdb_collection: Option<u64>,
     /// `tmdb_index` fails with this while it is set.
     pub tmdb_index_error: Option<ProviderError>,
-    /// The episodes the server added, by id, and when (seconds since 1970).
+    /// The episodes the server added, by id, and when (ticks of 100 ns since 1970).
     pub added: Vec<(ItemId, i64)>,
 }
 

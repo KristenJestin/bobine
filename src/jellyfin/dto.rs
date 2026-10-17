@@ -19,21 +19,60 @@ pub fn ticks(position: Duration) -> i64 {
     i64::try_from(position.as_nanos() / 100).unwrap_or(i64::MAX)
 }
 
-/// Seconds since 1970 of a date as Jellyfin writes it, in UTC: `2025-09-14T08:30:05.1234567Z`.
-/// The fraction of a second is dropped.
-pub fn seconds(date: &str) -> Option<i64> {
-    let number = |range: std::ops::Range<usize>| -> Option<i64> {
-        let digits = date.get(range)?;
+/// Ticks of 100 ns since 1970 of a date as Jellyfin writes it: `2025-09-14T08:30:05.1234567Z`,
+/// with up to seven digits of a second, then `Z`, an offset (`+02:00`) or nothing, which is UTC.
+/// None unless every part is there and in range: a date half read would move a check's mark.
+pub fn date_ticks(date: &str) -> Option<i64> {
+    let bytes = date.as_bytes();
+    let digits = |digits: &[u8]| -> Option<i64> {
         digits
-            .bytes()
-            .all(|b| b.is_ascii_digit())
-            .then(|| digits.parse().ok())?
+            .iter()
+            .all(u8::is_ascii_digit)
+            .then(|| std::str::from_utf8(digits).ok()?.parse().ok())?
     };
-    let (year, month, day) = (number(0..4)?, number(5..7)?, number(8..10)?);
-    let (hour, minute, second) = (number(11..13)?, number(14..16)?, number(17..19)?);
-    if date.get(4..5) != Some("-") || date.get(10..11) != Some("T") || !date.ends_with('Z') {
+    let number = |range: std::ops::Range<usize>| digits(bytes.get(range)?);
+    let separators = [(4, b'-'), (7, b'-'), (10, b'T'), (13, b':'), (16, b':')];
+    if !separators
+        .iter()
+        .all(|&(at, byte)| bytes.get(at) == Some(&byte))
+    {
         return None;
     }
+    let (year, month, day) = (number(0..4)?, number(5..7)?, number(8..10)?);
+    let (hour, minute, second) = (number(11..13)?, number(14..16)?, number(17..19)?);
+    let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+    let month_days = match month {
+        2 if leap => 29,
+        2 => 28,
+        4 | 6 | 9 | 11 => 30,
+        1..=12 => 31,
+        _ => return None,
+    };
+    if !(1..=month_days).contains(&day) || hour > 23 || minute > 59 || second > 59 {
+        return None;
+    }
+    let mut rest = &date[19..];
+    let mut fraction = 0;
+    if let Some(after) = rest.strip_prefix('.') {
+        let count = after.bytes().take_while(u8::is_ascii_digit).count();
+        if !(1..=7).contains(&count) {
+            return None;
+        }
+        fraction = after[..count].parse::<i64>().ok()? * 10_i64.pow(7 - count as u32);
+        rest = &after[count..];
+    }
+    let offset = match rest.as_bytes() {
+        [] | [b'Z'] => 0,
+        [sign @ (b'+' | b'-'), h1, h2, b':', m1, m2] => {
+            let (hours, minutes) = (digits(&[*h1, *h2])?, digits(&[*m1, *m2])?);
+            if hours > 23 || minutes > 59 {
+                return None;
+            }
+            let offset = hours * 3_600 + minutes * 60;
+            if *sign == b'+' { offset } else { -offset }
+        }
+        _ => return None,
+    };
     // Days from the civil date (H. Hinnant's algorithm), the year starting in March.
     let year = if month <= 2 { year - 1 } else { year };
     let era = year.div_euclid(400);
@@ -41,7 +80,8 @@ pub fn seconds(date: &str) -> Option<i64> {
     let of_year = (153 * ((month + 9) % 12) + 2) / 5 + day - 1;
     let of_cycle = of_era * 365 + of_era / 4 - of_era / 100 + of_year;
     let days = era * 146_097 + of_cycle - 719_468;
-    Some(days * 86_400 + hour * 3_600 + minute * 60 + second)
+    let seconds = days * 86_400 + hour * 3_600 + minute * 60 + second - offset;
+    Some(seconds * 10_000_000 + fraction)
 }
 
 #[derive(Deserialize)]
@@ -178,7 +218,8 @@ pub struct Item {
     pub media_sources: Vec<MediaSourceInfo>,
     /// A series' end, `2024-05-12T00:00:00.0000000Z`.
     pub end_date: Option<String>,
-    /// When the server added the item, `2025-09-14T08:30:05.1234567Z`, when asked for.
+    /// When the server added the item, `2025-09-14T08:30:05.1234567Z`, when asked for. Not always
+    /// when it was scanned: an import may keep the file's own time.
     pub date_created: Option<String>,
     /// A season's or an episode's number.
     pub index_number: Option<u32>,
@@ -449,9 +490,9 @@ impl Item {
     }
 
     /// An episode as the latest added list holds it, with its series' poster. None without
-    /// the date it was added, which nothing can be told from.
+    /// a date it was added that can be read, which nothing can be told from.
     pub fn new_episode(self) -> Option<NewEpisode> {
-        let added = seconds(self.date_created.as_deref()?)?;
+        let added = date_ticks(self.date_created.as_deref()?)?;
         let poster = self.list_poster();
         Some(NewEpisode {
             episode: self.episode(),
