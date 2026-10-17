@@ -306,7 +306,8 @@ impl Shell {
     }
 
     /// Runs `work` against the request server off the window's thread, then `then` with its
-    /// answer, if the same client is still there.
+    /// answer, if the same client is still there: not one of another session, nor one made
+    /// again since.
     pub(super) fn ask_seerr<R: Send + 'static>(
         &self,
         cx: &mut Context<Self>,
@@ -316,14 +317,14 @@ impl Shell {
         let Some(client) = self.seerr.client.clone() else {
             return;
         };
-        let making = self.seerr.making;
-        let task = cx
-            .background_executor()
-            .spawn(async move { work(&*client) });
+        let asked = client.clone();
+        let task = cx.background_executor().spawn(async move { work(&*asked) });
         cx.spawn(async move |this, cx| {
             let answer = task.await;
             this.update(cx, |shell, cx| {
-                if shell.seerr.making == making && shell.seerr.client.is_some() {
+                let same =
+                    (shell.seerr.client.as_ref()).is_some_and(|now| Arc::ptr_eq(now, &client));
+                if same {
                     then(shell, answer, cx);
                     cx.notify();
                 }
@@ -839,6 +840,31 @@ pub(super) mod tests {
                 shell.save_seerr_address(cx);
             })
             .unwrap();
+    }
+
+    #[gpui_kit::test]
+    fn a_read_of_a_previous_sessions_client_is_dropped(cx: &mut TestAppContext) {
+        let seerr = FakeSeerr::default();
+        let window = configured(&seerr, cx);
+        let landed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let mark = landed.clone();
+        window
+            .update(cx, |shell, _, cx| {
+                shell.ask_seerr(
+                    cx,
+                    |seerr| seerr.my_requests(),
+                    move |_, _, _| mark.store(true, std::sync::atomic::Ordering::Relaxed),
+                );
+                // Signed out and in again before the answer came: a new session, whose client
+                // was made as many times as the one before.
+                let making = shell.seerr.making;
+                shell.seerr = Seerr::default();
+                shell.seerr.making = making;
+                shell.seerr.client = Some(Arc::new(FakeSeerr::default()));
+            })
+            .unwrap();
+        cx.run_until_parked();
+        assert!(!landed.load(std::sync::atomic::Ordering::Relaxed));
     }
 
     #[gpui_kit::test]
