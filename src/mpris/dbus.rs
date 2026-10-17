@@ -3,8 +3,8 @@
 //! Everything D-Bus happens on a thread of its own (zbus runs its own async-io executor, the
 //! one GPUI's dependencies already bring): the window's thread only sends what changed down a
 //! channel and reads the commands back. The bus is reached at the first title that plays, so
-//! nothing shows in the bar widget before. Without `DBUS_SESSION_BUS_ADDRESS` (the headless
-//! checks) there is no bus, and the adapter stays silent.
+//! nothing shows in the bar widget before. Without a bus address the adapter stays silent; the
+//! harness gets none: `Shell::without_desktop` turns the desktop off, whatever the environment.
 
 use std::collections::HashMap;
 use std::sync::Arc;
