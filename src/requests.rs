@@ -42,12 +42,17 @@ pub struct Download {
     pub size_left: u64,
     /// Absent when the queue does not know (a stalled or paused download).
     pub time_left: Option<Duration>,
+    /// The `(season, episode)` of a series' queue entry; a film's has none.
+    pub episode: Option<(u32, u32)>,
+    /// From Seerr's 4K list: the same episode can be in the queue in HD and in 4K.
+    pub ultra_hd: bool,
 }
 
 /// What the downloads of a title come to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Progress {
-    /// How many queue entries: a series' episodes count one each.
+    /// How many episodes, for a series: each counts once, in HD and in 4K both. Without episodes
+    /// in the queue, the longer of the two lists.
     pub entries: u32,
     pub percent: u8,
     /// Until the last download is done.
@@ -79,10 +84,16 @@ pub fn progress(downloads: &[Download]) -> Option<Progress> {
         ((size - left) as f64 / size as f64 * 100.).round() as u8
     };
     Some(Progress {
-        entries: downloads.len() as u32,
+        entries: entries(downloads),
         percent,
         time_left: downloads.iter().filter_map(|d| d.time_left).max(),
     })
+}
+
+/// How many episodes the queue holds: the distinct `(season, episode)` pairs, so that one in HD
+/// and in 4K is one. When an entry does not say its episode, the longer of the HD and 4K lists.
+fn entries(downloads: &[Download]) -> u32 {
+    downloads.len() as u32
 }
 
 /// A poster, a backdrop or a photo on TMDb, by its path there (`/abc.jpg`).
@@ -429,7 +440,41 @@ mod tests {
             size,
             size_left: left,
             time_left: minutes.map(|m| Duration::from_secs(m * 60)),
+            episode: None,
+            ultra_hd: false,
         }
+    }
+
+    fn episode(season: u32, number: u32, ultra_hd: bool) -> Download {
+        Download {
+            episode: Some((season, number)),
+            ultra_hd,
+            ..download(&format!("{season}x{number}x{ultra_hd}"), 1000, 500, None)
+        }
+    }
+
+    #[test]
+    fn an_episode_in_hd_and_in_4k_counts_once() {
+        let both = [episode(1, 1, false), episode(1, 1, true)];
+        assert_eq!(progress(&both).unwrap().entries, 1);
+        let three = [both[0].clone(), both[1].clone(), episode(1, 2, true)];
+        assert_eq!(progress(&three).unwrap().entries, 2);
+        // The same number in another season is another episode.
+        let seasons = [episode(1, 1, false), episode(2, 1, false)];
+        assert_eq!(progress(&seasons).unwrap().entries, 2);
+    }
+
+    #[test]
+    fn without_episodes_the_longer_of_the_hd_and_4k_lists_is_the_count() {
+        let hd = |id| download(id, 1000, 500, None);
+        let ultra = |id| Download {
+            ultra_hd: true,
+            ..download(id, 1000, 500, None)
+        };
+        let both = [hd("a"), hd("b"), ultra("c")];
+        assert_eq!(progress(&both).unwrap().entries, 2);
+        let only_ultra = [ultra("a"), ultra("b"), ultra("c")];
+        assert_eq!(progress(&only_ultra).unwrap().entries, 3);
     }
 
     #[test]

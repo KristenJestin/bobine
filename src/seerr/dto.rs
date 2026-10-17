@@ -85,6 +85,15 @@ pub struct DownloadDto {
     pub size_left: Option<f64>,
     /// A .NET time span: `00:12:34`, `1.02:03:04`.
     pub time_left: Option<String>,
+    pub episode: Option<EpisodeDto>,
+}
+
+/// The episode of a series' queue entry.
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct EpisodeDto {
+    pub season_number: Option<u32>,
+    pub episode_number: Option<u32>,
 }
 
 /// The time a queue says is left, `hh:mm:ss` with days before a dot (`d.hh:mm:ss`) and
@@ -107,12 +116,17 @@ fn time_left(text: &str) -> Option<Duration> {
 }
 
 impl DownloadDto {
-    fn download(self) -> Download {
+    fn download(self, ultra_hd: bool) -> Download {
+        let episode = self
+            .episode
+            .and_then(|episode| Some((episode.season_number?, episode.episode_number?)));
         Download {
             id: self.download_id.filter(|id| !id.is_empty()),
             size: bytes(self.size),
             size_left: bytes(self.size_left),
             time_left: self.time_left.as_deref().and_then(time_left),
+            episode,
+            ultra_hd,
         }
     }
 }
@@ -135,11 +149,9 @@ pub struct MediaInfo {
 impl MediaInfo {
     /// What is downloading for the title, in HD and in 4K.
     pub fn downloads(self) -> Vec<Download> {
-        let both = self
-            .download_status
-            .into_iter()
-            .chain(self.download_status4k);
-        both.map(DownloadDto::download).collect()
+        let hd = self.download_status.into_iter().map(|d| d.download(false));
+        let ultra = self.download_status4k.into_iter().map(|d| d.download(true));
+        hd.chain(ultra).collect()
     }
 }
 
@@ -580,6 +592,10 @@ mod tests {
         assert_eq!(secs("01:20:05"), Some(4805));
         assert_eq!(secs("1.02:03:04"), Some(86_400 + 2 * 3600 + 3 * 60 + 4));
         assert_eq!(secs("00:00:12.3456789"), Some(12));
+        // Past what a `u64` of seconds holds: no time.
+        for too_long in ["999999999999999999.00:00:00", "18446744073709551615:00:00"] {
+            assert_eq!(secs(too_long), None, "{too_long:?}");
+        }
         for not_a_time in ["", "soon", "12:30", "aa:bb:cc", "00:61:00", "-00:01:00"] {
             assert_eq!(secs(not_a_time), None, "{not_a_time:?}");
         }
@@ -619,12 +635,16 @@ mod tests {
                     size: 5000,
                     size_left: 2000,
                     time_left: Some(Duration::from_secs(12 * 60 + 34)),
+                    episode: Some((1, 2)),
+                    ultra_hd: false,
                 },
                 Download {
                     id: None,
                     size: 9000,
                     size_left: 9000,
                     time_left: None,
+                    episode: None,
+                    ultra_hd: true,
                 },
             ]
         );
@@ -653,7 +673,9 @@ mod tests {
                 id: None,
                 size: 0,
                 size_left: 0,
-                time_left: None
+                time_left: None,
+                episode: None,
+                ultra_hd: false,
             }]
         );
     }

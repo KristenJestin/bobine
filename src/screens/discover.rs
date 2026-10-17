@@ -77,7 +77,10 @@ pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -
                     .iter()
                     .enumerate()
                     .map(|(at, request)| {
-                        let label = discover::my_request_label(request);
+                        let in_library = shell
+                            .library_page_of(request.title.kind, request.title.tmdb)
+                            .is_some();
+                        let label = discover::my_request_label(request, in_library);
                         card(shell, &request.title, ("mine", at), Some(label), cx)
                     })
                     .collect();
