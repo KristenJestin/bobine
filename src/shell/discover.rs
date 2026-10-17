@@ -158,6 +158,11 @@ impl Shell {
     /// be made. The key is read from the keyring off the window's thread, and goes from there to
     /// the client only.
     fn connect_seerr(&mut self, cx: &mut Context<Self>) {
+        // What was read and asked of the client before goes with it, its requests not sent
+        // yet with its pages: nothing more goes to the old server.
+        if self.seerr.client.is_some() {
+            self.seerr_gone(cx);
+        }
         self.seerr.making += 1;
         let making = self.seerr.making;
         self.seerr.check = None;
@@ -812,6 +817,26 @@ pub(super) mod tests {
                         "The address must start with http:// or https://."
                     ))
                 ));
+            })
+            .unwrap();
+    }
+
+    /// Seerr moved: the address is changed in the Settings, and `other` answers there.
+    pub fn change_address(
+        window: &WindowHandle<Shell>,
+        other: &FakeSeerr,
+        cx: &mut TestAppContext,
+    ) {
+        let fake = other.clone();
+        window
+            .update(cx, |shell, _, cx| {
+                shell.open_seerr =
+                    Arc::new(move |_, _, _| Ok(Arc::new(fake.clone()) as Arc<dyn RequestServer>));
+                let address = shell.seerr.address.clone().unwrap();
+                address.update(cx, |field, cx| {
+                    field.set_text("https://requests.example.net", cx)
+                });
+                shell.save_seerr_address(cx);
             })
             .unwrap();
     }

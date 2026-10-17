@@ -279,7 +279,9 @@ mod tests {
     use bobine::requests::Ask;
     use gpui_kit::{TestAppContext, WindowHandle};
 
-    use super::super::discover::tests::{address_only, click, configured, configured_on, drawn};
+    use super::super::discover::tests::{
+        address_only, change_address, click, configured, configured_on, drawn,
+    };
     use super::*;
     use crate::fake::{FILM, FakeServer, IN_LIBRARY_FILM};
     use crate::fake_seerr::{COLLECTION, FakeSeerr, WINTER_LIGHT, WINTERS_END};
@@ -521,6 +523,66 @@ mod tests {
             .unwrap();
         cx.run_until_parked();
         assert!(seerr.requests().is_empty());
+    }
+
+    /// Runs the window's tasks one at a time until Seerr was asked for `count` titles.
+    fn run_until_requested(seerr: &FakeSeerr, count: usize, cx: &mut TestAppContext) {
+        while seerr.requests().len() < count {
+            assert!(cx.executor().tick(), "never asked");
+        }
+    }
+
+    #[gpui_kit::test]
+    fn a_run_when_the_seerr_address_changes_ends(cx: &mut TestAppContext) {
+        let (old, new) = (FakeSeerr::default(), FakeSeerr::default());
+        let window = on_collection(&old, cx);
+        drawn(&window, cx);
+        window
+            .update(cx, |shell, _, cx| shell.request_collection(cx))
+            .unwrap();
+        run_until_requested(&old, 1, cx);
+        change_address(&window, &new, cx);
+        cx.run_until_parked();
+        assert_eq!(
+            old.requests(),
+            [Ask::Movie(WINTER_LIGHT)],
+            "nothing more to the old server"
+        );
+        assert!(new.requests().is_empty());
+        window
+            .update(cx, |shell, _, _| {
+                assert!(shell.seerr.client.is_some());
+                // Its page went with the old server: none is left waiting.
+                assert!(shell.seerr.collections.is_empty());
+                assert_ne!(shell.navigator.current(), Screen::SeerrCollection);
+            })
+            .unwrap();
+    }
+
+    #[gpui_kit::test]
+    fn the_collection_link_shows_after_a_seerr_client_change(cx: &mut TestAppContext) {
+        let (old, new) = (FakeSeerr::default(), FakeSeerr::default());
+        let server = FakeServer::new(6, true);
+        server.state.lock().unwrap().tmdb_collection = Some(COLLECTION);
+        let window = configured_on(server, &old, cx);
+        window
+            .update(cx, |shell, _, cx| shell.open_film(ItemId(FILM.into()), cx))
+            .unwrap();
+        // The link is being read when the address changes.
+        let reading = |cx: &mut TestAppContext| {
+            window
+                .read_with(cx, |shell, _| {
+                    shell.seerr.links.get(&IN_LIBRARY_FILM) == Some(&None)
+                })
+                .unwrap()
+        };
+        while !reading(cx) {
+            assert!(cx.executor().tick(), "never read");
+        }
+        change_address(&window, &new, cx);
+        cx.run_until_parked();
+        let mut visual = drawn(&window, cx);
+        assert!(visual.debug_bounds("part-of-collection").is_some());
     }
 
     #[gpui_kit::test]
