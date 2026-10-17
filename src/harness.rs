@@ -11,7 +11,7 @@
 //!
 //! `bobine --screen login|home|home-rows|home-list-resume|home-list-next|home-list-latest|home-list-empty|library|detail|
 //! detail-rows|detail-cast|playing|series|series-page|series-rows|up-next|collections|collection-page|
-//! my-list|my-list-empty|lists|playlist|film-list|series-list|discover|request|seasons|similar|settings-seerr [--films N]
+//! my-list|my-list-empty|lists|playlist|film-list|series-list|discover|request|seasons|seerr-collection|similar|settings-seerr [--films N]
 //! [--media FILE] [--segments SECONDS] [--direct-fails] [--trailer] [--image-delay-ms N] [--photos-fail-once] [--scenario menu|scroll|select|panel|blackout|search|search-slow|search-keys|help|ring|ring-wheel|tools|tools-keys|home-rotate|home-hover|home-jump|home-scroll|home-lists|home-play|home-poster-hover|grid-poster-hover|playlist-menu|cast-hover|genre-hover|episode-hover|skip|settings|settings-screen|long-tracks|segment-marks]
 //! [--search-delay-ms N] [--favourite-delay-ms N] [--logout-delay-ms N] [--favourite-fails] [--slower N] --quit-at S`
 //!
@@ -358,7 +358,7 @@ fn configure_seerr(shell: &mut Shell, cx: &mut gpui_kit::Context<Shell>) {
 
 /// The page of the request server's screen asked for, once its client is there.
 fn open_seerr_screen(screen: &str, shell: &mut Shell, cx: &mut gpui_kit::Context<Shell>) {
-    use crate::fake_seerr::{COPPER_COAST, NORTHERN_LIGHTS};
+    use crate::fake_seerr::{COLLECTION, COPPER_COAST, NORTHERN_LIGHTS, WINTER_LIGHT};
     use bobine::requests::MediaKind;
     match screen {
         "discover" => shell.select(NavEntry::Discover, cx),
@@ -369,6 +369,11 @@ fn open_seerr_screen(screen: &str, shell: &mut Shell, cx: &mut gpui_kit::Context
         "seasons" => {
             shell.select(NavEntry::Discover, cx);
             shell.open_request(MediaKind::Tv, COPPER_COAST, cx);
+        }
+        "seerr-collection" => {
+            shell.select(NavEntry::Discover, cx);
+            shell.open_request(MediaKind::Movie, WINTER_LIGHT, cx);
+            shell.open_seerr_collection(COLLECTION, cx);
         }
         "similar" => shell.open_film(ItemId(FILM.into()), cx),
         "settings-seerr" => shell.open_settings(cx),
@@ -452,6 +457,7 @@ fn show_screen(
         "discover",
         "request",
         "seasons",
+        "seerr-collection",
         "similar",
         "settings-seerr",
     ]);
