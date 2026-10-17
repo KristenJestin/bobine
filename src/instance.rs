@@ -6,8 +6,6 @@
 //! plays (nothing shows in the bar widget before), so a window that only browses could not be
 //! reached through it. The socket needs no bus, belongs to the user alone (`XDG_RUNTIME_DIR` is
 //! theirs, mode 0700), and a test makes its own in a temporary folder.
-// Red: the tests come first, the code after them.
-#![allow(dead_code, unused_variables, unused_imports)]
 
 use std::collections::VecDeque;
 use std::ffi::OsString;
@@ -57,35 +55,58 @@ impl Kind {
     }
 
     pub fn from_word(word: &str) -> Option<Self> {
-        todo!()
+        [Kind::Film, Kind::Series, Kind::Episode]
+            .into_iter()
+            .find(|kind| kind.word() == word)
     }
 }
 
 /// Whether `id` can stand in an address: something, with no separator nor space in it.
 pub fn valid_id(id: &str) -> bool {
-    todo!()
+    !id.is_empty()
+        && !id.starts_with('-')
+        && !id.contains(|c: char| c == '/' || c.is_whitespace() || c.is_control())
 }
 
 impl Request {
     /// The request as a `bobine:` address, the one line the socket carries.
     pub fn address(&self) -> String {
-        todo!()
+        match self {
+            Request::Open(kind, id) => format!("bobine:open/{}/{}", kind.word(), id.0),
+            Request::Play(id, From::Resume) => format!("bobine:play/{}", id.0),
+            Request::Play(id, From::Beginning) => format!("bobine:play-from-start/{}", id.0),
+        }
     }
 
     pub fn from_address(address: &str) -> Option<Self> {
-        todo!()
+        let (verb, rest) = address.strip_prefix("bobine:")?.split_once('/')?;
+        let request = match verb {
+            "open" => {
+                let (kind, id) = rest.split_once('/')?;
+                Request::Open(Kind::from_word(kind)?, ItemId(id.into()))
+            }
+            "play" => Request::Play(ItemId(rest.into()), From::Resume),
+            "play-from-start" => Request::Play(ItemId(rest.into()), From::Beginning),
+            _ => return None,
+        };
+        let (Request::Open(_, id) | Request::Play(id, _)) = &request;
+        valid_id(&id.0).then_some(request)
     }
 }
 
 /// `$XDG_RUNTIME_DIR/bobine.sock`. A relative `XDG_RUNTIME_DIR` is ignored, as the XDG
 /// specification says; without one, no window can be reached and each command opens its own.
 pub fn socket_path(runtime_dir: Option<OsString>) -> Option<PathBuf> {
-    todo!()
+    let dir = PathBuf::from(runtime_dir?);
+    dir.is_absolute().then(|| dir.join("bobine.sock"))
 }
 
 /// Hands `request` to the window listening at `path`: false when none listens there.
 pub fn hand_off(path: &Path, request: &Request) -> bool {
-    todo!()
+    let Ok(mut stream) = UnixStream::connect(path) else {
+        return false;
+    };
+    writeln!(stream, "{}", request.address()).is_ok()
 }
 
 /// What the commands asked, from the thread that hears them to the window's, which waits for
@@ -127,7 +148,25 @@ impl Inbox {
 /// Listens at `path` for the window. `None` when another window already listens there (this one
 /// opens all the same, out of the commands' reach), or when the socket cannot be made.
 pub fn listen(path: &Path) -> Option<Inbox> {
-    todo!()
+    if UnixStream::connect(path).is_ok() {
+        return None;
+    }
+    // What is left there is the socket of a window that ended.
+    let _ = std::fs::remove_file(path);
+    let listener = UnixListener::bind(path).ok()?;
+    let inbox = Inbox::default();
+    let heard = inbox.clone();
+    std::thread::Builder::new()
+        .name("bobine-instance".into())
+        .spawn(move || {
+            for stream in listener.incoming().flatten() {
+                if let Some(request) = read_request(stream) {
+                    heard.push(request);
+                }
+            }
+        })
+        .ok()?;
+    Some(inbox)
 }
 
 /// The one line a command sends; a client that says nothing is not waited for long.

@@ -5,8 +5,6 @@
 //! The exit code says how it went, beside a message entry the launcher can show: `OK`,
 //! `NOT_SIGNED_IN`, `UNREACHABLE`, `FAILED` (the keyring, the account file, an answer the server
 //! should not have given) and `USAGE`.
-// Red: the tests come first, the code after them.
-#![allow(dead_code, unused_variables, unused_imports)]
 
 use std::sync::Arc;
 
@@ -47,7 +45,40 @@ pub enum Command {
 /// The command `args` name (the program's name left out); `None` when they name none, and the
 /// window opens. An error is a usage error, said in a line.
 pub fn parse(args: &[String]) -> Option<Result<Command, String>> {
-    todo!()
+    let (first, rest) = args.split_first()?;
+    // The flags of the headless harness, and any other, are the window's.
+    if first.starts_with('-') {
+        return None;
+    }
+    let words: Vec<&str> = rest
+        .iter()
+        .map(String::as_str)
+        .filter(|arg| *arg != "--json")
+        .collect();
+    Some(match (first.as_str(), words.as_slice()) {
+        ("home", []) => Ok(Command::Home),
+        ("home", _) => Err("home takes nothing but --json".into()),
+        // The launcher hands the text typed as one argument, empty before anything is typed.
+        ("search", text) => Ok(Command::Search(text.join(" "))),
+        ("open", [address]) => address
+            .split_once(':')
+            .and_then(|(kind, id)| Some((Kind::from_word(kind)?, id)))
+            .filter(|(_, id)| valid_id(id))
+            .map(|(kind, id)| Command::Ask(Request::Open(kind, ItemId(id.into()))))
+            .ok_or_else(|| {
+                format!("open names film:<id>, series:<id> or episode:<id>, not {address}")
+            }),
+        ("play", [id] | [id, "--from-start"] | ["--from-start", id]) if valid_id(id) => {
+            let from = if words.contains(&"--from-start") {
+                From::Beginning
+            } else {
+                From::Resume
+            };
+            Ok(Command::Ask(Request::Play(ItemId((*id).into()), from)))
+        }
+        ("open" | "play", _) => Err(format!("{first}: {HOW}")),
+        (other, _) => Err(format!("no command {other}: {HOW}")),
+    })
 }
 
 /// What a command prints, and how it exits.
@@ -93,7 +124,21 @@ pub fn run(
     command: &Command,
     open: impl FnOnce() -> Result<Arc<dyn Connector>, ProviderError>,
 ) -> Outcome {
-    todo!()
+    let connector = match open() {
+        Ok(connector) => connector,
+        Err(error) => return failure(&error, None),
+    };
+    let server = match connector.restore() {
+        Ok(Some(server)) => server,
+        Ok(None) => return not_signed_in(),
+        Err(error) => return failure(&error, Some(&*connector)),
+    };
+    let listed = match command {
+        Command::Home => home(&*server),
+        Command::Search(text) => search(&*server, text),
+        Command::Ask(_) => Ok(Outcome::ok(Vec::new())),
+    };
+    listed.unwrap_or_else(|error| failure(&error, Some(&*connector)))
 }
 
 fn not_signed_in() -> Outcome {
@@ -154,7 +199,7 @@ fn title_entry(title: &Title) -> Value {
             Kind::Series,
             &series.id,
             &series.title,
-            words(["Series".into()], series_page::years(series)),
+            words(["Series".to_string()], series_page::years(series)),
             false,
         ),
     }
@@ -167,7 +212,7 @@ fn film_entry(film: &Film) -> Value {
         Kind::Film,
         &film.id,
         &film.title,
-        words(["Movie".into()], year.into_iter().chain(left)),
+        words(["Movie".to_string()], year.into_iter().chain(left)),
         film.resume.is_some(),
     )
 }
@@ -189,7 +234,7 @@ fn series_entry(series: &SeriesHit) -> Value {
         Kind::Series,
         &series.id,
         &series.title,
-        words(["Series".into()], year),
+        words(["Series".to_string()], year),
         false,
     )
 }

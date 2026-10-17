@@ -1,9 +1,6 @@
 //! What the launcher's commands ask the window (see `instance`): a page, or a title to play.
-// Red: the tests come first, the code after them.
-#![allow(dead_code, unused_variables, unused_imports)]
 
 use bobine::provider::{ItemId, Title};
-use gpui_kit::prelude::*;
 use gpui_kit::{Context, Window};
 
 use super::Shell;
@@ -56,7 +53,25 @@ impl Shell {
     /// The window is raised, and shows the page or plays the title. Before a session is there
     /// (the kept one being restored, or the login), the request waits for it; while a film
     /// plays, it goes on, and the request is dropped.
-    pub fn asked(&mut self, request: Request, window: &mut Window, cx: &mut Context<Self>) {}
+    pub fn asked(&mut self, request: Request, window: &mut Window, cx: &mut Context<Self>) {
+        // On Wayland the compositor decides: it may only mark the window as asking for attention.
+        window.activate_window();
+        if !self.session_ready() {
+            self.request_waiting = Some(request);
+            return;
+        }
+        if self.playback.is_some() {
+            return;
+        }
+        self.search = None;
+        match request {
+            Request::Open(Kind::Film, id) => self.open_film(id, cx),
+            Request::Open(Kind::Series, id) => self.open_series(id, cx),
+            Request::Open(Kind::Episode, id) => self.open_episode_page(id, cx),
+            Request::Play(id, from) => self.play_asked(id, from, window, cx),
+        }
+        cx.notify();
+    }
 
     /// An episode has no page: its series has, on its season, the episode in view.
     fn open_episode_page(&mut self, id: ItemId, cx: &mut Context<Self>) {
