@@ -487,8 +487,10 @@ mod tests {
         redraw(cx);
     }
 
+    /// The window drawn until what a draw changes (a card's place, the move's picture) has
+    /// reached the next draw.
     fn redraw(cx: &mut VisualTestContext) {
-        for _ in 0..2 {
+        for _ in 0..3 {
             cx.update(|window, _| window.refresh());
             cx.run_until_parked();
         }
