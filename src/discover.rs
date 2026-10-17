@@ -4,8 +4,8 @@
 
 use bobine::provider::{ItemId, TmdbIndex};
 use bobine::requests::{
-    Availability, Discovered, MediaKind, RequestError, RequestStatus, SeasonOffer, ServerCheck,
-    TmdbId,
+    Availability, CollectionOutcome, Discovered, MediaKind, RequestError, RequestStatus,
+    SeasonOffer, ServerCheck, TmdbId,
 };
 
 /// The library page of a title of the request server, when the library holds it.
@@ -103,6 +103,112 @@ impl SeasonPicker {
             many => format!("Request {} seasons", many.len()),
         }
     }
+}
+
+/// The movies a collection request may ask for, those checked, and the button that sends them.
+/// Every one is checked at first.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FilmPicker {
+    offered: Vec<TmdbId>,
+    checked: Vec<TmdbId>,
+}
+
+impl FilmPicker {
+    pub fn new(offered: Vec<TmdbId>) -> Self {
+        Self {
+            checked: offered.clone(),
+            offered,
+        }
+    }
+
+    /// Whether any movie is left to ask for.
+    pub fn offers_any(&self) -> bool {
+        !self.offered.is_empty()
+    }
+
+    pub fn is_offered(&self, film: TmdbId) -> bool {
+        self.offered.contains(&film)
+    }
+
+    pub fn is_checked(&self, film: TmdbId) -> bool {
+        self.checked.contains(&film)
+    }
+
+    pub fn toggle(&mut self, film: TmdbId) {
+        if !self.is_offered(film) {
+            return;
+        }
+        if self.is_checked(film) {
+            self.checked.retain(|checked| *checked != film);
+        } else {
+            self.checked.push(film);
+        }
+    }
+
+    /// The films checked, in the collection's order.
+    pub fn chosen(&self) -> Vec<TmdbId> {
+        (self.offered.iter())
+            .filter(|film| self.is_checked(**film))
+            .copied()
+            .collect()
+    }
+
+    pub fn button(&self) -> String {
+        match self.checked.len() {
+            0 => "Choose a movie".into(),
+            all if all == self.offered.len() => "Request collection".into(),
+            1 => "Request 1 movie".into(),
+            many => format!("Request {many} movies"),
+        }
+    }
+
+    /// Those just asked for are offered no more.
+    pub fn asked(&mut self, films: &[TmdbId]) {
+        self.offered.retain(|film| !films.contains(film));
+        self.checked.retain(|film| !films.contains(film));
+    }
+}
+
+/// Why the films of a collection request were not asked for, in the brackets of its line.
+fn not_requested_because(error: &RequestError) -> &'static str {
+    match error {
+        RequestError::Quota => "quota reached",
+        RequestError::AlreadyRequested => "requested already",
+        RequestError::Forbidden => "refused for your account",
+        RequestError::KeyRefused => "API key refused",
+        RequestError::NotFound => "unknown to Seerr",
+        RequestError::Unreachable(_) => "Seerr cannot be reached",
+        RequestError::Redirected => "Seerr answered with a redirect",
+        RequestError::InvalidAddress
+        | RequestError::NotARequestServer
+        | RequestError::Server(_)
+        | RequestError::BadAnswer(_) => "unexpected answer",
+    }
+}
+
+/// How a collection request went, movie by movie, by their titles: "Requested: A, B. Not
+/// requested (quota reached): C."
+pub fn collection_line(outcome: &CollectionOutcome, films: &[Discovered]) -> String {
+    let named = |ids: &[TmdbId]| -> String {
+        let titles: Vec<&str> = ids
+            .iter()
+            .filter_map(|id| films.iter().find(|film| film.tmdb == *id))
+            .map(|film| film.title.as_str())
+            .collect();
+        titles.join(", ")
+    };
+    let mut parts = Vec::new();
+    if !outcome.requested.is_empty() {
+        parts.push(format!("Requested: {}.", named(&outcome.requested)));
+    }
+    if !outcome.not_requested.is_empty() {
+        let missed = named(&outcome.not_requested);
+        parts.push(match &outcome.failure {
+            Some(why) => format!("Not requested ({}): {missed}.", not_requested_because(why)),
+            None => format!("Not requested: {missed}."),
+        });
+    }
+    parts.join(" ")
 }
 
 /// A failure of the request server, in a line of the page.
@@ -241,6 +347,82 @@ mod tests {
         picker.toggle(2);
         picker.toggle(3);
         assert_eq!(picker.chosen(), [2, 3]);
+    }
+
+    #[test]
+    fn a_collection_request_checks_every_movie_it_may_ask_for() {
+        let mut picker = FilmPicker::new(vec![3, 4]);
+        assert_eq!(picker.chosen(), [3, 4]);
+        assert_eq!(picker.button(), "Request collection");
+        picker.toggle(4);
+        assert_eq!(picker.chosen(), [3]);
+        assert_eq!(picker.button(), "Request 1 movie");
+        // A movie in the library or requested is not offered: it cannot be checked.
+        picker.toggle(1);
+        assert_eq!(picker.chosen(), [3]);
+        assert!(!picker.is_offered(1));
+        picker.toggle(3);
+        assert_eq!(picker.button(), "Choose a movie");
+        picker.toggle(4);
+        picker.toggle(3);
+        assert_eq!(picker.chosen(), [3, 4], "in the collection's order");
+        let three = FilmPicker::new(vec![3, 4, 5]);
+        let mut two = three.clone();
+        two.toggle(5);
+        assert_eq!(two.button(), "Request 2 movies");
+        // Once asked for, a movie is offered no more; one left unchecked stays so.
+        two.asked(&[3]);
+        assert_eq!(two.chosen(), [4]);
+        assert!(!two.is_offered(3));
+        assert!(two.is_offered(5) && !two.is_checked(5));
+    }
+
+    fn winter_saga() -> Vec<Discovered> {
+        vec![
+            titled(3, "Winter Light", Availability::Missing),
+            titled(4, "Winter's End", Availability::Missing),
+            titled(5, "Spring", Availability::Missing),
+        ]
+    }
+
+    #[test]
+    fn a_collection_request_names_the_movies_requested_and_those_not_with_why() {
+        let quota = CollectionOutcome {
+            requested: vec![3],
+            not_requested: vec![4, 5],
+            failure: Some(RequestError::Quota),
+        };
+        assert_eq!(
+            collection_line(&quota, &winter_saga()),
+            "Requested: Winter Light. Not requested (quota reached): Winter's End, Spring."
+        );
+        let all = CollectionOutcome {
+            requested: vec![3, 4],
+            not_requested: Vec::new(),
+            failure: None,
+        };
+        assert_eq!(
+            collection_line(&all, &winter_saga()),
+            "Requested: Winter Light, Winter's End."
+        );
+        let down = CollectionOutcome {
+            requested: Vec::new(),
+            not_requested: vec![3, 4],
+            failure: Some(RequestError::Unreachable("down".into())),
+        };
+        assert_eq!(
+            collection_line(&down, &winter_saga()),
+            "Not requested (Seerr cannot be reached): Winter Light, Winter's End."
+        );
+        let refused = CollectionOutcome {
+            requested: vec![3],
+            not_requested: vec![4],
+            failure: Some(RequestError::Forbidden),
+        };
+        assert_eq!(
+            collection_line(&refused, &winter_saga()),
+            "Requested: Winter Light. Not requested (refused for your account): Winter's End."
+        );
     }
 
     #[test]

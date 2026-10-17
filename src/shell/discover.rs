@@ -68,6 +68,11 @@ pub struct Seerr {
     pub discover: DiscoverPage,
     /// The request pages open, the last one shown.
     pub requests: Vec<super::RequestPage>,
+    /// The collection pages open, the last one shown.
+    pub collections: Vec<super::SeerrCollectionPage>,
+    /// The TMDb collection of each library movie asked about: `None` while it is read, and for
+    /// a movie in none.
+    pub links: HashMap<TmdbId, Option<bobine::requests::CollectionRef>>,
     /// What the server recommends after a title of the library, read once per title.
     similar: HashMap<(MediaKind, TmdbId), Vec<Discovered>>,
 }
@@ -213,11 +218,11 @@ impl Shell {
         if self.navigator.current() == Screen::Discover {
             self.load_discover(cx);
         }
-        let films: Vec<Option<TmdbId>> = self
+        let films: Vec<(Option<TmdbId>, Option<TmdbId>)> = self
             .details
             .iter()
             .filter_map(|page| match &page.detail {
-                Loadable::Ready(detail) => Some(detail.tmdb),
+                Loadable::Ready(detail) => Some((detail.tmdb, detail.tmdb_collection)),
                 _ => None,
             })
             .collect();
@@ -229,8 +234,9 @@ impl Shell {
                 _ => None,
             })
             .collect();
-        for tmdb in films {
+        for (tmdb, collection) in films {
             self.load_similar(MediaKind::Movie, tmdb, cx);
+            self.load_collection_link(tmdb, collection, cx);
         }
         for tmdb in series {
             self.load_similar(MediaKind::Tv, tmdb, cx);
@@ -244,9 +250,15 @@ impl Shell {
         self.seerr.indexing = false;
         self.seerr.discover = DiscoverPage::default();
         self.seerr.requests.clear();
+        self.seerr.collections.clear();
         self.seerr.similar.clear();
-        self.navigator
-            .forget(|screen| matches!(screen, Screen::Discover | Screen::Request));
+        self.seerr.links.clear();
+        self.navigator.forget(|screen| {
+            matches!(
+                screen,
+                Screen::Discover | Screen::Request | Screen::SeerrCollection
+            )
+        });
         cx.notify();
     }
 

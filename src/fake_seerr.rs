@@ -34,6 +34,8 @@ pub const HARBOUR_WATCH: TmdbId = 7003;
 pub struct Record {
     pub requests: Vec<Ask>,
     pub searches: Vec<String>,
+    /// The titles read, by TMDb id.
+    pub titles: Vec<TmdbId>,
     pub checks: u32,
     pub my_requests: u32,
 }
@@ -224,7 +226,8 @@ impl RequestServer for FakeSeerr {
     fn title(&self, kind: MediaKind, id: TmdbId) -> Result<TitleDetail, RequestError> {
         self.reach()?;
         {
-            let state = self.state();
+            let mut state = self.state();
+            state.record.titles.push(id);
             if state.titles_fail_after_a_request && !state.requested.is_empty() {
                 return Err(RequestError::Server(500));
             }
