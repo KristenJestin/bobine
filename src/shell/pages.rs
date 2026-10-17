@@ -1564,7 +1564,8 @@ impl Shell {
         };
         self.tried(&origin, None, cx);
         let desktop = playing.desktop.clone();
-        // A test plays on a fake player, through the rest of this path: what the end offers.
+        // A test plays on a fake player, through the rest of this path: what the end offers, and
+        // what the server is told, which the fake server records.
         #[cfg(test)]
         if let Some(player) = self.fake_player.take() {
             let display = Box::new(crate::video::fake::FakeDisplay::default());
@@ -1574,7 +1575,22 @@ impl Shell {
                 playing.title,
                 playing.subtitle,
             );
-            self.begin_playback(session, None, window, cx);
+            let reporting = self.server.clone().map(|server| {
+                Reporting::start(
+                    server,
+                    PlaybackReport {
+                        session: opened.session.clone(),
+                        film: opened.film.clone(),
+                        source: opened.source.clone(),
+                        position: plan.start,
+                        paused: false,
+                        audio_track: plan.audio_index,
+                        subtitle_track: plan.subtitle_index,
+                        method: PlayMethod::DirectPlay,
+                    },
+                )
+            });
+            self.begin_playback(session, reporting, window, cx);
             if let Some(playback) = &mut self.playback {
                 playback.playing = Some(opened.film.clone());
             }
