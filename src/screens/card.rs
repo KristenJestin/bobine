@@ -195,9 +195,10 @@ impl Cards {
     }
 
     /// The picture of the card `id`, as the last draw left it: where the way into the player
-    /// grows from, and where the way out goes back to.
+    /// grows from, and where the way out goes back to. The shell asks it while it draws as well,
+    /// before the cards have been given again: the draw before still stands then.
     pub fn picture(&self, id: &ElementId) -> Option<Picture> {
-        let kept = self.views.get(id).filter(|kept| kept.drawn == self.frame)?;
+        let kept = (self.views.get(id)).filter(|kept| kept.drawn + 1 >= self.frame)?;
         Some(Picture {
             at: id.clone(),
             item: kept.offer.open.item()?.clone(),
