@@ -3631,3 +3631,99 @@ fn a_plugin_that_fails_otherwise_is_an_error_left_to_the_caller() {
         Err(ProviderError::Server(500))
     );
 }
+
+/// A series of the library that shares its name with `SERIES`, and one of its episodes.
+const OTHER_TIDEWATER: &str = "50000000000000000000000000000003";
+const OTHER_TIDEWATER_EPISODE: &str = "e0000000000000000000000000000031";
+
+#[test]
+fn an_episode_counts_for_its_own_series_when_two_share_a_name() {
+    let s = Setup::new();
+    {
+        let mut state = s.fake.state.lock().unwrap();
+        state.episodes = vec![(OTHER_TIDEWATER_EPISODE, OTHER_TIDEWATER)];
+        state.reporting = Some(vec![
+            [
+                "2026-10-14 22:00:00",
+                USER_ID,
+                EPISODE,
+                "Episode",
+                "Tidewater - s01e02 - The Tide Turns",
+                "2700",
+            ],
+            [
+                "2026-10-15 22:00:00",
+                USER_ID,
+                OTHER_TIDEWATER_EPISODE,
+                "Episode",
+                "Tidewater - s01e01 - Pilot",
+                "2400",
+            ],
+            [
+                "2026-10-16 22:00:00",
+                USER_ID,
+                EPISODE,
+                "Episode",
+                "Tidewater - s01e02 - The Tide Turns",
+                "2700",
+            ],
+        ]);
+    }
+    let history = s.signed_in().watch_history().unwrap();
+    let series: Vec<_> = history
+        .plays
+        .iter()
+        .map(|play| play.title.id.clone())
+        .collect();
+    assert_eq!(
+        series,
+        [
+            Some(ItemId(SERIES.into())),
+            Some(ItemId(OTHER_TIDEWATER.into())),
+            Some(ItemId(SERIES.into()))
+        ]
+    );
+    let asked = s
+        .fake
+        .seen()
+        .into_iter()
+        .find(|seen| seen.path == "/Items" && seen.param("Ids").is_some())
+        .expect("the episodes asked by id");
+    assert_eq!(
+        asked.param("Ids"),
+        Some(format!("{EPISODE},{OTHER_TIDEWATER_EPISODE}").as_str()),
+        "each episode once"
+    );
+    assert_eq!(asked.param("Fields"), Some("SeriesId"));
+    assert_eq!(asked.param("userId"), Some(USER_ID));
+}
+
+#[test]
+fn an_episode_of_season_0_names_its_series() {
+    assert_eq!(
+        super::series_of_episode("Tidewater - s00e01 - A Special"),
+        "Tidewater"
+    );
+}
+
+#[test]
+fn an_episode_title_holding_the_pattern_keeps_its_series_name() {
+    assert_eq!(
+        super::series_of_episode("Tidewater - s02e01 - Previously - s01e09 - Recap"),
+        "Tidewater"
+    );
+}
+
+#[test]
+fn a_series_name_holding_a_dash_and_an_s_is_kept_whole() {
+    assert_eq!(
+        super::series_of_episode("Love - sick - s01e02 - Pilot"),
+        "Love - sick"
+    );
+    // The whole pattern in a series' name cannot be told from one in the title: the first one
+    // is taken, and an episode still in the library is never named this way.
+    assert_eq!(
+        super::series_of_episode("Retro - s01e01 - Redux - s02e03 - Pilot"),
+        "Retro"
+    );
+}

@@ -25,6 +25,7 @@ use dto::{
 };
 use http::{Device, Http, encode, normalize_address};
 use serde_json::json;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -1239,7 +1240,11 @@ impl MediaServer for Jellyfin {
         let rows = self.reporting_rows()?;
         if !rows.is_empty() {
             let titles = self.watched_titles()?;
-            let plays = rows.into_iter().map(|row| row.play(&titles)).collect();
+            let series = self.series_of_episodes(&rows)?;
+            let plays = rows
+                .into_iter()
+                .map(|row| row.play(&titles, &series))
+                .collect();
             return Ok(WatchHistory {
                 source: HistorySource::PlaybackReporting,
                 plays,
@@ -1319,6 +1324,34 @@ impl Jellyfin {
             .collect())
     }
 
+    /// The series of each episode played that the library still holds, by the episode's id: two
+    /// series may share a name, and a series may be renamed since.
+    fn series_of_episodes(
+        &self,
+        rows: &[ReportingRow],
+    ) -> Result<HashMap<String, String>, ProviderError> {
+        let mut asked = HashSet::new();
+        let episodes: Vec<&str> = rows
+            .iter()
+            .filter(|row| row.episode && !row.item.is_empty())
+            .map(|row| row.item.as_str())
+            .filter(|id| asked.insert(*id))
+            .collect();
+        let mut series = HashMap::new();
+        for chunk in episodes.chunks(EPISODES_ASKED) {
+            let found = self.items(
+                "the episodes played",
+                &[("Ids", chunk.join(",")), ("Fields", "SeriesId".into())],
+            )?;
+            for item in found.items {
+                if let Some(of) = item.series_id {
+                    series.insert(item.id, of);
+                }
+            }
+        }
+        Ok(series)
+    }
+
     /// The library's movies and series, with their genres and posters, to name what was played.
     fn watched_titles(&self) -> Result<Titles, ProviderError> {
         let found = self.items(
@@ -1358,13 +1391,16 @@ impl Jellyfin {
     }
 }
 
-/// The library's titles by id, and its series by name too: the plugin names an episode's series
-/// only in the episode's name.
+/// The library's titles by id, and its series by name too: the plugin names the series of an
+/// episode the library no longer holds only in the episode's name.
 #[derive(Default)]
 struct Titles {
-    by_id: std::collections::HashMap<String, Watched>,
-    series_by_name: std::collections::HashMap<String, Watched>,
+    by_id: HashMap<String, Watched>,
+    series_by_name: HashMap<String, Watched>,
 }
+
+/// How many episodes one request asks by id: their ids go in its address.
+const EPISODES_ASKED: usize = 100;
 
 /// The columns read from the plugin's table, in this order.
 const REPORTING_COLUMNS: [&str; 6] = [
@@ -1386,14 +1422,21 @@ struct ReportingRow {
 }
 
 impl ReportingRow {
-    fn play(self, titles: &Titles) -> Play {
+    /// `series`: the series of each episode the library holds, by the episode's id.
+    fn play(self, titles: &Titles, series: &HashMap<String, String>) -> Play {
         let title = if self.episode {
-            let series = series_of_episode(&self.name);
-            titles
-                .series_by_name
-                .get(series)
+            series
+                .get(&self.item)
+                .and_then(|series| titles.by_id.get(series))
                 .cloned()
-                .unwrap_or_else(|| gone(series, WatchedKind::Series))
+                .unwrap_or_else(|| {
+                    let series = series_of_episode(&self.name);
+                    titles
+                        .series_by_name
+                        .get(series)
+                        .cloned()
+                        .unwrap_or_else(|| gone(series, WatchedKind::Series))
+                })
         } else {
             titles
                 .by_id
@@ -1421,10 +1464,13 @@ fn gone(name: &str, kind: WatchedKind) -> Watched {
     }
 }
 
-/// The series of an episode the plugin names `Series - s01e02 - Episode`.
+/// The series of an episode the plugin names `Series - s01e02 - Episode`, for an episode the
+/// library no longer holds. The pattern may be in the series' name or the episode's: the first
+/// one is taken.
 fn series_of_episode(name: &str) -> &str {
-    let mut end = name.len();
-    while let Some(at) = name[..end].rfind(" - s") {
+    let mut from = 0;
+    while let Some(found) = name[from..].find(" - s") {
+        let at = from + found;
         let rest = &name[at + 4..];
         let season = rest.bytes().take_while(u8::is_ascii_digit).count();
         let episode = rest[season..]
@@ -1437,7 +1483,7 @@ fn series_of_episode(name: &str) -> &str {
         {
             return &name[..at];
         }
-        end = at;
+        from = at + 4;
     }
     name
 }

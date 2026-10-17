@@ -156,6 +156,8 @@ pub struct State {
     pub reporting: Option<Vec<[&'static str; 6]>>,
     /// The user has played nothing.
     pub nothing_played: bool,
+    /// Episodes the library holds beside `EPISODE`, with their series: (episode, series).
+    pub episodes: Vec<(&'static str, &'static str)>,
 }
 
 /// How many episodes the series of the pages puts in a playlist.
@@ -528,6 +530,24 @@ fn answer(state: &State, seen: &Seen) -> Answer {
             Answer::Json(
                 200,
                 json!({ "colums": columns, "results": rows, "message": message }),
+            )
+        }
+        ("GET", "/Items") if seen.param("Ids").is_some() => {
+            let held: Vec<_> = std::iter::once((EPISODE, SERIES))
+                .chain(state.episodes.iter().copied())
+                .collect();
+            let items: Vec<Value> = seen
+                .param("Ids")
+                .unwrap()
+                .split(',')
+                .filter_map(|id| held.iter().find(|(episode, _)| *episode == id))
+                .map(|(episode, series)| {
+                    json!({ "Id": episode, "Name": "An episode", "Type": "Episode", "SeriesId": series })
+                })
+                .collect();
+            Answer::Json(
+                200,
+                json!({ "Items": items, "TotalRecordCount": items.len() }),
             )
         }
         ("GET", "/Items") if seen.param("IsPlayed") == Some("true") => {
