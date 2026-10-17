@@ -703,6 +703,26 @@ mod tests {
     }
 
     #[gpui_kit::test]
+    fn n_carries_the_volume_and_the_mute_to_the_next_episode(cx: &mut TestAppContext) {
+        let window = signed_in(cx);
+        let next = FakePlayer::default();
+        let calls = next.calls.clone();
+        playing_an_episode(&window, 0, FakePlayer::default(), next, cx);
+        let mut visual = drawn(&window, cx);
+        visual.simulate_keystrokes("down m n");
+        visual.run_until_parked();
+        // The episode that follows runs on a new mpv, loud and unmuted: it is told what the one
+        // before was left at.
+        let asked = calls.borrow().clone();
+        assert!(asked.contains(&Call::Volume(95.)), "{asked:?}");
+        assert!(asked.contains(&Call::Muted(true)), "{asked:?}");
+        // And the mute keeps working on it: M unmutes.
+        let mut visual = drawn(&window, cx);
+        visual.simulate_keystrokes("m");
+        assert_eq!(calls.borrow().last(), Some(&Call::Muted(false)));
+    }
+
+    #[gpui_kit::test]
     fn arrow_focus_moves_through_a_row_and_a_grid_and_enter_opens(cx: &mut TestAppContext) {
         let window = signed_in(cx);
         let mut visual = drawn(&window, cx);
