@@ -160,6 +160,8 @@ pub struct State {
     pub reporting_offsets: Option<Vec<&'static str>>,
     /// The user has played nothing.
     pub nothing_played: bool,
+    /// A request for episodes by id that names this one answers 500.
+    pub broken_episode: Option<&'static str>,
     /// Episodes the library holds beside `EPISODE`, with their series: (episode, series).
     pub episodes: Vec<(&'static str, &'static str)>,
 }
@@ -501,6 +503,13 @@ fn answer(state: &State, seen: &Seen) -> Answer {
     if seen.path == "/Items"
         && state.broken_parent.is_some()
         && seen.param("ParentId") == state.broken_parent.as_deref()
+    {
+        return Answer::Empty(500);
+    }
+    if seen.path == "/Items"
+        && state
+            .broken_episode
+            .is_some_and(|id| seen.param("Ids").is_some_and(|ids| ids.contains(id)))
     {
         return Answer::Empty(500);
     }

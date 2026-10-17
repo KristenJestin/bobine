@@ -1240,7 +1240,7 @@ impl MediaServer for Jellyfin {
         let rows = self.reporting_rows()?;
         if !rows.is_empty() {
             let titles = self.watched_titles()?;
-            let series = self.series_of_episodes(&rows)?;
+            let series = self.series_of_episodes(&rows);
             let plays = rows
                 .into_iter()
                 .map(|row| row.play(&titles, &series))
@@ -1340,10 +1340,7 @@ impl Jellyfin {
 
     /// The series of each episode played that the library still holds, by the episode's id: two
     /// series may share a name, and a series may be renamed since.
-    fn series_of_episodes(
-        &self,
-        rows: &[ReportingRow],
-    ) -> Result<HashMap<String, String>, ProviderError> {
+    fn series_of_episodes(&self, rows: &[ReportingRow]) -> HashMap<String, String> {
         let mut asked = HashSet::new();
         let episodes: Vec<&str> = rows
             .iter()
@@ -1353,17 +1350,21 @@ impl Jellyfin {
             .collect();
         let mut series = HashMap::new();
         for chunk in episodes.chunks(EPISODES_ASKED) {
-            let found = self.items(
+            // A chunk that fails is unknown, not fatal: its episodes are read by name, and the
+            // plugin's plays are worth more than a series matched by id.
+            let Ok(found) = self.items(
                 "the episodes played",
                 &[("Ids", chunk.join(",")), ("Fields", "SeriesId".into())],
-            )?;
+            ) else {
+                continue;
+            };
             for item in found.items {
                 if let Some(of) = item.series_id {
                     series.insert(item.id, of);
                 }
             }
         }
-        Ok(series)
+        series
     }
 
     /// The library's movies and series, with their genres and posters, to name what was played.

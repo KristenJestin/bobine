@@ -3698,6 +3698,80 @@ fn an_episode_counts_for_its_own_series_when_two_share_a_name() {
     assert_eq!(asked.param("userId"), Some(USER_ID));
 }
 
+/// 101 plays of episodes: `EPISODE` first, then 99 the library no longer holds, and
+/// `OTHER_TIDEWATER_EPISODE` last. Chunks of 100 put the last one alone in the second request.
+fn a_history_of_101_episodes(s: &Setup) {
+    let mut state = s.fake.state.lock().unwrap();
+    state.episodes = vec![(OTHER_TIDEWATER_EPISODE, OTHER_TIDEWATER)];
+    // The name says Glass Orchard, the id says Tidewater: which one is used shows how it was read.
+    let mut rows = vec![[
+        "2026-10-14 22:00:00",
+        USER_ID,
+        EPISODE,
+        "Episode",
+        "Glass Orchard - s01e02 - The Tide Turns",
+        "2700",
+    ]];
+    for gone in 0..99 {
+        let id: &'static str = Box::leak(format!("e1{gone:030x}").into_boxed_str());
+        rows.push([
+            "2026-10-14 23:00:00",
+            USER_ID,
+            id,
+            "Episode",
+            "Gone Show - s01e01 - Pilot",
+            "600",
+        ]);
+    }
+    rows.push([
+        "2026-10-15 22:00:00",
+        USER_ID,
+        OTHER_TIDEWATER_EPISODE,
+        "Episode",
+        "Tidewater - s01e01 - Pilot",
+        "2400",
+    ]);
+    state.reporting = Some(rows);
+}
+
+#[test]
+fn the_episodes_are_asked_by_id_in_chunks_of_100() {
+    let s = Setup::new();
+    a_history_of_101_episodes(&s);
+    s.signed_in().watch_history().unwrap();
+    let asked: Vec<usize> = s
+        .fake
+        .seen()
+        .into_iter()
+        .filter(|seen| seen.path == "/Items")
+        .filter_map(|seen| seen.param("Ids").map(|ids| ids.split(',').count()))
+        .collect();
+    assert_eq!(asked, [100, 1]);
+}
+
+#[test]
+fn a_chunk_of_episodes_that_fails_leaves_those_to_the_name_and_the_history_comes_back() {
+    let s = Setup::new();
+    a_history_of_101_episodes(&s);
+    s.fake.state.lock().unwrap().broken_episode = Some(EPISODE);
+    let history = s
+        .signed_in()
+        .watch_history()
+        .expect("one failed chunk does not fail the history");
+    assert_eq!(history.plays.len(), 101);
+    // The first chunk failed: its episode is read by its name.
+    assert_eq!(history.plays[0].title.name, "Glass Orchard");
+    assert_eq!(
+        history.plays[0].title.id,
+        Some(ItemId("50000000000000000000000000000002".into()))
+    );
+    // The second answered: its episode is read by its id, whatever the name says.
+    assert_eq!(
+        history.plays[100].title.id,
+        Some(ItemId(OTHER_TIDEWATER.into()))
+    );
+}
+
 #[test]
 fn an_episode_of_season_0_names_its_series() {
     assert_eq!(
