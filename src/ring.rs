@@ -103,7 +103,12 @@ pub fn next<K: Clone>(from: Place, cards: &[(K, Place)], direction: Direction) -
     let pick = |candidates: Vec<&(K, Place)>, distance: &dyn Fn(&Place) -> f32| {
         candidates
             .into_iter()
-            .min_by(|a, b| distance(&a.1).total_cmp(&distance(&b.1)))
+            // The cards come in no set order: as near, the leftmost, then the highest.
+            .min_by(|a, b| {
+                (distance(&a.1).total_cmp(&distance(&b.1)))
+                    .then(a.1.left.total_cmp(&b.1.left))
+                    .then(a.1.top.total_cmp(&b.1.top))
+            })
             .map(|(key, _)| key.clone())
     };
     match direction {
@@ -212,6 +217,16 @@ mod tests {
             ("b2", at(222., 300.)),
             ("b3", at(338., 300.)),
         ]
+    }
+
+    #[test]
+    fn two_cards_as_near_go_to_the_left_one_whatever_their_order() {
+        // From the middle of a card, two below it half a card to either side.
+        let from = at(100., 100.);
+        let mut cards = vec![("right", at(150., 300.)), ("left", at(50., 300.))];
+        assert_eq!(next(from, &cards, Direction::Down), Some("left"));
+        cards.reverse();
+        assert_eq!(next(from, &cards, Direction::Down), Some("left"));
     }
 
     #[test]
