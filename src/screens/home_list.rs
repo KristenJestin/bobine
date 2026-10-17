@@ -58,6 +58,7 @@ pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -
         return empty_page(page, kind.empty_reason(), row);
     }
 
+    shell.scrolls_list(&scroll);
     let rows_list = uniform_list(
         "home-list",
         rows,

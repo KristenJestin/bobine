@@ -6,13 +6,16 @@ use std::time::{Duration, Instant};
 
 use bobine::provider::Segment;
 
-use super::controls::{Controls, KeyAction, key_action, on_picture, subtitle_position};
+use super::controls::{Controls, KeyAction, on_picture, subtitle_position};
 use super::segments::{Button, Label, Press, Prompt, button_at};
-use super::settings::{self, Page, Quality};
+use super::settings::{self, Page, Quality, SPEEDS};
 use super::{
     Aspect, Media, PlaybackInfo, Player, PlayerError, PlayerEvent, Seek, Track, TrackKind, tracks,
 };
 use crate::video::{Rect, VideoDisplay, placement};
+
+/// What a press of the volume keys changes, in points of 100.
+pub const VOLUME_STEP: f64 = 5.;
 
 /// How often "Playback info" is read from the player.
 const INFO_EVERY: Duration = Duration::from_secs(1);
@@ -27,6 +30,8 @@ pub enum WindowRequest {
     EndPlayback,
     /// Likewise, and the next episode plays at once.
     NextEpisode,
+    /// What comes next plays at once, this one left where it is.
+    PlayNext,
     /// The viewer chose another quality: the server is asked for it.
     Quality(Quality),
 }
@@ -52,6 +57,9 @@ pub struct Session {
     settings_open: bool,
     settings_page: Page,
     speed: f64,
+    /// 0 to 100. Each film has an mpv of its own: the window carries it from one to the next.
+    volume: f64,
+    muted: bool,
     /// In tenths of a second.
     subtitle_delay: i32,
     aspect: Aspect,
@@ -118,6 +126,8 @@ impl Session {
             settings_open: false,
             settings_page: Page::Main,
             speed: 1.,
+            volume: 100.,
+            muted: false,
             subtitle_delay: 0,
             aspect: Aspect::Auto,
             quality: Quality::Original,
@@ -238,29 +248,64 @@ impl Session {
     }
 
     /// A key pressed in the player; what the window must do, if anything.
-    pub fn key(
-        &mut self,
-        key: &str,
-        with_modifier: bool,
-        fullscreen: bool,
-    ) -> Option<WindowRequest> {
-        let action = key_action(key, with_modifier, fullscreen)?;
+    pub fn key(&mut self, action: KeyAction, fullscreen: bool) -> Option<WindowRequest> {
         // Escape closes the panel or the menu before it leaves fullscreen or the player.
-        if (self.panel_open || self.settings_open)
-            && matches!(action, KeyAction::ExitFullscreen | KeyAction::Leave)
-        {
+        if action == KeyAction::Escape && (self.panel_open || self.settings_open) {
             self.clicked_outside_panel();
             return None;
         }
         match action {
             KeyAction::TogglePause => self.toggle_pause(),
             KeyAction::SeekBy(seconds) => self.skip(seconds),
+            KeyAction::Volume(points) => {
+                self.volume = (self.volume + points).clamp(0., 100.);
+                self.player.set_volume(self.volume);
+            }
+            KeyAction::ToggleMute => {
+                self.muted = !self.muted;
+                self.player.set_muted(self.muted);
+            }
             KeyAction::ToggleFullscreen => return Some(WindowRequest::ToggleFullscreen),
-            KeyAction::ExitFullscreen => return Some(WindowRequest::ExitFullscreen),
-            KeyAction::Leave => return Some(WindowRequest::Leave),
+            KeyAction::CycleSubtitles => {
+                if let Some(id) = following(&self.subtitle_choices()) {
+                    self.select_subtitle(id);
+                }
+            }
+            KeyAction::CycleAudio => {
+                if let Some(Some(id)) = following(&self.audio_choices()) {
+                    self.select_audio(id);
+                }
+            }
+            KeyAction::Next => return Some(WindowRequest::PlayNext),
             KeyAction::PressSkip => return self.press_skip(),
+            KeyAction::ShiftSubtitles(tenths) => self.shift_subtitles(tenths),
+            KeyAction::Speed(steps) => {
+                let at = SPEEDS
+                    .iter()
+                    .position(|speed| *speed >= self.speed)
+                    .unwrap_or(SPEEDS.len() - 1);
+                let to = at
+                    .saturating_add_signed(steps as isize)
+                    .min(SPEEDS.len() - 1);
+                self.set_speed(SPEEDS[to]);
+            }
+            KeyAction::Escape if fullscreen => return Some(WindowRequest::ExitFullscreen),
+            KeyAction::Escape => return Some(WindowRequest::Leave),
         }
         None
+    }
+
+    /// The volume and the mute the film before was left at: each film has an mpv of its own,
+    /// which starts loud and unmuted.
+    pub fn carry_volume(&mut self, volume: f64, muted: bool) {
+        self.volume = volume;
+        self.muted = muted;
+        self.player.set_volume(volume);
+        self.player.set_muted(muted);
+    }
+
+    pub fn volume(&self) -> (f64, bool) {
+        (self.volume, self.muted)
     }
 
     pub fn toggle_pause(&mut self) {
@@ -477,10 +522,19 @@ impl Session {
 
     pub fn select_audio(&mut self, id: i64) {
         self.player.select_audio(Some(id));
+        self.mark_selected(TrackKind::Audio, Some(id));
     }
 
     pub fn select_subtitle(&mut self, id: Option<i64>) {
         self.player.select_subtitle(id);
+        self.mark_selected(TrackKind::Subtitle, id);
+    }
+
+    /// Shown at once, so that a key pressed again goes on from it; mpv's own word follows.
+    fn mark_selected(&mut self, kind: TrackKind, id: Option<i64>) {
+        for track in self.tracks.iter_mut().filter(|track| track.kind == kind) {
+            track.selected = Some(track.id) == id;
+        }
     }
 
     pub fn position_known(&self) -> bool {
@@ -572,6 +626,13 @@ impl Session {
             self.player.set_subtitle_position(position);
         }
     }
+}
+
+/// The choice after the current one, back to the first after the last.
+fn following(choices: &[Choice]) -> Option<Option<i64>> {
+    let current = choices.iter().position(|choice| choice.current);
+    let next = current.map_or(0, |at| (at + 1) % choices.len());
+    choices.get(next).map(|choice| choice.id)
 }
 
 #[cfg(test)]
@@ -674,9 +735,9 @@ mod tests {
     #[test]
     fn space_pauses_a_playing_film_and_plays_it_again() {
         let mut f = fixture();
-        assert_eq!(f.session.key("space", false, false), None);
+        assert_eq!(f.session.key(KeyAction::TogglePause, false), None);
         assert!(f.session.paused);
-        f.session.key("space", false, false);
+        f.session.key(KeyAction::TogglePause, false);
         assert!(!f.session.paused);
         assert_eq!(f.calls(), [Call::Paused(true), Call::Paused(false)]);
     }
@@ -684,8 +745,8 @@ mod tests {
     #[test]
     fn the_arrows_skip_ten_seconds() {
         let mut f = fixture();
-        f.session.key("left", false, false);
-        f.session.key("right", false, false);
+        f.session.key(KeyAction::SeekBy(-10.), false);
+        f.session.key(KeyAction::SeekBy(10.), false);
         assert_eq!(
             f.calls(),
             [Call::Seek(Seek::By(-10.)), Call::Seek(Seek::By(10.))]
@@ -696,7 +757,7 @@ mod tests {
     fn f_asks_the_window_for_fullscreen() {
         let mut f = fixture();
         assert_eq!(
-            f.session.key("f", false, false),
+            f.session.key(KeyAction::ToggleFullscreen, false),
             Some(WindowRequest::ToggleFullscreen)
         );
     }
@@ -705,12 +766,127 @@ mod tests {
     fn escape_leaves_fullscreen_then_the_player() {
         let mut f = fixture();
         assert_eq!(
-            f.session.key("escape", false, true),
+            f.session.key(KeyAction::Escape, true),
             Some(WindowRequest::ExitFullscreen)
         );
         assert_eq!(
-            f.session.key("escape", false, false),
+            f.session.key(KeyAction::Escape, false),
             Some(WindowRequest::Leave)
+        );
+    }
+
+    #[test]
+    fn the_volume_keys_step_by_five_between_silence_and_full() {
+        let mut f = fixture();
+        f.session.key(KeyAction::Volume(5.), false);
+        f.session.key(KeyAction::Volume(-5.), false);
+        f.session.key(KeyAction::Volume(-5.), false);
+        assert_eq!(
+            f.calls(),
+            [Call::Volume(100.), Call::Volume(95.), Call::Volume(90.)]
+        );
+        for _ in 0..30 {
+            f.session.key(KeyAction::Volume(-5.), false);
+        }
+        assert_eq!(f.calls().last(), Some(&Call::Volume(0.)));
+    }
+
+    #[test]
+    fn the_volume_is_kept_from_one_session_to_the_next() {
+        let mut f = fixture();
+        f.session.carry_volume(40., true);
+        f.session.key(KeyAction::Volume(5.), false);
+        assert_eq!(f.session.volume(), (45., true));
+        assert_eq!(
+            f.calls(),
+            [Call::Volume(40.), Call::Muted(true), Call::Volume(45.)]
+        );
+    }
+
+    #[test]
+    fn m_mutes_and_unmutes() {
+        let mut f = fixture();
+        f.session.key(KeyAction::ToggleMute, false);
+        f.session.key(KeyAction::ToggleMute, false);
+        assert_eq!(f.calls(), [Call::Muted(true), Call::Muted(false)]);
+    }
+
+    #[test]
+    fn c_cycles_the_subtitles_through_none() {
+        let mut f = fixture();
+        f.queue(vec![PlayerEvent::Tracks(vec![
+            track(TrackKind::Subtitle, 1, "fre", "subrip", false),
+            track(TrackKind::Subtitle, 2, "eng", "ass", false),
+        ])]);
+        f.session.update(Instant::now());
+        for _ in 0..3 {
+            f.session.key(KeyAction::CycleSubtitles, false);
+        }
+        assert_eq!(
+            f.calls(),
+            [
+                Call::Subtitle(Some(1)),
+                Call::Subtitle(Some(2)),
+                Call::Subtitle(None)
+            ]
+        );
+    }
+
+    #[test]
+    fn a_cycles_the_audio_tracks() {
+        let mut f = fixture();
+        f.queue(vec![PlayerEvent::Tracks(vec![
+            track(TrackKind::Audio, 1, "fre", "eac3", true),
+            track(TrackKind::Audio, 2, "eng", "aac", false),
+        ])]);
+        f.session.update(Instant::now());
+        f.session.key(KeyAction::CycleAudio, false);
+        f.session.key(KeyAction::CycleAudio, false);
+        assert_eq!(f.calls(), [Call::Audio(Some(2)), Call::Audio(Some(1))]);
+    }
+
+    #[test]
+    fn the_brackets_move_the_subtitles_by_a_tenth() {
+        let mut f = fixture();
+        f.session.key(KeyAction::ShiftSubtitles(1), false);
+        f.session.key(KeyAction::ShiftSubtitles(-1), false);
+        f.session.key(KeyAction::ShiftSubtitles(-1), false);
+        assert_eq!(
+            f.calls(),
+            [
+                Call::SubtitleDelay(0.1),
+                Call::SubtitleDelay(0.),
+                Call::SubtitleDelay(-0.1)
+            ]
+        );
+    }
+
+    #[test]
+    fn the_angle_brackets_step_through_the_speeds_and_stop_at_the_ends() {
+        let mut f = fixture();
+        f.session.key(KeyAction::Speed(1), false);
+        f.session.key(KeyAction::Speed(-1), false);
+        f.session.key(KeyAction::Speed(-1), false);
+        f.session.key(KeyAction::Speed(-1), false);
+        f.session.key(KeyAction::Speed(-1), false);
+        assert_eq!(
+            f.calls(),
+            [
+                Call::Speed(1.25),
+                Call::Speed(1.),
+                Call::Speed(0.75),
+                Call::Speed(0.5),
+                Call::Speed(0.5)
+            ]
+        );
+    }
+
+    #[test]
+    fn n_asks_the_window_for_what_comes_next() {
+        let mut f = fixture();
+        assert_eq!(
+            f.session.key(KeyAction::Next, false),
+            Some(WindowRequest::PlayNext)
         );
     }
 
@@ -785,10 +961,10 @@ mod tests {
     fn escape_closes_the_panel_before_anything_else() {
         let mut f = fixture();
         f.session.toggle_panel();
-        assert_eq!(f.session.key("escape", false, true), None);
+        assert_eq!(f.session.key(KeyAction::Escape, true), None);
         assert!(!f.session.panel_open());
         assert_eq!(
-            f.session.key("escape", false, true),
+            f.session.key(KeyAction::Escape, true),
             Some(WindowRequest::ExitFullscreen)
         );
     }
@@ -873,7 +1049,7 @@ mod tests {
     fn escape_or_a_click_outside_closes_the_settings_menu() {
         let mut f = fixture();
         f.session.toggle_settings();
-        assert_eq!(f.session.key("escape", false, true), None);
+        assert_eq!(f.session.key(KeyAction::Escape, true), None);
         assert!(!f.session.settings_open());
         f.session.toggle_settings();
         f.session.clicked_outside_panel();
@@ -1225,7 +1401,7 @@ mod tests {
         let mut f = fixture();
         with_segments(&mut f, true);
         at(&mut f, Instant::now(), 60.);
-        assert_eq!(f.session.key("enter", false, false), None);
+        assert_eq!(f.session.key(KeyAction::PressSkip, false), None);
         assert_eq!(seeks(&f), [Call::Seek(Seek::To(130.))]);
     }
 
@@ -1234,7 +1410,7 @@ mod tests {
         let mut f = fixture();
         with_segments(&mut f, true);
         at(&mut f, Instant::now(), 1200.);
-        assert_eq!(f.session.key("enter", false, false), None);
+        assert_eq!(f.session.key(KeyAction::PressSkip, false), None);
         assert_eq!(seeks(&f), []);
     }
 
@@ -1246,7 +1422,7 @@ mod tests {
         at(&mut f, start, 60.);
         at(&mut f, start + Duration::from_secs(6), 66.);
         assert_eq!(f.session.skip_button(), None);
-        assert_eq!(f.session.key("enter", false, false), None);
+        assert_eq!(f.session.key(KeyAction::PressSkip, false), None);
         assert_eq!(seeks(&f), []);
     }
 
@@ -1282,7 +1458,7 @@ mod tests {
             at(&mut f, start, position);
             assert_eq!(f.session.skip_button(), None);
         }
-        assert_eq!(f.session.key("enter", false, false), None);
+        assert_eq!(f.session.key(KeyAction::PressSkip, false), None);
     }
 
     #[test]
@@ -1314,7 +1490,7 @@ mod tests {
             "Next episode"
         );
         assert_eq!(
-            f.session.key("enter", false, false),
+            f.session.key(KeyAction::PressSkip, false),
             Some(WindowRequest::NextEpisode)
         );
         assert!(f.session.update(start + Duration::from_millis(100)));

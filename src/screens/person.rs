@@ -30,6 +30,7 @@ pub fn render(shell: &mut Shell, _: &mut Window, cx: &mut Context<Shell>) -> imp
         Loadable::Failed(why) => Err(*why),
         Loadable::Loading => Err("Loading…"),
     };
+    shell.scrolls.push(scroll.clone());
     let photo = shell.image(photo_ref.as_ref(), images::PHOTO, cx);
 
     let (counts, body) = match titles {

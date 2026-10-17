@@ -49,34 +49,27 @@ pub fn on_picture(y: f32, window_height: f32, controls_shown: bool) -> bool {
     !controls_shown || (TOP_CONTROLS_HEIGHT..window_height - BOTTOM_CONTROLS_HEIGHT).contains(&y)
 }
 
+/// What a key of the player does; the keys themselves are in the keymap (`crate::keys`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum KeyAction {
     TogglePause,
     SeekBy(f64),
+    /// Louder by this many points, quieter when negative.
+    Volume(f64),
+    ToggleMute,
     ToggleFullscreen,
-    ExitFullscreen,
-    Leave,
-    /// Enter: the skip button, while it shows.
+    CycleSubtitles,
+    CycleAudio,
+    /// The next episode, or the next title of the playlist.
+    Next,
+    /// The skip button, while it shows.
     PressSkip,
-}
-
-/// The action of a key, by GPUI's name for it. Escape leaves fullscreen first, then the player.
-/// `with_modifier` says Ctrl, Alt or Super is held (Shift does not count).
-pub fn key_action(key: &str, with_modifier: bool, fullscreen: bool) -> Option<KeyAction> {
-    // Ctrl+F or Super+Left belong to the window manager or to nobody, not to the player.
-    if with_modifier {
-        return None;
-    }
-    match key {
-        "space" => Some(KeyAction::TogglePause),
-        "left" => Some(KeyAction::SeekBy(-SKIP_SECONDS)),
-        "right" => Some(KeyAction::SeekBy(SKIP_SECONDS)),
-        "f" => Some(KeyAction::ToggleFullscreen),
-        "enter" => Some(KeyAction::PressSkip),
-        "escape" if fullscreen => Some(KeyAction::ExitFullscreen),
-        "escape" => Some(KeyAction::Leave),
-        _ => None,
-    }
+    /// Later by tenths of a second, earlier when negative.
+    ShiftSubtitles(i32),
+    /// One speed faster, slower when negative.
+    Speed(i32),
+    /// Leaves fullscreen first, then the player.
+    Escape,
 }
 
 #[cfg(test)]
@@ -123,63 +116,6 @@ mod tests {
     }
 
     #[test]
-    fn space_plays_and_pauses() {
-        assert_eq!(
-            key_action("space", false, false),
-            Some(KeyAction::TogglePause)
-        );
-    }
-
-    #[test]
-    fn left_and_right_skip_ten_seconds() {
-        assert_eq!(
-            key_action("left", false, false),
-            Some(KeyAction::SeekBy(-10.))
-        );
-        assert_eq!(
-            key_action("right", false, true),
-            Some(KeyAction::SeekBy(10.))
-        );
-    }
-
-    #[test]
-    fn f_toggles_fullscreen() {
-        assert_eq!(
-            key_action("f", false, false),
-            Some(KeyAction::ToggleFullscreen)
-        );
-        assert_eq!(
-            key_action("f", false, true),
-            Some(KeyAction::ToggleFullscreen)
-        );
-    }
-
-    #[test]
-    fn escape_leaves_fullscreen_first_then_the_player() {
-        assert_eq!(
-            key_action("escape", false, true),
-            Some(KeyAction::ExitFullscreen)
-        );
-        assert_eq!(key_action("escape", false, false), Some(KeyAction::Leave));
-    }
-
-    #[test]
-    fn other_keys_do_nothing() {
-        assert_eq!(key_action("a", false, false), None);
-        assert_eq!(key_action("tab", false, false), None);
-    }
-
-    #[test]
-    fn enter_presses_the_skip_button() {
-        assert_eq!(
-            key_action("enter", false, false),
-            Some(KeyAction::PressSkip)
-        );
-        assert_eq!(key_action("enter", false, true), Some(KeyAction::PressSkip));
-        assert_eq!(key_action("enter", true, false), None);
-    }
-
-    #[test]
     fn a_click_between_the_bars_is_on_the_picture() {
         assert!(on_picture(400., 810., true));
         assert!(!on_picture(50., 810., true), "the title bar");
@@ -209,13 +145,5 @@ mod tests {
     fn in_a_tiny_window_the_subtitles_go_no_higher_than_the_top() {
         assert_eq!(subtitle_position(100., true), 0.);
         assert_eq!(subtitle_position(0., true), 100.);
-    }
-
-    #[test]
-    fn keys_held_with_ctrl_alt_or_super_do_nothing() {
-        for key in ["space", "left", "right", "f", "escape"] {
-            assert_eq!(key_action(key, true, false), None, "{key}");
-            assert_eq!(key_action(key, true, true), None, "{key}");
-        }
     }
 }

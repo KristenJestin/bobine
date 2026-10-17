@@ -442,6 +442,7 @@ mod tests {
         let server = FakeServer::new(12, true);
         let connector: Arc<dyn bobine::provider::Connector> = Arc::new(server.clone());
         let window = cx.add_window(|_, cx| {
+            crate::keys::bind(cx);
             Shell::new(
                 None,
                 Box::new(move || Ok(connector)),

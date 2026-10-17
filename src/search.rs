@@ -422,11 +422,6 @@ pub fn scroll_to_show(lines: &[Line], selected: usize, scrolled: f32, view: f32)
     wanted.clamp(0., max)
 }
 
-/// Ctrl+K, with nothing else held.
-pub fn is_shortcut(key: &str, control: bool, others: bool) -> bool {
-    control && !others && key == "k"
-}
-
 /// Whether the palette opens over `screen`: not on the login (no server yet) nor in the player.
 pub fn opens_from(screen: Screen) -> bool {
     !matches!(screen, Screen::Login | Screen::Player)
@@ -868,14 +863,6 @@ mod tests {
             t + Duration::from_secs(1),
         );
         assert_eq!(palette.hits()[0].caption(), "");
-    }
-
-    #[test]
-    fn ctrl_k_alone_opens_the_palette() {
-        assert!(is_shortcut("k", true, false));
-        assert!(!is_shortcut("k", false, false));
-        assert!(!is_shortcut("k", true, true));
-        assert!(!is_shortcut("j", true, false));
     }
 
     #[test]

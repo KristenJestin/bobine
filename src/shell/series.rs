@@ -482,7 +482,7 @@ impl Shell {
     }
 
     /// What the card offered plays, on its page.
-    fn play_next(&mut self, next: Next, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn play_next(&mut self, next: Next, window: &mut Window, cx: &mut Context<Self>) {
         match next {
             Next::Episode(episode) => self.play_episode(episode, window, cx),
             Next::Entry(entry) => self.play_entry(entry, true, window, cx),
