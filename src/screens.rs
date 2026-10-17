@@ -496,6 +496,11 @@ fn poster_caption(title: String, caption: String) -> Div {
         .child(caption_text(CAPTION_DETAIL, caption).text_color(theme::dim()))
 }
 
+/// What has been done of a bar: the brand's coral, sized and shaped by the bar around it.
+fn progress_fill() -> Div {
+    div().bg(theme::brand())
+}
+
 /// A thin bar: how far the viewer went.
 fn progress_bar(fraction: f32, width: f32) -> Div {
     div()
@@ -503,11 +508,28 @@ fn progress_bar(fraction: f32, width: f32) -> Div {
         .h(px(3.))
         .rounded_full()
         .bg(rgba(0xffffff33))
-        .child(
-            div()
-                .h_full()
-                .w(px(width * fraction.clamp(0., 1.)))
-                .rounded_full()
-                .bg(theme::accent()),
-        )
+        .child(bar_fill(fraction, width))
+}
+
+/// The done part of a bar of `width`: the share `fraction` of it, in the brand's coral.
+fn bar_fill(fraction: f32, width: f32) -> Div {
+    progress_fill()
+        .h_full()
+        .w(px(width * fraction.clamp(0., 1.)))
+        .rounded_full()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_progress_bar_is_filled_with_the_brand_coral() {
+        let mut fill = bar_fill(0.5, 100.);
+        let mut coral = div().bg(theme::brand());
+        assert_eq!(
+            format!("{:?}", fill.style().background),
+            format!("{:?}", coral.style().background)
+        );
+    }
 }

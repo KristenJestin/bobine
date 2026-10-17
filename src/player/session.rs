@@ -198,6 +198,16 @@ impl Session {
         self.first_frame_at
     }
 
+    pub fn answers_slowly(&self) -> bool {
+        self.player.answers_slowly()
+    }
+
+    /// A frame of the film is on the window, as the display says: asking it waits for nothing,
+    /// unlike asking the player.
+    pub fn picture_shown(&self) -> bool {
+        self.display.picture_shown()
+    }
+
     /// What the server marked in this film or episode, by start.
     pub fn set_segments(&mut self, segments: Vec<Segment>) {
         self.segments = segments;

@@ -53,6 +53,9 @@ pub trait VideoDisplay {
     /// Hides the pointer over the window, or brings it back. Said again on every update: the
     /// display acts when the wish changes or when it first can.
     fn set_cursor_visible(&mut self, visible: bool);
+    /// A frame of the film is on the window. Read at every frame of the window: it waits for
+    /// nothing.
+    fn picture_shown(&self) -> bool;
 }
 
 #[cfg(test)]
@@ -75,6 +78,9 @@ pub mod fake {
         }
         fn set_cursor_visible(&mut self, visible: bool) {
             self.cursor.borrow_mut().push(visible);
+        }
+        fn picture_shown(&self) -> bool {
+            false
         }
     }
 }

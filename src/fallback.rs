@@ -741,6 +741,7 @@ mod tests {
                 calls: player.calls.clone(),
                 queued: player.queued.clone(),
                 info: player.info.clone(),
+                slow: false,
                 load_fails: player.load_fails.clone(),
             }),
             Box::new(FakeDisplay::default()),

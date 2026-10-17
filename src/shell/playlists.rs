@@ -467,6 +467,18 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.play_entry_as(entry, go_on, false, window, cx);
+    }
+
+    /// `seamless`: it follows the title that just ended, so the player does not open again.
+    pub(super) fn play_entry_as(
+        &mut self,
+        entry: PlaylistEntry,
+        go_on: bool,
+        seamless: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let depth = self.playlist_pages.len().wrapping_sub(1);
         let Some(page) = self.playlist_pages.last_mut() else {
             return;
@@ -506,6 +518,7 @@ impl Shell {
                             started.opened,
                             playing,
                             next,
+                            seamless,
                             window,
                             cx,
                         );
@@ -517,7 +530,7 @@ impl Shell {
                     Err(StartError::NothingToPlay) => match next {
                         Some(Next::Entry(next)) if go_on => {
                             shell.tried(&origin, None, cx);
-                            shell.play_entry(next, true, window, cx);
+                            shell.play_entry_as(next, true, seamless, window, cx);
                         }
                         _ => shell.tried(&origin, Some("Nothing to play for this title."), cx),
                     },

@@ -184,7 +184,7 @@ mod tests {
                     "Le Dernier Hiver".into(),
                     None,
                 );
-                shell.begin_playback(session, None, window, cx);
+                shell.begin_playback(session, None, false, window, cx);
                 shell.playback.as_mut().unwrap().next = next;
                 shell.publish(title, cx);
             })

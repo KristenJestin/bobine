@@ -5,7 +5,6 @@ use gpui_kit::prelude::*;
 use gpui_kit::{Context, Div, Focusable, FontWeight, IntoElement, KeyDownEvent, Window, div, px};
 
 use super::centered;
-use crate::chrome::logo;
 use crate::shell::Shell;
 use crate::theme;
 
@@ -59,7 +58,7 @@ pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -
                 }
                 cx.stop_propagation();
             }))
-            .child(logo(44., 20., 12.))
+            .child(crate::brand::mark(44., window, cx))
             .child(
                 div()
                     .flex()

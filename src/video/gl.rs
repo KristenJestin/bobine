@@ -43,6 +43,8 @@ const CONFIG: [egl::Int; 13] = [
 pub struct Target {
     size: Mutex<(i32, i32)>,
     stop: AtomicBool,
+    /// A frame of the film reached the surface.
+    shown: AtomicBool,
     pending: Mutex<bool>,
     signal: Condvar,
 }
@@ -55,6 +57,10 @@ impl Target {
             drop(size);
             self.wake();
         }
+    }
+
+    pub fn shown(&self) -> bool {
+        self.shown.load(Ordering::Relaxed)
     }
 
     pub fn stop(&self) {
@@ -243,7 +249,8 @@ impl Gl {
             }
             // A new size is drawn at once, even on a paused film: else the old buffer would be
             // stretched.
-            if (!render.has_new_frame() && !resized) || size.0 == 0 {
+            let new_frame = render.has_new_frame();
+            if (!new_frame && !resized) || size.0 == 0 {
                 continue;
             }
             let fbo = sys::mpv_opengl_fbo {
@@ -269,6 +276,9 @@ impl Gl {
                 .swap_buffers(self.context.display, self.surface.surface)
                 .map_err(|e| format!("eglSwapBuffers: {e}"))?;
             render.report_swap();
+            if new_frame {
+                target.shown.store(true, Ordering::Relaxed);
+            }
         }
         Ok(())
     }

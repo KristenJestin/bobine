@@ -1507,7 +1507,7 @@ impl Shell {
         cx.spawn_in(window, async move |this, cx| {
             let opened = task.await;
             this.update_in(cx, |shell, window, cx| {
-                shell.start_playback(origin, plan, opened, playing, None, window, cx);
+                shell.start_playback(origin, plan, opened, playing, None, false, window, cx);
                 cx.notify();
             })
             .ok();
@@ -1568,7 +1568,7 @@ impl Shell {
     }
 
     /// The server opened the playback: the player starts. `next`: the episode after, for the
-    /// card at the end.
+    /// card at the end. `seamless`: it follows the playback that just ended.
     #[allow(
         clippy::too_many_arguments,
         reason = "one playback's parts, put together once"
@@ -1580,6 +1580,7 @@ impl Shell {
         opened: Result<Opened, ProviderError>,
         playing: Playing,
         next: Option<Next>,
+        seamless: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -1595,6 +1596,7 @@ impl Shell {
         };
         self.tried(&origin, None, cx);
         let desktop = playing.desktop.clone();
+        let item = playing.list.clone();
         // A test plays on a fake player, through the rest of this path: what the end offers, and
         // what the server is told, which the fake server records.
         #[cfg(test)]
@@ -1621,7 +1623,8 @@ impl Shell {
                     },
                 )
             });
-            self.begin_playback(session, reporting, window, cx);
+            self.begin_playback(session, reporting, seamless, window, cx);
+            self.grow_from(item.as_ref(), window);
             if let Some(playback) = &mut self.playback {
                 playback.playing = Some(opened.film.clone());
             }
@@ -1662,8 +1665,9 @@ impl Shell {
         let media = plan.media(&opened, &externals);
         let fallback = Fallback::new(server.clone(), plan.clone(), &opened);
         let list = playing.list.clone();
-        match self.play(mpv, media, playing, Some(reporting), window, cx) {
+        match self.play(mpv, media, playing, Some(reporting), seamless, window, cx) {
             Ok(()) => {
+                self.grow_from(item.as_ref(), window);
                 self.arm_playback(fallback, window, cx);
                 if let Some(playback) = &mut self.playback {
                     playback.playing = Some(opened.film.clone());
@@ -2458,7 +2462,7 @@ mod tests {
                 );
                 let ended = session.update(Instant::now());
                 reporting.tick(Instant::now(), &session, ended);
-                shell.begin_playback(session, Some(reporting), window, cx);
+                shell.begin_playback(session, Some(reporting), false, window, cx);
                 assert!(shell.playback.is_some());
             })
             .unwrap();
@@ -2662,7 +2666,7 @@ mod tests {
                         method: PlayMethod::DirectPlay,
                     },
                 );
-                shell.begin_playback(session, Some(reporting), window, cx);
+                shell.begin_playback(session, Some(reporting), false, window, cx);
                 let fallback = Fallback::new(Arc::new(server.clone()), plan.clone(), &opened);
                 shell.arm_playback(fallback, window, cx);
             })
@@ -2739,7 +2743,7 @@ mod tests {
                 );
                 let ended = session.update(Instant::now());
                 reporting.tick(Instant::now(), &session, ended);
-                shell.begin_playback(session, Some(reporting), window, cx);
+                shell.begin_playback(session, Some(reporting), false, window, cx);
                 let playback = shell.playback.as_mut().unwrap();
                 playback.fallback = Some(Fallback::new(
                     Arc::new(server.clone()),
@@ -2849,7 +2853,7 @@ mod tests {
                 }]);
                 session.update(Instant::now());
                 assert!(session.skip_button().is_some());
-                shell.begin_playback(session, None, window, cx);
+                shell.begin_playback(session, None, false, window, cx);
             })
             .unwrap();
         let mut visual = drawn(&window, cx);
@@ -2905,7 +2909,7 @@ mod tests {
                     list: None,
                     desktop: None,
                 };
-                shell.start_playback(Origin::Home, plan, opened, playing, None, window, cx);
+                shell.start_playback(Origin::Home, plan, opened, playing, None, false, window, cx);
                 assert!(shell.playback.is_none());
                 assert_eq!(shell.navigator.current(), Screen::Login);
             })
@@ -3030,6 +3034,19 @@ mod tests {
             visual.simulate_keystrokes("escape");
             assert_eq!(current(&window, cx), screen);
         }
+    }
+
+    #[gpui_kit::test]
+    fn the_pill_bar_draws_the_brand_mark_in_its_corner_not_a_letter(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        let (_server, window) = signed_in_window(cx);
+        let mut visual = drawn(&window, cx);
+        let bar = visual.debug_bounds("pill-bar").expect("the bar");
+        let mark = visual.debug_bounds("brand-mark").expect("the mark");
+        assert!(bar.contains(&mark.origin), "{mark:?} in {bar:?}");
+        assert!(bar.contains(&mark.bottom_right()), "{mark:?} in {bar:?}");
+        assert_eq!((mark.size.width, mark.size.height), (px(32.), px(32.)));
     }
 
     #[gpui_kit::test]

@@ -235,7 +235,7 @@ fn seasons_menu(
                     16.,
                 )
                 .text_color(if checked {
-                    theme::accent()
+                    theme::brand()
                 } else {
                     theme::dim()
                 }),

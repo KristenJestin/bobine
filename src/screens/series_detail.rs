@@ -189,7 +189,9 @@ fn hero(
         .zip(shown.choices.as_ref())
         .map(|(next, choices)| chips_row(&next.versions, choices, menu, &shown.chips, window, cx));
     let title = heading(shell, &series.title, detail.logo.as_ref(), window, cx);
-    hero_frame(backdrop, height).child(
+    // The way into the player grows from it.
+    let mark = crate::curtain::mark(&shell.pictures, &series.id, backdrop.clone());
+    hero_frame(backdrop, height).child(mark).child(
         hero_text_under(title)
             .child(facts_line(
                 series_page::meta(detail, shown.seasons.len()),
@@ -432,9 +434,9 @@ fn episode_row(
     .map(|check| {
         if item.watched {
             check
-                .bg(theme::accent())
-                .border_color(theme::accent())
-                .text_color(theme::background())
+                .bg(theme::brand())
+                .border_color(theme::brand())
+                .text_color(theme::on_brand())
         } else {
             check.border_color(rgb(0x3a3a40)).text_color(theme::dim())
         }
@@ -604,13 +606,12 @@ pub fn up_next_card(
                     .bg(theme::line())
                     .children(picture(still, theme::RADIUS_LARGE))
                     .child(
-                        div()
+                        super::progress_fill()
                             .absolute()
                             .left_0()
                             .bottom_0()
                             .h(px(3.))
-                            .w(px(CARD_WIDTH * fraction))
-                            .bg(theme::accent()),
+                            .w(px(CARD_WIDTH * fraction)),
                     ),
             )
             .child(

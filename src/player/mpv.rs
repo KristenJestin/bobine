@@ -179,6 +179,11 @@ impl<C: MpvClient> MpvPlayer<C> {
 }
 
 impl<C: MpvClient> Player for MpvPlayer<C> {
+    /// Its core answers each property asked once it is free, and opening a file keeps it busy.
+    fn answers_slowly(&self) -> bool {
+        true
+    }
+
     fn load(&mut self, media: Media<'_>) -> Result<(), PlayerError> {
         let Media {
             stream,
