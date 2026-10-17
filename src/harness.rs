@@ -12,7 +12,7 @@
 //! `bobine --screen login|home|home-rows|home-list-resume|home-list-next|home-list-latest|home-list-empty|library|detail|
 //! detail-rows|detail-cast|playing|series|series-page|series-rows|up-next|collections|collection-page|
 //! my-list|my-list-empty|lists|playlist|film-list|series-list|discover|request|seasons|similar|settings-seerr [--films N]
-//! [--media FILE] [--segments SECONDS] [--direct-fails] [--trailer] [--image-delay-ms N] [--photos-fail-once] [--scenario menu|scroll|select|panel|blackout|search|search-slow|search-keys|help|ring|tools|tools-keys|home-rotate|home-hover|home-jump|home-scroll|home-lists|home-play|home-poster-hover|grid-poster-hover|playlist-menu|cast-hover|genre-hover|episode-hover|skip|settings|settings-screen|long-tracks|segment-marks]
+//! [--media FILE] [--segments SECONDS] [--direct-fails] [--trailer] [--image-delay-ms N] [--photos-fail-once] [--scenario menu|scroll|select|panel|blackout|search|search-slow|search-keys|help|ring|ring-wheel|tools|tools-keys|home-rotate|home-hover|home-jump|home-scroll|home-lists|home-play|home-poster-hover|grid-poster-hover|playlist-menu|cast-hover|genre-hover|episode-hover|skip|settings|settings-screen|long-tracks|segment-marks]
 //! [--search-delay-ms N] [--favourite-delay-ms N] [--logout-delay-ms N] [--favourite-fails] [--slower N] --quit-at S`
 //!
 //! A scenario sends clicks, keys and scroll events to the window as the compositor would, at set
@@ -955,6 +955,37 @@ impl Acts {
                 (1.6, "along the row", Key("right")),
                 (2.2, "the row below", Key("down")),
                 (2.8, "along it", Key("right")),
+            ],
+            // The wheel right after the arrows moved the page: the two do not fight.
+            "ring-wheel" => vec![
+                (0.0, "", Hover(Bottom)),
+                (1.0, "the ring shows", Key("right")),
+                (1.4, "down", Key("down")),
+                (1.8, "down", Key("down")),
+                (2.2, "down", Key("down")),
+                (2.8, "the arrows moved the page", Mark),
+                (
+                    3.0,
+                    "wheel down at once",
+                    Wheel {
+                        over: Bottom,
+                        lines: -3.,
+                        shift: false,
+                    },
+                ),
+                (3.6, "after the wheel down", Mark),
+                (
+                    3.8,
+                    "wheel up",
+                    Wheel {
+                        over: Bottom,
+                        lines: 3.,
+                        shift: false,
+                    },
+                ),
+                (4.4, "after the wheel up", Mark),
+                (4.6, "an arrow again", Key("down")),
+                (5.2, "after the arrow", Mark),
             ],
             // Nothing but the pointer put away: the header runs.
             "home-idle" => vec![(0.0, "", Hover(Bottom))],
