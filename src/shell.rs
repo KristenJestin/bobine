@@ -543,6 +543,10 @@ impl Shell {
 
     /// Opens the player on `media`. Its addresses go straight to mpv: nothing here keeps or
     /// prints them.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "one playback's parts, put together once"
+    )]
     pub fn play(
         &mut self,
         mpv: Arc<Libmpv>,
