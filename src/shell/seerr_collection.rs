@@ -106,7 +106,11 @@ impl Shell {
                     return;
                 };
                 match parts {
-                    Ok(parts) => page.parts = Loadable::Ready(parts),
+                    Ok(parts) => {
+                        let name = Some(parts.name.clone());
+                        page.parts = Loadable::Ready(parts);
+                        shell.seerr.names.insert(id, name);
+                    }
                     Err(error) if !matches!(page.parts, Loadable::Ready(_)) => {
                         page.parts = Loadable::Failed(discover::error_line(&error));
                     }
@@ -216,7 +220,7 @@ impl Shell {
 
     /// The collection a library movie is part of, for its "Part of …": Jellyfin's TMDb
     /// collection id when it has one (Seerr then names it), else what Seerr says of the movie.
-    /// Read once per movie.
+    /// Read once per movie, and a collection's name once per session.
     pub(super) fn load_collection_link(
         &mut self,
         tmdb: Option<TmdbId>,
@@ -227,6 +231,13 @@ impl Shell {
             return;
         };
         if self.seerr.client.is_none() || self.seerr.links.contains_key(&tmdb) {
+            return;
+        }
+        if let Some(id) = collection
+            && let Some(name) = self.seerr.names.get(&id)
+        {
+            let link = (name.clone()).map(|name| CollectionRef { id, name });
+            self.seerr.links.insert(tmdb, link);
             return;
         }
         self.seerr.links.insert(tmdb, None);
@@ -243,7 +254,17 @@ impl Shell {
         };
         self.ask_seerr(cx, read, move |shell, link, _| match link {
             Ok(link) => {
+                if let Some(id) = collection {
+                    let name = link.as_ref().map(|link| link.name.clone());
+                    shell.seerr.names.insert(id, name);
+                }
                 shell.seerr.links.insert(tmdb, link);
+            }
+            // Unknown to Seerr: asked again in the next session only.
+            Err(RequestError::NotFound) => {
+                if let Some(id) = collection {
+                    shell.seerr.names.insert(id, None);
+                }
             }
             // Asked again the next time the page opens.
             Err(_) => {
@@ -808,6 +829,53 @@ mod tests {
         // Back on the movie's page.
         window.update(cx, |shell, _, cx| shell.escape(cx)).unwrap();
         assert_eq!(screen(&window, cx), Screen::FilmDetail);
+    }
+
+    /// How many times Seerr was asked for the collection `id`.
+    fn collection_reads(seerr: &FakeSeerr, id: TmdbId) -> usize {
+        let state = seerr.state.lock().unwrap();
+        state
+            .record
+            .collections
+            .iter()
+            .filter(|read| **read == id)
+            .count()
+    }
+
+    #[gpui_kit::test]
+    fn a_collection_unknown_to_seerr_is_asked_for_once_a_session(cx: &mut TestAppContext) {
+        let seerr = FakeSeerr::default();
+        let server = FakeServer::new(6, true);
+        server.state.lock().unwrap().tmdb_collection = Some(999);
+        let window = configured_on(server, &seerr, cx);
+        for _ in 0..2 {
+            window
+                .update(cx, |shell, _, cx| {
+                    shell.go_back(cx);
+                    shell.open_film(ItemId(FILM.into()), cx)
+                })
+                .unwrap();
+            cx.run_until_parked();
+        }
+        let mut visual = drawn(&window, cx);
+        assert!(visual.debug_bounds("film-play").is_some());
+        assert!(visual.debug_bounds("part-of-collection").is_none());
+        assert_eq!(collection_reads(&seerr, 999), 1);
+    }
+
+    #[gpui_kit::test]
+    fn a_collection_page_read_names_the_link_of_its_movies(cx: &mut TestAppContext) {
+        let seerr = FakeSeerr::default();
+        let server = FakeServer::new(6, true);
+        server.state.lock().unwrap().tmdb_collection = Some(COLLECTION);
+        let window = on_collection_of(server, &seerr, cx);
+        window
+            .update(cx, |shell, _, cx| shell.open_film(ItemId(FILM.into()), cx))
+            .unwrap();
+        cx.run_until_parked();
+        let mut visual = drawn(&window, cx);
+        assert!(visual.debug_bounds("part-of-collection").is_some());
+        assert_eq!(collection_reads(&seerr, COLLECTION), 1);
     }
 
     #[gpui_kit::test]

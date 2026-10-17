@@ -36,6 +36,8 @@ pub struct Record {
     pub searches: Vec<String>,
     /// The titles read, by TMDb id.
     pub titles: Vec<TmdbId>,
+    /// The collections read, by TMDb id.
+    pub collections: Vec<TmdbId>,
     pub checks: u32,
     pub my_requests: u32,
 }
@@ -295,6 +297,7 @@ impl RequestServer for FakeSeerr {
 
     fn collection(&self, id: TmdbId) -> Result<CollectionParts, RequestError> {
         self.reach()?;
+        self.state().record.collections.push(id);
         if id != COLLECTION {
             return Err(RequestError::NotFound);
         }

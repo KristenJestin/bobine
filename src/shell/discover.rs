@@ -73,6 +73,9 @@ pub struct Seerr {
     /// The TMDb collection of each library movie asked about: `None` while it is read, and for
     /// a movie in none.
     pub links: HashMap<TmdbId, Option<bobine::requests::CollectionRef>>,
+    /// The name of each TMDb collection read, `None` for one Seerr does not know: read once a
+    /// session, by the link of whichever of its movies or by its page.
+    pub names: HashMap<TmdbId, Option<String>>,
     /// What the server recommends after a title of the library, read once per title.
     similar: HashMap<(MediaKind, TmdbId), Vec<Discovered>>,
 }
@@ -258,6 +261,7 @@ impl Shell {
         self.seerr.collections.clear();
         self.seerr.similar.clear();
         self.seerr.links.clear();
+        self.seerr.names.clear();
         self.navigator.forget(|screen| {
             matches!(
                 screen,
