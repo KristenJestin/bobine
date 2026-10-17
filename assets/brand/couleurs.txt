@@ -1,0 +1,5 @@
+Bobine
+couleur (fond sombre) #f45246
+couleur (fond clair)  #c92420
+crème                 #ece5d8
+fond                  #14120f
