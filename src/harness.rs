@@ -1063,7 +1063,6 @@ impl Acts {
                 (5.0, "click the first mark again", Click(HeroMark(0))),
             ],
             // The wheel over a row goes sideways, over the header it goes down.
-            // The Settings wheeled down to their foot: the Integrations section whole.
             "stats-scroll" => vec![(
                 0.5,
                 "wheel down to the foot of the stats",
