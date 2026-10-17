@@ -60,6 +60,8 @@ pub struct State {
     pub delay: Duration,
     /// A title cannot be read any more once something was asked for.
     pub titles_fail_after_a_request: bool,
+    /// The trailer every title lists, when it lists one.
+    pub trailer: Option<String>,
 }
 
 #[derive(Clone)]
@@ -78,6 +80,7 @@ impl Default for FakeSeerr {
                 requested: Vec::new(),
                 delay: Duration::ZERO,
                 titles_fail_after_a_request: false,
+                trailer: None,
             })),
         }
     }
@@ -251,6 +254,7 @@ impl RequestServer for FakeSeerr {
             WINTERS_END,
         ];
         let requested = self.state().requested.contains(&id);
+        let trailer = self.state().trailer.clone();
         let seasons = match kind {
             MediaKind::Movie => Vec::new(),
             MediaKind::Tv => (1..=3)
@@ -285,6 +289,7 @@ impl RequestServer for FakeSeerr {
                 name: "Winter Saga".into(),
             }),
             seasons,
+            trailer,
             title,
         })
     }

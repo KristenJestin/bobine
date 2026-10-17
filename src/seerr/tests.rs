@@ -213,6 +213,55 @@ fn a_film_page_has_its_cast_its_runtime_and_its_collection() {
 }
 
 #[test]
+fn a_film_lists_its_best_trailer() {
+    let fake = FakeSeerr::start();
+    let film = client(&fake).title(MediaKind::Movie, LIGHTHOUSE).unwrap();
+    assert_eq!(
+        film.trailer.as_deref(),
+        Some("https://www.youtube.com/watch?v=offTrl01"),
+        "the official one, not the fan cut listed before it"
+    );
+}
+
+#[test]
+fn a_series_lists_its_trailer_too() {
+    let fake = FakeSeerr::start();
+    let series = client(&fake).title(MediaKind::Tv, NORTHERN_LINE).unwrap();
+    assert_eq!(
+        series.trailer.as_deref(),
+        Some("https://www.youtube.com/watch?v=lineTrl1")
+    );
+}
+
+#[test]
+fn a_vimeo_trailer_is_listed_and_a_video_on_another_site_is_left_out() {
+    let fake = FakeSeerr::start();
+    let series = client(&fake).title(MediaKind::Tv, COPPER_COAST).unwrap();
+    assert_eq!(
+        series.trailer.as_deref(),
+        Some("https://vimeo.com/12345678")
+    );
+}
+
+#[test]
+fn a_title_with_only_teasers_or_featurettes_lists_no_trailer() {
+    let fake = FakeSeerr::start();
+    let film = client(&fake)
+        .title(MediaKind::Movie, HARBOUR_LIGHTS)
+        .unwrap();
+    assert_eq!(film.trailer, None);
+}
+
+#[test]
+fn a_title_with_no_videos_lists_no_trailer() {
+    let fake = FakeSeerr::start();
+    let film = client(&fake)
+        .title(MediaKind::Movie, HARBOUR_NIGHTS)
+        .unwrap();
+    assert_eq!(film.trailer, None);
+}
+
+#[test]
 fn a_series_offers_only_the_seasons_not_available_nor_requested() {
     let fake = FakeSeerr::start();
     let series = client(&fake).title(MediaKind::Tv, NORTHERN_LINE).unwrap();

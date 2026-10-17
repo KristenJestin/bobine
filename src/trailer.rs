@@ -33,6 +33,12 @@ pub fn remote(trailers: &Trailers, ytdlp: bool) -> Option<String> {
     trailers.remote.clone().filter(|_| ytdlp)
 }
 
+/// The trailer of a request page, if there is one `yt-dlp` can play: its address is always a
+/// page, never a file of a server.
+pub fn requested(address: Option<&str>, ytdlp: bool) -> Option<String> {
+    address.filter(|_| ytdlp).map(str::to_string)
+}
+
 /// The options of a trailer's mpv: those of every mpv, and the `yt-dlp` hook only for a page
 /// address, so that a film's address never goes through `yt-dlp`.
 pub fn mpv_options(

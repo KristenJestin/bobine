@@ -104,6 +104,9 @@ pub struct TitleDetail {
     pub collection: Option<CollectionRef>,
     /// A series' seasons, the specials left out.
     pub seasons: Vec<SeasonOffer>,
+    /// The page address of its best trailer (YouTube or Vimeo), played through the `yt-dlp`
+    /// hook. A public address, no secret.
+    pub trailer: Option<String>,
 }
 
 /// A TMDb collection and its films, oldest first.

@@ -176,6 +176,54 @@ pub struct Credits {
     pub cast: Vec<Cast>,
 }
 
+/// A video Seerr lists for a title (`relatedVideos`). Seerr keeps of TMDb's only these: not the
+/// language, the date nor whether it is official.
+#[derive(Deserialize, Default)]
+#[serde(default)]
+pub struct RelatedVideo {
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub name: String,
+    pub site: String,
+    pub key: String,
+}
+
+impl RelatedVideo {
+    /// The page the player is given, built from the site and the key: the address Seerr sends
+    /// along is never used, so that only these two hosts can ever reach `yt-dlp`.
+    fn address(&self) -> Option<String> {
+        let host = match self.site.as_str() {
+            "YouTube" => "https://www.youtube.com/watch?v=",
+            "Vimeo" => "https://vimeo.com/",
+            _ => return None,
+        };
+        let plain = !self.key.is_empty()
+            && (self.key.chars()).all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
+        plain.then(|| format!("{host}{}", self.key))
+    }
+
+    /// "Official Trailer", but not "Unofficial Trailer".
+    fn official(&self) -> bool {
+        (self.name.split(|c: char| !c.is_alphanumeric()))
+            .any(|w| w.eq_ignore_ascii_case("official"))
+    }
+}
+
+/// The trailer a request page plays: among the videos of type Trailer on a site `yt-dlp` plays,
+/// an official one, else the first one listed. The user's language is not preferred: Seerr drops
+/// each video's `iso_639_1`, so the order kept is TMDb's, as Seerr returns it.
+fn trailer(videos: Vec<RelatedVideo>) -> Option<String> {
+    let trailers: Vec<(bool, String)> = videos
+        .iter()
+        .filter(|video| video.kind == "Trailer")
+        .filter_map(|video| Some((video.official(), video.address()?)))
+        .collect();
+    let official = trailers.iter().find(|(official, _)| *official);
+    official
+        .or(trailers.first())
+        .map(|(_, address)| address.clone())
+}
+
 #[derive(Deserialize)]
 pub struct CollectionLink {
     pub id: u64,
@@ -206,6 +254,8 @@ pub struct Details {
     pub collection: Option<CollectionLink>,
     #[serde(default)]
     pub seasons: Vec<TvSeason>,
+    #[serde(default)]
+    pub related_videos: Vec<RelatedVideo>,
 }
 
 /// The most of the cast a page shows.
@@ -271,6 +321,7 @@ impl Details {
                 name: link.name,
             }),
             seasons,
+            trailer: trailer(self.related_videos),
         })
     }
 }
@@ -347,6 +398,56 @@ pub struct Message {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn video(kind: &str, name: &str, site: &str, key: &str) -> RelatedVideo {
+        RelatedVideo {
+            kind: kind.into(),
+            name: name.into(),
+            site: site.into(),
+            key: key.into(),
+        }
+    }
+
+    #[test]
+    fn the_official_trailer_is_chosen_over_an_unofficial_one() {
+        let videos = vec![
+            video("Trailer", "Trailer", "YouTube", "plain001"),
+            video("Trailer", "Unofficial Trailer", "YouTube", "unoff001"),
+            video("Trailer", "Official Trailer #2", "YouTube", "offic002"),
+            video("Trailer", "Official Trailer", "YouTube", "offic001"),
+        ];
+        assert_eq!(
+            trailer(videos).as_deref(),
+            Some("https://www.youtube.com/watch?v=offic002"),
+            "the first official one, as Seerr lists them; 'unofficial' is no 'official'"
+        );
+    }
+
+    #[test]
+    fn without_an_official_trailer_the_first_one_listed_is_chosen() {
+        let videos = vec![
+            video("Trailer", "Trailer", "YouTube", "first001"),
+            video("Trailer", "Trailer", "YouTube", "second01"),
+        ];
+        assert_eq!(
+            trailer(videos).as_deref(),
+            Some("https://www.youtube.com/watch?v=first001")
+        );
+    }
+
+    #[test]
+    fn a_key_that_is_not_a_plain_id_is_left_out_so_that_no_other_address_reaches_the_player() {
+        let videos = vec![
+            video("Trailer", "Official Trailer", "YouTube", "x&ytdl=--exec"),
+            video("Trailer", "Official Trailer", "YouTube", ""),
+            video("Trailer", "Trailer", "Vimeo", "12/../34"),
+            video("Trailer", "Trailer", "YouTube", "good_id-1"),
+        ];
+        assert_eq!(
+            trailer(videos).as_deref(),
+            Some("https://www.youtube.com/watch?v=good_id-1")
+        );
+    }
 
     #[test]
     fn each_media_status_code_has_its_availability() {
