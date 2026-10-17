@@ -3706,24 +3706,6 @@ mod tests {
     }
 
     #[gpui_kit::test]
-    fn the_header_bars_are_short_and_thin(cx: &mut gpui_kit::TestAppContext) {
-        let (_server, window) = signed_in_window(cx);
-        let mut visual = drawn(&window, cx);
-        let (width, height) = crate::hero::MARK;
-        for title in 0..2 {
-            let bar = visual
-                .debug_bounds(Box::leak(format!("hero-mark {title}").into_boxed_str()))
-                .expect("a bar for each title of the header");
-            assert_eq!(
-                (bar.size.width, bar.size.height),
-                (px(width), px(height)),
-                "the bar of title {title}"
-            );
-        }
-        assert!(height <= 2. && width <= 40., "quiet: {width} x {height}");
-    }
-
-    #[gpui_kit::test]
     fn buttons_in_a_row_share_one_height(cx: &mut gpui_kit::TestAppContext) {
         let (_server, window) = signed_in_window(cx);
         // The Home header, a movie page and a series page: a filled button beside outlined ones.

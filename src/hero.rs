@@ -152,9 +152,23 @@ pub fn text_levels(level: f32) -> (f32, f32) {
     ((1. - 2. * level).max(0.), (2. * level - 1.).max(0.))
 }
 
-/// A bar under the header, one for each title: its width and its thickness. Short and thin, so
-/// that the bars stay quiet beside the title.
-pub const MARK: (f32, f32) = (28., 2.);
+/// The marks under the header, one for each title: a dot, and for the title shown a pill whose
+/// fill is the time it has left. Both are `DOT` high.
+pub const DOT: f32 = 8.;
+pub const PILL: f32 = 40.;
+
+/// How long the mark of title `at` is: the pill grows out of a dot as its title comes in, and
+/// the one leaving shrinks back into a dot, both at the pace of the cross-fade.
+pub fn mark_width(at: usize, current: usize, blend: Blend) -> f32 {
+    let level = if at == current {
+        blend.level
+    } else if blend.leaving == Some(at) {
+        1. - blend.level
+    } else {
+        0.
+    };
+    DOT + (PILL - DOT) * level
+}
 
 /// The most a logo takes of the header.
 pub const LOGO: (f32, f32) = (440., 130.);

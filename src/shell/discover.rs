@@ -55,10 +55,15 @@ pub struct Seerr {
     key_saved: Option<bool>,
     /// What the last test of the connection said: the version, or why it failed.
     pub check: Option<Loadable<String>>,
+    /// What the form still lacks, while only one of the address and the key is there: said
+    /// quietly, it is not a failure.
+    pub hint: Option<&'static str>,
     /// Said under the fields when the requests go as the key's owner, not the viewer.
     pub owner_line: Option<String>,
     /// The number of the client being made: an older making that ends late is dropped.
     making: u64,
+    /// A client is being made: the keyring read and the server asked.
+    connecting: bool,
     _key_changed: Option<Subscription>,
     /// The library by TMDb id: what of the request server's titles is in it. Kept for the
     /// session, read again with the Home; while there is none, nothing is said not in it.
@@ -118,6 +123,7 @@ impl Shell {
         let Some(key) = self.add_secret_field("API key", SEERR_KEY, cx) else {
             return;
         };
+        key.update(cx, |key, _| key.in_form());
         let changed = cx.observe(&key, |shell, key, cx| {
             let key = key.read(cx);
             if !key.is_settled() {
@@ -127,6 +133,10 @@ impl Shell {
             if saved != shell.seerr.key_saved {
                 shell.seerr.key_saved = saved;
                 shell.connect_seerr(cx);
+            } else if shell.seerr.client.is_none() {
+                // A save that failed leaves the key missing: say so again.
+                shell.seerr.hint = shell.missing_hint(cx);
+                cx.notify();
             }
         });
         self.seerr = Seerr {
@@ -135,6 +145,16 @@ impl Shell {
             _key_changed: Some(changed),
             ..Seerr::default()
         };
+    }
+
+    /// The form's Save: the address typed, and the key if one was typed.
+    pub fn save_seerr(&mut self, cx: &mut Context<Self>) {
+        // The key first: once its write is under way the form knows the key is coming, and the
+        // address saved just after does not say that it is missing.
+        if let Some(key) = self.seerr.key.clone() {
+            key.update(cx, |key, cx| key.save(cx));
+        }
+        self.save_seerr_address(cx);
     }
 
     /// The address typed is kept (an empty one forgets it) and the client made again.
@@ -156,6 +176,27 @@ impl Shell {
         cx.notify();
     }
 
+    /// What the form lacks, said once the key field is settled: while the keyring is at work the
+    /// key is not missing, it is coming, and its end reconnects.
+    fn missing_hint(&self, cx: &Context<Self>) -> Option<&'static str> {
+        let settled = self
+            .seerr
+            .key
+            .as_ref()
+            .is_none_or(|key| key.read(cx).is_settled());
+        if !settled {
+            return None;
+        }
+        match (
+            &self.settings.seerr_address,
+            self.seerr.key_saved == Some(true),
+        ) {
+            (Some(_), false) => Some("Add the API key to connect."),
+            (None, true) => Some("Add the address to connect."),
+            _ => None,
+        }
+    }
+
     /// Makes the client from the address and the key, or drops it when one of them is missing:
     /// Discover goes with it, and the Settings say which is missing, or why the client could not
     /// be made. The key is read from the keyring off the window's thread, and goes from there to
@@ -168,20 +209,17 @@ impl Shell {
         }
         self.seerr.making += 1;
         let making = self.seerr.making;
+        self.seerr.connecting = false;
         self.seerr.check = None;
         self.seerr.owner_line = None;
         let key_saved = self.seerr.key_saved == Some(true);
         let address = self.settings.seerr_address.clone();
-        let missing = match (&address, key_saved) {
-            (Some(_), false) => Some("Enter the API key."),
-            (None, true) => Some("Enter the address."),
-            _ => None,
-        };
+        self.seerr.hint = self.missing_hint(cx);
         let (Some(address), true, Some(server)) = (address, key_saved, self.server.clone()) else {
             self.seerr_gone(cx);
-            self.seerr.check = missing.map(Loadable::Failed);
             return;
         };
+        self.seerr.connecting = true;
         let account = secret_field::account(&server.server().id, server.user_id(), SEERR_KEY);
         let (store, open): (Arc<dyn TokenStore>, _) =
             (self.secrets.clone(), self.open_seerr.clone());
@@ -201,6 +239,7 @@ impl Shell {
                 if shell.seerr.making != making {
                     return;
                 }
+                shell.seerr.connecting = false;
                 match made {
                     Ok((client, check)) => {
                         shell.seerr.client = Some(client);
@@ -533,13 +572,29 @@ impl Shell {
         }
     }
 
-    /// The Settings' "Test": the version, or why the connection failed.
+    /// Whether a client is being made, or the key is being written to the keyring, which makes
+    /// one when it ends.
+    pub fn seerr_connecting(&self, cx: &Context<Self>) -> bool {
+        self.seerr.connecting
+            || self
+                .seerr
+                .key
+                .as_ref()
+                .is_some_and(|key| key.read(cx).is_busy())
+    }
+
+    /// The Settings' "Test": the form saved as it stands, then the version, or why the
+    /// connection failed. A connection being made is the test: it asks the server too.
     pub fn test_seerr(&mut self, cx: &mut Context<Self>) {
+        self.save_seerr(cx);
         let Some(client) = self.seerr.client.clone() else {
+            if self.seerr_connecting(cx) {
+                cx.notify();
+                return;
+            }
             // Why there is no client was said already; without a word, both are missing.
-            if !matches!(self.seerr.check, Some(Loadable::Failed(_))) {
-                self.seerr.check =
-                    Some(Loadable::Failed("Enter the address and the API key first."));
+            if self.seerr.check.is_none() && self.seerr.hint.is_none() {
+                self.seerr.hint = Some("Add the address and the API key to connect.");
             }
             cx.notify();
             return;
@@ -571,7 +626,7 @@ pub(super) mod tests {
 
     use bobine::provider::{Connector, TokenStore};
     use bobine::requests::RequestError;
-    use gpui_kit::{Modifiers, TestAppContext, VisualTestContext, WindowHandle};
+    use gpui_kit::{Focusable, Modifiers, TestAppContext, VisualTestContext, WindowHandle};
 
     use super::*;
     use crate::config::Settings;
@@ -754,16 +809,276 @@ pub(super) mod tests {
         let mut visual = drawn(&window, cx);
         window
             .update(cx, |shell, _, _| {
-                assert!(matches!(
-                    shell.seerr.check,
-                    Some(Loadable::Failed("Enter the API key."))
-                ));
+                assert_eq!(shell.seerr.hint, Some("Add the API key to connect."));
+                assert!(shell.seerr.check.is_none());
                 assert_eq!(shell.seerr.owner_line, None);
             })
             .unwrap();
-        assert!(visual.debug_bounds("seerr-check").is_some());
+        assert!(visual.debug_bounds("seerr-hint").is_some());
         assert!(visual.debug_bounds("seerr-owner").is_none());
         assert_eq!(seerr.state.lock().unwrap().record.checks, 0);
+    }
+
+    /// A long address and a long key stay in their fields: their text is cut at the field's
+    /// edge, and the field scrolls to keep the caret, at the end of the text, in view.
+    #[gpui_kit::test]
+    fn a_200_character_address_and_a_64_character_key_stay_inside_their_fields(
+        cx: &mut TestAppContext,
+    ) {
+        let seerr = FakeSeerr::default();
+        let (window, _) = start(None, &Arc::new(MemoryKeyring::default()), &seerr, cx);
+        let address = format!("https://{}.example.org", "a".repeat(200 - 20));
+        assert_eq!(address.len(), 200);
+        let (address_field, key_field) = window
+            .update(cx, |shell, window, cx| {
+                shell.open_settings(cx);
+                let field = shell.seerr.address.clone().unwrap();
+                field.update(cx, |field, cx| field.set_text(&address, cx));
+                let key = shell.seerr.key.clone().unwrap();
+                key.update(cx, |key, cx| key.type_in(&"k".repeat(64), cx));
+                let key = key.read(cx).input().clone();
+                // The caret shows only in the field that has the focus.
+                let focus = field.read(cx).focus_handle(cx);
+                window.focus(&focus, cx);
+                (field, key)
+            })
+            .unwrap();
+        let mut visual = drawn(&window, cx);
+        let check = |name: &str, field: &Entity<TextInput>, visual: &mut VisualTestContext| {
+            let crate::input::Drawn {
+                room,
+                caret,
+                line,
+                clip,
+            } = visual.read(|cx| field.read(cx).drawn().expect("the field was drawn"));
+            assert!(
+                caret.left() >= room.left() && caret.right() <= room.right(),
+                "the {name}'s caret at {caret:?} is out of its field {room:?}"
+            );
+            // The line is longer than the field and ends at the caret: it was painted
+            // scrolled left, with no empty room after its end.
+            assert!(
+                line.left() < room.left(),
+                "the {name}'s line is painted at {line:?}, not scrolled in its field {room:?}"
+            );
+            assert!(
+                (line.right() - caret.left()).abs() <= gpui_kit::px(1.),
+                "the {name}'s line ends at {}, its caret is at {}",
+                line.right(),
+                caret.left()
+            );
+            // What is painted outside the field is cut off by the mask in force.
+            assert!(
+                clip.left() >= room.left() && clip.right() <= room.right(),
+                "the {name}'s text is clipped to {clip:?}, wider than its field {room:?}"
+            );
+        };
+        check("address", &address_field, &mut visual);
+        window
+            .update(cx, |_, window, cx| {
+                let focus = key_field.read(cx).focus_handle(cx);
+                window.focus(&focus, cx);
+            })
+            .unwrap();
+        visual.run_until_parked();
+        check("key", &key_field, &mut visual);
+    }
+
+    /// Saving the address before the key is half the form filled, not a failure: a quiet hint
+    /// says the key is missing, never in the colour of an error.
+    #[gpui_kit::test]
+    fn saving_an_address_with_no_key_shows_a_hint_not_an_error(cx: &mut TestAppContext) {
+        let seerr = FakeSeerr::default();
+        let (window, _) = start(None, &Arc::new(MemoryKeyring::default()), &seerr, cx);
+        window
+            .update(cx, |shell, _, cx| {
+                shell.open_settings(cx);
+                let field = shell.seerr.address.clone().unwrap();
+                field.update(cx, |field, cx| field.set_text(ADDRESS, cx));
+            })
+            .unwrap();
+        let mut visual = drawn(&window, cx);
+        click(&mut visual, "seerr-save");
+        window
+            .update(cx, |shell, _, _| {
+                if let Some(Loadable::Failed(why)) = shell.seerr.check {
+                    panic!("an address without a key is said as an error: {why}");
+                }
+            })
+            .unwrap();
+        assert!(visual.debug_bounds("seerr-hint").is_some(), "no hint");
+        assert!(visual.debug_bounds("seerr-check").is_none());
+    }
+
+    /// One Save keeps the address and the key typed together.
+    #[gpui_kit::test]
+    fn one_save_keeps_the_address_and_the_key_together(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.toml");
+        let keyring = Arc::new(MemoryKeyring::default());
+        let seerr = FakeSeerr::default();
+        let (window, _) = start(Some(path.clone()), &keyring, &seerr, cx);
+        window
+            .update(cx, |shell, _, cx| {
+                shell.open_settings(cx);
+                let field = shell.seerr.address.clone().unwrap();
+                field.update(cx, |field, cx| field.set_text(ADDRESS, cx));
+                let key = shell.seerr.key.clone().unwrap();
+                key.update(cx, |key, cx| key.type_in(KEY, cx));
+            })
+            .unwrap();
+        let mut visual = drawn(&window, cx);
+        click(&mut visual, "seerr-save");
+        cx.run_until_parked();
+        assert!(connected(&window, cx));
+        assert_eq!(keyring.secret(ACCOUNT).as_deref(), Some(KEY));
+        assert_eq!(
+            Settings::read(&path).seerr_address.as_deref(),
+            Some(ADDRESS)
+        );
+        let mut visual = drawn(&window, cx);
+        assert!(visual.debug_bounds("seerr-hint").is_none());
+    }
+
+    /// The address is kept before the key's keyring write ends: the form is not half filled, it
+    /// is being saved, so the hint "add the key" must not flash in between.
+    #[gpui_kit::test]
+    fn saving_both_fields_never_flashes_the_hint_for_the_key(cx: &mut TestAppContext) {
+        let keyring = Arc::new(MemoryKeyring::default());
+        let seerr = FakeSeerr::default();
+        let (window, _) = start(None, &keyring, &seerr, cx);
+        window
+            .update(cx, |shell, _, cx| {
+                shell.open_settings(cx);
+                let field = shell.seerr.address.clone().unwrap();
+                field.update(cx, |field, cx| field.set_text(ADDRESS, cx));
+                let key = shell.seerr.key.clone().unwrap();
+                key.update(cx, |key, cx| key.type_in(KEY, cx));
+                shell.save_seerr(cx);
+                // Nothing in the background has run yet: the keyring write is still pending.
+                assert_eq!(keyring.secret(ACCOUNT), None, "the write ended already");
+                assert_eq!(
+                    shell.seerr.hint, None,
+                    "a hint while the key is being saved"
+                );
+            })
+            .unwrap();
+        cx.run_until_parked();
+        assert!(connected(&window, cx));
+        window
+            .update(cx, |shell, _, _| assert_eq!(shell.seerr.hint, None))
+            .unwrap();
+    }
+
+    /// Enter in either field of the form saves both, as the Save button does.
+    #[gpui_kit::test]
+    fn enter_in_either_field_saves_the_address_and_the_key(cx: &mut TestAppContext) {
+        for in_key in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("settings.toml");
+            let keyring = Arc::new(MemoryKeyring::default());
+            let seerr = FakeSeerr::default();
+            let (window, _) = start(Some(path.clone()), &keyring, &seerr, cx);
+            window
+                .update(cx, |shell, window, cx| {
+                    shell.open_settings(cx);
+                    let field = shell.seerr.address.clone().unwrap();
+                    field.update(cx, |field, cx| field.set_text(ADDRESS, cx));
+                    let key = shell.seerr.key.clone().unwrap();
+                    key.update(cx, |key, cx| key.type_in(KEY, cx));
+                    let typing = if in_key {
+                        key.read(cx).input().clone()
+                    } else {
+                        field
+                    };
+                    let focus = typing.read(cx).focus_handle(cx);
+                    window.focus(&focus, cx);
+                })
+                .unwrap();
+            let mut visual = drawn(&window, cx);
+            visual.simulate_keystrokes("enter");
+            visual.run_until_parked();
+            let which = if in_key { "key" } else { "address" };
+            assert_eq!(
+                keyring.secret(ACCOUNT).as_deref(),
+                Some(KEY),
+                "Enter in the {which}"
+            );
+            assert_eq!(
+                Settings::read(&path).seerr_address.as_deref(),
+                Some(ADDRESS),
+                "Enter in the {which}"
+            );
+            assert!(connected(&window, cx), "Enter in the {which}");
+        }
+    }
+
+    /// Test on a form not saved yet saves it first, then tests what it saved.
+    #[gpui_kit::test]
+    fn test_on_unsaved_fields_saves_them_then_tests(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.toml");
+        let keyring = Arc::new(MemoryKeyring::default());
+        let seerr = FakeSeerr::default();
+        let (window, _) = start(Some(path.clone()), &keyring, &seerr, cx);
+        window
+            .update(cx, |shell, _, cx| {
+                shell.open_settings(cx);
+                let field = shell.seerr.address.clone().unwrap();
+                field.update(cx, |field, cx| field.set_text(ADDRESS, cx));
+                let key = shell.seerr.key.clone().unwrap();
+                key.update(cx, |key, cx| key.type_in(KEY, cx));
+            })
+            .unwrap();
+        let mut visual = drawn(&window, cx);
+        click(&mut visual, "seerr-test");
+        cx.run_until_parked();
+        assert_eq!(keyring.secret(ACCOUNT).as_deref(), Some(KEY));
+        assert_eq!(
+            Settings::read(&path).seerr_address.as_deref(),
+            Some(ADDRESS)
+        );
+        assert!(connected(&window, cx));
+        window
+            .update(cx, |shell, _, _| {
+                assert!(
+                    matches!(shell.seerr.check, Some(Loadable::Ready(_))),
+                    "the test did not end on a version"
+                );
+                assert_eq!(shell.seerr.hint, None);
+            })
+            .unwrap();
+        assert_eq!(seerr.state.lock().unwrap().record.checks, 1);
+    }
+
+    /// While the connection is being made, Test does not claim that the form is incomplete: it
+    /// says it is connecting, and the connection's own answer is the test's.
+    #[gpui_kit::test]
+    fn test_while_connecting_does_not_say_the_form_is_incomplete(cx: &mut TestAppContext) {
+        let seerr = FakeSeerr::default();
+        let (window, _) = start(None, &Arc::new(MemoryKeyring::default()), &seerr, cx);
+        window
+            .update(cx, |shell, _, cx| {
+                shell.open_settings(cx);
+                let field = shell.seerr.address.clone().unwrap();
+                field.update(cx, |field, cx| field.set_text(ADDRESS, cx));
+                let key = shell.seerr.key.clone().unwrap();
+                key.update(cx, |key, cx| key.type_in(KEY, cx));
+                shell.save_seerr(cx);
+                // Nothing in the background has run: the key is still being written.
+                shell.test_seerr(cx);
+                assert_eq!(shell.seerr.hint, None, "Test says the form is incomplete");
+                assert!(shell.seerr_connecting(cx), "Test does not say it connects");
+            })
+            .unwrap();
+        cx.run_until_parked();
+        window
+            .update(cx, |shell, _, cx| {
+                assert!(matches!(shell.seerr.check, Some(Loadable::Ready(_))));
+                assert!(!shell.seerr_connecting(cx));
+            })
+            .unwrap();
+        assert_eq!(seerr.state.lock().unwrap().record.checks, 1);
     }
 
     #[gpui_kit::test]
