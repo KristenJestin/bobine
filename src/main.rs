@@ -1,5 +1,5 @@
 //! `bobine`: a native client for films and series, Jellyfin first.
-#![allow(dead_code)] // the stubs of the first commit: removed with the implementation
+#![allow(dead_code, unused_imports)] // the stubs of the first commit: removed with the implementation
 
 mod brand;
 mod chrome;
