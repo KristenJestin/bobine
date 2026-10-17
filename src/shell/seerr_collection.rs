@@ -680,6 +680,40 @@ mod tests {
     }
 
     #[gpui_kit::test]
+    fn a_late_answer_of_a_page_gone_does_not_count_in_the_run_of_its_reopened_page(
+        cx: &mut TestAppContext,
+    ) {
+        let seerr = FakeSeerr::default();
+        let window = on_collection(&seerr, cx);
+        let gone = window
+            .update(cx, |shell, _, cx| {
+                let generation = shell.seerr.collections.last().unwrap().generation;
+                assert!(shell.go_back(cx));
+                assert!(shell.go_forward(cx));
+                generation
+            })
+            .unwrap();
+        cx.run_until_parked();
+        drawn(&window, cx);
+        window
+            .update(cx, |shell, _, cx| {
+                shell.request_collection(cx);
+                // The run of the page gone takes its next step while the new page's runs.
+                shell.request_next_film(gone, cx);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        assert_eq!(
+            seerr.requests(),
+            [Ask::Movie(WINTER_LIGHT), Ask::Movie(WINTERS_END)]
+        );
+        assert_eq!(
+            outcome(&window, cx).as_deref(),
+            Some("Requested: Winter Light, Winter's End.")
+        );
+    }
+
+    #[gpui_kit::test]
     fn a_failure_after_the_first_request_says_which_movie_was_not_requested_and_why(
         cx: &mut TestAppContext,
     ) {
