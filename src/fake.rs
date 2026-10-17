@@ -10,11 +10,12 @@ use std::time::Duration;
 use bobine::provider::{
     AudioTrack, CastMember, Collection, CollectionCard, CollectionDetail, Connector, EntryId,
     Episode, ExternalSubtitle, Favourite, Feature, FeatureKind, Film, FilmDetail, FilmQuery,
-    FilmSort, FilterChoices, ImageKind, ImageRef, ItemId, Library, LibraryKind, MediaServer,
-    MediaSource, MediaSourceId, Page, PersonHit, PersonTitles, PlaySessionId, Playback,
-    PlaybackReport, Playlist, PlaylistEntry, ProviderError, SearchResults, Season, Segment, Series,
-    SeriesDetail, SeriesHit, ServerInfo, StreamUrl, SubtitleTrack, Title, TmdbIndex, Token,
-    TokenStore, Trailers, TranscodeRequest, Trickplay, VideoRange, VideoTrack,
+    FilmSort, FilterChoices, HistorySource, ImageKind, ImageRef, ItemId, Library, LibraryKind,
+    MediaServer, MediaSource, MediaSourceId, Page, PersonHit, PersonTitles, PlaySessionId,
+    Playback, PlaybackReport, Playlist, PlaylistEntry, ProviderError, SearchResults, Season,
+    Segment, Series, SeriesDetail, SeriesHit, ServerInfo, StreamUrl, SubtitleTrack, Title,
+    TmdbIndex, Token, TokenStore, Trailers, TranscodeRequest, Trickplay, VideoRange, VideoTrack,
+    WatchHistory,
 };
 
 pub const USER: &str = "camille";
@@ -1619,6 +1620,13 @@ impl MediaServer for FakeServer {
             return Err(error);
         }
         Ok(StreamUrl::new(state.trailer_stream.clone()))
+    }
+
+    fn watch_history(&self) -> Result<WatchHistory, ProviderError> {
+        Ok(WatchHistory {
+            source: HistorySource::PlayedItems,
+            plays: Vec::new(),
+        })
     }
 }
 

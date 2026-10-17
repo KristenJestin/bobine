@@ -4,10 +4,12 @@
 //! Every call blocks until the server answers: the window runs them on its background executor,
 //! never on the thread that draws.
 
+mod history;
 mod keyring;
 mod secret;
 mod trickplay;
 
+pub use history::{HistorySource, LocalTime, Play, WatchHistory, Watched, WatchedKind};
 pub use keyring::{SecretServiceStore, TokenStore};
 pub use secret::{StreamUrl, Token};
 pub use trickplay::{Cell, Trickplay, WANTED_WIDTH};
@@ -163,6 +165,9 @@ pub trait MediaServer: Send + Sync {
     /// playback session is opened: a trailer is not watched, the server is told nothing of it.
     /// `NotFound` when the title has none.
     fn local_trailer(&self, item: &ItemId) -> Result<StreamUrl, ProviderError>;
+    /// What the signed-in user watched, and only they: each play the server recorded, or, when
+    /// it records none, each title marked played. Empty when there is neither.
+    fn watch_history(&self) -> Result<WatchHistory, ProviderError>;
 }
 
 /// The trailers of a film or a series, as its page learns them.

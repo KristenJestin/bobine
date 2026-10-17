@@ -1,0 +1,8 @@
+{
+  "Items": [
+    { "Id": "f0000000000000000000000000000001", "Name": "The Quiet Harbour", "Type": "Movie", "RunTimeTicks": 66000000000, "Genres": ["Drama", "Mystery"], "ImageTags": { "Primary": "poster-quiet-harbour" }, "UserData": { "Played": true, "PlayCount": 2, "LastPlayedDate": "2026-10-12T12:00:00.0000000Z" } },
+    { "Id": "e0000000000000000000000000000021", "Name": "The Tide Turns", "Type": "Episode", "SeriesId": "50000000000000000000000000000001", "SeriesName": "Tidewater", "SeriesPrimaryImageTag": "poster-tidewater", "RunTimeTicks": 27000000000, "Genres": [], "UserData": { "Played": true, "PlayCount": 1, "LastPlayedDate": "2026-10-14T12:00:00.0000000Z" } },
+    { "Id": "f0000000000000000000000000000002", "Name": "Amber Fields", "Type": "Movie", "RunTimeTicks": 58200000000, "Genres": ["Drama"], "ImageTags": {}, "UserData": { "Played": true, "PlayCount": 0 } }
+  ],
+  "TotalRecordCount": 3
+}

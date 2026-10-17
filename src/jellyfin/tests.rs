@@ -3379,3 +3379,255 @@ fn a_remote_trailer_that_is_not_a_web_address_is_left_out() {
     let detail = s.signed_in().film(&film()).unwrap();
     assert_eq!(detail.trailers.remote, None);
 }
+
+/// Another user of the same server, whose plays the plugin holds beside ours.
+const OTHER_USER_ID: &str = "99999999999999999999999999999999";
+
+fn reporting_rows() -> Vec<[&'static str; 6]> {
+    vec![
+        [
+            "2026-10-12 21:05:00.1234567",
+            USER_ID,
+            FILM,
+            "Movie",
+            "The Quiet Harbour",
+            "6000",
+        ],
+        [
+            "2026-10-13 08:30:00",
+            USER_ID,
+            FILM,
+            "Movie",
+            "The Quiet Harbour",
+            "600",
+        ],
+        [
+            "2026-10-14 22:00:00",
+            USER_ID,
+            EPISODE,
+            "Episode",
+            "Tidewater - s01e02 - The Tide Turns",
+            "2700",
+        ],
+        [
+            "2026-10-15 20:00:00",
+            OTHER_USER_ID,
+            "f0000000000000000000000000000002",
+            "Movie",
+            "Amber Fields",
+            "5000",
+        ],
+        [
+            "2026-09-01 19:00:00",
+            USER_ID,
+            "e0000000000000000000000000000099",
+            "Episode",
+            "Lost Shore - s02e01 - Pilot",
+            "1800",
+        ],
+    ]
+}
+
+fn local(day: u32, month: u32, hour: u32, minute: u32) -> LocalTime {
+    LocalTime {
+        year: 2026,
+        month,
+        day,
+        hour,
+        minute,
+    }
+}
+
+fn names(history: &WatchHistory) -> Vec<&str> {
+    history
+        .plays
+        .iter()
+        .map(|play| play.title.name.as_str())
+        .collect()
+}
+
+#[test]
+fn with_the_plugin_its_numbers_are_shown() {
+    let s = Setup::new();
+    s.fake.state.lock().unwrap().reporting = Some(reporting_rows());
+    let history = s.signed_in().watch_history().unwrap();
+    assert_eq!(history.source, HistorySource::PlaybackReporting);
+    assert_eq!(
+        names(&history),
+        [
+            "The Quiet Harbour",
+            "The Quiet Harbour",
+            "Tidewater",
+            "Lost Shore"
+        ]
+    );
+    let first = &history.plays[0];
+    assert_eq!(
+        first.at,
+        Some(local(12, 10, 21, 5)),
+        "the plugin's own clock"
+    );
+    assert_eq!((first.seconds, first.count), (6000, 1));
+    assert_eq!(first.title.kind, WatchedKind::Movie);
+    assert_eq!(first.title.id, Some(film()));
+    assert_eq!(first.title.genres, ["Drama", "Mystery"]);
+    assert_eq!(
+        first
+            .title
+            .poster
+            .as_ref()
+            .map(|poster| poster.tag.as_str()),
+        Some("poster-quiet-harbour")
+    );
+    let episode = &history.plays[2];
+    assert_eq!(
+        episode.title.kind,
+        WatchedKind::Series,
+        "counted for its series"
+    );
+    assert_eq!(episode.title.id, Some(ItemId(SERIES.into())));
+    assert_eq!(episode.title.genres, ["Drama", "Mystery"]);
+    let gone = &history.plays[3];
+    assert_eq!(gone.title.id, None, "a series the library no longer holds");
+    assert_eq!(gone.title.kind, WatchedKind::Series);
+    assert!(
+        !s.fake
+            .seen()
+            .iter()
+            .any(|seen| seen.param("IsPlayed").is_some()),
+        "the played items are not asked when the plugin answers"
+    );
+}
+
+#[test]
+fn the_plugin_is_asked_only_a_select_of_the_signed_in_users_plays() {
+    let s = Setup::new();
+    s.fake.state.lock().unwrap().reporting = Some(reporting_rows());
+    s.signed_in().watch_history().unwrap();
+    let asked = s
+        .fake
+        .last("POST", "/user_usage_stats/submit_custom_query")
+        .json();
+    let query = asked["CustomQueryString"].as_str().unwrap();
+    assert!(query.starts_with("SELECT "), "{query}");
+    assert!(query.contains(&format!("UserId = '{USER_ID}'")), "{query}");
+    assert!(!query.contains(';'), "one statement: {query}");
+    assert_eq!(asked["ReplaceUserId"], false, "ids are kept, not names");
+}
+
+#[test]
+fn another_users_plays_are_never_counted() {
+    let s = Setup::new();
+    s.fake.state.lock().unwrap().reporting = Some(reporting_rows());
+    let history = s.signed_in().watch_history().unwrap();
+    assert!(!names(&history).contains(&"Amber Fields"));
+    assert_eq!(history.plays.len(), 4);
+}
+
+#[test]
+fn a_user_id_that_is_not_hex_is_never_put_in_a_query() {
+    assert_eq!(super::reporting_query("0f1e' OR '1'='1"), None);
+    assert_eq!(super::reporting_query(""), None);
+    let dashed = super::reporting_query("0F1E2D3C-4B5A-6978-8796-A5B4C3D2E1F0").unwrap();
+    assert!(
+        dashed.contains(&format!("UserId = '{USER_ID}'")),
+        "{dashed}"
+    );
+}
+
+#[test]
+fn without_the_plugin_the_played_items_are_used() {
+    let s = Setup::new();
+    let history = s.signed_in().watch_history().unwrap();
+    assert_eq!(history.source, HistorySource::PlayedItems);
+    let asked = s
+        .fake
+        .seen()
+        .into_iter()
+        .find(|seen| seen.path == "/Items" && seen.param("IsPlayed") == Some("true"))
+        .expect("the played items asked");
+    assert_eq!(asked.param("Recursive"), Some("true"));
+    assert_eq!(asked.param("IncludeItemTypes"), Some("Movie,Episode"));
+    assert_eq!(asked.param("Fields"), Some("UserData,Genres,RunTimeTicks"));
+    assert_eq!(asked.param("userId"), Some(USER_ID));
+    // Twice 110 minutes: the last play on its date, the one before it at no known time.
+    let harbour: Vec<_> = history
+        .plays
+        .iter()
+        .filter(|play| play.title.name == "The Quiet Harbour")
+        .map(|play| {
+            (
+                play.at.map(|at| (at.month, at.day)),
+                play.seconds,
+                play.count,
+            )
+        })
+        .collect();
+    assert_eq!(harbour, [(Some((10, 12)), 6600, 1), (None, 6600, 1)]);
+    let episode = history
+        .plays
+        .iter()
+        .find(|play| play.title.name == "Tidewater")
+        .expect("the episode counted for its series");
+    assert_eq!(episode.title.kind, WatchedKind::Series);
+    assert_eq!(episode.title.id, Some(ItemId(SERIES.into())));
+    assert_eq!(
+        episode.title.genres,
+        ["Drama", "Mystery"],
+        "the series' genres"
+    );
+    assert_eq!((episode.seconds, episode.count), (2700, 1));
+    let marked = history
+        .plays
+        .iter()
+        .find(|play| play.title.name == "Amber Fields")
+        .expect("a title marked played without a play");
+    assert_eq!((marked.at, marked.seconds, marked.count), (None, 5820, 1));
+}
+
+#[test]
+fn a_plugin_closed_to_the_user_falls_back_to_the_played_items() {
+    let s = Setup::new();
+    {
+        let mut state = s.fake.state.lock().unwrap();
+        state.reporting = Some(reporting_rows());
+        // The plugin's routes are for administrators only.
+        state
+            .broken
+            .push(("/user_usage_stats/submit_custom_query".into(), 403));
+    }
+    let history = s.signed_in().watch_history().unwrap();
+    assert_eq!(history.source, HistorySource::PlayedItems);
+}
+
+#[test]
+fn a_plugin_with_no_play_of_the_user_falls_back_to_the_played_items() {
+    let s = Setup::new();
+    s.fake.state.lock().unwrap().reporting = Some(Vec::new());
+    let history = s.signed_in().watch_history().unwrap();
+    assert_eq!(history.source, HistorySource::PlayedItems);
+    assert!(!history.plays.is_empty());
+}
+
+#[test]
+fn with_no_data_at_all_the_history_is_empty() {
+    let s = Setup::new();
+    s.fake.state.lock().unwrap().nothing_played = true;
+    let history = s.signed_in().watch_history().unwrap();
+    assert_eq!(history.plays, []);
+}
+
+#[test]
+fn a_plugin_that_fails_otherwise_is_an_error_left_to_the_caller() {
+    let s = Setup::new();
+    s.fake
+        .state
+        .lock()
+        .unwrap()
+        .broken
+        .push(("/user_usage_stats/submit_custom_query".into(), 500));
+    assert_eq!(
+        s.signed_in().watch_history(),
+        Err(ProviderError::Server(500))
+    );
+}

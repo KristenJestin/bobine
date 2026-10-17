@@ -11,11 +11,12 @@ mod tests;
 
 use crate::provider::{
     Collection, CollectionCard, CollectionDetail, Connector, EntryId, Episode, ExternalSubtitle,
-    Favourite, Feature, Film, FilmDetail, FilmQuery, FilmSort, FilterChoices, ImageKind, ImageRef,
-    ItemId, Library, MediaServer, MediaSourceId, Page, PersonTitles, PlayMethod, PlaySessionId,
-    Playback, PlaybackReport, Playlist, PlaylistEntry, ProviderError, SearchResults, Season,
-    Segment, Series, SeriesDetail, ServerInfo, StreamUrl, Title, TmdbIndex, Token, TokenStore,
-    TranscodeRequest, Trickplay,
+    Favourite, Feature, Film, FilmDetail, FilmQuery, FilmSort, FilterChoices, HistorySource,
+    ImageKind, ImageRef, ItemId, Library, LocalTime, MediaServer, MediaSourceId, Page,
+    PersonTitles, Play, PlayMethod, PlaySessionId, Playback, PlaybackReport, Playlist,
+    PlaylistEntry, ProviderError, SearchResults, Season, Segment, Series, SeriesDetail, ServerInfo,
+    StreamUrl, Title, TmdbIndex, Token, TokenStore, TranscodeRequest, Trickplay, WatchHistory,
+    Watched, WatchedKind,
 };
 use account::{AccountFile, Login};
 use dto::{
@@ -1231,4 +1232,292 @@ impl MediaServer for Jellyfin {
             encode(self.token()),
         )))
     }
+
+    /// The plugin's plays first; its routes answer 404 when it is not installed, and 403 to a
+    /// user who is not an administrator: the titles marked played are read then.
+    fn watch_history(&self) -> Result<WatchHistory, ProviderError> {
+        let rows = self.reporting_rows()?;
+        if !rows.is_empty() {
+            let titles = self.watched_titles()?;
+            let plays = rows.into_iter().map(|row| row.play(&titles)).collect();
+            return Ok(WatchHistory {
+                source: HistorySource::PlaybackReporting,
+                plays,
+            });
+        }
+        let played = self.items(
+            "played items",
+            &[
+                ("IsPlayed", "true".into()),
+                ("Recursive", "true".into()),
+                ("IncludeItemTypes", "Movie,Episode".into()),
+                ("Fields", "UserData,Genres,RunTimeTicks".into()),
+            ],
+        )?;
+        let titles = if played.items.is_empty() {
+            Titles::default()
+        } else {
+            self.watched_titles()?
+        };
+        Ok(WatchHistory {
+            source: HistorySource::PlayedItems,
+            plays: played
+                .items
+                .iter()
+                .flat_map(|item| played_item(item, &titles))
+                .collect(),
+        })
+    }
+}
+
+impl Jellyfin {
+    /// The signed-in user's plays the Playback Reporting plugin recorded; none when it is not
+    /// there or not open to them. Its report routes add up every user's plays: only its query
+    /// route gives one user's, each with its time and title.
+    fn reporting_rows(&self) -> Result<Vec<ReportingRow>, ProviderError> {
+        let (Some(query), Some(user)) = (
+            reporting_query(&self.login.user_id),
+            plugin_user_id(&self.login.user_id),
+        ) else {
+            return Ok(Vec::new());
+        };
+        let answer: Result<dto::CustomQueryAnswer, ProviderError> = self.http.post(
+            "watch history",
+            "/user_usage_stats/submit_custom_query",
+            &[],
+            &json!({ "CustomQueryString": query, "ReplaceUserId": false }),
+        );
+        let answer = match answer {
+            Ok(answer) => answer,
+            Err(ProviderError::NotFound | ProviderError::Forbidden) => return Ok(Vec::new()),
+            Err(error) => return Err(error),
+        };
+        let Some(at) = REPORTING_COLUMNS
+            .iter()
+            .map(|name| answer.colums.iter().position(|column| column == name))
+            .collect::<Option<Vec<usize>>>()
+        else {
+            return Ok(Vec::new());
+        };
+        let cell = |row: &[serde_json::Value], column: usize| match row.get(at[column]) {
+            Some(serde_json::Value::String(text)) => text.clone(),
+            Some(other) => other.to_string(),
+            None => String::new(),
+        };
+        Ok(answer
+            .results
+            .iter()
+            // The query asked only the user's rows: what else comes back is not counted.
+            .filter(|row| plugin_user_id(&cell(row, 1)).as_deref() == Some(user.as_str()))
+            .map(|row| ReportingRow {
+                at: LocalTime::parse(&cell(row, 0)),
+                item: cell(row, 2),
+                episode: cell(row, 3) == "Episode",
+                name: cell(row, 4),
+                seconds: cell(row, 5).parse().unwrap_or(0),
+            })
+            .collect())
+    }
+
+    /// The library's movies and series, with their genres and posters, to name what was played.
+    fn watched_titles(&self) -> Result<Titles, ProviderError> {
+        let found = self.items(
+            "the library's titles",
+            &[
+                ("Recursive", "true".into()),
+                ("IncludeItemTypes", "Movie,Series".into()),
+                ("Fields", "Genres".into()),
+                ("EnableUserData", "false".into()),
+                ("EnableTotalRecordCount", "false".into()),
+                ("ImageTypeLimit", "1".into()),
+                ("EnableImageTypes", "Primary".into()),
+            ],
+        )?;
+        let mut titles = Titles::default();
+        for item in &found.items {
+            let kind = match item.kind.as_deref() {
+                Some("Movie") => WatchedKind::Movie,
+                Some("Series") => WatchedKind::Series,
+                _ => continue,
+            };
+            let watched = Watched {
+                id: Some(ItemId(item.id.clone())),
+                name: item.name.clone(),
+                kind,
+                poster: item.list_poster(),
+                genres: item.genres.clone(),
+            };
+            if kind == WatchedKind::Series {
+                titles
+                    .series_by_name
+                    .insert(item.name.clone(), watched.clone());
+            }
+            titles.by_id.insert(item.id.clone(), watched);
+        }
+        Ok(titles)
+    }
+}
+
+/// The library's titles by id, and its series by name too: the plugin names an episode's series
+/// only in the episode's name.
+#[derive(Default)]
+struct Titles {
+    by_id: std::collections::HashMap<String, Watched>,
+    series_by_name: std::collections::HashMap<String, Watched>,
+}
+
+/// The columns read from the plugin's table, in this order.
+const REPORTING_COLUMNS: [&str; 6] = [
+    "DateCreated",
+    "UserId",
+    "ItemId",
+    "ItemType",
+    "ItemName",
+    "PlayDuration",
+];
+
+/// A play the plugin recorded. Its time is the server's clock, taken as the local one.
+struct ReportingRow {
+    at: Option<LocalTime>,
+    item: String,
+    episode: bool,
+    name: String,
+    seconds: u64,
+}
+
+impl ReportingRow {
+    fn play(self, titles: &Titles) -> Play {
+        let title = if self.episode {
+            let series = series_of_episode(&self.name);
+            titles
+                .series_by_name
+                .get(series)
+                .cloned()
+                .unwrap_or_else(|| gone(series, WatchedKind::Series))
+        } else {
+            titles
+                .by_id
+                .get(&self.item)
+                .cloned()
+                .unwrap_or_else(|| gone(&self.name, WatchedKind::Movie))
+        };
+        Play {
+            title,
+            at: self.at,
+            seconds: self.seconds,
+            count: 1,
+        }
+    }
+}
+
+/// A title the library no longer holds, known by its name.
+fn gone(name: &str, kind: WatchedKind) -> Watched {
+    Watched {
+        id: None,
+        name: name.to_string(),
+        kind,
+        poster: None,
+        genres: Vec::new(),
+    }
+}
+
+/// The series of an episode the plugin names `Series - s01e02 - Episode`.
+fn series_of_episode(name: &str) -> &str {
+    let mut end = name.len();
+    while let Some(at) = name[..end].rfind(" - s") {
+        let rest = &name[at + 4..];
+        let season = rest.bytes().take_while(u8::is_ascii_digit).count();
+        let episode = rest[season..]
+            .strip_prefix('e')
+            .map(|after| (after, after.bytes().take_while(u8::is_ascii_digit).count()));
+        if let Some((after, digits)) = episode
+            && season > 0
+            && digits > 0
+            && after[digits..].starts_with(" - ")
+        {
+            return &name[..at];
+        }
+        end = at;
+    }
+    name
+}
+
+/// The plays of a title marked played: its last play on its date, the ones before at no known
+/// time, each as long as the title. A title marked played by hand was watched once.
+fn played_item(item: &Item, titles: &Titles) -> Vec<Play> {
+    let title = match item.kind.as_deref() {
+        Some("Episode") => {
+            let series = item.series_id.clone().unwrap_or_default();
+            titles
+                .by_id
+                .get(&series)
+                .cloned()
+                .unwrap_or_else(|| Watched {
+                    id: item.series_id.clone().map(ItemId),
+                    name: item.series_name.clone().unwrap_or_default(),
+                    kind: WatchedKind::Series,
+                    poster: item.list_poster(),
+                    genres: Vec::new(),
+                })
+        }
+        _ => titles
+            .by_id
+            .get(&item.id)
+            .cloned()
+            .unwrap_or_else(|| Watched {
+                id: Some(ItemId(item.id.clone())),
+                name: item.name.clone(),
+                kind: WatchedKind::Movie,
+                poster: item.list_poster(),
+                genres: item.genres.clone(),
+            }),
+    };
+    let length = item.run_time_ticks.unwrap_or(0).max(0) as u64 / 10_000_000;
+    let user_data = item.user_data.as_ref();
+    let count = user_data.map_or(0, |data| data.play_count).max(1);
+    let last = user_data
+        .and_then(|data| data.last_played_date.as_deref())
+        .and_then(LocalTime::from_utc);
+    let (dated, before) = if last.is_some() {
+        (1, count - 1)
+    } else {
+        (0, count)
+    };
+    let mut plays = Vec::new();
+    if dated == 1 {
+        plays.push(Play {
+            title: title.clone(),
+            at: last,
+            seconds: length,
+            count: 1,
+        });
+    }
+    if before > 0 {
+        plays.push(Play {
+            title,
+            at: None,
+            seconds: length * u64::from(before),
+            count: before,
+        });
+    }
+    plays
+}
+
+/// The plugin's user ids are Jellyfin's without dashes, in lower case. None for anything that is
+/// not hex: it would not be put in a query.
+fn plugin_user_id(user_id: &str) -> Option<String> {
+    let id = user_id.replace('-', "").to_ascii_lowercase();
+    (!id.is_empty() && id.bytes().all(|byte| byte.is_ascii_hexdigit())).then_some(id)
+}
+
+/// The query of the signed-in user's plays of movies and episodes. The plugin runs whatever it
+/// is sent, writes included: only this SELECT is ever sent, constants and the user's id, which
+/// is hex or nothing is asked.
+fn reporting_query(user_id: &str) -> Option<String> {
+    let id = plugin_user_id(user_id)?;
+    Some(format!(
+        "SELECT {} FROM PlaybackActivity WHERE UserId = '{id}' \
+         AND ItemType IN ('Movie', 'Episode') ORDER BY DateCreated",
+        REPORTING_COLUMNS.join(", ")
+    ))
 }

@@ -73,6 +73,8 @@ fn fixture(name: &str) -> Value {
         "tmdb_index" => include_str!("fixtures/tmdb_index.json"),
         "playlists" => include_str!("fixtures/playlists.json"),
         "playlist_items" => include_str!("fixtures/playlist_items.json"),
+        "played_items" => include_str!("fixtures/played_items.json"),
+        "watched_titles" => include_str!("fixtures/watched_titles.json"),
         _ => panic!("no fixture {name}"),
     };
     serde_json::from_str(text).unwrap()
@@ -148,6 +150,12 @@ pub struct State {
     pub local_trailer: bool,
     /// The trailers hosted elsewhere that the film and the series list, in order.
     pub remote_trailers: Vec<String>,
+    /// The rows the Playback Reporting plugin answers a query with, every user's, whatever the
+    /// query: `DateCreated, UserId, ItemId, ItemType, ItemName, PlayDuration`. None: the plugin
+    /// is not installed, its routes answer 404.
+    pub reporting: Option<Vec<[&'static str; 6]>>,
+    /// The user has played nothing.
+    pub nothing_played: bool,
 }
 
 /// How many episodes the series of the pages puts in a playlist.
@@ -498,6 +506,40 @@ fn answer(state: &State, seen: &Seen) -> Answer {
         ("GET", "/Genres") => Answer::Json(200, genres(library_fixture(seen))),
         ("GET", "/Items/Filters") => Answer::Json(200, years(library_fixture(seen))),
         ("GET", "/Persons") => Answer::Json(200, matching("persons", seen)),
+        ("POST", "/user_usage_stats/submit_custom_query") if state.reporting.is_some() => {
+            let rows = state.reporting.as_ref().unwrap();
+            let columns = if rows.is_empty() {
+                json!([])
+            } else {
+                json!([
+                    "DateCreated",
+                    "UserId",
+                    "ItemId",
+                    "ItemType",
+                    "ItemName",
+                    "PlayDuration"
+                ])
+            };
+            let message = if rows.is_empty() {
+                "Query executed, no data returned.</br>Number of rows effected : 0"
+            } else {
+                ""
+            };
+            Answer::Json(
+                200,
+                json!({ "colums": columns, "results": rows, "message": message }),
+            )
+        }
+        ("GET", "/Items") if seen.param("IsPlayed") == Some("true") => {
+            if state.nothing_played {
+                Answer::Json(200, json!({ "Items": [], "TotalRecordCount": 0 }))
+            } else {
+                Answer::Json(200, fixture("played_items"))
+            }
+        }
+        ("GET", "/Items") if seen.param("Fields") == Some("Genres") => {
+            Answer::Json(200, fixture("watched_titles"))
+        }
         ("GET", "/Items") if seen.param("HasTmdbId") == Some("true") => {
             Answer::Json(200, of_types(fixture("tmdb_index"), seen))
         }

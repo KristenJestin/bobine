@@ -120,6 +120,8 @@ pub struct UserData {
     pub playback_position_ticks: i64,
     pub unplayed_item_count: Option<u32>,
     pub is_favorite: bool,
+    pub play_count: u32,
+    pub last_played_date: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -683,4 +685,13 @@ impl MediaSourceInfo {
                 .map(|index| (index >= 0).then_some(index)),
         }
     }
+}
+
+/// What the Playback Reporting plugin answers a query with (its own spelling of `colums`, from
+/// its source): each cell as text.
+#[derive(Deserialize, Default)]
+#[serde(default)]
+pub struct CustomQueryAnswer {
+    pub colums: Vec<String>,
+    pub results: Vec<Vec<serde_json::Value>>,
 }
