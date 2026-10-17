@@ -239,6 +239,17 @@ fn a_series_is_requested_with_chosen_seasons() {
     );
 }
 
+/// Asks for `films` as the collection page does: the quota, then each film once the one before
+/// was answered.
+fn request_films(seerr: &SeerrClient, films: &[TmdbId]) -> CollectionOutcome {
+    let mut run = CollectionRun::default();
+    run.quota(seerr.quota_reached(MediaKind::Movie), films);
+    while let Some(film) = run.next(films) {
+        run.answered(film, seerr.request(&Ask::Movie(film)), films);
+    }
+    run.outcome
+}
+
 #[test]
 fn a_collection_with_two_films_in_the_library_and_two_missing_requests_only_the_two_missing_ones() {
     let fake = FakeSeerr::start();
@@ -251,7 +262,7 @@ fn a_collection_with_two_films_in_the_library_and_two_missing_requests_only_the_
         kind == MediaKind::Movie && library.contains(&id)
     });
     assert_eq!(wanted, [HARBOUR_NIGHTS, HARBOUR_DAWN]);
-    let outcome = request_films(&seerr, &wanted, &|| true);
+    let outcome = request_films(&seerr, &wanted);
     assert_eq!(outcome.requested, wanted);
     let asked: Vec<u64> = fake
         .posts()
@@ -266,14 +277,14 @@ fn a_collection_request_stops_at_the_quota_and_says_which_films_were_not_request
     let fake = FakeSeerr::start();
     fake.state.lock().unwrap().movie_quota = Some(1);
     let seerr = client(&fake);
-    let outcome = request_films(&seerr, &[HARBOUR_NIGHTS, HARBOUR_DAWN], &|| true);
+    let outcome = request_films(&seerr, &[HARBOUR_NIGHTS, HARBOUR_DAWN]);
     assert_eq!(outcome.requested, [HARBOUR_NIGHTS]);
     assert_eq!(outcome.not_requested, [HARBOUR_DAWN]);
     assert_eq!(outcome.failure, Some(RequestError::Quota));
     assert_eq!(fake.posts().len(), 2, "the second one met the quota");
     // A quota already reached sends nothing.
     let posts = fake.posts().len();
-    let outcome = request_films(&seerr, &[PAPER_MOONS], &|| true);
+    let outcome = request_films(&seerr, &[PAPER_MOONS]);
     assert_eq!(outcome.failure, Some(RequestError::Quota));
     assert_eq!(fake.posts().len(), posts);
 }

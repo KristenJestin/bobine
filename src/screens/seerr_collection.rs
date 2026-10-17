@@ -30,7 +30,7 @@ pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -
         Loadable::Failed(why) => return centered().child(note(*why)).into_any_element(),
         Loadable::Loading => return centered().child(note("Loading…")).into_any_element(),
     };
-    let (picker, busy, outcome) = (page.picker.clone(), page.busy, page.outcome.clone());
+    let (picker, busy, outcome) = (page.picker.clone(), page.busy(), page.outcome.clone());
     let scroll = page.scroll.clone();
     let [films_scroll] = page.rows.clone();
 

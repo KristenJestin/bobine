@@ -3,10 +3,9 @@
 //! the checked ones one after the other, as Seerr's own collection request does. Reached by
 //! "Part of …" on a request page and on a library movie's page.
 
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-
-use bobine::requests::{self, CollectionParts, CollectionRef, MediaKind, RequestServer, TmdbId};
+use bobine::requests::{
+    self, Ask, CollectionParts, CollectionRef, CollectionRun, MediaKind, RequestServer, TmdbId,
+};
 use gpui_kit::{Context, ScrollHandle, ScrollWheelEvent, Window};
 
 use super::pages::route_wheel;
@@ -22,12 +21,10 @@ pub struct SeerrCollectionPage {
     pub parts: Loadable<CollectionParts>,
     /// The movies it may ask for, once the library is indexed: none is offered before.
     pub picker: Option<FilmPicker>,
-    /// The requests on their way.
-    pub busy: bool,
+    /// The requests on their way: once the page is gone, what is left is not sent.
+    run: Option<CollectionRun>,
     /// How the last request went, movie by movie, and whether all of them went.
     pub outcome: Option<(String, bool)>,
-    /// Set when the page closes: the requests not sent yet are not sent.
-    stop: Arc<AtomicBool>,
     pub scroll: ScrollHandle,
     pub rows: [ScrollHandle; 1],
     gesture: scroll::Gesture,
@@ -40,9 +37,8 @@ impl SeerrCollectionPage {
             generation,
             parts: Loadable::Loading,
             picker: None,
-            busy: false,
+            run: None,
             outcome: None,
-            stop: Arc::new(AtomicBool::new(false)),
             scroll: ScrollHandle::new(),
             rows: Default::default(),
             gesture: scroll::Gesture::default(),
@@ -50,10 +46,17 @@ impl SeerrCollectionPage {
     }
 }
 
-impl Drop for SeerrCollectionPage {
-    /// Gone back from, left by the pill bar, signed out of: what is left to send stays unsent.
-    fn drop(&mut self) {
-        self.stop.store(true, Ordering::Relaxed);
+impl SeerrCollectionPage {
+    pub fn busy(&self) -> bool {
+        self.run.is_some()
+    }
+
+    /// The movies checked, at this moment.
+    fn wanted(&self) -> Vec<TmdbId> {
+        self.picker
+            .as_ref()
+            .map(FilmPicker::chosen)
+            .unwrap_or_default()
     }
 }
 
@@ -125,7 +128,7 @@ impl Shell {
         let Some(page) = self.seerr_collection_shown() else {
             return;
         };
-        if page.busy {
+        if page.busy() {
             return;
         }
         if let Some(picker) = &mut page.picker {
@@ -138,60 +141,71 @@ impl Shell {
     /// window's thread. A quota reached or a failure stops them, and a line names which went
     /// and which did not.
     pub fn request_collection(&mut self, cx: &mut Context<Self>) {
-        let Some(client) = self.seerr.client.clone() else {
-            return;
-        };
         let Some(page) = self.seerr_collection_shown() else {
             return;
         };
-        let (Some(picker), Loadable::Ready(parts)) = (&page.picker, &page.parts) else {
-            return;
-        };
-        let chosen = picker.chosen();
-        if page.busy || chosen.is_empty() {
+        if page.busy() || page.wanted().is_empty() {
             return;
         }
-        let films = parts.films.clone();
-        page.busy = true;
+        page.run = Some(CollectionRun::default());
         page.outcome = None;
-        let (generation, stop) = (page.generation, page.stop.clone());
-        let asked = client.clone();
-        let task = cx.background_executor().spawn(async move {
-            let go_on = || !stop.load(Ordering::Relaxed);
-            requests::request_films(&*asked, &chosen, &go_on)
-        });
-        cx.spawn(async move |this, cx| {
-            let outcome = task.await;
-            this.update(cx, |shell, cx| {
-                // The answer of a client gone meanwhile (Seerr set up again, another session)
-                // is not this one's.
-                let same = shell
-                    .seerr
-                    .client
-                    .as_ref()
-                    .is_some_and(|now| Arc::ptr_eq(now, &client));
-                if !same {
+        let generation = page.generation;
+        self.ask_seerr(
+            cx,
+            |seerr| seerr.quota_reached(MediaKind::Movie),
+            move |shell, quota, cx| {
+                let Some(page) = shell.seerr_collection_numbered(generation) else {
                     return;
+                };
+                let wanted = page.wanted();
+                if let Some(run) = &mut page.run {
+                    run.quota(quota, &wanted);
                 }
-                for film in &outcome.requested {
-                    shell.mark_requested(MediaKind::Movie, *film);
+                shell.request_next_film(generation, cx);
+            },
+        );
+        cx.notify();
+    }
+
+    /// The next movie of the run asked for, once the answer for the one before came; the line
+    /// of the run once none is left. A page gone meanwhile asks for nothing more.
+    fn request_next_film(&mut self, generation: u64, cx: &mut Context<Self>) {
+        let Some(page) = self.seerr_collection_numbered(generation) else {
+            return;
+        };
+        let wanted = page.wanted();
+        let Some(run) = &page.run else {
+            return;
+        };
+        let Some(film) = run.next(&wanted) else {
+            let outcome = page.run.take().map(|run| run.outcome).unwrap_or_default();
+            if let Loadable::Ready(parts) = &page.parts {
+                let all = outcome.not_requested.is_empty();
+                page.outcome = Some((discover::collection_line(&outcome, &parts.films), all));
+            }
+            // What was asked for is offered no more; what was not stays checked.
+            if let Some(picker) = &mut page.picker {
+                picker.asked(&outcome.requested);
+            }
+            return;
+        };
+        self.ask_seerr(
+            cx,
+            move |seerr| seerr.request(&Ask::Movie(film)),
+            move |shell, answer, cx| {
+                if answer.is_ok() {
+                    shell.mark_requested(MediaKind::Movie, film);
                 }
                 let Some(page) = shell.seerr_collection_numbered(generation) else {
                     return;
                 };
-                page.busy = false;
-                let all = outcome.not_requested.is_empty();
-                page.outcome = Some((discover::collection_line(&outcome, &films), all));
-                // What was asked for is offered no more; what was not stays checked.
-                if let Some(picker) = &mut page.picker {
-                    picker.asked(&outcome.requested);
+                let wanted = page.wanted();
+                if let Some(run) = &mut page.run {
+                    run.answered(film, answer, &wanted);
                 }
-                cx.notify();
-            })
-            .ok();
-        })
-        .detach();
-        cx.notify();
+                shell.request_next_film(generation, cx);
+            },
+        );
     }
 
     /// The collection a library movie is part of, for its "Part of …": Jellyfin's TMDb
@@ -256,7 +270,6 @@ impl Shell {
 #[cfg(test)]
 mod tests {
     use bobine::provider::{ItemId, ProviderError};
-    use bobine::requests::Ask;
     use gpui_kit::{TestAppContext, WindowHandle};
 
     use super::super::discover::tests::{address_only, click, configured, configured_on, drawn};

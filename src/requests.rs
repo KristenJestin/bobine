@@ -179,7 +179,7 @@ pub trait RequestServer: Send + Sync {
 }
 
 /// What came of asking for the films of a collection.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct CollectionOutcome {
     pub requested: Vec<TmdbId>,
     /// The films not asked for, from the first one that failed.
@@ -188,44 +188,55 @@ pub struct CollectionOutcome {
     pub failure: Option<RequestError>,
 }
 
-/// Asks for `films` one after the other, as Seerr's own collection request does: Seerr has no
-/// request for a whole collection. It stops at the first failure, a quota reached before or
-/// during, so that the films after it are said not requested rather than refused one by one.
-/// `go_on` is asked before each film: once it says no (the page closed, the viewer signed out),
-/// nothing more is sent.
-pub fn request_films(
-    server: &dyn RequestServer,
-    films: &[TmdbId],
-    go_on: &dyn Fn() -> bool,
-) -> CollectionOutcome {
-    let stopped = |at: usize, why: RequestError, requested: Vec<TmdbId>| CollectionOutcome {
-        requested,
-        not_requested: films[at..].to_vec(),
-        failure: Some(why),
-    };
-    match server.quota_reached(MediaKind::Movie) {
-        Ok(true) => return stopped(0, RequestError::Quota, Vec::new()),
-        Ok(false) => {}
-        Err(why) => return stopped(0, why, Vec::new()),
-    }
-    let mut requested = Vec::new();
-    for (at, film) in films.iter().enumerate() {
-        if !go_on() {
-            return CollectionOutcome {
-                requested,
-                not_requested: films[at..].to_vec(),
-                failure: None,
-            };
+/// A collection request on its way. Seerr has no request for a whole collection: its films are
+/// asked for one after the other, as Seerr's own collection request does, each once the answer
+/// for the one before came. It stops at the first failure, a quota reached before or during, so
+/// that the films after it are said not requested rather than refused one by one.
+#[derive(Debug, Default)]
+pub struct CollectionRun {
+    pub outcome: CollectionOutcome,
+    tried: Vec<TmdbId>,
+}
+
+impl CollectionRun {
+    /// The quota read before the first film: reached, or not read, nothing is asked for.
+    pub fn quota(&mut self, answer: Result<bool, RequestError>, wanted: &[TmdbId]) {
+        match answer {
+            Ok(false) => {}
+            Ok(true) => self.stop(RequestError::Quota, wanted),
+            Err(why) => self.stop(why, wanted),
         }
-        if let Err(why) = server.request(&Ask::Movie(*film)) {
-            return stopped(at, why, requested);
-        }
-        requested.push(*film);
     }
-    CollectionOutcome {
-        requested,
-        not_requested: Vec::new(),
-        failure: None,
+
+    /// The film to ask for next among those wanted, in their order; none once stopped.
+    pub fn next(&self, wanted: &[TmdbId]) -> Option<TmdbId> {
+        if self.outcome.failure.is_some() {
+            return None;
+        }
+        wanted
+            .iter()
+            .copied()
+            .find(|film| !self.tried.contains(film))
+    }
+
+    /// The answer for `film`, `wanted` the films wanted when it came.
+    pub fn answered(&mut self, film: TmdbId, answer: Result<(), RequestError>, wanted: &[TmdbId]) {
+        match answer {
+            Ok(()) => self.outcome.requested.push(film),
+            Err(why) => {
+                self.outcome.not_requested.push(film);
+                self.stop(why, wanted);
+            }
+        }
+        self.tried.push(film);
+    }
+
+    fn stop(&mut self, why: RequestError, wanted: &[TmdbId]) {
+        let left: Vec<TmdbId> = (wanted.iter().copied())
+            .filter(|film| !self.tried.contains(film) && !self.outcome.not_requested.contains(film))
+            .collect();
+        self.outcome.not_requested.extend(left);
+        self.outcome.failure = Some(why);
     }
 }
 
@@ -298,98 +309,42 @@ pub fn year_of(date: &str) -> Option<i32> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
 
-    /// A server that refuses a film, or whose quota is reached.
-    #[derive(Default)]
-    struct Counter {
-        refuses: Option<(TmdbId, RequestError)>,
-        quota: bool,
-        asked: Mutex<Vec<TmdbId>>,
-    }
-
-    impl RequestServer for Counter {
-        fn check(&self) -> Result<ServerCheck, RequestError> {
-            unreachable!()
+    /// Runs a collection request to its end, `answer` saying how each film went.
+    fn run(
+        quota: Result<bool, RequestError>,
+        wanted: &[TmdbId],
+        answer: impl Fn(TmdbId) -> Result<(), RequestError>,
+    ) -> (CollectionOutcome, Vec<TmdbId>) {
+        let mut run = CollectionRun::default();
+        let mut asked = Vec::new();
+        run.quota(quota, wanted);
+        while let Some(film) = run.next(wanted) {
+            asked.push(film);
+            run.answered(film, answer(film), wanted);
         }
-        fn discover(&self, _: DiscoverRow) -> Result<Vec<Discovered>, RequestError> {
-            unreachable!()
-        }
-        fn search(&self, _: &str) -> Result<Vec<Discovered>, RequestError> {
-            unreachable!()
-        }
-        fn title(&self, _: MediaKind, _: TmdbId) -> Result<TitleDetail, RequestError> {
-            unreachable!()
-        }
-        fn recommendations(
-            &self,
-            _: MediaKind,
-            _: TmdbId,
-        ) -> Result<Vec<Discovered>, RequestError> {
-            unreachable!()
-        }
-        fn collection(&self, _: TmdbId) -> Result<CollectionParts, RequestError> {
-            unreachable!()
-        }
-        fn my_requests(&self) -> Result<Vec<MyRequest>, RequestError> {
-            unreachable!()
-        }
-        fn quota_reached(&self, _: MediaKind) -> Result<bool, RequestError> {
-            Ok(self.quota)
-        }
-        fn request(&self, ask: &Ask) -> Result<(), RequestError> {
-            let Ask::Movie(id) = ask else { unreachable!() };
-            if let Some((refused, why)) = &self.refuses
-                && refused == id
-            {
-                return Err(why.clone());
-            }
-            self.asked.lock().unwrap().push(*id);
-            Ok(())
-        }
-        fn image(&self, _: &TmdbImage, _: u32) -> Result<Vec<u8>, RequestError> {
-            unreachable!()
-        }
+        (run.outcome, asked)
     }
 
     #[test]
     fn a_collection_request_stops_at_the_quota_and_says_which_films_were_not_requested() {
-        let server = Counter {
-            refuses: Some((3, RequestError::Quota)),
-            ..Counter::default()
-        };
-        let outcome = request_films(&server, &[1, 2, 3, 4], &|| true);
+        let (outcome, asked) = run(Ok(false), &[1, 2, 3, 4], |film| match film {
+            3 => Err(RequestError::Quota),
+            _ => Ok(()),
+        });
         assert_eq!(outcome.requested, [1, 2]);
         assert_eq!(outcome.not_requested, [3, 4]);
         assert_eq!(outcome.failure, Some(RequestError::Quota));
-        assert_eq!(
-            *server.asked.lock().unwrap(),
-            [1, 2],
-            "nothing after the quota"
-        );
+        assert_eq!(asked, [1, 2, 3], "nothing after the quota");
     }
 
     #[test]
     fn a_quota_already_reached_requests_nothing() {
-        let server = Counter {
-            quota: true,
-            ..Counter::default()
-        };
-        let outcome = request_films(&server, &[1, 2], &|| true);
+        let (outcome, asked) = run(Ok(true), &[1, 2], |_| Ok(()));
         assert!(outcome.requested.is_empty());
         assert_eq!(outcome.not_requested, [1, 2]);
-        assert!(server.asked.lock().unwrap().is_empty());
-    }
-
-    #[test]
-    fn a_collection_request_sends_nothing_more_once_told_to_stop() {
-        let server = Counter::default();
-        let go_on = || server.asked.lock().unwrap().is_empty();
-        let outcome = request_films(&server, &[1, 2, 3], &go_on);
-        assert_eq!(*server.asked.lock().unwrap(), [1]);
-        assert_eq!(outcome.requested, [1]);
-        assert_eq!(outcome.not_requested, [2, 3]);
-        assert_eq!(outcome.failure, None);
+        assert_eq!(outcome.failure, Some(RequestError::Quota));
+        assert!(asked.is_empty());
     }
 
     #[test]
