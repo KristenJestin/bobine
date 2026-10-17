@@ -32,6 +32,36 @@ pub enum Availability {
     Blocked,
 }
 
+/// One entry of Radarr's or Sonarr's download queue for a title, as Seerr relays it in
+/// `mediaInfo.downloadStatus` (and `downloadStatus4k`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Download {
+    /// The download client's id: the episodes of a season pack are one download, one id.
+    pub id: Option<String>,
+    pub size: u64,
+    pub size_left: u64,
+    /// Absent when the queue does not know (a stalled or paused download).
+    pub time_left: Option<Duration>,
+}
+
+/// What the downloads of a title come to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Progress {
+    /// How many queue entries: a series' episodes count one each.
+    pub entries: u32,
+    pub percent: u8,
+    /// Until the last download is done.
+    pub time_left: Option<Duration>,
+}
+
+/// The downloads of a title summed into one: the sizes of the downloads that are distinct (a
+/// season pack is listed once per episode, with the pack's size each time), the longest time
+/// left. `None` when nothing downloads.
+pub fn progress(downloads: &[Download]) -> Option<Progress> {
+    let _ = downloads;
+    None
+}
+
 /// A poster, a backdrop or a photo on TMDb, by its path there (`/abc.jpg`).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TmdbImage(pub String);
@@ -107,6 +137,8 @@ pub struct TitleDetail {
     /// The page address of its best trailer (YouTube or Vimeo), played through the `yt-dlp`
     /// hook. A public address, no secret.
     pub trailer: Option<String>,
+    /// What Radarr or Sonarr is downloading for it, 4K included; empty when nothing is.
+    pub downloads: Vec<Download>,
 }
 
 /// A TMDb collection and its films, oldest first.
@@ -135,6 +167,7 @@ pub enum RequestStatus {
 pub struct MyRequest {
     pub title: Discovered,
     pub status: RequestStatus,
+    pub downloads: Vec<Download>,
 }
 
 /// What to ask for: a film, or seasons of a series.
@@ -365,6 +398,73 @@ mod tests {
         assert_eq!(outcome.not_requested, [1, 2]);
         assert_eq!(outcome.failure, Some(RequestError::Quota));
         assert!(asked.is_empty());
+    }
+
+    fn download(id: &str, size: u64, left: u64, minutes: Option<u64>) -> Download {
+        Download {
+            id: (!id.is_empty()).then(|| id.to_string()),
+            size,
+            size_left: left,
+            time_left: minutes.map(|m| Duration::from_secs(m * 60)),
+        }
+    }
+
+    #[test]
+    fn nothing_in_the_queue_is_no_progress() {
+        assert_eq!(progress(&[]), None);
+    }
+
+    #[test]
+    fn one_download_gives_its_percentage_and_its_time_left() {
+        let one = [download("a", 1000, 380, Some(2))];
+        assert_eq!(
+            progress(&one),
+            Some(Progress {
+                entries: 1,
+                percent: 62,
+                time_left: Some(Duration::from_secs(120)),
+            })
+        );
+    }
+
+    #[test]
+    fn the_episodes_of_a_season_pack_count_the_pack_once() {
+        // Three episodes of one pack: the queue lists the pack's size and what is left of it for
+        // each. Two thirds of 3000 bytes are left, not of 9000.
+        let pack = [
+            download("pack", 3000, 1800, Some(10)),
+            download("pack", 3000, 1800, Some(10)),
+            download("pack", 3000, 1800, Some(10)),
+        ];
+        let sum = progress(&pack).unwrap();
+        assert_eq!((sum.entries, sum.percent), (3, 40));
+    }
+
+    #[test]
+    fn separate_downloads_add_up_and_the_longest_time_left_is_the_title_s() {
+        let two = [
+            download("a", 1000, 0, Some(1)),
+            download("b", 3000, 3000, Some(30)),
+        ];
+        let sum = progress(&two).unwrap();
+        assert_eq!((sum.entries, sum.percent), (2, 25));
+        assert_eq!(sum.time_left, Some(Duration::from_secs(30 * 60)));
+    }
+
+    #[test]
+    fn downloads_without_an_id_are_never_taken_for_one_download() {
+        let two = [download("", 1000, 500, None), download("", 1000, 500, None)];
+        let sum = progress(&two).unwrap();
+        assert_eq!((sum.entries, sum.percent, sum.time_left), (2, 50, None));
+    }
+
+    #[test]
+    fn a_queue_that_reports_no_size_is_zero_percent_and_never_divides_by_zero() {
+        let empty = [download("a", 0, 0, None)];
+        assert_eq!(progress(&empty).unwrap().percent, 0);
+        // What is left cannot exceed the size.
+        let odd = [download("a", 100, 400, None)];
+        assert_eq!(progress(&odd).unwrap().percent, 0);
     }
 
     #[test]

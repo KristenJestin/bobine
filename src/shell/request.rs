@@ -4,6 +4,7 @@
 
 use std::cell::Cell;
 use std::rc::Rc;
+use std::time::Duration;
 
 use bobine::requests::{Ask, Availability, Discovered, MediaKind, TitleDetail, TmdbId};
 use gpui_kit::{Context, Pixels, Point, ScrollHandle, ScrollWheelEvent, Window};
@@ -15,6 +16,9 @@ use crate::menu::Menus;
 use crate::motion::{self, Presence};
 use crate::navigation::Screen;
 use crate::scroll;
+
+/// How often a request page whose title downloads reads it again.
+pub(super) const REFRESH: Duration = Duration::from_secs(15);
 
 /// The one menu of a request page: the seasons of a series.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -907,5 +911,284 @@ mod tests {
         window
             .update(cx, |shell, _, _| assert!(shell.playback.is_none()))
             .unwrap();
+    }
+
+    /// A download of `size` bytes with `left` to go and `minutes` until it is done.
+    fn download(id: &str, size: u64, left: u64, minutes: u64) -> bobine::requests::Download {
+        bobine::requests::Download {
+            id: Some(id.into()),
+            size,
+            size_left: left,
+            time_left: Some(Duration::from_secs(minutes * 60)),
+        }
+    }
+
+    /// Radarr's queue for Glass Rivers (a film Seerr says is processing), as it is now.
+    fn queue(seerr: &FakeSeerr, downloads: Vec<bobine::requests::Download>) {
+        seerr
+            .state
+            .lock()
+            .unwrap()
+            .downloads
+            .insert(GLASS_RIVERS, downloads);
+    }
+
+    /// How many times the page asked for a title.
+    fn reads(seerr: &FakeSeerr) -> usize {
+        seerr.state.lock().unwrap().record.titles.len()
+    }
+
+    const GLASS_RIVERS: TmdbId = 9006;
+
+    fn width(visual: &mut gpui_kit::VisualTestContext, selector: &'static str) -> f32 {
+        f32::from(visual.debug_bounds(selector).unwrap().size.width)
+    }
+
+    #[gpui_kit::test]
+    fn a_title_downloading_shows_its_percentage_and_time_left(cx: &mut TestAppContext) {
+        let seerr = FakeSeerr::default();
+        queue(&seerr, vec![download("a", 1000, 380, 2)]);
+        let window = on_request(&seerr, MediaKind::Movie, GLASS_RIVERS, cx);
+        let mut visual = drawn(&window, cx);
+        assert!(
+            visual
+                .debug_bounds("status Downloading · 62 % · 2 min left")
+                .is_some()
+        );
+        assert!(visual.debug_bounds("status Processing").is_none());
+        // A thin bar under the pill, filled to the percentage.
+        let bar = width(&mut visual, "download-bar");
+        let fill = width(&mut visual, "download-fill");
+        assert!((fill / bar - 0.62).abs() < 0.01, "{fill} of {bar}");
+    }
+
+    #[gpui_kit::test]
+    fn the_episodes_downloading_for_a_series_are_one_line(cx: &mut TestAppContext) {
+        let seerr = FakeSeerr::default();
+        {
+            let mut state = seerr.state.lock().unwrap();
+            state
+                .availability
+                .insert(COPPER_COAST, Availability::Processing);
+            let pack = (0..3).map(|_| download("pack", 3000, 1800, 10)).collect();
+            state.downloads.insert(COPPER_COAST, pack);
+        }
+        let window = on_request(&seerr, MediaKind::Tv, COPPER_COAST, cx);
+        let mut visual = drawn(&window, cx);
+        assert!(
+            visual
+                .debug_bounds("status Downloading 3 episodes · 40 %")
+                .is_some()
+        );
+    }
+
+    #[gpui_kit::test]
+    fn a_title_approved_but_not_downloading_says_it_waits_for_a_download(cx: &mut TestAppContext) {
+        let seerr = FakeSeerr::default();
+        let window = on_request(&seerr, MediaKind::Movie, GLASS_RIVERS, cx);
+        let mut visual = drawn(&window, cx);
+        assert!(
+            visual
+                .debug_bounds("status Approved, waiting for a download")
+                .is_some()
+        );
+        assert!(visual.debug_bounds("download-bar").is_none());
+    }
+
+    #[gpui_kit::test]
+    fn the_status_refreshes_while_the_page_is_open_and_stops_when_it_closes(
+        cx: &mut TestAppContext,
+    ) {
+        let seerr = FakeSeerr::default();
+        queue(&seerr, vec![download("a", 1000, 380, 2)]);
+        let window = on_request(&seerr, MediaKind::Movie, GLASS_RIVERS, cx);
+        let first = reads(&seerr);
+        // Not before the time is up.
+        queue(&seerr, vec![download("a", 1000, 100, 1)]);
+        cx.executor()
+            .advance_clock(REFRESH - Duration::from_secs(1));
+        cx.run_until_parked();
+        assert_eq!(reads(&seerr), first);
+        cx.executor().advance_clock(Duration::from_secs(1));
+        cx.run_until_parked();
+        assert_eq!(reads(&seerr), first + 1);
+        let mut visual = drawn(&window, cx);
+        assert!(
+            visual
+                .debug_bounds("status Downloading · 90 % · 1 min left")
+                .is_some()
+        );
+        assert!(
+            visual
+                .debug_bounds("status Downloading · 62 % · 2 min left")
+                .is_none()
+        );
+        // And again, every time.
+        cx.executor().advance_clock(REFRESH);
+        cx.run_until_parked();
+        assert_eq!(reads(&seerr), first + 2);
+        // Closed, the page reads nothing more.
+        window
+            .update(cx, |shell, _, cx| assert!(shell.go_back(cx)))
+            .unwrap();
+        let closed = reads(&seerr);
+        for _ in 0..3 {
+            cx.executor().advance_clock(REFRESH);
+            cx.run_until_parked();
+        }
+        assert_eq!(reads(&seerr), closed);
+    }
+
+    #[gpui_kit::test]
+    fn a_page_refresh_leaves_the_seasons_being_chosen_alone(cx: &mut TestAppContext) {
+        let seerr = FakeSeerr::default();
+        {
+            let mut state = seerr.state.lock().unwrap();
+            state
+                .availability
+                .insert(HARBOUR_WATCH, Availability::PartiallyAvailable);
+            state
+                .downloads
+                .insert(HARBOUR_WATCH, vec![download("a", 1000, 500, 5)]);
+        }
+        let window = on_request(&seerr, MediaKind::Tv, HARBOUR_WATCH, cx);
+        let mut visual = drawn(&window, cx);
+        click(&mut visual, "request-button");
+        click(&mut visual, "season 3");
+        cx.executor().advance_clock(REFRESH);
+        cx.run_until_parked();
+        let mut visual = drawn(&window, cx);
+        assert!(
+            visual.debug_bounds("seasons-menu").is_some(),
+            "the menu stays open"
+        );
+        click(&mut visual, "seasons-send");
+        assert!(
+            seerr.requests().is_empty(),
+            "season 3 is unchecked: nothing to send"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn a_page_without_a_download_is_not_read_again(cx: &mut TestAppContext) {
+        let seerr = FakeSeerr::default();
+        let window = on_request(&seerr, MediaKind::Movie, GLASS_RIVERS, cx);
+        let first = reads(&seerr);
+        for _ in 0..3 {
+            cx.executor().advance_clock(REFRESH);
+            cx.run_until_parked();
+        }
+        assert_eq!(reads(&seerr), first);
+        let _ = window;
+    }
+
+    #[gpui_kit::test]
+    fn a_title_that_becomes_available_offers_to_open_it_in_the_library(cx: &mut TestAppContext) {
+        let seerr = FakeSeerr::default();
+        let server = FakeServer::new(6, true);
+        queue(&seerr, vec![download("a", 1000, 380, 2)]);
+        let window = configured_on(server.clone(), &seerr, cx);
+        window
+            .update(cx, |shell, _, cx| {
+                shell.select(NavEntry::Discover, cx);
+                shell.open_discovered(MediaKind::Movie, GLASS_RIVERS, cx);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        let mut visual = drawn(&window, cx);
+        assert!(visual.debug_bounds("request-open-library").is_none());
+        // The download ends, Seerr marks the title available, the media server holds it.
+        queue(&seerr, vec![]);
+        seerr
+            .state
+            .lock()
+            .unwrap()
+            .availability
+            .insert(GLASS_RIVERS, Availability::Available);
+        server
+            .state
+            .lock()
+            .unwrap()
+            .tmdb
+            .push((ItemId(FILM.into()), GLASS_RIVERS));
+        cx.executor().advance_clock(REFRESH);
+        cx.run_until_parked();
+        let mut visual = drawn(&window, cx);
+        assert!(visual.debug_bounds("status In library").is_some());
+        assert!(visual.debug_bounds("download-bar").is_none());
+        // Nothing is read any more.
+        let done = reads(&seerr);
+        for _ in 0..3 {
+            cx.executor().advance_clock(REFRESH);
+            cx.run_until_parked();
+        }
+        assert_eq!(reads(&seerr), done);
+        click(&mut visual, "request-open-library");
+        assert_eq!(screen(&window, cx), Screen::FilmDetail);
+    }
+
+    #[gpui_kit::test]
+    fn a_download_that_ends_before_the_title_is_available_keeps_the_page_watching(
+        cx: &mut TestAppContext,
+    ) {
+        let seerr = FakeSeerr::default();
+        queue(&seerr, vec![download("a", 1000, 380, 2)]);
+        let window = on_request(&seerr, MediaKind::Movie, GLASS_RIVERS, cx);
+        queue(&seerr, vec![]);
+        cx.executor().advance_clock(REFRESH);
+        cx.run_until_parked();
+        let seen = reads(&seerr);
+        cx.executor().advance_clock(REFRESH);
+        cx.run_until_parked();
+        assert_eq!(
+            reads(&seerr),
+            seen + 1,
+            "still watching for the title to come"
+        );
+        let mut visual = drawn(&window, cx);
+        assert!(
+            visual
+                .debug_bounds("status Approved, waiting for a download")
+                .is_some()
+        );
+    }
+
+    #[gpui_kit::test]
+    fn the_viewer_s_requests_row_shows_the_short_download_status(cx: &mut TestAppContext) {
+        let seerr = FakeSeerr::default();
+        queue(&seerr, vec![download("a", 1000, 380, 2)]);
+        let window = configured(&seerr, cx);
+        window
+            .update(cx, |shell, _, cx| shell.select(NavEntry::Discover, cx))
+            .unwrap();
+        cx.run_until_parked();
+        let mut visual = drawn(&window, cx);
+        assert!(visual.debug_bounds("status Downloading · 62 %").is_some());
+    }
+
+    #[gpui_kit::test]
+    fn the_trailer_button_stays_beside_the_request_button_while_a_title_downloads(
+        cx: &mut TestAppContext,
+    ) {
+        let seerr = FakeSeerr::default();
+        queue(&seerr, vec![download("a", 1000, 380, 2)]);
+        seerr.state.lock().unwrap().trailer = Some(ADDRESS.into());
+        let window = configured(&seerr, cx);
+        window
+            .update(cx, |shell, _, cx| {
+                shell.ytdlp = true;
+                shell.select(NavEntry::Discover, cx);
+                shell.open_discovered(MediaKind::Movie, GLASS_RIVERS, cx);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        let mut visual = drawn(&window, cx);
+        assert!(
+            visual
+                .debug_bounds("status Downloading · 62 % · 2 min left")
+                .is_some()
+        );
+        click(&mut visual, REQUEST_TRAILER);
+        assert_eq!(opened(&window, cx).len(), 1);
     }
 }
