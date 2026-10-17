@@ -1,9 +1,10 @@
 //! Every key of the window, once: what binds them and what the help shows are both read from
 //! `KEYS`, so the help can never say a key the window does not have.
 //!
-//! The root of the window names the screen in its key context (`Player` or `Browse`), adds
-//! `Modal` while something over the page takes the keys (the help, the palette, the playlist
-//! menu), and a text field adds `TextInput` under it. While a text field has the focus, only
+//! The root of the window names the screen in its key context (`Player` or `Browse`; neither
+//! on the login, before there is a server), adds `Modal` while something over the page takes
+//! the keys (the help, the palette, the playlist menu), and a text field adds `TextInput` under
+//! it. While a text field has the focus, only
 //! Escape (and the palette's own keys) fire.
 
 use gpui_kit::{App, KeyBinding, actions};
@@ -169,7 +170,7 @@ pub const KEYS: &[Key] = &[
     key!(&["escape"], "Browse", Browse, "Close or go back", Dismiss),
     key!(
         &["?"],
-        "Bobine && !TextInput",
+        "(Player || Browse) && !TextInput",
         Both,
         "Show or hide the keys",
         Help

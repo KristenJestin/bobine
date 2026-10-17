@@ -33,11 +33,12 @@ impl Shell {
     pub(super) fn key_context(&self, screen: Screen) -> KeyContext {
         let mut context = KeyContext::default();
         context.add("Bobine");
-        context.add(if screen == Screen::Player && self.playback.is_some() {
-            "Player"
-        } else {
-            "Browse"
-        });
+        if screen == Screen::Player && self.playback.is_some() {
+            context.add("Player");
+        } else if self.server.is_some() && screen != Screen::Login {
+            context.add("Browse");
+        }
+        // Without a server, no page has keys yet: the login keeps its own.
         let over = if self.help_open {
             Some("Help")
         } else if self.search_is_open() {
@@ -775,6 +776,35 @@ mod tests {
         let mut visual = drawn(&window, cx);
         visual.simulate_keystrokes("alt-left");
         assert_eq!(screen(&window, cx), Screen::Home);
+    }
+
+    #[gpui_kit::test]
+    fn alt_and_a_number_on_the_login_stays_on_the_login(cx: &mut TestAppContext) {
+        let connector: Arc<dyn bobine::provider::Connector> = Arc::new(FakeServer::new(12, false));
+        let window = cx.add_window(|_, cx| {
+            crate::input::bind_keys(cx);
+            crate::keys::bind(cx);
+            Shell::new(
+                None,
+                Box::new(move || Ok(connector)),
+                None,
+                Arc::new(crate::fake::MemoryKeyring::default()),
+                cx,
+            )
+        });
+        let mut visual = drawn(&window, cx);
+        assert_eq!(screen(&window, cx), Screen::Login);
+        // Not in a field: the root has the keys.
+        window
+            .update(cx, |shell, window, cx| window.focus(&shell.focus, cx))
+            .unwrap();
+        visual.simulate_keystrokes("alt-1 alt-2 ?");
+        visual.run_until_parked();
+        assert_eq!(screen(&window, cx), Screen::Login);
+        assert!(
+            !window.read_with(cx, |shell, _| shell.help_open).unwrap(),
+            "no keys to show yet"
+        );
     }
 
     #[gpui_kit::test]
