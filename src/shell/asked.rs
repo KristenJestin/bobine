@@ -65,7 +65,7 @@ impl Shell {
         }
         self.search = None;
         match request {
-            Request::Open(Kind::Film, id) => self.open_film(id, cx),
+            Request::Open(Kind::Movie, id) => self.open_film(id, cx),
             Request::Open(Kind::Series, id) => self.open_series(id, cx),
             Request::Open(Kind::Episode, id) => self.open_episode_page(id, cx),
             Request::Play(id, from) => self.play_asked(id, from, window, cx),
@@ -169,11 +169,11 @@ mod tests {
     }
 
     #[gpui_kit::test]
-    fn open_film_with_a_window_running_shows_that_films_page_in_it(cx: &mut TestAppContext) {
+    fn open_movie_with_a_window_running_shows_that_films_page_in_it(cx: &mut TestAppContext) {
         let server = FakeServer::new(6, true);
         let (window, inbox, visual) = start(&server, None, cx);
         assert_eq!(screen(&window, cx), Screen::Home);
-        inbox.push(Request::Open(Kind::Film, ItemId("film-4".into())));
+        inbox.push(Request::Open(Kind::Movie, ItemId("film-4".into())));
         visual.run_until_parked();
         assert_eq!(screen(&window, cx), Screen::FilmDetail);
         window
@@ -252,7 +252,7 @@ mod tests {
     #[gpui_kit::test]
     fn a_request_before_the_sign_in_waits_for_it(cx: &mut TestAppContext) {
         let server = FakeServer::new(6, false);
-        let first = Request::Open(Kind::Film, ItemId("film-4".into()));
+        let first = Request::Open(Kind::Movie, ItemId("film-4".into()));
         let (window, _inbox, visual) = start(&server, Some(first), cx);
         assert_eq!(screen(&window, cx), Screen::Login);
         let session = server.login(

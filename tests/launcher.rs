@@ -56,16 +56,16 @@ fn a_command_bobine_does_not_know_is_a_usage_error_in_json() {
 }
 
 #[test]
-fn open_film_with_a_window_running_opens_no_second_window() {
+fn open_movie_with_a_window_running_opens_no_second_window() {
     let config = tempfile::tempdir().unwrap();
     let runtime = tempfile::tempdir().unwrap();
     // The window running, as the command sees it: something listening on the socket.
     let window = UnixListener::bind(runtime.path().join("bobine.sock")).unwrap();
-    let output = bobine(&["open", "film:film-7"], config.path(), runtime.path());
+    let output = bobine(&["open", "movie:film-7"], config.path(), runtime.path());
     assert_eq!(output.status.code(), Some(0));
     assert!(output.stdout.is_empty());
     let (mut stream, _) = window.accept().unwrap();
     let mut asked = String::new();
     stream.read_to_string(&mut asked).unwrap();
-    assert_eq!(asked, "bobine:open/film/film-7\n");
+    assert_eq!(asked, "bobine:open/movie/film-7\n");
 }

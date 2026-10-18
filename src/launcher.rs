@@ -31,7 +31,7 @@ const FOUND: u32 = 20;
 /// What the entries show for an icon: Bobine's own, from the icon theme.
 const ICON: &str = "bobine";
 
-const HOW: &str = "bobine home --json | search <text> --json | open film|series|episode:<id> | \
+const HOW: &str = "bobine home --json | search <text> --json | open movie|series|episode:<id> | \
                    play <id> [--from-start]";
 
 #[derive(Debug, PartialEq, Eq)]
@@ -66,7 +66,7 @@ pub fn parse(args: &[String]) -> Option<Result<Command, String>> {
             .filter(|(_, id)| valid_id(id))
             .map(|(kind, id)| Command::Ask(Request::Open(kind, ItemId(id.into()))))
             .ok_or_else(|| {
-                format!("open names film:<id>, series:<id> or episode:<id>, not {address}")
+                format!("open names movie:<id>, series:<id> or episode:<id>, not {address}")
             }),
         ("play", [id] | [id, "--from-start"] | ["--from-start", id]) if valid_id(id) => {
             let from = if words.contains(&"--from-start") {
@@ -209,7 +209,7 @@ fn film_entry(film: &Film) -> Value {
     let year = film.year.map(|year| year.to_string());
     let left = film_page::time_left(film);
     entry(
-        Kind::Film,
+        Kind::Movie,
         &film.id,
         &film.title,
         words(["Movie".to_string()], year.into_iter().chain(left)),
@@ -346,9 +346,9 @@ mod tests {
             Some(Ok(Command::Search(String::new())))
         );
         assert_eq!(
-            parse(&args("open film:film-7")),
+            parse(&args("open movie:film-7")),
             Some(Ok(Command::Ask(Request::Open(
-                Kind::Film,
+                Kind::Movie,
                 ItemId("film-7".into())
             ))))
         );
@@ -389,10 +389,10 @@ mod tests {
             "open",
             "open film-7",
             "open album:a1",
-            "open film:",
+            "open movie:",
             "play",
             "play a b",
-            "play film:0/1",
+            "play movie:0/1",
         ] {
             assert!(matches!(parse(&args(line)), Some(Err(_))), "{line}");
         }
@@ -410,15 +410,15 @@ mod tests {
         assert_eq!(
             ids(&home),
             [
-                "film:film-0",
-                "film:film-2",
-                "film:film-5",
+                "movie:film-0",
+                "movie:film-2",
+                "movie:film-5",
                 "episode:series-0-s2-e4",
                 // Next up: the episode started is already listed above.
                 "episode:series-2-s1-e3",
             ]
         );
-        let film = entry_of(&home, "film:film-0");
+        let film = entry_of(&home, "movie:film-0");
         assert_eq!(film["name"], "Le Dernier Hiver");
         assert_eq!(film["subtitle"], "Movie · 2025 · 59m left");
         assert_eq!(film["icon"], "bobine");
@@ -429,7 +429,7 @@ mod tests {
             commands(film),
             [
                 ("Play from the start", "bobine play 'film-0' --from-start"),
-                ("Open the page", "bobine open 'film:film-0'"),
+                ("Open the page", "bobine open 'movie:film-0'"),
             ]
         );
         let next = entry_of(&home, "episode:series-2-s1-e3");
@@ -468,7 +468,7 @@ mod tests {
         assert_eq!(found.code, OK);
         assert_eq!(
             ids(&found),
-            ["film:film-0", "series:series-2", "series:series-3"]
+            ["movie:film-0", "series:series-2", "series:series-3"]
         );
         assert_eq!(server.state.lock().unwrap().record.searches, ["hiver"]);
         let series = entry_of(&found, "series:series-3");
@@ -479,7 +479,7 @@ mod tests {
             commands(series),
             [("Open the page", "bobine open 'series:series-3'")]
         );
-        let film = entry_of(&found, "film:film-0");
+        let film = entry_of(&found, "movie:film-0");
         assert_eq!(film["verb"], "Resume");
         assert_eq!(commands(film).len(), 2);
     }

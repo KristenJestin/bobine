@@ -30,7 +30,7 @@ const LINE_AT_MOST: u64 = 4096;
 /// What a page is of.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
-    Film,
+    Movie,
     Series,
     /// An episode's page is its series', on its season.
     Episode,
@@ -48,14 +48,14 @@ pub enum Request {
 impl Kind {
     pub fn word(self) -> &'static str {
         match self {
-            Kind::Film => "film",
+            Kind::Movie => "movie",
             Kind::Series => "series",
             Kind::Episode => "episode",
         }
     }
 
     pub fn from_word(word: &str) -> Option<Self> {
-        [Kind::Film, Kind::Series, Kind::Episode]
+        [Kind::Movie, Kind::Series, Kind::Episode]
             .into_iter()
             .find(|kind| kind.word() == word)
     }
@@ -185,8 +185,8 @@ mod tests {
 
     const WAIT: Duration = Duration::from_secs(5);
 
-    fn film() -> Request {
-        Request::Open(Kind::Film, ItemId("film-7".into()))
+    fn movie() -> Request {
+        Request::Open(Kind::Movie, ItemId("film-7".into()))
     }
 
     /// What `inbox` heard, once it heard `count` requests or five seconds went by.
@@ -201,7 +201,7 @@ mod tests {
     #[test]
     fn every_request_goes_through_its_address_and_back() {
         let requests = [
-            film(),
+            movie(),
             Request::Open(Kind::Series, ItemId("series-0".into())),
             Request::Open(Kind::Episode, ItemId("series-0-s2-e4".into())),
             Request::Play(ItemId("film-0".into()), From::Resume),
@@ -210,7 +210,7 @@ mod tests {
         for request in requests {
             assert_eq!(Request::from_address(&request.address()), Some(request));
         }
-        assert_eq!(film().address(), "bobine:open/film/film-7");
+        assert_eq!(movie().address(), "bobine:open/movie/film-7");
         assert_eq!(
             Request::Play(ItemId("film-0".into()), From::Resume).address(),
             "bobine:play/film-0"
@@ -222,12 +222,12 @@ mod tests {
         for address in [
             "",
             "bobine:",
-            "bobine:open/film/",
+            "bobine:open/movie/",
             "bobine:open/album/a1",
-            "bobine:open/film/a/b",
+            "bobine:open/movie/a/b",
             "bobine:play/",
             "bobine:rewind/film-0",
-            "http:open/film/film-0",
+            "http:open/movie/film-0",
         ] {
             assert_eq!(Request::from_address(address), None, "{address}");
         }
@@ -244,12 +244,12 @@ mod tests {
     }
 
     #[test]
-    fn open_film_with_a_window_running_is_handed_to_it() {
+    fn open_movie_with_a_window_running_is_handed_to_it() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("bobine.sock");
         let inbox = listen(&path).expect("the first window listens");
-        assert!(hand_off(&path, &film()));
-        assert_eq!(heard(&inbox, 1), [film()]);
+        assert!(hand_off(&path, &movie()));
+        assert_eq!(heard(&inbox, 1), [movie()]);
     }
 
     #[test]
@@ -269,8 +269,8 @@ mod tests {
         let path = dir.path().join("bobine.sock");
         drop(UnixListener::bind(&path).unwrap());
         let inbox = listen(&path).expect("the new window listens");
-        assert!(hand_off(&path, &film()));
-        assert_eq!(heard(&inbox, 1), [film()]);
+        assert!(hand_off(&path, &movie()));
+        assert_eq!(heard(&inbox, 1), [movie()]);
     }
 
     #[test]
@@ -279,8 +279,8 @@ mod tests {
         let path = dir.path().join("bobine.sock");
         let first = listen(&path).expect("the first window listens");
         assert!(listen(&path).is_none());
-        assert!(hand_off(&path, &film()));
-        assert_eq!(heard(&first, 1), [film()]);
+        assert!(hand_off(&path, &movie()));
+        assert_eq!(heard(&first, 1), [movie()]);
     }
 
     #[test]
@@ -291,7 +291,7 @@ mod tests {
         let mut stream = UnixStream::connect(&path).unwrap();
         stream.write_all(b"rm -rf /\n").unwrap();
         drop(stream);
-        assert!(hand_off(&path, &film()));
-        assert_eq!(heard(&inbox, 1), [film()]);
+        assert!(hand_off(&path, &movie()));
+        assert_eq!(heard(&inbox, 1), [movie()]);
     }
 }

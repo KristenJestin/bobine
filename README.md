@@ -21,9 +21,9 @@ cargo test
 bobine                                  opens the window
 bobine --version                        prints the version
 bobine home --json                      Continue watching, then Next up
-bobine search <text> --json             the films and series whose name holds the text
-bobine open film|series|episode:<id>    shows that page in the window
-bobine play <id> [--from-start]         plays a film, an episode or a series' next episode
+bobine search <text> --json             the movies and series whose name holds the text
+bobine open movie|series|episode:<id>    shows that page in the window
+bobine play <id> [--from-start]         plays a movie, an episode or a series' next episode
 ```
 
 `home` and `search` print entries for the desktop launcher (the format of poste's
