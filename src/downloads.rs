@@ -15,6 +15,9 @@
 //! manifests themselves: one download at a time, in the order queued. `run` does the queued
 //! downloads and blocks until none is left; the window calls it on its background executor after
 //! each `queue_*` or `resume`, and a call while another runs returns at once.
+//!
+//! A finished download plays from its folder (`Local`); while the server cannot be reached, its
+//! plays go to `<server id>/<user id>/plays.json` (`Journal`) until the server is told (#136).
 
 // Driven by tests until the Downloads page (#134) and the player (#135) use it.
 #![allow(dead_code)]
@@ -26,12 +29,14 @@ use std::fs::{self, File};
 use std::io::{self, Write};
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, TryLockError};
+use std::time::{Duration, SystemTime};
 
 use bobine::provider::{
-    DownloadKind, DownloadPlan, Episode, Fetched, FilmDetail, ImageKind, ImageRef, ItemId,
-    MediaServer, MediaSourceId, ProviderError, Segment, SeriesDetail, Sink, Trailers, Trickplay,
+    DownloadKind, DownloadPlan, Episode, ExternalSubtitle, Fetched, FilmDetail, ImageKind,
+    ImageRef, ItemId, MediaServer, MediaSourceId, PlaySessionId, Playback, ProviderError, Segment,
+    SeriesDetail, Sink, StreamUrl, Trailers, Trickplay,
 };
 use serde::{Deserialize, Serialize};
 
@@ -45,6 +50,7 @@ pub const FORMAT: u32 = 1;
 
 const MANIFEST: &str = "item.json";
 const PART: &str = "media.part";
+const JOURNAL: &str = "plays.json";
 
 /// The free space of a disk.
 pub trait Disk: Send + Sync {
@@ -179,7 +185,9 @@ impl Manifest {
 
     /// The complete file's name in the item's folder.
     pub fn media_name(&self) -> String {
-        format!("media.{}", safe(self.container.as_deref().unwrap_or("bin")))
+        // A container may come as a list (`mov,mp4,m4a`): its first name is the file's.
+        let container = self.container.as_deref().and_then(|c| c.split(',').next());
+        format!("media.{}", safe(container.unwrap_or("bin")))
     }
 }
 
@@ -203,6 +211,142 @@ pub fn image_name(image: &ImageRef, width: u32) -> PathBuf {
         ImageKind::Logo => "logo",
     };
     Path::new("images").join(format!("{}-{kind}-{width}.jpg", safe(&image.item.0)))
+}
+
+/// A finished download, as the player opens it: the file, its subtitles, its thumbnails and its
+/// segments, all from its folder.
+#[derive(Debug, Clone)]
+pub struct Local {
+    folder: PathBuf,
+    pub manifest: Manifest,
+}
+
+impl Local {
+    /// The playback of the file under the playback session `session`: the stream and the
+    /// external subtitles are paths in the download's folder, which the player opens as it
+    /// opens an address.
+    pub fn playback(&self, session: PlaySessionId) -> Playback {
+        let path = |name: &Path| StreamUrl::new(self.folder.join(name).to_string_lossy().into());
+        Playback {
+            session,
+            film: self.manifest.item().clone(),
+            source: self.manifest.source.clone(),
+            stream: path(Path::new(&self.manifest.media_name())),
+            external_subtitles: self
+                .manifest
+                .subtitles
+                .iter()
+                .map(|subtitle| ExternalSubtitle {
+                    index: subtitle.index,
+                    url: path(&subtitle_name(subtitle)),
+                })
+                .collect(),
+            converted: false,
+        }
+    }
+
+    pub fn segments(&self) -> &[Segment] {
+        &self.manifest.segments
+    }
+
+    /// The layout of the thumbnails downloaded, when the server made some.
+    pub fn trickplay(&self) -> Option<Trickplay> {
+        self.manifest.trickplay
+    }
+
+    /// One downloaded tile of thumbnails, as the server gave it.
+    pub fn tile(&self, tile: u32) -> io::Result<Vec<u8>> {
+        let trickplay = self.manifest.trickplay.ok_or(io::ErrorKind::NotFound)?;
+        fs::read(self.folder.join(tile_name(&trickplay, tile)))
+    }
+}
+
+/// A play while the server could not be reached, for it to be told once it is back.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OfflinePlay {
+    pub item: ItemId,
+    /// Where the viewer stopped; zero once watched.
+    pub position: Duration,
+    /// Watched to its end.
+    pub played: bool,
+    /// How many plays ended watched, for the server's count to follow (#136).
+    #[serde(default)]
+    pub play_count: u32,
+    /// When, by the machine's clock.
+    pub at: SystemTime,
+}
+
+/// `plays.json`: one account's offline plays, oldest first, the last one of each item.
+#[derive(Debug, Clone)]
+pub struct Journal {
+    path: PathBuf,
+}
+
+impl Journal {
+    /// The plays kept; none when there is no file yet, an error when it cannot be read.
+    pub fn plays(&self) -> io::Result<Vec<OfflinePlay>> {
+        match fs::read(&self.path) {
+            Ok(text) => serde_json::from_slice(&text)
+                .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error)),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(Vec::new()),
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Keeps `play` as its item's last, after every other. An item watched stays watched, and
+    /// each play that ended watched is counted. A file that cannot be read is moved aside as
+    /// `plays.json.bad-<n>`, so that nothing is lost, and a new journal starts.
+    pub fn record(&self, mut play: OfflinePlay) -> io::Result<()> {
+        // One lock for every Journal of the folder: two reports are never read-modify-written
+        // at once.
+        let lock = journal_lock(&self.path);
+        let _held = lock.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut plays = match self.plays() {
+            Ok(plays) => plays,
+            Err(error) if error.kind() == io::ErrorKind::InvalidData => {
+                self.set_aside()?;
+                Vec::new()
+            }
+            Err(error) => return Err(error),
+        };
+        if let Some(before) = plays.iter().find(|kept| kept.item == play.item) {
+            // A partial rewatch does not unwatch.
+            play.played |= before.played;
+            play.play_count += before.play_count;
+        }
+        plays.retain(|kept| kept.item != play.item);
+        plays.push(play);
+        let text = serde_json::to_vec_pretty(&plays).map_err(io::Error::other)?;
+        // Through a temporary file of its own, so a crash leaves the plays as they were.
+        static WRITES: AtomicU64 = AtomicU64::new(0);
+        let tmp = self.path.with_extension(format!(
+            "json.tmp-{}-{}",
+            std::process::id(),
+            WRITES.fetch_add(1, Ordering::Relaxed)
+        ));
+        write_file(&tmp, &text)?;
+        fs::rename(tmp, &self.path)
+    }
+
+    fn set_aside(&self) -> io::Result<()> {
+        let name = self.path.file_name().unwrap_or_default().to_os_string();
+        let aside = (1..)
+            .map(|n| {
+                let mut aside = name.clone();
+                aside.push(format!(".bad-{n}"));
+                self.path.with_file_name(aside)
+            })
+            .find(|aside| !aside.exists())
+            .expect("an unbounded range");
+        fs::rename(&self.path, aside)
+    }
+}
+
+/// The lock of the journal at `path`, the same for every `Journal` of it in the process.
+fn journal_lock(path: &Path) -> Arc<Mutex<()>> {
+    static LOCKS: Mutex<BTreeMap<PathBuf, Arc<Mutex<()>>>> = Mutex::new(BTreeMap::new());
+    let mut locks = LOCKS.lock().unwrap_or_else(PoisonError::into_inner);
+    locks.entry(path.to_path_buf()).or_default().clone()
 }
 
 /// A download as the Downloads page lists it.
@@ -797,6 +941,21 @@ impl Downloads {
         }
     }
 
+    /// A finished download of `item`, to play.
+    pub fn local(&self, item: &ItemId) -> Option<Local> {
+        let manifest = self.table().items.get(&item.0)?.clone();
+        let folder = self.folder(item);
+        (manifest.state == State::Done && folder.join(manifest.media_name()).is_file())
+            .then_some(Local { folder, manifest })
+    }
+
+    /// The account's offline plays.
+    pub fn journal(&self) -> Journal {
+        Journal {
+            path: self.root.join(JOURNAL),
+        }
+    }
+
     /// Every download, in the order of the queue.
     pub fn list(&self) -> Vec<Download> {
         let table = self.table();
@@ -1234,6 +1393,19 @@ mod tests {
     }
 
     #[test]
+    fn a_container_list_names_the_file_by_its_first_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        let server = fake();
+        let downloads = open(dir.path(), &server, roomy());
+        downloads
+            .queue_film(&film(&server, FILM), &source("source-4k"))
+            .unwrap();
+        let mut kept = manifest(dir.path(), FILM);
+        kept.container = Some("mov,mp4,m4a".into());
+        assert_eq!(kept.media_name(), "media.mov");
+    }
+
+    #[test]
     fn a_season_queues_each_of_its_episodes() {
         let dir = tempfile::tempdir().unwrap();
         let server = fake();
@@ -1332,6 +1504,88 @@ mod tests {
         let left: Vec<ItemId> = downloads.list().into_iter().map(|d| d.item).collect();
         assert_eq!(left, [item("film-1")]);
         assert_eq!(open(dir.path(), &server, roomy()).list().len(), 1);
+    }
+
+    fn play(id: &str, position: u64, played: bool) -> OfflinePlay {
+        OfflinePlay {
+            item: item(id),
+            position: Duration::from_secs(position),
+            played,
+            play_count: u32::from(played),
+            at: SystemTime::now(),
+        }
+    }
+
+    #[test]
+    fn a_partial_rewatch_keeps_an_offline_watch() {
+        let dir = tempfile::tempdir().unwrap();
+        let journal = open(dir.path(), &fake(), roomy()).journal();
+        std::fs::create_dir_all(account(dir.path())).unwrap();
+        journal.record(play(FILM, 0, true)).unwrap();
+        journal.record(play(FILM, 1200, false)).unwrap();
+        let plays = journal.plays().unwrap();
+        assert_eq!(plays.len(), 1);
+        assert!(plays[0].played, "a rewatch does not unwatch");
+        assert_eq!(plays[0].position, Duration::from_secs(1200));
+        assert_eq!(plays[0].play_count, 1);
+        // A second watch counts too.
+        journal.record(play(FILM, 0, true)).unwrap();
+        assert_eq!(journal.plays().unwrap()[0].play_count, 2);
+    }
+
+    #[test]
+    fn two_plays_recorded_at_once_are_both_kept() {
+        let server = fake();
+        for round in 0..20 {
+            let dir = tempfile::tempdir().unwrap();
+            std::fs::create_dir_all(account(dir.path())).unwrap();
+            let barrier = Arc::new(std::sync::Barrier::new(8));
+            // Each Journal comes from its own Downloads, as two playbacks of one account do.
+            let threads: Vec<_> = (0..8)
+                .map(|n| {
+                    let journal = open(dir.path(), &server, roomy()).journal();
+                    let barrier = barrier.clone();
+                    std::thread::spawn(move || {
+                        barrier.wait();
+                        journal
+                            .record(play(&format!("item-{n}"), n, false))
+                            .unwrap();
+                    })
+                })
+                .collect();
+            for thread in threads {
+                thread.join().unwrap();
+            }
+            let kept = open(dir.path(), &server, roomy())
+                .journal()
+                .plays()
+                .unwrap();
+            assert_eq!(kept.len(), 8, "round {round}: {kept:?}");
+        }
+    }
+
+    #[test]
+    fn an_unreadable_journal_is_never_overwritten() {
+        let dir = tempfile::tempdir().unwrap();
+        let journal = open(dir.path(), &fake(), roomy()).journal();
+        std::fs::create_dir_all(account(dir.path())).unwrap();
+        let path = account(dir.path()).join("plays.json");
+        std::fs::write(&path, b"{ not json").unwrap();
+        assert!(journal.plays().is_err());
+        // The new play is kept, and the file that could not be read is kept aside.
+        journal.record(play(FILM, 600, false)).unwrap();
+        assert_eq!(journal.plays().unwrap().len(), 1);
+        let aside: Vec<_> = files_under(&account(dir.path()))
+            .into_iter()
+            .filter(|file| {
+                file.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with("plays.json.bad-")
+            })
+            .collect();
+        assert_eq!(aside.len(), 1, "{aside:?}");
+        assert_eq!(std::fs::read(&aside[0]).unwrap(), b"{ not json");
     }
 
     #[test]

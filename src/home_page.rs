@@ -1,17 +1,22 @@
 //! What the Home shows and what its buttons start, apart from the window: the lists of its rows,
 //! what each card says, and the playback a "Play" opens for a film, a series or an episode.
 //! The playback itself, its reports and its end are the film page's and the series page's.
+//! A downloaded title plays from its file (`start_download`).
+
+use std::sync::Arc;
 
 use bobine::provider::{
     Episode, Feature, FeatureKind, FilmQuery, FilmSort, ItemId, LibraryKind, MediaServer, Page,
-    Playback, ProviderError, Title,
+    PlaySessionId, Playback, ProviderError, Title,
 };
 
+use crate::downloads::{Downloads, Local, Snapshot};
 use crate::fallback;
 use crate::film_page::{self, Choices, Plan};
 use crate::grid;
 use crate::library_tools::Tools;
 use crate::player::settings::Quality;
+use crate::reports::To;
 use crate::series_page;
 
 /// What a play button of the Home starts.
@@ -139,6 +144,123 @@ pub fn start_from(
             })
         }
     }
+}
+
+/// The playback session of a download played while the server cannot be reached: the journal
+/// does not keep it.
+const OFFLINE_SESSION: &str = "offline";
+
+/// Whether the server can be reached for the playback of a download.
+#[allow(
+    dead_code,
+    reason = "played from the shell once offline mode (#137) wires downloads in"
+)]
+pub enum Reach {
+    Online(Arc<dyn MediaServer>),
+    /// Nothing is asked of the server.
+    Offline,
+}
+
+/// A download's playback, ready for the player: where its reports go, and the download, whose
+/// segments and thumbnails the player shows.
+#[allow(
+    dead_code,
+    reason = "played from the shell once offline mode (#137) wires downloads in"
+)]
+pub struct StartedDownload {
+    pub started: Started,
+    pub reports: To,
+    pub local: Local,
+}
+
+/// Opens the playback of the download of `item` from its file. Online, the server opens a playback
+/// session for it as for any other and hears its reports; offline, the journal does.
+#[allow(
+    dead_code,
+    reason = "played from the shell once offline mode (#137) wires downloads in"
+)]
+pub fn start_download(
+    downloads: &Downloads,
+    item: &ItemId,
+    reach: Reach,
+    from: film_page::From,
+) -> Result<StartedDownload, StartError> {
+    let local = downloads.local(item).ok_or(StartError::NothingToPlay)?;
+    let (film, versions) = match &local.manifest.title {
+        Snapshot::Film(detail) => (&detail.film, &detail.versions),
+        Snapshot::Episode(episode, _) => (&episode.item, &episode.versions),
+    };
+    // Where the viewer stopped: as the server holds it, else as the last offline play left it,
+    // else as it was when downloaded.
+    let mut film = film.clone();
+    if let Some(play) = downloads
+        .journal()
+        .plays()
+        .unwrap()
+        .iter()
+        .find(|p| &p.item == item)
+    {
+        film.resume = Some(play.position).filter(|position| !position.is_zero());
+    }
+    if let Reach::Online(server) = &reach {
+        match server.title(item) {
+            Ok(Title::Film(fresh)) => film.resume = fresh.resume,
+            Ok(Title::Episode(fresh)) => film.resume = fresh.item.resume,
+            _ => {}
+        }
+    }
+    let mut choices = Choices::new(versions);
+    if let Some(version) = versions.iter().position(|v| v.id == local.manifest.source) {
+        choices.set_version(versions, version);
+    }
+    let plan = film_page::plan(&film, versions, &choices, from).ok_or(StartError::NothingToPlay)?;
+    let version = choices.source(versions).map(film_page::version_label);
+    let (title, subtitle, list, desktop) = match &local.manifest.title {
+        Snapshot::Film(detail) => {
+            let mut parts: Vec<String> = film.year.iter().map(i32::to_string).collect();
+            parts.extend(version);
+            parts.push("downloaded".into());
+            let desktop = crate::mpris::Title::film(&detail.film);
+            (
+                plan.title.clone(),
+                parts.join(" · "),
+                film.id.clone(),
+                desktop,
+            )
+        }
+        Snapshot::Episode(episode, _) => {
+            let (title, mut subtitle) = series_page::player_title(episode);
+            if let Some(version) = version {
+                subtitle.push_str(&format!(" · {version}"));
+            }
+            let desktop = crate::mpris::Title::episode(episode);
+            (title, subtitle, episode.series.clone(), desktop)
+        }
+    };
+    let (opened, reports) = match reach {
+        Reach::Online(server) => (
+            server
+                .play(item, &local.manifest.source)
+                .map(|opened| local.playback(opened.session)),
+            To::Server(server),
+        ),
+        Reach::Offline => (
+            Ok(local.playback(PlaySessionId(OFFLINE_SESSION.into()))),
+            To::Journal(downloads.journal()),
+        ),
+    };
+    Ok(StartedDownload {
+        started: Started {
+            plan,
+            title,
+            subtitle,
+            list,
+            desktop,
+            opened,
+        },
+        reports,
+        local,
+    })
 }
 
 /// The rows of the Home that list titles, and so have a full grid behind "See all".
@@ -729,5 +851,385 @@ mod tests {
             .unwrap();
         let title = Title::Series(page.items[0].clone());
         assert_eq!((time_left(&title), progress(&title)), (None, None));
+    }
+}
+
+#[cfg(test)]
+mod download_tests {
+    //! A downloaded title plays from its file, with the fake player, the fake server and a
+    //! temporary folder.
+
+    use std::path::{Path, PathBuf};
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+
+    use bobine::provider::{
+        ItemId, MediaSourceId, PlayMethod, PlaybackReport, Segment, SegmentKind, Trickplay,
+    };
+
+    use super::*;
+    use crate::downloads::{Disk, Downloads};
+    use crate::fake::{FILM, FakeServer, PLAY_SESSION, Record, Report};
+    use crate::fallback::{DOWNLOAD_CANNOT_PLAY, Fallback};
+    use crate::player::fake::{Call, FakePlayer};
+    use crate::player::session::Session;
+    use crate::player::thumbnails::{BUDGET, Tiles};
+    use crate::player::{PlayerError, PlayerEvent, Seek};
+    use crate::reports::Reporting;
+    use crate::video::fake::FakeDisplay;
+
+    struct Roomy;
+
+    impl Disk for Roomy {
+        fn free(&self, _path: &Path) -> std::io::Result<u64> {
+            Ok(1 << 40)
+        }
+    }
+
+    const TRICKPLAY: Trickplay = Trickplay {
+        width: 320,
+        height: 180,
+        columns: 2,
+        rows: 2,
+        count: 6,
+        interval: Duration::from_secs(10),
+    };
+
+    fn intro() -> Segment {
+        Segment {
+            kind: SegmentKind::Intro,
+            start: Duration::from_secs(5),
+            end: Duration::from_secs(65),
+        }
+    }
+
+    struct Fixture {
+        _dir: tempfile::TempDir,
+        server: FakeServer,
+        downloads: Downloads,
+        folder: PathBuf,
+        player: FakePlayer,
+    }
+
+    /// The film downloaded whole, its 4K version with its subtitle file, thumbnails and
+    /// segments; then the server's record is cleared.
+    fn downloaded() -> Fixture {
+        let dir = tempfile::tempdir().unwrap();
+        let server = FakeServer::new(10, true);
+        {
+            let mut state = server.state.lock().unwrap();
+            state.trickplay = Some(TRICKPLAY);
+            state.tiles = vec![b"tile-a".to_vec(), b"tile-b".to_vec()];
+            state.segments = vec![intro()];
+        }
+        let downloads =
+            Downloads::open(dir.path(), Arc::new(server.clone()), Arc::new(Roomy)).unwrap();
+        let film = server.film(&ItemId(FILM.into())).unwrap();
+        downloads
+            .queue_film(&film, &MediaSourceId("source-4k".into()))
+            .unwrap();
+        downloads.run();
+        server.state.lock().unwrap().record = Record::default();
+        let folder = downloads.folder(&ItemId(FILM.into()));
+        Fixture {
+            _dir: dir,
+            server,
+            downloads,
+            folder,
+            player: FakePlayer::default(),
+        }
+    }
+
+    impl Fixture {
+        fn start(&self, reach: Reach) -> StartedDownload {
+            start_download(
+                &self.downloads,
+                &ItemId(FILM.into()),
+                reach,
+                film_page::From::Resume,
+            )
+            .unwrap()
+        }
+
+        fn online(&self) -> Reach {
+            Reach::Online(Arc::new(self.server.clone()))
+        }
+
+        /// The player loads what `started` opened.
+        fn session(&self, started: &Started) -> Session {
+            let opened = started.opened.as_ref().unwrap();
+            let externals = started.plan.externals(opened);
+            let mut session = Session::new(
+                Box::new(FakePlayer {
+                    calls: self.player.calls.clone(),
+                    queued: self.player.queued.clone(),
+                    info: self.player.info.clone(),
+                    ..Default::default()
+                }),
+                Box::new(FakeDisplay::default()),
+                started.title.clone(),
+                Some(started.subtitle.clone()),
+            );
+            session
+                .restart(started.plan.media(opened, &externals))
+                .unwrap();
+            session
+        }
+
+        /// Plays `started`, reporting to where it says, through each step of player events;
+        /// then the viewer leaves.
+        fn play(&self, started: StartedDownload, steps: Vec<Vec<PlayerEvent>>) {
+            let mut session = self.session(&started.started);
+            let opened = started.started.opened.as_ref().unwrap();
+            let mut reporting = Reporting::to(
+                started.reports,
+                PlaybackReport {
+                    session: opened.session.clone(),
+                    film: opened.film.clone(),
+                    source: opened.source.clone(),
+                    position: started.started.plan.start,
+                    paused: false,
+                    audio_track: started.started.plan.audio_index,
+                    subtitle_track: started.started.plan.subtitle_index,
+                    method: PlayMethod::DirectPlay,
+                },
+            );
+            let mut now = Instant::now();
+            for events in steps {
+                now += Duration::from_secs(1);
+                self.player.queued.borrow_mut().extend(events);
+                let ended = session.update(now);
+                reporting.tick(now, &session, ended);
+            }
+            reporting.finish(&session).join().unwrap();
+        }
+
+        fn loaded_url(&self) -> String {
+            self.player
+                .calls
+                .borrow()
+                .iter()
+                .find_map(|call| match call {
+                    Call::Load { url, .. } => Some(url.clone()),
+                    _ => None,
+                })
+                .unwrap()
+        }
+
+        /// Nothing at all was asked of the server since the download.
+        fn server_untouched(&self) {
+            let state = self.server.state.lock().unwrap();
+            let record = &state.record;
+            assert!(record.plays.is_empty(), "{:?}", record.plays);
+            assert!(record.reports.is_empty());
+            assert!(record.transcodes.is_empty());
+            assert!(record.segment_asks.is_empty());
+            assert!(record.tiles.is_empty());
+            assert!(record.images.is_empty());
+            assert!(record.film_pages.is_empty());
+            assert!(record.titles.is_empty(), "{:?}", record.titles);
+        }
+    }
+
+    #[test]
+    fn a_downloaded_film_plays_its_local_file_with_its_local_subtitles() {
+        let f = downloaded();
+        let started = f.start(Reach::Offline);
+        let opened = started.started.opened.as_ref().unwrap();
+        let _session = f.session(&started.started);
+        let file = f.folder.join("media.mkv");
+        assert!(file.is_file());
+        assert_eq!(f.loaded_url(), file.to_string_lossy());
+        // The version's subtitle file, its fifth track, from the folder and named from its track.
+        let subtitle = f.folder.join("subtitles/5.srt");
+        assert!(subtitle.is_file());
+        let urls: Vec<&str> = opened
+            .external_subtitles
+            .iter()
+            .map(|external| external.url.expose_for_player())
+            .collect();
+        assert_eq!(urls, [subtitle.to_string_lossy()]);
+        let Call::Load { externals, .. } = f.player.calls.borrow()[0].clone() else {
+            panic!("not a load");
+        };
+        assert_eq!(externals.len(), 1);
+        assert_ne!(externals[0].0, "Subtitles", "named from its track");
+        assert_eq!(opened.source, MediaSourceId("source-4k".into()));
+        assert!(!opened.converted);
+    }
+
+    #[test]
+    fn an_online_play_of_a_download_reports_to_the_server() {
+        let f = downloaded();
+        let started = f.start(f.online());
+        let opened = started.started.opened.as_ref().unwrap();
+        // The server opened a playback session, as for any other play; the file is the local one.
+        assert_eq!(opened.session.0, PLAY_SESSION);
+        assert_eq!(
+            f.server.state.lock().unwrap().record.plays,
+            [(ItemId(FILM.into()), MediaSourceId("source-4k".into()))]
+        );
+        f.play(
+            started,
+            vec![vec![PlayerEvent::Loaded, PlayerEvent::Position(600.)]],
+        );
+        assert_eq!(f.loaded_url(), f.folder.join("media.mkv").to_string_lossy());
+        let reports = f.server.reports();
+        assert!(matches!(
+            reports.as_slice(),
+            [Report::Started(_), Report::Stopped(stopped)]
+                if stopped.position == Duration::from_secs(600)
+                    && stopped.session.0 == PLAY_SESSION
+                    && stopped.method == PlayMethod::DirectPlay
+        ));
+        assert!(f.downloads.journal().plays().unwrap().is_empty());
+    }
+
+    #[test]
+    fn an_offline_play_writes_the_journal_and_asks_nothing_of_the_server() {
+        let f = downloaded();
+        let before = std::time::SystemTime::now();
+        let started = f.start(Reach::Offline);
+        f.play(
+            started,
+            vec![
+                vec![PlayerEvent::Loaded, PlayerEvent::Position(590.)],
+                vec![PlayerEvent::Position(600.)],
+            ],
+        );
+        let plays = f.downloads.journal().plays().unwrap();
+        assert_eq!(plays.len(), 1);
+        assert_eq!(plays[0].item, ItemId(FILM.into()));
+        assert_eq!(plays[0].position, Duration::from_secs(600));
+        assert!(!plays[0].played);
+        assert!(plays[0].at >= before);
+        assert!(f.folder.parent().unwrap().join("plays.json").is_file());
+        f.server_untouched();
+    }
+
+    #[test]
+    fn the_end_of_an_offline_play_marks_it_watched_in_the_journal() {
+        let f = downloaded();
+        let started = f.start(Reach::Offline);
+        f.play(
+            started,
+            vec![
+                vec![
+                    PlayerEvent::Loaded,
+                    PlayerEvent::Duration(7860.),
+                    PlayerEvent::Position(7855.),
+                ],
+                vec![PlayerEvent::EndOfFile],
+            ],
+        );
+        let plays = f.downloads.journal().plays().unwrap();
+        assert_eq!(plays.len(), 1);
+        assert!(plays[0].played);
+        assert_eq!(plays[0].position, Duration::ZERO);
+        f.server_untouched();
+    }
+
+    #[test]
+    fn an_offline_play_stopped_in_the_credits_is_watched() {
+        let f = downloaded();
+        let started = f.start(Reach::Offline);
+        // 7200 of 7860 seconds is past 90 %, and the viewer leaves without the file ending.
+        f.play(
+            started,
+            vec![vec![
+                PlayerEvent::Loaded,
+                PlayerEvent::Duration(7860.),
+                PlayerEvent::Position(7200.),
+            ]],
+        );
+        let plays = f.downloads.journal().plays().unwrap();
+        assert_eq!(plays.len(), 1);
+        assert!(plays[0].played);
+        assert_eq!(plays[0].position, Duration::ZERO);
+        assert_eq!(plays[0].play_count, 1);
+
+        // Short of 90 %, it is only where the viewer stopped.
+        let f = downloaded();
+        let started = f.start(Reach::Offline);
+        f.play(
+            started,
+            vec![vec![
+                PlayerEvent::Loaded,
+                PlayerEvent::Duration(7860.),
+                PlayerEvent::Position(7000.),
+            ]],
+        );
+        let plays = f.downloads.journal().plays().unwrap();
+        assert!(!plays[0].played);
+        assert_eq!(plays[0].position, Duration::from_secs(7000));
+    }
+
+    #[test]
+    fn a_download_that_does_not_play_asks_for_no_conversion() {
+        let f = downloaded();
+        let started = f.start(f.online());
+        let mut session = f.session(&started.started);
+        let opened = started.started.opened.as_ref().unwrap();
+        let mut fallback = Fallback::local(
+            Arc::new(f.server.clone()),
+            started.started.plan.clone(),
+            opened,
+        );
+        let mut now = Instant::now();
+        f.player
+            .queued
+            .borrow_mut()
+            .push(PlayerEvent::Error(PlayerError("loading failed".into())));
+        for _ in 0..3 {
+            now += Duration::from_secs(61);
+            session.update(now);
+            assert_eq!(fallback.tick(&mut session, now), None);
+        }
+        assert_eq!(
+            session.error(),
+            Some(&PlayerError(DOWNLOAD_CANNOT_PLAY.into()))
+        );
+        // Nor does a quality chosen in the settings.
+        assert!(
+            fallback
+                .choose(
+                    crate::player::settings::Quality::Cap(4_000_000),
+                    &mut session
+                )
+                .is_none()
+        );
+        assert!(f.server.state.lock().unwrap().record.transcodes.is_empty());
+    }
+
+    #[test]
+    fn offline_thumbnails_come_from_the_downloaded_tiles() {
+        let f = downloaded();
+        let started = f.start(Reach::Offline);
+        let trickplay = started.local.trickplay().expect("thumbnails downloaded");
+        assert_eq!(trickplay, TRICKPLAY);
+        let mut tiles: Tiles<Vec<u8>> = Tiles::new(trickplay, BUDGET);
+        let tile = tiles.next_fetch(Some(1), Instant::now()).unwrap();
+        assert_eq!(tile, 1);
+        assert_eq!(started.local.tile(tile).unwrap(), b"tile-b");
+        assert_eq!(started.local.tile(0).unwrap(), b"tile-a");
+        f.server_untouched();
+    }
+
+    #[test]
+    fn offline_skipping_uses_the_downloaded_segments() {
+        let f = downloaded();
+        let started = f.start(Reach::Offline);
+        let mut session = f.session(&started.started);
+        session.set_segments(started.local.segments().to_vec());
+        f.player.queued.borrow_mut().extend([
+            PlayerEvent::Loaded,
+            PlayerEvent::Duration(7860.),
+            PlayerEvent::Position(10.),
+        ]);
+        session.update(Instant::now());
+        assert!(session.skip_button().is_some(), "the intro offers a skip");
+        assert!(session.press_skip().is_none());
+        assert!(f.player.calls.borrow().contains(&Call::Seek(Seek::To(65.))));
+        f.server_untouched();
     }
 }

@@ -110,6 +110,8 @@ pub struct Record {
     pub plays: Vec<(ItemId, MediaSourceId)>,
     pub images: Vec<(ImageRef, u32)>,
     pub film_pages: Vec<ItemId>,
+    /// The items whose title was asked, in order.
+    pub titles: Vec<ItemId>,
     /// The queries searched, in the order they came.
     pub searches: Vec<String>,
     /// Every call that put an item in the list (`true`) or took it out, answered or failed.
@@ -1321,6 +1323,7 @@ impl MediaServer for FakeServer {
     }
 
     fn title(&self, item: &ItemId) -> Result<Title, ProviderError> {
+        self.state().record.titles.push(item.clone());
         self.state().reachable()?;
         if let Some(episode) = self.episode(item) {
             return Ok(Title::Episode(episode));
