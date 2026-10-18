@@ -115,9 +115,8 @@ impl Shell {
     ) -> Option<AnyElement> {
         // The executor's clock, which the tests drive with `advance_clock`.
         let now = cx.background_executor().now();
-        let wanted = self
-            .notice
-            .filter(|_| !matches!(screen, Screen::Login | Screen::Player));
+        // Over the player too: a command of the launcher may be refused while a movie plays.
+        let wanted = self.notice.filter(|_| screen != Screen::Login);
         let drawn = self.notice_fade.follow(wanted, now);
         if self.notice_fade.moving(now) {
             window.request_animation_frame();

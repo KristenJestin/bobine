@@ -9,6 +9,10 @@ use crate::home_page::{self, PlayTarget};
 use crate::instance::{Inbox, Kind, Request};
 use crate::navigation::Screen;
 
+/// Why a request did nothing, said over the page for a moment.
+const PLAYING: &str = "Playback in progress: stop it first.";
+const STARTING: &str = "Another title is already starting.";
+
 impl Shell {
     /// The window hears the commands on `inbox` (`None`: they cannot reach it), and does
     /// `first`, the command it was opened for, once a session is there.
@@ -51,8 +55,8 @@ impl Shell {
     }
 
     /// The window is raised, and shows the page or plays the title. Before a session is there
-    /// (the kept one being restored, or the login), the request waits for it; while a film
-    /// plays, it goes on, and the request is dropped.
+    /// (the kept one being restored, or the login), the request waits for it; while a movie
+    /// plays, it goes on, and the window says why the request did nothing.
     pub fn asked(&mut self, request: Request, window: &mut Window, cx: &mut Context<Self>) {
         // On Wayland the compositor decides: it may only mark the window as asking for attention.
         window.activate_window();
@@ -61,6 +65,7 @@ impl Shell {
             return;
         }
         if self.playback.is_some() {
+            self.show_notice(PLAYING, cx);
             return;
         }
         self.search = None;
@@ -97,6 +102,7 @@ impl Shell {
     /// Like a "Play" of the Home: the server says what the id is, then opens its playback.
     fn play_asked(&mut self, id: ItemId, from: From, window: &mut Window, cx: &mut Context<Self>) {
         if self.home.busy {
+            self.show_notice(STARTING, cx);
             return;
         }
         let Some(server) = self.server.clone() else {
