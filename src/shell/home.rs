@@ -764,9 +764,7 @@ mod tests {
     /// While the header moves by itself, only the header is drawn again: the shell, which draws
     /// the whole window, is neither notified nor built again at the header's rate.
     #[gpui_kit::test]
-    fn an_idle_home_with_its_header_showing_does_not_rebuild_the_window(
-        cx: &mut gpui_kit::TestAppContext,
-    ) {
+    fn an_idle_home_does_not_rebuild_the_shell(cx: &mut gpui_kit::TestAppContext) {
         let server: Arc<dyn Connector> = Arc::new(FakeServer::new(6, true));
         let window = cx.add_window(|_, cx| {
             crate::keys::bind(cx);
