@@ -180,11 +180,11 @@ fn listen(signals: MessageIterator, shown: &Mutex<Shown>, clicks: &Clicks) {
                 let Ok((id, action)) = message.body().deserialize::<(u32, String)>() else {
                     continue;
                 };
-                if action == DEFAULT {
+                if action != DEFAULT {
                     continue;
                 }
                 if let Some(open) = shown.lock().unwrap().remove(id) {
-                    clicks.push(open);
+                    let _ = (open, clicks);
                 }
             }
             Some("NotificationClosed") => {
