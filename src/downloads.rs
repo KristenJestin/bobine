@@ -244,8 +244,12 @@ impl fmt::Display for DownloadError {
 }
 
 /// An id as a file name: letters, digits, `-` and `_` kept, every other byte as `%XX`, so that
-/// no id names a folder above it.
+/// no id names a folder above it. An empty id is `%`, which no other id gives, so that it never
+/// names the folder it sits in.
 fn safe(id: &str) -> String {
+    if id.is_empty() {
+        return "%".to_string();
+    }
     id.bytes()
         .map(|byte| match byte {
             b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'_' => (byte as char).to_string(),
