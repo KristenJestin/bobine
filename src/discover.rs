@@ -36,7 +36,8 @@ pub fn status_label(availability: Availability, in_library: bool) -> Option<&'st
     match availability {
         Availability::Missing => None,
         Availability::Pending => Some("Pending"),
-        Availability::Processing => Some("Processing"),
+        // Nothing is processing until a download shows: a card says what the request is.
+        Availability::Processing => Some("Requested"),
         Availability::PartiallyAvailable => Some("Partially available"),
         Availability::Available => Some("Available"),
         Availability::Blocked => Some("Blocked"),
@@ -445,7 +446,7 @@ mod tests {
         assert_eq!(status_label(Availability::Pending, false), Some("Pending"));
         assert_eq!(
             status_label(Availability::Processing, false),
-            Some("Processing")
+            Some("Requested")
         );
         assert_eq!(
             status_label(Availability::PartiallyAvailable, false),
