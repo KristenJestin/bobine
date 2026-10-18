@@ -1389,7 +1389,9 @@ impl MediaServer for Jellyfin {
 
     /// The token goes in the header, never in the address. A resume asks `Range: bytes=<from>-`
     /// with `If-Range: <validator>`: the server answers 206 from there while the file is the
-    /// same, 200 with all of it once it changed.
+    /// same, 200 with all of it once it changed. An answer that says otherwise (a 206 with another
+    /// mark: a proxy that dropped `If-Range`; a 416: the kept bytes already are the whole file)
+    /// is asked again without a range, so the sink starts again from zero.
     fn fetch(
         &self,
         file: &DownloadFile,
@@ -1413,7 +1415,12 @@ impl MediaServer for Jellyfin {
         let headers: Vec<(&str, &str)> = resume
             .map(|validator| vec![("Range", range.as_str()), ("If-Range", validator)])
             .unwrap_or_default();
-        let mut response = self.http.download(WHAT, &path, &headers)?;
+        let mut response = match self.http.download(WHAT, &path, &headers) {
+            Err(ProviderError::Server(416)) if resume.is_some() => {
+                return self.fetch(file, 0, None, sink);
+            }
+            sent => sent?,
+        };
         let header = |name: &str| {
             response
                 .headers()
@@ -1437,6 +1444,11 @@ impl MediaServer for Jellyfin {
                     "{WHAT}: not the bytes asked for"
                 )));
             }
+            // The file was replaced and the answer ignored `If-Range`: these bytes belong to
+            // another file than the kept ones.
+            if validator.is_some() && validator.as_deref() != resume {
+                return self.fetch(file, 0, None, sink);
+            }
             Fetched {
                 resumed: true,
                 validator,
@@ -1453,6 +1465,7 @@ impl MediaServer for Jellyfin {
         sink.start(&fetched).map_err(written)?;
         let mut body = response.body_mut().as_reader();
         let mut buffer = vec![0; 256 * 1024];
+        let mut received = 0u64;
         loop {
             let read = match std::io::Read::read(&mut body, &mut buffer) {
                 Ok(0) => break,
@@ -1462,8 +1475,18 @@ impl MediaServer for Jellyfin {
                 Err(e) => return Err(ProviderError::Unreachable(format!("{WHAT}: {}", e.kind()))),
             };
             sink.write_all(&buffer[..read]).map_err(written)?;
+            received += read as u64;
         }
+        // A body that ends before its length is a cut transfer to resume, not a whole file.
+        let expected = fetched
+            .length
+            .map(|length| length.saturating_sub(if fetched.resumed { from } else { 0 }));
         sink.flush().map_err(written)?;
+        if expected.is_some_and(|expected| expected != received) {
+            return Err(ProviderError::Unreachable(format!(
+                "{WHAT}: the body ended early"
+            )));
+        }
         Ok(fetched)
     }
 }

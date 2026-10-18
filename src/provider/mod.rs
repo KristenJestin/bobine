@@ -185,7 +185,9 @@ pub trait MediaServer: Send + Sync {
     ) -> Result<DownloadPlan, ProviderError>;
     /// Writes the bytes of one file of a plan into `sink`, from byte `from` when `validator`
     /// (from an earlier answer) still matches, else from zero: the sink is told which before the
-    /// first byte. Blocks until done or failed.
+    /// first byte. Blocks until done or failed. `Ok` means every byte of the file arrived and was
+    /// written: a body that ends before its length is an error (`Unreachable`), whatever was
+    /// written stays in the sink for a resume from there.
     fn fetch(
         &self,
         file: &DownloadFile,
