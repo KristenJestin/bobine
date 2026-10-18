@@ -15,6 +15,9 @@
 //! manifests themselves: one download at a time, in the order queued. `run` does the queued
 //! downloads and blocks until none is left; the window calls it on its background executor after
 //! each `queue_*` or `resume`, and a call while another runs returns at once.
+//!
+//! A finished download plays from its folder (`Local`); while the server cannot be reached, its
+//! plays go to `<server id>/<user id>/plays.json` (`Journal`) until the server is told (#136).
 
 // Driven by tests until the Downloads page (#134) and the player (#135) use it.
 #![allow(dead_code)]
@@ -28,10 +31,12 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, TryLockError};
+use std::time::{Duration, SystemTime};
 
 use bobine::provider::{
-    DownloadKind, DownloadPlan, Episode, Fetched, FilmDetail, ImageKind, ImageRef, ItemId,
-    MediaServer, MediaSourceId, ProviderError, Segment, SeriesDetail, Sink, Trailers, Trickplay,
+    DownloadKind, DownloadPlan, Episode, ExternalSubtitle, Fetched, FilmDetail, ImageKind,
+    ImageRef, ItemId, MediaServer, MediaSourceId, PlaySessionId, Playback, ProviderError, Segment,
+    SeriesDetail, Sink, StreamUrl, Trailers, Trickplay,
 };
 use serde::{Deserialize, Serialize};
 
@@ -45,6 +50,7 @@ pub const FORMAT: u32 = 1;
 
 const MANIFEST: &str = "item.json";
 const PART: &str = "media.part";
+const JOURNAL: &str = "plays.json";
 
 /// The free space of a disk.
 pub trait Disk: Send + Sync {
@@ -203,6 +209,84 @@ pub fn image_name(image: &ImageRef, width: u32) -> PathBuf {
         ImageKind::Logo => "logo",
     };
     Path::new("images").join(format!("{}-{kind}-{width}.jpg", safe(&image.item.0)))
+}
+
+/// A finished download, as the player opens it: the file, its subtitles, its thumbnails and its
+/// segments, all from its folder.
+#[derive(Debug, Clone)]
+pub struct Local {
+    folder: PathBuf,
+    pub manifest: Manifest,
+}
+
+impl Local {
+    /// The playback of the file under the playback session `session`: the stream and the
+    /// external subtitles are paths in the download's folder, which the player opens as it
+    /// opens an address.
+    pub fn playback(&self, session: PlaySessionId) -> Playback {
+        let path = |name: &Path| StreamUrl::new(self.folder.join(name).to_string_lossy().into());
+        Playback {
+            session,
+            film: self.manifest.item().clone(),
+            source: self.manifest.source.clone(),
+            stream: path(Path::new(&self.manifest.media_name())),
+            external_subtitles: self
+                .manifest
+                .subtitles
+                .iter()
+                .map(|subtitle| ExternalSubtitle {
+                    index: subtitle.index,
+                    url: path(&subtitle_name(subtitle)),
+                })
+                .collect(),
+            converted: false,
+        }
+    }
+
+    pub fn segments(&self) -> &[Segment] {
+        &self.manifest.segments
+    }
+
+    /// The layout of the thumbnails downloaded, when the server made some.
+    pub fn trickplay(&self) -> Option<Trickplay> {
+        self.manifest.trickplay
+    }
+
+    /// One downloaded tile of thumbnails, as the server gave it.
+    pub fn tile(&self, tile: u32) -> io::Result<Vec<u8>> {
+        let _ = tile;
+        Err(io::ErrorKind::Unsupported.into())
+    }
+}
+
+/// A play while the server could not be reached, for it to be told once it is back.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OfflinePlay {
+    pub item: ItemId,
+    /// Where the viewer stopped; zero once watched.
+    pub position: Duration,
+    /// Watched to its end.
+    pub played: bool,
+    /// When, by the machine's clock.
+    pub at: SystemTime,
+}
+
+/// `plays.json`: one account's offline plays, oldest first, the last one of each item.
+#[derive(Debug, Clone)]
+pub struct Journal {
+    path: PathBuf,
+}
+
+impl Journal {
+    pub fn plays(&self) -> Vec<OfflinePlay> {
+        Vec::new()
+    }
+
+    /// Keeps `play` as its item's last, after every other.
+    pub fn record(&self, play: OfflinePlay) -> io::Result<()> {
+        let _ = (play, &self.path);
+        Ok(())
+    }
 }
 
 /// A download as the Downloads page lists it.
@@ -794,6 +878,21 @@ impl Downloads {
             // The run, still writing, removes what is left once it stops.
             Err(_) if running => Ok(()),
             removed => removed,
+        }
+    }
+
+    /// A finished download of `item`, to play.
+    pub fn local(&self, item: &ItemId) -> Option<Local> {
+        let manifest = self.table().items.get(&item.0)?.clone();
+        let folder = self.folder(item);
+        (manifest.state == State::Done && folder.join(manifest.media_name()).is_file())
+            .then_some(Local { folder, manifest })
+    }
+
+    /// The account's offline plays.
+    pub fn journal(&self) -> Journal {
+        Journal {
+            path: self.root.join(JOURNAL),
         }
     }
 

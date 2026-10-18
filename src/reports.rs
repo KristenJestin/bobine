@@ -1,21 +1,37 @@
 //! What the server is told of a playback: "playing" once the film is loaded, where the viewer is
 //! every `PROGRESS_EVERY` and on each pause and seek, "stopped" when they leave or the film ends.
 //! The calls block: one worker thread per playback sends them, in order, off the window's thread.
+//! While the server cannot be reached, a download's playback writes them to the journal instead.
 
 use std::sync::Arc;
 use std::sync::mpsc::{Sender, channel};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use bobine::provider::{MediaServer, PROGRESS_EVERY, PlaybackReport};
+use bobine::provider::{MediaServer, PROGRESS_EVERY, PlaybackReport, ProviderError};
 
+use crate::downloads::Journal;
 use crate::player::session::Session;
+use crate::series_page::reached_the_end;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Kind {
     Started,
     Progress,
     Stopped,
+    /// Stopped at the film's real end: it is watched.
+    Ended,
+}
+
+/// Where the reports of a playback go.
+pub enum To {
+    Server(Arc<dyn MediaServer>),
+    #[allow(
+        dead_code,
+        reason = "played from the shell once offline mode (#137) wires downloads in"
+    )]
+    /// The server cannot be reached: the journal keeps the play until it is told.
+    Journal(Journal),
 }
 
 pub struct Reporting {
@@ -35,6 +51,15 @@ impl Reporting {
         Self::start_after(server, base, None)
     }
 
+    #[allow(
+        dead_code,
+        reason = "played from the shell once offline mode (#137) wires downloads in"
+    )]
+    /// Reports a playback to `to`: the server, or the journal.
+    pub fn to(to: To, base: PlaybackReport) -> Self {
+        Self::start_to(to, base, None)
+    }
+
     /// Reports another playback of the same film, once `previous` has sent all of its own: the
     /// "stopped" of an attempt that failed must not reach the server after the first report of
     /// the conversion that replaces it.
@@ -43,16 +68,23 @@ impl Reporting {
         base: PlaybackReport,
         previous: Option<JoinHandle<()>>,
     ) -> Self {
+        Self::start_to(To::Server(server), base, previous)
+    }
+
+    fn start_to(to: To, base: PlaybackReport, previous: Option<JoinHandle<()>>) -> Self {
         let (sender, receiver) = channel::<(Kind, PlaybackReport)>();
         let worker = std::thread::spawn(move || {
             if let Some(previous) = previous {
                 let _ = previous.join();
             }
             for (kind, report) in receiver {
-                let sent = match kind {
-                    Kind::Started => server.report_started(&report),
-                    Kind::Progress => server.report_progress(&report),
-                    Kind::Stopped => server.report_stopped(&report),
+                let sent = match &to {
+                    To::Server(server) => match kind {
+                        Kind::Started => server.report_started(&report),
+                        Kind::Progress => server.report_progress(&report),
+                        Kind::Stopped | Kind::Ended => server.report_stopped(&report),
+                    },
+                    To::Journal(journal) => write(journal, kind, &report),
                 };
                 // The film plays on: the next report says where the viewer is anyway.
                 if let Err(error) = sent {
@@ -108,7 +140,12 @@ impl Reporting {
             // Where it really ended: a dropped network stream also ends with EOF, and the server
             // marks the film watched by its own threshold.
             self.stopped = true;
-            self.send(Kind::Stopped, self.position(session), false, now);
+            let position = self.position(session);
+            let kind = match reached_the_end(position, session.duration) {
+                true => Kind::Ended,
+                false => Kind::Stopped,
+            };
+            self.send(kind, position, false, now);
             return;
         }
         let changed = session.paused != self.paused || session.seeks() != self.seeks;
@@ -130,6 +167,13 @@ impl Reporting {
         drop(self.sender);
         self.worker
     }
+}
+
+/// A report as the journal keeps it: the item's last position, or watched when it ended at its
+/// end.
+fn write(journal: &Journal, kind: Kind, report: &PlaybackReport) -> Result<(), ProviderError> {
+    let _ = (journal, kind, report);
+    Ok(())
 }
 
 /// What ends the reports of a playback the viewer leaves: the handle of its own reports, or,

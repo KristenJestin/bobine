@@ -1,7 +1,8 @@
 //! Direct play first; when the file does not play, once, the server's conversion. A file does
 //! not play when its load ends with an error, or when no picture comes within a few seconds of
 //! its opening, or when it never opens within a longer limit. A file that showed a picture
-//! plays: an error later is not one a conversion mends, and is shown as it is.
+//! plays: an error later is not one a conversion mends, and is shown as it is. A downloaded file
+//! is never converted: it does not play, and that is said.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -32,6 +33,13 @@ pub const OPEN_WAIT: Duration = Duration::from_secs(60);
 /// The same for a conversion: the server answers the playlist once it has started to encode, and
 /// the verdict that follows is final (the film cannot play), so it is given more room.
 pub const OPEN_CONVERTED_WAIT: Duration = Duration::from_secs(90);
+
+/// What the player says of a downloaded file that does not play.
+#[allow(
+    dead_code,
+    reason = "played from the shell once offline mode (#137) wires downloads in"
+)]
+pub const DOWNLOAD_CANNOT_PLAY: &str = "this download cannot be played";
 
 /// How long the conversion notice stays once the converted picture shows.
 pub const NOTICE_FOR: Duration = Duration::from_secs(5);
@@ -153,6 +161,8 @@ pub struct Fallback {
     refused_at: Option<Instant>,
     /// Names this playback, so an answer for one the viewer left is told apart.
     id: u64,
+    /// A downloaded file: the server never converts it.
+    local: bool,
 }
 
 impl Fallback {
@@ -176,6 +186,19 @@ impl Fallback {
             externals: opened.external_subtitles.iter().map(|e| e.index).collect(),
             refused_at: None,
             id: PLAYBACKS.fetch_add(1, Ordering::Relaxed),
+            local: false,
+        }
+    }
+
+    #[allow(
+        dead_code,
+        reason = "played from the shell once offline mode (#137) wires downloads in"
+    )]
+    /// A downloaded file `opened` (`Local::playback`) of `plan`, which nothing replaces.
+    pub fn local(server: Arc<dyn MediaServer>, plan: Plan, opened: &Playback) -> Self {
+        Self {
+            local: true,
+            ..Self::new(server, plan, opened)
         }
     }
 
