@@ -704,6 +704,7 @@ mod tests {
             Box::new(FakeDisplay {
                 placements: display.placements.clone(),
                 cursor: display.cursor.clone(),
+                shown: display.shown.clone(),
             }),
             "Le Dernier Hiver".into(),
             None,
@@ -1390,6 +1391,15 @@ mod tests {
         f.queue(vec![PlayerEvent::FirstFrame]);
         f.session.update(Instant::now());
         assert!(!f.session.loading());
+    }
+
+    #[test]
+    fn a_picture_the_display_shows_drops_the_loading_mark_before_the_player_tells_it() {
+        let mut f = fixture();
+        f.queue(vec![PlayerEvent::Loaded]);
+        f.session.update(Instant::now());
+        *f.display.shown.borrow_mut() = true;
+        assert!(!f.session.loading(), "the display already shows a frame");
     }
 
     #[test]
