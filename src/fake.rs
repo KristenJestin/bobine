@@ -204,6 +204,8 @@ pub struct State {
     pub record: Record,
     /// How long an image takes to come: a real server makes the fetches overlap.
     pub image_delay: std::time::Duration,
+    /// No image comes: the list loads, the pictures fail as unreachable.
+    pub images_fail: bool,
     /// The first time each person's photo is asked, the server fails (as a busy server that
     /// times out while it fetches the photo from elsewhere).
     pub photos_fail_once: bool,
@@ -667,9 +669,9 @@ pub fn episodes() -> Vec<Episode> {
                         id: ItemId(id),
                     },
                     series: ItemId(format!("series-{n}")),
+                    series_poster: image(&format!("series-{n}"), ImageKind::Primary),
                     series_title: (*title).into(),
                     season: ItemId(format!("series-{n}-s{season}")),
-                    series_poster: image(&format!("series-{n}"), ImageKind::Primary),
                     season_number: Some(season),
                     number: Some(number),
                     overview: Some(
@@ -755,6 +757,7 @@ impl FakeServer {
                 play_error: None,
                 record: Record::default(),
                 image_delay: std::time::Duration::ZERO,
+                images_fail: false,
                 photos_fail_once: false,
                 collection_poster_error: None,
                 collection_posters_asked: Vec::new(),
@@ -1175,8 +1178,8 @@ impl MediaServer for FakeServer {
             let mut state = self.state();
             let asked_before = state.record.images.iter().any(|(i, _)| i == image);
             state.record.images.push((image.clone(), width));
-            let fails =
-                state.photos_fail_once && image.item.0.starts_with("person-") && !asked_before;
+            let fails = state.images_fail
+                || (state.photos_fail_once && image.item.0.starts_with("person-") && !asked_before);
             (state.image_delay, fails)
         };
         std::thread::sleep(delay);
