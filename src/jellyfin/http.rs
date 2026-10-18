@@ -205,6 +205,32 @@ impl Http {
             .map_err(|e| transport(what, e))
     }
 
+    /// A file to download, from the headers given (`Range`, `If-Range`): its answer, the body
+    /// not read yet. No time limit on the whole, a film takes what it takes; only on the wait for
+    /// the server's answer.
+    pub fn download(
+        &self,
+        what: &str,
+        path: &str,
+        headers: &[(&str, &str)],
+    ) -> Result<Response<ureq::Body>, ProviderError> {
+        let mut request = self
+            .agent
+            .get(&self.url(path, &[]))
+            .header("Authorization", &self.authorization());
+        for (name, value) in headers {
+            request = request.header(*name, *value);
+        }
+        let sent = request
+            .config()
+            .timeout_global(None)
+            .timeout_connect(Some(TIMEOUT))
+            .timeout_recv_response(Some(TIMEOUT))
+            .build()
+            .call();
+        Self::checked(what, sent)
+    }
+
     /// Posts a JSON body; the answer is read as JSON.
     pub fn post<B: Serialize, T: DeserializeOwned>(
         &self,
