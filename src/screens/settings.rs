@@ -138,6 +138,9 @@ pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -
         .overflow_y_scroll()
         .flex()
         .justify_center()
+        // GPUI sizes what scrolls from the bounds of its children: stretched to the page's
+        // height, the column would hide all it holds below the window.
+        .items_start()
         .child(
             div()
                 .w_full()
