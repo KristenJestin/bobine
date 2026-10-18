@@ -29,7 +29,7 @@ use std::fs::{self, File};
 use std::io::{self, Write};
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, TryLockError};
 use std::time::{Duration, SystemTime};
 
@@ -283,24 +283,70 @@ pub struct Journal {
 }
 
 impl Journal {
+    /// The plays kept; none when there is no file yet, an error when it cannot be read.
     pub fn plays(&self) -> io::Result<Vec<OfflinePlay>> {
-        Ok(fs::read(&self.path)
-            .ok()
-            .and_then(|text| serde_json::from_slice(&text).ok())
-            .unwrap_or_default())
+        match fs::read(&self.path) {
+            Ok(text) => serde_json::from_slice(&text)
+                .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error)),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(Vec::new()),
+            Err(error) => Err(error),
+        }
     }
 
-    /// Keeps `play` as its item's last, after every other.
-    pub fn record(&self, play: OfflinePlay) -> io::Result<()> {
-        let mut plays = self.plays().unwrap_or_default();
+    /// Keeps `play` as its item's last, after every other. An item watched stays watched, and
+    /// each play that ended watched is counted. A file that cannot be read is moved aside as
+    /// `plays.json.bad-<n>`, so that nothing is lost, and a new journal starts.
+    pub fn record(&self, mut play: OfflinePlay) -> io::Result<()> {
+        // One lock for every Journal of the folder: two reports are never read-modify-written
+        // at once.
+        let lock = journal_lock(&self.path);
+        let _held = lock.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut plays = match self.plays() {
+            Ok(plays) => plays,
+            Err(error) if error.kind() == io::ErrorKind::InvalidData => {
+                self.set_aside()?;
+                Vec::new()
+            }
+            Err(error) => return Err(error),
+        };
+        if let Some(before) = plays.iter().find(|kept| kept.item == play.item) {
+            // A partial rewatch does not unwatch.
+            play.played |= before.played;
+            play.play_count += before.play_count;
+        }
         plays.retain(|kept| kept.item != play.item);
         plays.push(play);
         let text = serde_json::to_vec_pretty(&plays).map_err(io::Error::other)?;
-        // Through a temporary file, so a crash leaves the plays as they were.
-        let tmp = self.path.with_extension("json.tmp");
+        // Through a temporary file of its own, so a crash leaves the plays as they were.
+        static WRITES: AtomicU64 = AtomicU64::new(0);
+        let tmp = self.path.with_extension(format!(
+            "json.tmp-{}-{}",
+            std::process::id(),
+            WRITES.fetch_add(1, Ordering::Relaxed)
+        ));
         write_file(&tmp, &text)?;
         fs::rename(tmp, &self.path)
     }
+
+    fn set_aside(&self) -> io::Result<()> {
+        let name = self.path.file_name().unwrap_or_default().to_os_string();
+        let aside = (1..)
+            .map(|n| {
+                let mut aside = name.clone();
+                aside.push(format!(".bad-{n}"));
+                self.path.with_file_name(aside)
+            })
+            .find(|aside| !aside.exists())
+            .expect("an unbounded range");
+        fs::rename(&self.path, aside)
+    }
+}
+
+/// The lock of the journal at `path`, the same for every `Journal` of it in the process.
+fn journal_lock(path: &Path) -> Arc<Mutex<()>> {
+    static LOCKS: Mutex<BTreeMap<PathBuf, Arc<Mutex<()>>>> = Mutex::new(BTreeMap::new());
+    let mut locks = LOCKS.lock().unwrap_or_else(PoisonError::into_inner);
+    locks.entry(path.to_path_buf()).or_default().clone()
 }
 
 /// A download as the Downloads page lists it.
