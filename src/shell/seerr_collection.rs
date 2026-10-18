@@ -241,6 +241,14 @@ impl Shell {
             return;
         }
         self.seerr.links.insert(tmdb, None);
+        // Another movie of the collection is reading its name: this one waits for the answer.
+        if let Some(id) = collection {
+            if let Some(waiting) = self.seerr.reading.get_mut(&id) {
+                waiting.push(tmdb);
+                return;
+            }
+            self.seerr.reading.insert(id, Vec::new());
+        }
         let read = move |seerr: &dyn RequestServer| match collection {
             Some(id) => seerr.collection(id).map(|parts| {
                 Some(CollectionRef {
@@ -252,23 +260,33 @@ impl Shell {
                 .title(MediaKind::Movie, tmdb)
                 .map(|detail| detail.collection),
         };
-        self.ask_seerr(cx, read, move |shell, link, _| match link {
-            Ok(link) => {
-                if let Some(id) = collection {
-                    let name = link.as_ref().map(|link| link.name.clone());
-                    shell.seerr.names.insert(id, name);
+        self.ask_seerr(cx, read, move |shell, link, _| {
+            let waiting = collection
+                .and_then(|id| shell.seerr.reading.remove(&id))
+                .unwrap_or_default();
+            match link {
+                Ok(link) => {
+                    // Whichever way the collection was found, its name is read once a session.
+                    if let Some(found) = &link {
+                        shell.seerr.names.insert(found.id, Some(found.name.clone()));
+                    }
+                    for film in waiting {
+                        shell.seerr.links.insert(film, link.clone());
+                    }
+                    shell.seerr.links.insert(tmdb, link);
                 }
-                shell.seerr.links.insert(tmdb, link);
-            }
-            // Unknown to Seerr: asked again in the next session only.
-            Err(RequestError::NotFound) => {
-                if let Some(id) = collection {
-                    shell.seerr.names.insert(id, None);
+                // Unknown to Seerr: asked again in the next session only.
+                Err(RequestError::NotFound) => {
+                    if let Some(id) = collection {
+                        shell.seerr.names.insert(id, None);
+                    }
                 }
-            }
-            // Asked again the next time the page opens.
-            Err(_) => {
-                shell.seerr.links.remove(&tmdb);
+                // Asked again the next time the page opens.
+                Err(_) => {
+                    for film in waiting.into_iter().chain([tmdb]) {
+                        shell.seerr.links.remove(&film);
+                    }
+                }
             }
         });
     }
@@ -302,7 +320,7 @@ mod tests {
 
     use super::super::discover::tests::{change_address, click, configured, configured_on, drawn};
     use super::*;
-    use crate::fake::{FILM, FakeServer, IN_LIBRARY_FILM};
+    use crate::fake::{FILM, FakeServer, IN_LIBRARY_FILM, OTHER_LIBRARY_FILM};
     use crate::fake_seerr::{COLLECTION, FakeSeerr, WINTER_LIGHT, WINTERS_END};
     use crate::navigation::NavEntry;
 
@@ -882,6 +900,49 @@ mod tests {
         let mut visual = drawn(&window, cx);
         assert!(visual.debug_bounds("part-of-collection").is_some());
         assert_eq!(collection_reads(&seerr, COLLECTION), 1);
+    }
+
+    #[gpui_kit::test]
+    fn a_title_request_fills_its_names(cx: &mut TestAppContext) {
+        let seerr = FakeSeerr::default();
+        let window = configured(&seerr, cx);
+        // Jellyfin knows no collection of the film: Seerr's page of the film gives it.
+        window
+            .update(cx, |shell, _, cx| shell.open_film(ItemId(FILM.into()), cx))
+            .unwrap();
+        cx.run_until_parked();
+        window
+            .update(cx, |shell, _, _| {
+                assert_eq!(
+                    shell.seerr.names.get(&COLLECTION),
+                    Some(&Some("Winter Saga".to_string()))
+                );
+            })
+            .unwrap();
+    }
+
+    #[gpui_kit::test]
+    fn two_movies_of_one_collection_read_its_name_once(cx: &mut TestAppContext) {
+        let seerr = FakeSeerr::default();
+        let window = configured(&seerr, cx);
+        window
+            .update(cx, |shell, _, cx| {
+                shell.load_collection_link(Some(IN_LIBRARY_FILM), Some(COLLECTION), cx);
+                shell.load_collection_link(Some(OTHER_LIBRARY_FILM), Some(COLLECTION), cx);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        assert_eq!(collection_reads(&seerr, COLLECTION), 1);
+        window
+            .update(cx, |shell, _, _| {
+                for film in [IN_LIBRARY_FILM, OTHER_LIBRARY_FILM] {
+                    assert_eq!(
+                        shell.collection_link(Some(film)).map(|link| link.id),
+                        Some(COLLECTION)
+                    );
+                }
+            })
+            .unwrap();
     }
 
     #[gpui_kit::test]
