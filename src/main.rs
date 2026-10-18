@@ -5,6 +5,7 @@ mod chrome;
 mod config;
 mod curtain;
 mod discover;
+mod downloads;
 #[cfg(any(test, feature = "harness"))]
 mod fake;
 #[cfg(any(test, feature = "harness"))]

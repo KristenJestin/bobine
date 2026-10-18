@@ -9,13 +9,14 @@ use std::time::Duration;
 
 use bobine::provider::{
     AudioTrack, CastMember, Collection, CollectionCard, CollectionDetail, Connector, DownloadFile,
-    DownloadPlan, EntryId, Episode, ExternalSubtitle, Favourite, Feature, FeatureKind, Fetched,
-    Film, FilmDetail, FilmQuery, FilmSort, FilterChoices, HistorySource, ImageKind, ImageRef,
-    ItemId, Library, LibraryKind, LocalTime, MediaServer, MediaSource, MediaSourceId, NewEpisode,
-    Page, PersonHit, PersonTitles, Play, PlaySessionId, Playback, PlaybackReport, Playlist,
-    PlaylistEntry, ProviderError, SearchResults, Season, Segment, Series, SeriesDetail, SeriesHit,
-    ServerInfo, Sink, StreamUrl, SubtitleTrack, Title, TmdbIndex, Token, TokenStore, Trailers,
-    TranscodeRequest, Trickplay, VideoRange, VideoTrack, WatchHistory, Watched, WatchedKind,
+    DownloadKind, DownloadPlan, EntryId, Episode, ExternalSubtitle, Favourite, Feature,
+    FeatureKind, Fetched, Film, FilmDetail, FilmQuery, FilmSort, FilterChoices, HistorySource,
+    ImageKind, ImageRef, ItemId, Library, LibraryKind, LocalTime, MediaServer, MediaSource,
+    MediaSourceId, NewEpisode, Page, PersonHit, PersonTitles, Play, PlaySessionId, Playback,
+    PlaybackReport, Playlist, PlaylistEntry, ProviderError, SearchResults, Season, Segment, Series,
+    SeriesDetail, SeriesHit, ServerInfo, Sink, StreamUrl, SubtitleTrack, Title, TmdbIndex, Token,
+    TokenStore, Trailers, TranscodeRequest, Trickplay, VideoRange, VideoTrack, WatchHistory,
+    Watched, WatchedKind,
 };
 
 pub const USER: &str = "camille";
@@ -137,6 +138,10 @@ pub struct Record {
     pub histories: u32,
     /// How many times the episodes added lately were asked.
     pub new_episode_asks: u32,
+    /// Every file fetched, from which byte and with which validator, in the order asked.
+    pub fetches: Vec<(DownloadFile, u64, Option<String>)>,
+    /// The most fetches that ran at once.
+    pub most_fetches_at_once: usize,
 }
 
 /// A change asked of a playlist.
@@ -272,6 +277,20 @@ pub struct State {
     pub between_pages: Option<Change>,
     /// No answer comes: the Home's lists, the search and the titles fail as unreachable.
     pub unreachable: bool,
+    /// How many bytes each downloaded file is.
+    pub download_size: u64,
+    /// What the server's files are now: a new one is a file replaced, which a resume does not
+    /// continue.
+    pub download_version: String,
+    /// Once a media file reached this many bytes, the hook runs, then the transfer goes on: a
+    /// test sees the disk in the middle of a download. Once.
+    pub mid_download: Option<(u64, Box<dyn FnOnce() + Send>)>,
+    /// Once a media file reached this many bytes, the sink's disk is full. Once.
+    pub disk_full_after: Option<u64>,
+    /// How long each piece of a file takes to come, so that two downloads would overlap.
+    pub fetch_delay: std::time::Duration,
+    /// How many fetches run now.
+    pub fetching: usize,
 }
 
 impl State {
@@ -799,6 +818,12 @@ impl FakeServer {
                 added: Vec::new(),
                 between_pages: None,
                 unreachable: false,
+                download_size: 64,
+                download_version: "v1".into(),
+                mid_download: None,
+                disk_full_after: None,
+                fetch_delay: std::time::Duration::ZERO,
+                fetching: 0,
             })),
             info: ServerInfo {
                 id: "server-1".into(),
@@ -1799,21 +1824,114 @@ impl MediaServer for FakeServer {
 
     fn download_plan(
         &self,
-        _item: &ItemId,
-        _source: &MediaSourceId,
+        item: &ItemId,
+        source: &MediaSourceId,
     ) -> Result<DownloadPlan, ProviderError> {
-        Err(ProviderError::NotFound)
+        let versions = match self.episode(item) {
+            Some(episode) => episode.versions,
+            None => self.film(item)?.versions,
+        };
+        let version = versions
+            .iter()
+            .find(|s| &s.id == source)
+            .ok_or(ProviderError::NotFound)?;
+        let handle = format!("{}/{}", item.0, source.0);
+        let media = DownloadFile {
+            kind: DownloadKind::Media,
+            handle: handle.clone(),
+        };
+        let subtitles = version
+            .subtitles
+            .iter()
+            .filter(|s| s.external)
+            .map(|s| DownloadFile {
+                kind: DownloadKind::Subtitle {
+                    index: s.index,
+                    format: "srt".into(),
+                },
+                handle: handle.clone(),
+            });
+        let state = self.state();
+        Ok(DownloadPlan {
+            size: Some(state.download_size),
+            version: state.download_version.clone(),
+            container: version.container.clone(),
+            files: std::iter::once(media).chain(subtitles).collect(),
+        })
     }
 
+    /// Serves the bytes `download_bytes` gives, from `from` when `validator` is the file's own.
     fn fetch(
         &self,
-        _file: &DownloadFile,
-        _from: u64,
-        _validator: Option<&str>,
-        _sink: &mut dyn Sink,
+        file: &DownloadFile,
+        from: u64,
+        validator: Option<&str>,
+        sink: &mut dyn Sink,
     ) -> Result<Fetched, ProviderError> {
-        Err(ProviderError::NotFound)
+        let (bytes, etag, delay) = {
+            let mut state = self.state();
+            state
+                .record
+                .fetches
+                .push((file.clone(), from, validator.map(str::to_string)));
+            state.fetching += 1;
+            state.record.most_fetches_at_once =
+                state.record.most_fetches_at_once.max(state.fetching);
+            let bytes = match &file.kind {
+                DownloadKind::Media => download_bytes(&file.handle, state.download_size),
+                DownloadKind::Subtitle { index, .. } => {
+                    format!("{index}\n00:00:01,000 --> 00:00:02,000\nBonjour\n").into_bytes()
+                }
+            };
+            (
+                bytes,
+                format!("\"{}\"", state.download_version),
+                state.fetch_delay,
+            )
+        };
+        let resumed = from > 0 && validator == Some(etag.as_str());
+        let fetched = Fetched {
+            resumed,
+            validator: Some(etag),
+            length: Some(bytes.len() as u64),
+        };
+        let media = file.kind == DownloadKind::Media;
+        let written = |e: std::io::Error| ProviderError::Write(e.kind());
+        let sent = (|| {
+            sink.start(&fetched).map_err(written)?;
+            let mut at = if resumed { from as usize } else { 0 };
+            for piece in bytes[at.min(bytes.len())..].chunks(4) {
+                if media {
+                    let full = self
+                        .state()
+                        .disk_full_after
+                        .take_if(|after| at as u64 >= *after);
+                    if full.is_some() {
+                        return Err(ProviderError::Write(std::io::ErrorKind::StorageFull));
+                    }
+                    let hook = self
+                        .state()
+                        .mid_download
+                        .take_if(|(after, _)| at as u64 >= *after);
+                    if let Some((_, hook)) = hook {
+                        hook();
+                    }
+                }
+                std::thread::sleep(delay);
+                sink.write_all(piece).map_err(written)?;
+                at += piece.len();
+            }
+            sink.flush().map_err(written)?;
+            Ok(fetched.clone())
+        })();
+        self.state().fetching -= 1;
+        sent
     }
+}
+
+/// The bytes of the media file of a download handle, `size` of them: a test compares them.
+pub fn download_bytes(handle: &str, size: u64) -> Vec<u8> {
+    handle.bytes().cycle().take(size as usize).collect()
 }
 
 const COLLECTION_NAMES: [&str; 10] = [
