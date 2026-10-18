@@ -1409,13 +1409,16 @@ pub(super) mod tests {
         });
         let mut visual = drawn(window, cx);
         visual.simulate_keystrokes(keys);
-        cx.executor().advance_clock(Duration::from_secs(1));
-        let mut visual = drawn(window, cx);
         let on = window
             .read_with(cx, |shell, _| shell.ring.shown_on().cloned())
             .unwrap()?;
         let on = on.to_string();
         let selector: &'static str = Box::leak(format!("card-ring {on}").into_boxed_str());
+        // The ring fades in with the clock of the time: draw again once it has had some.
+        std::thread::sleep(Duration::from_millis(300));
+        window.update(cx, |_, _, cx| cx.notify()).unwrap();
+        visual.run_until_parked();
+        let mut visual = drawn(window, cx);
         assert!(visual.debug_bounds(selector).is_some(), "drawn on {on}");
         Some(on)
     }
@@ -1451,7 +1454,16 @@ pub(super) mod tests {
             })
             .unwrap();
         let _ = drawn(&window, cx);
-        let on = ring_after(&window, "right", cx).expect("an arrow lands on a similar tile");
+        // The row of the library's own similar titles comes first: the arrows go down to ours.
+        let mut keys = "right".to_string();
+        let mut on = String::new();
+        for _ in 0..6 {
+            on = ring_after(&window, &keys, cx).expect("an arrow lands on a tile");
+            if on.contains("not-in-library") {
+                break;
+            }
+            keys = "down".into();
+        }
         assert!(on.contains("not-in-library"), "{on}");
     }
 
