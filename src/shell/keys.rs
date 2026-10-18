@@ -151,7 +151,10 @@ impl Shell {
     fn toggle_help(&mut self, cx: &mut Context<Self>) {
         if self.help_open {
             self.close_help(cx);
-        } else if !self.search_is_open() && !self.playlist_menu_is_open() {
+        } else if !self.search_is_open()
+            && !self.playlist_menu_is_open()
+            && !self.page_menu_is_open(self.navigator.current())
+        {
             self.help_open = true;
             self.help_fade.set(true, Instant::now());
             cx.notify();
