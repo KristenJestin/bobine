@@ -269,6 +269,9 @@ pub struct OfflinePlay {
     pub position: Duration,
     /// Watched to its end.
     pub played: bool,
+    /// How many plays ended watched, for the server's count to follow (#136).
+    #[serde(default)]
+    pub play_count: u32,
     /// When, by the machine's clock.
     pub at: SystemTime,
 }
@@ -280,16 +283,16 @@ pub struct Journal {
 }
 
 impl Journal {
-    pub fn plays(&self) -> Vec<OfflinePlay> {
-        fs::read(&self.path)
+    pub fn plays(&self) -> io::Result<Vec<OfflinePlay>> {
+        Ok(fs::read(&self.path)
             .ok()
             .and_then(|text| serde_json::from_slice(&text).ok())
-            .unwrap_or_default()
+            .unwrap_or_default())
     }
 
     /// Keeps `play` as its item's last, after every other.
     pub fn record(&self, play: OfflinePlay) -> io::Result<()> {
-        let mut plays = self.plays();
+        let mut plays = self.plays().unwrap_or_default();
         plays.retain(|kept| kept.item != play.item);
         plays.push(play);
         let text = serde_json::to_vec_pretty(&plays).map_err(io::Error::other)?;
@@ -1455,6 +1458,88 @@ mod tests {
         let left: Vec<ItemId> = downloads.list().into_iter().map(|d| d.item).collect();
         assert_eq!(left, [item("film-1")]);
         assert_eq!(open(dir.path(), &server, roomy()).list().len(), 1);
+    }
+
+    fn play(id: &str, position: u64, played: bool) -> OfflinePlay {
+        OfflinePlay {
+            item: item(id),
+            position: Duration::from_secs(position),
+            played,
+            play_count: u32::from(played),
+            at: SystemTime::now(),
+        }
+    }
+
+    #[test]
+    fn a_partial_rewatch_keeps_an_offline_watch() {
+        let dir = tempfile::tempdir().unwrap();
+        let journal = open(dir.path(), &fake(), roomy()).journal();
+        std::fs::create_dir_all(account(dir.path())).unwrap();
+        journal.record(play(FILM, 0, true)).unwrap();
+        journal.record(play(FILM, 1200, false)).unwrap();
+        let plays = journal.plays().unwrap();
+        assert_eq!(plays.len(), 1);
+        assert!(plays[0].played, "a rewatch does not unwatch");
+        assert_eq!(plays[0].position, Duration::from_secs(1200));
+        assert_eq!(plays[0].play_count, 1);
+        // A second watch counts too.
+        journal.record(play(FILM, 0, true)).unwrap();
+        assert_eq!(journal.plays().unwrap()[0].play_count, 2);
+    }
+
+    #[test]
+    fn two_plays_recorded_at_once_are_both_kept() {
+        let server = fake();
+        for round in 0..20 {
+            let dir = tempfile::tempdir().unwrap();
+            std::fs::create_dir_all(account(dir.path())).unwrap();
+            let barrier = Arc::new(std::sync::Barrier::new(8));
+            // Each Journal comes from its own Downloads, as two playbacks of one account do.
+            let threads: Vec<_> = (0..8)
+                .map(|n| {
+                    let journal = open(dir.path(), &server, roomy()).journal();
+                    let barrier = barrier.clone();
+                    std::thread::spawn(move || {
+                        barrier.wait();
+                        journal
+                            .record(play(&format!("item-{n}"), n, false))
+                            .unwrap();
+                    })
+                })
+                .collect();
+            for thread in threads {
+                thread.join().unwrap();
+            }
+            let kept = open(dir.path(), &server, roomy())
+                .journal()
+                .plays()
+                .unwrap();
+            assert_eq!(kept.len(), 8, "round {round}: {kept:?}");
+        }
+    }
+
+    #[test]
+    fn an_unreadable_journal_is_never_overwritten() {
+        let dir = tempfile::tempdir().unwrap();
+        let journal = open(dir.path(), &fake(), roomy()).journal();
+        std::fs::create_dir_all(account(dir.path())).unwrap();
+        let path = account(dir.path()).join("plays.json");
+        std::fs::write(&path, b"{ not json").unwrap();
+        assert!(journal.plays().is_err());
+        // The new play is kept, and the file that could not be read is kept aside.
+        journal.record(play(FILM, 600, false)).unwrap();
+        assert_eq!(journal.plays().unwrap().len(), 1);
+        let aside: Vec<_> = files_under(&account(dir.path()))
+            .into_iter()
+            .filter(|file| {
+                file.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with("plays.json.bad-")
+            })
+            .collect();
+        assert_eq!(aside.len(), 1, "{aside:?}");
+        assert_eq!(std::fs::read(&aside[0]).unwrap(), b"{ not json");
     }
 
     #[test]

@@ -183,6 +183,7 @@ fn write(journal: &Journal, kind: Kind, report: &PlaybackReport) -> Result<(), P
                 report.position
             },
             played,
+            play_count: u32::from(played),
             at: SystemTime::now(),
         })
         .map_err(|error| ProviderError::Write(error.kind()))

@@ -193,7 +193,13 @@ pub fn start_download(
     // Where the viewer stopped: as the server holds it, else as the last offline play left it,
     // else as it was when downloaded.
     let mut film = film.clone();
-    if let Some(play) = downloads.journal().plays().iter().find(|p| &p.item == item) {
+    if let Some(play) = downloads
+        .journal()
+        .plays()
+        .unwrap()
+        .iter()
+        .find(|p| &p.item == item)
+    {
         film.resume = Some(play.position).filter(|position| !position.is_zero());
     }
     if let Reach::Online(server) = &reach {
@@ -1021,6 +1027,7 @@ mod download_tests {
             assert!(record.tiles.is_empty());
             assert!(record.images.is_empty());
             assert!(record.film_pages.is_empty());
+            assert!(record.titles.is_empty(), "{:?}", record.titles);
         }
     }
 
@@ -1075,7 +1082,7 @@ mod download_tests {
                     && stopped.session.0 == PLAY_SESSION
                     && stopped.method == PlayMethod::DirectPlay
         ));
-        assert!(f.downloads.journal().plays().is_empty());
+        assert!(f.downloads.journal().plays().unwrap().is_empty());
     }
 
     #[test]
@@ -1090,7 +1097,7 @@ mod download_tests {
                 vec![PlayerEvent::Position(600.)],
             ],
         );
-        let plays = f.downloads.journal().plays();
+        let plays = f.downloads.journal().plays().unwrap();
         assert_eq!(plays.len(), 1);
         assert_eq!(plays[0].item, ItemId(FILM.into()));
         assert_eq!(plays[0].position, Duration::from_secs(600));
@@ -1115,11 +1122,46 @@ mod download_tests {
                 vec![PlayerEvent::EndOfFile],
             ],
         );
-        let plays = f.downloads.journal().plays();
+        let plays = f.downloads.journal().plays().unwrap();
         assert_eq!(plays.len(), 1);
         assert!(plays[0].played);
         assert_eq!(plays[0].position, Duration::ZERO);
         f.server_untouched();
+    }
+
+    #[test]
+    fn an_offline_play_stopped_in_the_credits_is_watched() {
+        let f = downloaded();
+        let started = f.start(Reach::Offline);
+        // 7200 of 7860 seconds is past 90 %, and the viewer leaves without the file ending.
+        f.play(
+            started,
+            vec![vec![
+                PlayerEvent::Loaded,
+                PlayerEvent::Duration(7860.),
+                PlayerEvent::Position(7200.),
+            ]],
+        );
+        let plays = f.downloads.journal().plays().unwrap();
+        assert_eq!(plays.len(), 1);
+        assert!(plays[0].played);
+        assert_eq!(plays[0].position, Duration::ZERO);
+        assert_eq!(plays[0].play_count, 1);
+
+        // Short of 90 %, it is only where the viewer stopped.
+        let f = downloaded();
+        let started = f.start(Reach::Offline);
+        f.play(
+            started,
+            vec![vec![
+                PlayerEvent::Loaded,
+                PlayerEvent::Duration(7860.),
+                PlayerEvent::Position(7000.),
+            ]],
+        );
+        let plays = f.downloads.journal().plays().unwrap();
+        assert!(!plays[0].played);
+        assert_eq!(plays[0].position, Duration::from_secs(7000));
     }
 
     #[test]
