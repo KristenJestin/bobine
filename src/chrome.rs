@@ -84,10 +84,13 @@ pub fn pill_bar(
     cx: &mut Context<Shell>,
 ) -> impl IntoElement {
     // Discover is there only while a request server is configured.
-    let shown = NavEntry::ALL
+    let shown = NavEntry::BAR
         .into_iter()
-        .enumerate()
-        .filter(move |(_, entry)| discover || *entry != NavEntry::Discover);
+        .filter(move |entry| discover || *entry != NavEntry::Discover)
+        .map(|entry| {
+            let index = NavEntry::ALL.iter().position(|e| *e == entry);
+            (index.expect("every entry of the bar is in ALL"), entry)
+        });
     let entries = shown.map(|(index, entry)| {
         let level = highlight[index];
         let live = entry.target().is_some();

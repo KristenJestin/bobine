@@ -3,7 +3,7 @@
 //! watched marks) and never touches a network, a keyring or a file.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -38,6 +38,21 @@ pub const SERIES: &str = "series-0";
 pub const IN_LIBRARY_FILM: u64 = 9001;
 pub const OTHER_LIBRARY_FILM: u64 = 9002;
 pub const IN_LIBRARY_SERIES: u64 = 7001;
+
+/// A disk with as many bytes free as a test says: the tests never fill the real one.
+pub struct FakeDisk(pub AtomicU64);
+
+impl FakeDisk {
+    pub fn with(free: u64) -> std::sync::Arc<FakeDisk> {
+        std::sync::Arc::new(FakeDisk(AtomicU64::new(free)))
+    }
+}
+
+impl crate::downloads::Disk for FakeDisk {
+    fn free(&self, _path: &std::path::Path) -> std::io::Result<u64> {
+        Ok(self.0.load(Ordering::SeqCst))
+    }
+}
 
 /// The system keyring in memory: the tests and the harness never reach the real one. Beside the
 /// library's `MemoryStore`, which is `cfg(test)` of the library and so out of reach of this
@@ -291,6 +306,8 @@ pub struct State {
     pub fetch_delay: std::time::Duration,
     /// How many fetches run now.
     pub fetching: usize,
+    /// The films the server lets nobody download.
+    pub not_downloadable: Vec<ItemId>,
 }
 
 impl State {
@@ -824,6 +841,7 @@ impl FakeServer {
                 disk_full_after: None,
                 fetch_delay: std::time::Duration::ZERO,
                 fetching: 0,
+                not_downloadable: Vec::new(),
             })),
             info: ServerInfo {
                 id: "server-1".into(),
@@ -1066,6 +1084,7 @@ impl MediaServer for FakeServer {
         let others = self.state().films.clone();
         let tmdb = state_tmdb(&self.state().tmdb, &found.id);
         let trailers = self.state().trailers.clone();
+        let downloadable = !self.state().not_downloadable.contains(&found.id);
         Ok(FilmDetail {
             tmdb,
             tmdb_collection: tmdb.and_then(|_| self.state().tmdb_collection),
@@ -1097,7 +1116,7 @@ impl MediaServer for FakeServer {
             } else {
                 versions().split_off(1)
             },
-            downloadable: true,
+            downloadable,
             favourite: self.state().favourites.contains(&found.id),
             trailers,
             // The first film of the tests is a logo, the others are written, as on the Home.

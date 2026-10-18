@@ -4,6 +4,7 @@ mod asked;
 mod curtain;
 mod desktop;
 mod discover;
+mod downloads;
 mod episodes;
 mod home;
 mod keys;
@@ -24,6 +25,7 @@ mod stats;
 mod trailer;
 
 pub use discover::{OpenSeerr, Seerr};
+pub use downloads::DownloadsState;
 pub use home::{HomePage, ListPage};
 pub use lists::{CollectionPage, CollectionsPage, ListCard, ListsPage, MyListPage, PlayerList};
 pub use pages::{Chip, DetailPage, GONE, LibraryPage, Loadable, LoginForm, OpenConnector, Tool};
@@ -208,6 +210,8 @@ pub struct Shell {
     pub collection_pages: Vec<CollectionPage>,
     pub my_list: MyListPage,
     pub lists: ListsPage,
+    /// What is kept on disk, and what is coming.
+    pub downloads: DownloadsState,
     /// What the viewer watched, once read: None while there is nothing to show, and no page.
     pub stats: Option<Rc<crate::stats::Stats>>,
     /// The local clock the stats are counted on: a fixed one in the tests and the harness.
@@ -441,6 +445,17 @@ impl Shell {
             collection_pages: Vec::new(),
             my_list: Default::default(),
             lists: Default::default(),
+            // A test never writes under the real data folder: it gives its own.
+            #[cfg(not(test))]
+            downloads: DownloadsState::new(
+                crate::config::downloads_path(
+                    std::env::var_os("XDG_DATA_HOME"),
+                    std::env::var_os("HOME"),
+                ),
+                Arc::new(crate::downloads::Statvfs),
+            ),
+            #[cfg(test)]
+            downloads: DownloadsState::new(None, Arc::new(crate::downloads::Statvfs)),
             stats: None,
             #[cfg(not(test))]
             clock: bobine::provider::LocalTime::now,

@@ -4,6 +4,7 @@
 mod card;
 mod collection_detail;
 mod discover;
+mod downloads;
 mod film_detail;
 pub mod help;
 mod home;
@@ -81,6 +82,7 @@ pub fn render(
         Screen::Discover => discover::render(shell, window, cx).into_any_element(),
         Screen::Request => request::render(shell, window, cx).into_any_element(),
         Screen::SeerrCollection => seerr_collection::render(shell, window, cx).into_any_element(),
+        Screen::Downloads => downloads::render(shell, window, cx).into_any_element(),
     }
 }
 

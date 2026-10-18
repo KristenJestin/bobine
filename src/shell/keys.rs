@@ -106,6 +106,7 @@ impl Shell {
         let root = pill::<Pill4>(root, 3, cx);
         let root = pill::<Pill5>(root, 4, cx);
         let root = pill::<Pill6>(root, 5, cx);
+        let root = pill::<Pill7>(root, 6, cx);
         let root = arrow::<FocusLeft>(root, Direction::Left, cx);
         let root = arrow::<FocusRight>(root, Direction::Right, cx);
         let root = arrow::<FocusUp>(root, Direction::Up, cx);

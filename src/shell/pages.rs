@@ -639,6 +639,7 @@ impl Shell {
         self.set_up_seerr(cx);
         self.start_episode_checks(cx);
         self.navigator.switch_root(Screen::Home);
+        self.open_downloads(cx);
         self.load_home(cx);
         self.load_stats(cx);
     }

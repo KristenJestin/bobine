@@ -38,6 +38,7 @@ actions!(
         Pill4,
         Pill5,
         Pill6,
+        Pill7,
         FocusLeft,
         FocusRight,
         FocusUp,
@@ -152,6 +153,7 @@ pub const KEYS: &[Key] = &[
     key!(&["alt-4"], BROWSE, Browse, "Collections", Pill4),
     key!(&["alt-5"], BROWSE, Browse, "Lists", Pill5),
     key!(&["alt-6"], BROWSE, Browse, "Discover", Pill6),
+    key!(&["alt-7"], BROWSE, Browse, "Downloads", Pill7),
     // The same on AZERTY, whose number row gives these without Shift: one line in the help.
     key!(&["alt-&"], BROWSE, Hidden, "Home", Pill1),
     key!(&["alt-eacute"], BROWSE, Hidden, "Movies", Pill2),
@@ -159,6 +161,7 @@ pub const KEYS: &[Key] = &[
     key!(&["alt-'"], BROWSE, Hidden, "Collections", Pill4),
     key!(&["alt-("], BROWSE, Hidden, "Lists", Pill5),
     key!(&["alt--"], BROWSE, Hidden, "Discover", Pill6),
+    key!(&["alt-egrave"], BROWSE, Hidden, "Downloads", Pill7),
     // Escape fires in a text field too: it closes what is open first.
     key!(
         &["escape"],
