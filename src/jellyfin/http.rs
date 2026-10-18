@@ -6,6 +6,10 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::time::Duration;
 use ureq::http::Response;
+use ureq::unversioned::resolver::DefaultResolver;
+use ureq::unversioned::transport::{
+    Buffers, ConnectionDetails, Connector, DefaultConnector, NextTimeout, Transport,
+};
 
 const TIMEOUT: Duration = Duration::from_secs(15);
 /// The server may convert an image before answering (a person's photo): it gets longer than an
@@ -23,9 +27,67 @@ pub struct Device {
     pub name: String,
 }
 
+/// Bounds every wait for the server's bytes to `.0`, whatever the request's own timeouts leave.
+#[derive(Debug)]
+struct IdleLimit(Duration);
+
+impl<In: Transport> Connector<In> for IdleLimit {
+    type Out = Idle<In>;
+
+    fn connect(
+        &self,
+        _: &ConnectionDetails,
+        chained: Option<In>,
+    ) -> Result<Option<Self::Out>, ureq::Error> {
+        Ok(chained.map(|inner| Idle {
+            inner,
+            limit: self.0,
+        }))
+    }
+}
+
+#[derive(Debug)]
+struct Idle<T> {
+    inner: T,
+    limit: Duration,
+}
+
+impl<T: Transport> Transport for Idle<T> {
+    fn buffers(&mut self) -> &mut dyn Buffers {
+        self.inner.buffers()
+    }
+
+    fn transmit_output(&mut self, amount: usize, timeout: NextTimeout) -> Result<(), ureq::Error> {
+        self.inner.transmit_output(amount, timeout)
+    }
+
+    fn await_input(&mut self, timeout: NextTimeout) -> Result<bool, ureq::Error> {
+        let limit = NextTimeout {
+            after: self.limit.into(),
+            reason: ureq::Timeout::RecvBody,
+        };
+        let sooner = if timeout.after < limit.after {
+            timeout
+        } else {
+            limit
+        };
+        self.inner.await_input(sooner)
+    }
+
+    fn is_open(&mut self) -> bool {
+        self.inner.is_open()
+    }
+
+    fn is_tls(&self) -> bool {
+        self.inner.is_tls()
+    }
+}
+
 /// A Jellyfin server at one address, with or without a token.
 pub struct Http {
     agent: ureq::Agent,
+    /// Gives up on a wait for the server's bytes that lasts too long, which `agent` does not.
+    downloads: ureq::Agent,
     image_timeout: Duration,
     base: String,
     device: Device,
@@ -93,16 +155,23 @@ impl Http {
         token: Option<Token>,
         timeout: Duration,
         image_timeout: Duration,
-        _idle_limit: Duration,
+        idle_limit: Duration,
     ) -> Self {
-        let agent = ureq::Agent::config_builder()
+        let config = ureq::Agent::config_builder()
             .timeout_global(Some(timeout))
             .http_status_as_error(false)
             .user_agent(format!("{CLIENT}/{}", crate::VERSION))
-            .build()
-            .into();
+            .build();
+        // ureq's timeouts are per phase, a body's one is on the whole of it: a body that stalls
+        // is bounded only by a limit on each wait for input.
+        let downloads = ureq::Agent::with_parts(
+            config.clone(),
+            DefaultConnector::new().chain(IdleLimit(idle_limit)),
+            DefaultResolver::default(),
+        );
         Self {
-            agent,
+            agent: config.into(),
+            downloads,
             image_timeout,
             base,
             device,
@@ -210,7 +279,7 @@ impl Http {
 
     /// A file to download, from the headers given (`Range`, `If-Range`): its answer, the body
     /// not read yet. No time limit on the whole, a film takes what it takes; only on the wait for
-    /// the server's answer.
+    /// the server's answer, and on each wait for the next bytes of the body.
     pub fn download(
         &self,
         what: &str,
@@ -218,9 +287,11 @@ impl Http {
         headers: &[(&str, &str)],
     ) -> Result<Response<ureq::Body>, ProviderError> {
         let mut request = self
-            .agent
+            .downloads
             .get(&self.url(path, &[]))
-            .header("Authorization", &self.authorization());
+            .header("Authorization", &self.authorization())
+            // The file as it is, not compressed on the way: its length is then the bytes written.
+            .header("Accept-Encoding", "identity");
         for (name, value) in headers {
             request = request.header(*name, *value);
         }
