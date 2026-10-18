@@ -764,9 +764,7 @@ mod tests {
     /// While the header moves by itself, only the header is drawn again: the shell, which draws
     /// the whole window, is neither notified nor built again at the header's rate.
     #[gpui_kit::test]
-    fn an_idle_home_with_its_header_showing_does_not_rebuild_the_window(
-        cx: &mut gpui_kit::TestAppContext,
-    ) {
+    fn an_idle_home_does_not_rebuild_the_shell(cx: &mut gpui_kit::TestAppContext) {
         let server: Arc<dyn Connector> = Arc::new(FakeServer::new(6, true));
         let window = cx.add_window(|_, cx| {
             crate::keys::bind(cx);
@@ -937,6 +935,68 @@ mod tests {
             let page = shell.series_pages.last().expect("the series page");
             assert_eq!(page.id, series.id);
             assert_eq!(page.season, 2, "the page opens on the new season");
+        });
+    }
+
+    /// The Home is asked of one server, then again of another before the first answered: what
+    /// the first one says comes once the second load was asked, and it is never shown.
+    #[gpui_kit::test]
+    fn a_late_answer_of_an_older_home_request_is_dropped(cx: &mut gpui_kit::TestAppContext) {
+        let (window, _visual) = home_with_a_header(cx);
+        let shell = window.root(cx).unwrap();
+        // Every title the older load is answered with is its own.
+        let old = FakeServer::new(6, true);
+        {
+            let mut state = old.state.lock().unwrap();
+            for film in &mut state.films {
+                film.id = ItemId(format!("old-{}", film.id.0));
+            }
+            for series in &mut state.series {
+                series.id = ItemId(format!("old-{}", series.id.0));
+            }
+        }
+        let is_old =
+            |shown: &[Vec<String>]| shown.iter().flatten().any(|id| id.starts_with("old-"));
+        let alone = {
+            let mut home = HomePage::default();
+            let asked = home.begin_load();
+            deliver(&mut home, asked, &read(&old));
+            shown(&home)
+        };
+        assert!(
+            is_old(&alone),
+            "the older answers must show for this test to mean anything"
+        );
+
+        // What the page shows each time the shell is notified, an answer at a time.
+        let seen = Rc::new(std::cell::RefCell::new(Vec::new()));
+        cx.update(|cx| {
+            let seen = Rc::clone(&seen);
+            cx.observe(&shell, move |shell, cx| {
+                seen.borrow_mut().push(shown(&shell.read(cx).home))
+            })
+            .detach();
+        });
+        cx.update(|cx| {
+            shell.update(cx, |shell, cx| {
+                let newer = shell.server.clone();
+                shell.server = Some(Arc::new(old.clone()));
+                shell.load_home(cx);
+                shell.server = newer;
+                shell.load_home(cx);
+            })
+        });
+        cx.run_until_parked();
+
+        let seen = seen.borrow();
+        assert!(!seen.is_empty(), "the answers never came");
+        for shown in seen.iter() {
+            assert!(!is_old(shown), "a late answer was shown: {shown:?}");
+        }
+        cx.read(|cx| {
+            let home = &shell.read(cx).home;
+            assert!(!home.featured().is_empty(), "the newer answers must show");
+            assert!(!is_old(&shown(home)));
         });
     }
 
