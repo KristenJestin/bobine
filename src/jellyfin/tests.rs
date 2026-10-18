@@ -891,6 +891,22 @@ fn a_film_in_a_list_has_poster_rating_runtime_watched_and_resume() {
 }
 
 #[test]
+fn continue_watching_episodes_say_whether_they_can_be_downloaded() {
+    let s = Setup::new();
+    let started = s.signed_in().continue_watching().unwrap();
+    let Title::Episode(episode) = &started[1] else {
+        panic!("an episode second: {started:?}");
+    };
+    assert!(episode.downloadable);
+    // The latest list is asked for it too, though it folds its episodes into their series.
+    s.signed_in()
+        .latest(&ItemId(SERIES_LIBRARY.into()), 10)
+        .unwrap();
+    let asked = s.fake.last("GET", "/Items/Latest");
+    assert!(asked.param("Fields").unwrap().contains("CanDownload"));
+}
+
+#[test]
 fn what_the_user_started_is_films_and_episodes() {
     let s = Setup::new();
     let started = s.signed_in().continue_watching().unwrap();
@@ -4310,6 +4326,126 @@ fn a_file_changed_on_the_server_starts_again_from_zero() {
         }
     );
     assert!(!part.started[0].resumed);
+}
+
+fn downloads_of(s: &Setup) -> Vec<crate::jellyfin::fake::Seen> {
+    s.fake
+        .seen()
+        .into_iter()
+        .filter(|seen| seen.path == format!("/Items/{SOURCE}/Download"))
+        .collect()
+}
+
+#[test]
+fn a_partial_answer_from_a_changed_file_starts_again_from_zero() {
+    let s = Setup::new();
+    let server = s.signed_in();
+    let plan = plan_of_the_film(&*server);
+    let mut part = Part {
+        bytes: MEDIA[..20].to_vec(),
+        ..Part::default()
+    };
+    {
+        let mut state = s.fake.state.lock().unwrap();
+        state.media_changed = true;
+        state.ignore_if_range = true;
+    }
+    let fetched = server
+        .fetch(&plan.files[0], 20, Some(MEDIA_ETAG), &mut part)
+        .unwrap();
+    assert_eq!(part.bytes, CHANGED_MEDIA, "no byte of the old file is kept");
+    assert_eq!(
+        fetched,
+        Fetched {
+            resumed: false,
+            validator: Some(CHANGED_MEDIA_ETAG.into()),
+            length: Some(CHANGED_MEDIA.len() as u64),
+        }
+    );
+    assert!(part.started.iter().all(|started| !started.resumed));
+    assert_eq!(downloads_of(&s).last().unwrap().range, None);
+}
+
+#[test]
+fn a_resume_past_the_end_starts_again_without_a_range() {
+    let s = Setup::new();
+    let server = s.signed_in();
+    let plan = plan_of_the_film(&*server);
+    let mut part = Part {
+        bytes: MEDIA.to_vec(),
+        ..Part::default()
+    };
+    let fetched = server
+        .fetch(
+            &plan.files[0],
+            MEDIA.len() as u64,
+            Some(MEDIA_ETAG),
+            &mut part,
+        )
+        .unwrap();
+    assert_eq!(part.bytes, MEDIA);
+    assert_eq!(
+        fetched,
+        Fetched {
+            resumed: false,
+            validator: Some(MEDIA_ETAG.into()),
+            length: Some(MEDIA.len() as u64),
+        }
+    );
+    let asked = downloads_of(&s);
+    assert_eq!(
+        asked[0].range.as_deref(),
+        Some(format!("bytes={}-", MEDIA.len()).as_str())
+    );
+    assert_eq!(asked.last().unwrap().range, None);
+}
+
+#[test]
+fn a_body_cut_before_its_end_is_not_complete() {
+    let s = Setup::new();
+    let server = s.signed_in();
+    let plan = plan_of_the_film(&*server);
+    s.fake.state.lock().unwrap().cut_body = true;
+    let mut part = Part::default();
+    let cut = server.fetch(&plan.files[0], 0, None, &mut part);
+    assert!(
+        matches!(cut, Err(ProviderError::Unreachable(_))),
+        "not Ok: {cut:?}"
+    );
+    // What came is kept, for the resume.
+    assert_eq!(part.bytes, MEDIA[..MEDIA.len() / 2]);
+
+    // A resume cut short is not complete either.
+    let mut kept = Part {
+        bytes: MEDIA[..10].to_vec(),
+        ..Part::default()
+    };
+    let cut = server.fetch(&plan.files[0], 10, Some(MEDIA_ETAG), &mut kept);
+    assert!(
+        matches!(cut, Err(ProviderError::Unreachable(_))),
+        "not Ok: {cut:?}"
+    );
+}
+
+#[test]
+fn downloads_ask_for_the_bytes_as_they_are() {
+    let s = Setup::new();
+    let server = s.signed_in();
+    let plan = plan_of_the_film(&*server);
+    let mut part = Part::default();
+    server.fetch(&plan.files[0], 0, None, &mut part).unwrap();
+    let mut part = Part::default();
+    server.fetch(&plan.files[1], 0, None, &mut part).unwrap();
+    let asked: Vec<_> = s
+        .fake
+        .seen()
+        .into_iter()
+        .filter(|seen| seen.path.contains("Download") || seen.path.contains("Subtitles"))
+        .collect();
+    assert_eq!(asked.len(), 2);
+    for seen in asked {
+        assert_eq!(seen.accept_encoding.as_deref(), Some("identity"));
+    }
 }
 
 #[test]

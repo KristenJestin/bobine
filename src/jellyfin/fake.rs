@@ -3,6 +3,7 @@
 //! and keeps every request it gets.
 
 use serde_json::{Value, json};
+use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use tiny_http::{Header, Response, Server};
@@ -102,6 +103,7 @@ pub struct Seen {
     pub authorization: Option<String>,
     pub range: Option<String>,
     pub if_range: Option<String>,
+    pub accept_encoding: Option<String>,
     pub body: String,
 }
 
@@ -186,7 +188,19 @@ pub struct State {
     pub downloads_refused: bool,
     /// The film and the episode cannot be downloaded, though the user may download.
     pub not_downloadable: bool,
+    /// A proxy in front of the server drops `If-Range`: a ranged request is answered 206 from
+    /// the byte asked, whatever the file has become.
+    pub ignore_if_range: bool,
+    /// The file's answer stops after half of its bytes: a whole answer from a proxy that cut
+    /// a range short (its `Content-Range` still names the whole file), or, to a request for all
+    /// of it, one that promises every byte and closes the connection after half of them.
+    pub cut_body: bool,
+    /// The file's answer sends half of its bytes, then nothing for `STALL`.
+    pub stall_body: bool,
 }
+
+/// How long a stalled body sends nothing.
+const STALL: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// How many episodes the series of the pages puts in a playlist.
 pub const SERIES_EPISODES: usize = 3;
@@ -254,6 +268,57 @@ enum Answer {
     Empty(u16),
     /// A file as ASP.NET serves it with ranges: its status, its headers, its bytes.
     File(u16, Vec<(&'static str, String)>, Vec<u8>),
+    /// The file is somewhere else: another address, which answers the same request.
+    Redirect(String),
+}
+
+/// The file's answer, cut or stalled when the state says so. The server's own writer cannot
+/// send fewer bytes than it promised and then close, so the file moves to a listener that does:
+/// it promises all the bytes, sends half of them, then closes, or, when `stall_body`, sends
+/// nothing for `STALL` first. A cut range is the exception: a short answer that is whole in
+/// itself.
+fn interrupted(state: &State, answer: Answer) -> Answer {
+    let Answer::File(code, headers, bytes) = answer else {
+        return answer;
+    };
+    if !state.cut_body && !state.stall_body {
+        return Answer::File(code, headers, bytes);
+    }
+    if code == 206 && !state.stall_body {
+        let half = bytes.len() / 2;
+        return Answer::File(code, headers, bytes[..half].to_vec());
+    }
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let stall = state.stall_body;
+    std::thread::spawn(move || {
+        let Ok((mut stream, _)) = listener.accept() else {
+            return;
+        };
+        let mut asked = Vec::new();
+        let mut chunk = [0; 1024];
+        while !asked.ends_with(b"\r\n\r\n") {
+            match stream.read(&mut chunk) {
+                Ok(0) | Err(_) => return,
+                Ok(n) => asked.extend_from_slice(&chunk[..n]),
+            }
+        }
+        let mut head = format!(
+            "HTTP/1.1 {code} Partial\r\nContent-Length: {}\r\n",
+            bytes.len()
+        );
+        for (name, value) in headers {
+            head.push_str(&format!("{name}: {value}\r\n"));
+        }
+        head.push_str("\r\n");
+        let _ = stream.write_all(head.as_bytes());
+        let _ = stream.write_all(&bytes[..bytes.len() / 2]);
+        let _ = stream.flush();
+        if stall {
+            std::thread::sleep(STALL);
+        }
+    });
+    Answer::Redirect(format!("http://127.0.0.1:{port}/file"))
 }
 
 /// An item as the server shows it: whether it can be downloaded, and its first version's file
@@ -278,7 +343,7 @@ fn media(state: &State) -> (&'static [u8], &'static str) {
 
 /// A file answered as `PhysicalFile(…, enableRangeProcessing: true)` does: from the byte a
 /// `Range: bytes=N-` asks, unless an `If-Range` no longer matches the file, then all of it.
-fn ranged(seen: &Seen, bytes: &[u8], etag: &str) -> Answer {
+fn ranged(state: &State, seen: &Seen, bytes: &[u8], etag: &str) -> Answer {
     let headers = vec![
         ("ETag", etag.to_string()),
         ("Accept-Ranges", "bytes".to_string()),
@@ -289,8 +354,14 @@ fn ranged(seen: &Seen, bytes: &[u8], etag: &str) -> Answer {
         .and_then(|r| r.strip_prefix("bytes="))
         .and_then(|r| r.strip_suffix('-'))
         .map(|n| n.parse::<usize>().unwrap());
-    let still = seen.if_range.as_deref().is_none_or(|v| v == etag);
+    let still = state.ignore_if_range || seen.if_range.as_deref().is_none_or(|v| v == etag);
     match from {
+        // Past the end, as ASP.NET answers a range that starts after the last byte.
+        Some(from) if still && from >= bytes.len() => Answer::File(
+            416,
+            vec![("Content-Range", format!("bytes */{}", bytes.len()))],
+            Vec::new(),
+        ),
         Some(from) if still => {
             let mut headers = headers;
             headers.push((
@@ -608,7 +679,19 @@ fn answer(state: &State, seen: &Seen) -> Answer {
     match route {
         ("POST", "/Sessions/Logout") => Answer::Empty(204),
         ("GET", "/UserViews") => Answer::Json(200, fixture("user_views")),
-        ("GET", "/UserItems/Resume") => Answer::Json(200, fixture("resume")),
+        ("GET", "/UserItems/Resume") => {
+            let mut started = fixture("resume");
+            // A list gives what an item can do only when asked.
+            if seen
+                .param("Fields")
+                .is_some_and(|f| f.contains("CanDownload"))
+            {
+                for item in started["Items"].as_array_mut().unwrap() {
+                    *item = downloadable(state, item.take());
+                }
+            }
+            Answer::Json(200, started)
+        }
         ("GET", "/Genres") => Answer::Json(200, genres(library_fixture(seen))),
         ("GET", "/Items/Filters") => Answer::Json(200, years(library_fixture(seen))),
         ("GET", "/Persons") => Answer::Json(200, matching("persons", seen)),
@@ -724,10 +807,10 @@ fn answer(state: &State, seen: &Seen) -> Answer {
                 return Answer::Empty(403);
             }
             let (bytes, etag) = media(state);
-            ranged(seen, bytes, etag)
+            interrupted(state, ranged(state, seen, bytes, etag))
         }
         ("GET", path) if path.starts_with(&format!("/Videos/{FILM}/{SOURCE}/Subtitles/")) => {
-            ranged(seen, SUBTITLE, "\"5b7e1e5b7e1e\"")
+            ranged(state, seen, SUBTITLE, "\"5b7e1e5b7e1e\"")
         }
         ("GET", path) if path == format!("/Items/{FILM}") => {
             let item = trailers_of(state, favourite_of(state, FILM, fixture("film_detail")));
@@ -955,6 +1038,8 @@ fn respond(request: tiny_http::Request, answer: Answer, delay: std::time::Durati
             }
             request.respond(response)
         }
+        Answer::Redirect(to) => request
+            .respond(Response::empty(302).with_header(Header::from_bytes("Location", to).unwrap())),
     };
 }
 
@@ -981,6 +1066,7 @@ impl FakeServer {
                     let authorization = header("Authorization");
                     let range = header("Range");
                     let if_range = header("If-Range");
+                    let accept_encoding = header("Accept-Encoding");
                     let seen = Seen {
                         method: request.method().as_str().to_string(),
                         path,
@@ -988,6 +1074,7 @@ impl FakeServer {
                         authorization,
                         range,
                         if_range,
+                        accept_encoding,
                         body,
                     };
                     let (answer, delay, gated) = {

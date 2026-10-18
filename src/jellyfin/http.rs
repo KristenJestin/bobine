@@ -11,6 +11,8 @@ const TIMEOUT: Duration = Duration::from_secs(15);
 /// The server may convert an image before answering (a person's photo): it gets longer than an
 /// API call, which must stay quick to report an unreachable server.
 const IMAGE_TIMEOUT: Duration = Duration::from_secs(60);
+/// How long a download may receive nothing before it is given up.
+const IDLE_LIMIT: Duration = Duration::from_secs(30);
 const CLIENT: &str = "Bobine";
 
 /// The device this installation is to the server.
@@ -82,7 +84,7 @@ fn status(code: u16) -> ProviderError {
 
 impl Http {
     pub fn new(base: String, device: Device, token: Option<Token>) -> Self {
-        Self::with_timeouts(base, device, token, TIMEOUT, IMAGE_TIMEOUT)
+        Self::with_timeouts(base, device, token, TIMEOUT, IMAGE_TIMEOUT, IDLE_LIMIT)
     }
 
     fn with_timeouts(
@@ -91,6 +93,7 @@ impl Http {
         token: Option<Token>,
         timeout: Duration,
         image_timeout: Duration,
+        _idle_limit: Duration,
     ) -> Self {
         let agent = ureq::Agent::config_builder()
             .timeout_global(Some(timeout))
@@ -319,6 +322,7 @@ mod tests {
             token.clone(),
             Duration::from_secs(1),
             Duration::from_secs(10),
+            IDLE_LIMIT,
         );
         assert_eq!(http.get_bytes("image", path, &[]).unwrap(), IMAGE);
         // Not forever: an image still takes at most its own timeout.
@@ -328,11 +332,43 @@ mod tests {
             token,
             Duration::from_secs(10),
             Duration::from_secs(1),
+            IDLE_LIMIT,
         );
         assert!(matches!(
             http.get_bytes("image", path, &[]),
             Err(ProviderError::Unreachable(_))
         ));
+    }
+
+    #[test]
+    fn a_body_that_stalls_fails_instead_of_hanging() {
+        use crate::jellyfin::fake::{FakeServer, SOURCE, TOKEN};
+        use std::io::Read;
+        let fake = FakeServer::start();
+        fake.state.lock().unwrap().stall_body = true;
+        let device = Device {
+            id: "device".into(),
+            name: "Test".into(),
+        };
+        let http = Http::with_timeouts(
+            fake.url.clone(),
+            device,
+            Some(Token::new(TOKEN.into())),
+            TIMEOUT,
+            IMAGE_TIMEOUT,
+            Duration::from_millis(300),
+        );
+        let path = &format!("/Items/{SOURCE}/Download");
+        let started = std::time::Instant::now();
+        let mut response = http.download("download", path, &[]).unwrap();
+        let mut body = Vec::new();
+        let read = response.body_mut().as_reader().read_to_end(&mut body);
+        assert!(read.is_err(), "a stalled body is not a whole one");
+        assert!(
+            started.elapsed() < Duration::from_millis(1500),
+            "given up after the idle limit, not when the server lets go: {:?}",
+            started.elapsed()
+        );
     }
 
     #[test]
