@@ -203,6 +203,7 @@ mod tests {
     //! never the session bus of the machine, never a notification on the real desktop.
 
     use std::path::PathBuf;
+    use std::time::{Duration, Instant};
 
     use bobine::provider::ItemId;
     use zbus::interface;
@@ -210,7 +211,21 @@ mod tests {
     use zbus::zvariant::OwnedValue;
 
     use super::*;
-    use crate::mpris::dbus::tests::{Bus, private_bus, until};
+    use crate::mpris::dbus::tests::{Bus, private_bus};
+
+    /// Waits for `done` and returns as soon as it holds. The ceiling is only there so that a click
+    /// never heard fails the test instead of hanging it: a loaded machine takes far longer than
+    /// the few seconds an idle one needs.
+    fn until(mut done: impl FnMut() -> bool) -> bool {
+        let start = Instant::now();
+        while start.elapsed() < CEILING {
+            if done() {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        false
+    }
 
     /// What the fake server was asked to show.
     #[derive(Clone, Debug)]
@@ -269,6 +284,8 @@ mod tests {
             reason: u32,
         ) -> zbus::Result<()>;
     }
+
+    const CEILING: Duration = Duration::from_secs(60);
 
     /// The test's notification server on `bus`.
     struct Desktop {
@@ -341,7 +358,10 @@ mod tests {
     /// thread is left parked behind. The signals are handled in the order they were sent, so the
     /// clicks heard by then are all those that came before.
     fn heard(clicks: &Clicks, count: usize) -> Vec<Open> {
-        until(|| clicks.0.lock().unwrap().heard.len() >= count);
+        assert!(
+            until(|| clicks.0.lock().unwrap().heard.len() >= count),
+            "{count} click(s) not heard"
+        );
         clicks.0.lock().unwrap().heard.drain(..).collect()
     }
 
