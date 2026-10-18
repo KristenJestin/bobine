@@ -32,6 +32,13 @@ jobs:
           printf '%s\n' "$TITLE" > "$RUNNER_TEMP/title"
           tools/commit-message.sh "$RUNNER_TEMP/title"
 
+  # Shell only, no build: the release archive's install.sh, run into temporary folders.
+  install-script:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: tools/test-install.sh
+
   # No sound card, no server and no session bus here: the suites run against fakes (see AGENTS.md, Testing).
   verify:
     runs-on: ubuntu-latest

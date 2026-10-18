@@ -14,8 +14,11 @@ check() { # <subject> <where>
     echo "$where: \"$subject\" is not <type>(<scope>): <subject> (types: ${TYPES//|/, }; scope required; lowercase start; no final period)" >&2
     return 1
   fi
-  if [ "${#subject}" -gt 72 ]; then
-    echo "$where: subject is ${#subject} characters, 72 at most" >&2
+  # A squash merge appends " (#<n>)" to the title the pull request was checked with.
+  local title=$subject
+  [[ $title =~ ^(.*)\ \(#[0-9]+\)$ ]] && title=${BASH_REMATCH[1]}
+  if [ "${#title}" -gt 72 ]; then
+    echo "$where: subject is ${#title} characters, 72 at most" >&2
     return 1
   fi
 }

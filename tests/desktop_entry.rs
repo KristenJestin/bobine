@@ -37,6 +37,21 @@ fn the_desktop_entry_is_named_after_the_window_app_id() {
 }
 
 #[test]
+fn the_desktop_entry_lists_the_keywords_a_launcher_search_finds_it_by() {
+    let entry = share().join("applications/bobine.desktop");
+    let text = fs::read_to_string(entry).unwrap();
+    let keywords = field(&text, "Keywords").expect("the entry lists keywords");
+    // The spec wants a list ending with a semicolon.
+    assert!(keywords.ends_with(';'), "{keywords}");
+    let listed: Vec<&str> = keywords.split_terminator(';').collect();
+    for wanted in [
+        "film", "films", "movie", "movies", "series", "tv", "media", "jellyfin",
+    ] {
+        assert!(listed.contains(&wanted), "{wanted} is not in {keywords}");
+    }
+}
+
+#[test]
 fn the_icon_the_desktop_entry_names_exists_at_every_hicolor_size() {
     let entry = share().join("applications/bobine.desktop");
     let text = fs::read_to_string(entry).unwrap();
