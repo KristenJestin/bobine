@@ -425,6 +425,7 @@ impl Jellyfin {
             source: source.clone(),
             stream: StreamUrl::new(stream),
             external_subtitles,
+            converted: false,
         }
     }
 
@@ -1204,6 +1205,7 @@ impl MediaServer for Jellyfin {
         })?;
         let stream = self.served(path);
         let mut playback = self.opened(film, source, session, &found, stream);
+        playback.converted = true;
         // The embedded text subtitle chosen comes as a file the server extracts, beside the
         // converted picture.
         let delivered = found.media_streams.iter().find(|s| {

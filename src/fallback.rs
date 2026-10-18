@@ -112,13 +112,23 @@ impl Reopen {
 }
 
 /// Asks the server for the first playback of `plan`: its conversion under the cap of `quality`
-/// at once, or the file as it is.
+/// at once, or the file as it is. A server that gives no conversion leaves the film playing as it
+/// is, which the player's menu then says could not be had at that quality.
 pub fn open_first(
     server: &dyn MediaServer,
     plan: &Plan,
     quality: Quality,
 ) -> Result<Playback, ProviderError> {
-    let _ = quality;
+    if let Quality::Cap(bits) = quality {
+        let request = TranscodeRequest {
+            max_bitrate: Some(bits),
+            ..plan.transcode_request(plan.start)
+        };
+        match server.transcode(&request) {
+            Ok(opened) => return Ok(opened),
+            Err(error) => eprintln!("bobine: the server does not give the quality asked: {error}"),
+        }
+    }
     server.play(&plan.film, &plan.source)
 }
 
@@ -146,14 +156,20 @@ pub struct Fallback {
 }
 
 impl Fallback {
-    /// `opened`: what the server gave for `plan`, which plays.
+    /// `opened`: what the server gave for `plan`, which plays; the conversion [`open_first`] asked
+    /// for plays from the start as one, `plan` being the file as it is.
     pub fn new(server: Arc<dyn MediaServer>, plan: Plan, opened: &Playback) -> Self {
         static PLAYBACKS: AtomicU64 = AtomicU64::new(0);
+        let (method, played) = if opened.converted {
+            (PlayMethod::Transcode, plan.converted(plan.start, opened))
+        } else {
+            (PlayMethod::DirectPlay, plan.clone())
+        };
         Self {
             server,
-            original: plan.clone(),
-            plan,
-            method: PlayMethod::DirectPlay,
+            original: plan,
+            plan: played,
+            method,
             asking: None,
             chosen: None,
             direct_failed: false,
@@ -165,6 +181,20 @@ impl Fallback {
 
     pub fn id(&self) -> u64 {
         self.id
+    }
+
+    /// How the film plays now.
+    pub fn method(&self) -> PlayMethod {
+        self.method
+    }
+
+    /// A film that began as the server's conversion at `quality`: the session says so, as it
+    /// does once a conversion answers.
+    pub fn announce(&self, session: &mut Session, quality: Quality) {
+        if self.method == PlayMethod::Transcode {
+            session.playing_as(quality, true);
+            session.subtitle = said(session.subtitle.take(), self.method);
+        }
     }
 
     /// At each tick: what to ask the server when the file does not play. The conversion is

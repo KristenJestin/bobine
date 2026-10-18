@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use bobine::provider::{
     Collection, Connector, FilmDetail, FilmQuery, FilterChoices, ItemId, LibraryKind, MediaServer,
-    MediaSource, Page, PersonHit, PlayMethod, Playback as Opened, PlaybackReport, ProviderError,
+    MediaSource, Page, PersonHit, Playback as Opened, PlaybackReport, ProviderError,
 };
 use bobine::requests::{MediaKind, TmdbId};
 use gpui_kit::prelude::*;
@@ -1605,8 +1605,21 @@ impl Shell {
         // A test plays on a fake player, through the rest of this path: what the end offers, and
         // what the server is told, which the fake server records.
         #[cfg(test)]
-        if let Some(player) = self.fake_player.take() {
+        if let Some(mut player) = self.fake_player.take() {
+            use crate::player::Player as _;
             let display = Box::new(crate::video::fake::FakeDisplay::default());
+            // Only a conversion has a fallback here: the other tests play a file as it is.
+            let fallback = self
+                .server
+                .clone()
+                .filter(|_| opened.converted)
+                .map(|server| Fallback::new(server, plan.clone(), &opened));
+            let played = fallback.as_ref().map_or(&plan, |fallback| &fallback.plan);
+            let externals = played.externals(&opened);
+            let _ = player.load(played.media(&opened, &externals));
+            let method = fallback
+                .as_ref()
+                .map_or(bobine::provider::PlayMethod::DirectPlay, Fallback::method);
             let session = crate::player::session::Session::new(
                 Box::new(player),
                 display,
@@ -1624,12 +1637,15 @@ impl Shell {
                         paused: false,
                         audio_track: plan.audio_index,
                         subtitle_track: plan.subtitle_index,
-                        method: PlayMethod::DirectPlay,
+                        method,
                     },
                 )
             });
             self.begin_playback(session, reporting, seamless, window, cx);
             self.grow_from(item.as_ref(), window);
+            if let Some(fallback) = fallback {
+                self.arm_playback(fallback, window, cx);
+            }
             if let Some(playback) = &mut self.playback {
                 playback.playing = Some(opened.film.clone());
             }
@@ -1653,6 +1669,7 @@ impl Shell {
                 return;
             }
         };
+        let fallback = Fallback::new(server.clone(), plan.clone(), &opened);
         let reporting = Reporting::start(
             server.clone(),
             PlaybackReport {
@@ -1663,12 +1680,12 @@ impl Shell {
                 paused: false,
                 audio_track: plan.audio_index,
                 subtitle_track: plan.subtitle_index,
-                method: PlayMethod::DirectPlay,
+                method: fallback.method(),
             },
         );
-        let externals = plan.externals(&opened);
-        let media = plan.media(&opened, &externals);
-        let fallback = Fallback::new(server.clone(), plan.clone(), &opened);
+        // What plays first: the file as it is, or the conversion the cap asked for.
+        let externals = fallback.plan.externals(&opened);
+        let media = fallback.plan.media(&opened, &externals);
         let list = playing.list.clone();
         match self.play(mpv, media, playing, Some(reporting), seamless, window, cx) {
             Ok(()) => {
@@ -1699,11 +1716,11 @@ impl Shell {
         let Some(playback) = &mut self.playback else {
             return;
         };
+        let quality = self.settings.default_quality.for_player();
+        fallback.announce(&mut playback.session, quality);
         playback.fallback = Some(fallback);
         playback.session.offer_quality();
-        let request = playback
-            .session
-            .choose_quality(self.settings.default_quality.for_player());
+        let request = playback.session.choose_quality(quality);
         self.player_request(request, window, cx);
     }
 
@@ -1915,6 +1932,7 @@ impl Shell {
 mod tests {
     use super::*;
     use bobine::provider::Film;
+    use bobine::provider::PlayMethod;
 
     #[test]
     fn the_home_and_its_lists_reload_after_a_playback() {
