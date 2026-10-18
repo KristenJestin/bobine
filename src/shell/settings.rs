@@ -610,6 +610,13 @@ mod tests {
             last_after.bottom() <= height,
             "{last_after:?} is still below the window"
         );
+        // And it stops there: the last section ends the page's padding above the window's bottom,
+        // not further up.
+        let end = f32::from(height) - crate::screens::settings::PAGE_BOTTOM;
+        assert!(
+            (f32::from(last_after.bottom()) - end).abs() < 1.,
+            "{last_after:?} does not end at {end}"
+        );
     }
 
     #[gpui_kit::test]
