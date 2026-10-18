@@ -568,17 +568,18 @@ mod tests {
         let mut visual = drawn(&window, cx);
         visual.simulate_resize(gpui_kit::size(gpui_kit::px(1280.), gpui_kit::px(height)));
         visual.run_until_parked();
-        let bounds = |visual: &VisualTestContext, selector: &str| {
+        let bounds = |visual: &mut VisualTestContext, selector: &'static str| {
             visual
                 .debug_bounds(selector)
                 .unwrap_or_else(|| panic!("{selector} was not drawn"))
         };
         let (first, last) = (
-            bounds(&visual, "settings-playback"),
-            bounds(&visual, "settings-about"),
+            bounds(&mut visual, "settings-playback"),
+            bounds(&mut visual, "settings-about"),
         );
+        let position = bounds(&mut visual, "settings-page").center();
         visual.simulate_event(gpui_kit::ScrollWheelEvent {
-            position: bounds(&visual, "settings-page").center(),
+            position,
             delta: gpui_kit::ScrollDelta::Pixels(gpui_kit::point(
                 gpui_kit::px(0.),
                 gpui_kit::px(-5000.),
@@ -590,8 +591,8 @@ mod tests {
         (
             first,
             last,
-            bounds(&visual, "settings-playback"),
-            bounds(&visual, "settings-about"),
+            bounds(&mut visual, "settings-playback"),
+            bounds(&mut visual, "settings-about"),
         )
     }
 
