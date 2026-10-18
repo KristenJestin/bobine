@@ -6,11 +6,13 @@
 use bobine::provider::ItemId;
 use gpui_kit::prelude::*;
 use std::sync::Arc;
+use std::time::Duration;
 
 use gpui_kit::{
-    App, ClickEvent, Context, Div, FontWeight, IntoElement, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, ObjectFit, RenderImage, Rgba, ScrollHandle, Stateful, Window,
-    div, img, linear_color_stop, linear_gradient, px, rgb, rgba,
+    Animation, AnimationExt, App, ClickEvent, Context, Div, FontWeight, IntoElement, MouseButton,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, ObjectFit, RenderImage, Rgba, ScrollHandle,
+    Stateful, Transformation, Window, div, img, linear_color_stop, linear_gradient, percentage, px,
+    rgb, rgba, svg,
 };
 
 use super::empty_screen;
@@ -44,6 +46,11 @@ const MENU_LINE: f32 = 34.;
 const MENU_GAP: f32 = 8.;
 /// The room the track panel leaves free under it.
 const PANEL_TOP: f32 = 96.;
+
+/// How long the loading mark takes to turn once.
+const SPINNER_TURN: Duration = Duration::from_millis(900);
+/// The loading mark's size.
+const SPINNER_SIZE: f32 = 48.;
 
 /// The player screen with no film to play.
 pub fn empty(_cx: &mut Context<Shell>) -> impl IntoElement {
@@ -170,6 +177,7 @@ pub fn render(
         .children(outside)
         .children(panel)
         .children(menu)
+        .when(session.loading(), |root| root.child(spinner()))
         .when_some(session.error(), |root, error| {
             root.child(
                 div()
@@ -189,6 +197,28 @@ pub fn render(
                     )),
             )
         })
+}
+
+/// Centred over the picture while the player waits for it: it catches no click, so a double
+/// click on it still goes fullscreen.
+fn spinner() -> Div {
+    div()
+        .absolute()
+        .inset_0()
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(
+            svg()
+                .path(IconName::SpinnerGap.path())
+                .size(px(SPINNER_SIZE))
+                .text_color(rgb(0xffffff))
+                .with_animation(
+                    "player-loading",
+                    Animation::new(SPINNER_TURN).repeat(),
+                    |mark, t| mark.with_transformation(Transformation::rotate(percentage(t))),
+                ),
+        )
 }
 
 /// A double click on `element` is not one on the picture: fullscreen stays as it is.
@@ -324,7 +354,6 @@ fn bottom_bar(session: &Session, window: &mut Window, cx: &mut Context<Shell>) -
     } else {
         0.
     };
-    let left = (session.duration - session.position).max(0.);
     let bar_width = f32::from(window.viewport_size().width) - 2. * EDGE;
     let skip = |seconds: f64| {
         move |shell: &mut Shell, _: &ClickEvent, _: &mut Window, cx: &mut Context<Shell>| {
@@ -474,11 +503,11 @@ fn bottom_bar(session: &Session, window: &mut Window, cx: &mut Context<Shell>) -
                         .items_center()
                         .justify_end()
                         .gap(px(8.))
-                        .child(div().mr(px(8.)).text_color(theme::muted()).child(format!(
-                            "{} · {}",
-                            time::remaining(left),
-                            time::end_clock(time::local_now(), left)
-                        )))
+                        .children(
+                            session.time_left(time::local_now()).map(|text| {
+                                div().mr(px(8.)).text_color(theme::muted()).child(text)
+                            }),
+                        )
                         .child(gear)
                         .child(fullscreen),
                 ),

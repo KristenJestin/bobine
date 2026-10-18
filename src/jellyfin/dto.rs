@@ -475,8 +475,10 @@ impl Item {
     }
 
     pub fn episode(self) -> Episode {
+        let series_poster = self.series_primary();
         Episode {
             item: self.film(),
+            series_poster,
             series: ItemId(self.series_id.unwrap_or_default()),
             series_title: self.series_name.unwrap_or_default(),
             season: ItemId(self.season_id.unwrap_or_default()),
@@ -572,6 +574,10 @@ impl Item {
         if self.kind.as_deref() != Some("Episode") {
             return self.primary();
         }
+        self.series_primary()
+    }
+
+    fn series_primary(&self) -> Option<ImageRef> {
         Some(ImageRef {
             item: ItemId(self.series_id.clone()?),
             kind: ImageKind::Primary,
