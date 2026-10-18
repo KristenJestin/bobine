@@ -1,6 +1,7 @@
 #!/bin/sh
-# Packs a built `bobine` with its desktop entry and icons, the licence and the notices of what it
-# is built from, and writes the SHA-256 checksum beside the archive. Prints the archive's file name.
+# Packs a built `bobine` with its `install.sh`, its desktop entry and icons, the licence and the
+# notices of what it is built from, and writes the SHA-256 checksum beside the archive. Prints the
+# archive's file name.
 #
 #   tools/package.sh <version> <binary> <out-dir>
 set -eu
@@ -17,6 +18,8 @@ mkdir "$stage/$name"
 install -m 755 "$binary" "$stage/$name/bobine"
 install -m 644 "$root/LICENSE" "$stage/$name/LICENSE"
 install -m 644 "$root/THIRD-PARTY-NOTICES.md" "$stage/$name/THIRD-PARTY-NOTICES.md"
+# What poste (and the docs) run: it installs `bobine` and `share/` below.
+install -m 755 "$root/assets/linux/install.sh" "$stage/$name/install.sh"
 # The desktop entry and the icons of the hicolor theme, laid out as under /usr/share.
 cp -r "$root/assets/linux/share" "$stage/$name/share"
 

@@ -25,21 +25,25 @@ gh release download <tag> -R KristenJestin/bobine --pattern 'bobine-*'
 sha256sum --check bobine-*.sha256
 tar -xzf bobine-*.tar.gz
 cd bobine-*-linux-x86_64
-install -Dm755 bobine ~/.local/bin/bobine
-bobine --version
+./install.sh
 ```
 
-`~/.local/bin` must be in your `PATH`. Without `gh`, download the two files from the Releases page
-in a browser and run the same commands from `sha256sum` on.
+It puts `bobine` in `~/.local/bin`, and the desktop entry and the icons under `~/.local/share`
+(`PREFIX=/some/where ./install.sh` for another place), then runs `bobine --version`. It never asks
+for root and never touches `~/.config/bobine` nor the keyring. `~/.local/bin` must be in your
+`PATH`; the script says so when it is not. Without `gh`, download the two files from the Releases
+page in a browser and run the same commands from `sha256sum` on.
 
 ## Update
 
-Download the newer archive the same way and install the binary over the old one. The account and
-the settings in `~/.config/bobine` stay: no new sign-in is needed within a minor version.
+Download the newer archive the same way and run its `install.sh`: a Bobine that is playing keeps
+running its old binary, and the next start runs the new one. The account and the settings in
+`~/.config/bobine` stay: no new sign-in is needed within a minor version.
 
 ## Remove everything
 
 ```
-rm ~/.local/bin/bobine
+rm ~/.local/bin/bobine ~/.local/share/applications/bobine.desktop
+rm ~/.local/share/icons/hicolor/*/apps/bobine.*
 rm -r ~/.config/bobine     # the account and the settings; the token is in the keyring (Secret Service)
 ```
