@@ -519,9 +519,10 @@ impl Shell {
         };
         self.home.busy = true;
         self.notify_hero(cx);
+        let quality = self.settings.default_quality.for_player();
         let task = cx
             .background_executor()
-            .spawn(async move { home_page::start(&*server, &target) });
+            .spawn(async move { home_page::start(&*server, &target, quality) });
         cx.spawn_in(window, async move |this, cx| {
             let started = task.await;
             this.update_in(cx, |shell, window, cx| {

@@ -673,6 +673,7 @@ mod tests {
 
     use super::*;
     use crate::player::fake::{Call, FakePlayer};
+    use crate::player::{FirstSubtitle, Stream};
     use crate::video::Placement;
     use crate::video::fake::FakeDisplay;
 
@@ -1415,6 +1416,33 @@ mod tests {
         f.queue(vec![PlayerEvent::Buffering(false)]);
         f.session.update(Instant::now());
         assert!(!f.session.loading());
+    }
+
+    #[test]
+    fn a_restart_clears_the_cache_stall() {
+        let mut f = fixture();
+        f.queue(vec![
+            PlayerEvent::Loaded,
+            PlayerEvent::FirstFrame,
+            PlayerEvent::Buffering(true),
+        ]);
+        f.session.update(Instant::now());
+        assert!(f.session.loading(), "stalled on the cache");
+        let media = Media {
+            stream: Stream {
+                url: "file:///converted.mkv",
+                headers: &[],
+            },
+            start: 0.,
+            audio: None,
+            subtitle: FirstSubtitle::Default,
+            external_subtitles: &[],
+        };
+        f.session.restart(media).unwrap();
+        // The conversion shows its first picture without ever saying that the stall ended.
+        f.queue(vec![PlayerEvent::Loaded, PlayerEvent::FirstFrame]);
+        f.session.update(Instant::now());
+        assert!(!f.session.loading(), "the old stall does not come along");
     }
 
     #[test]

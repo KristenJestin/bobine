@@ -7,9 +7,11 @@ use bobine::provider::{
     Playback, ProviderError, Title,
 };
 
+use crate::fallback;
 use crate::film_page::{self, Choices, Plan};
 use crate::grid;
 use crate::library_tools::Tools;
+use crate::player::settings::Quality;
 use crate::series_page;
 
 /// What a play button of the Home starts.
@@ -70,8 +72,12 @@ pub struct Started {
 }
 
 /// Opens the playback of `target`, off the window's thread: it blocks on the server.
-pub fn start(server: &dyn MediaServer, target: &PlayTarget) -> Result<Started, StartError> {
-    start_from(server, target, film_page::From::Resume)
+pub fn start(
+    server: &dyn MediaServer,
+    target: &PlayTarget,
+    quality: Quality,
+) -> Result<Started, StartError> {
+    start_from(server, target, film_page::From::Resume, quality)
 }
 
 /// `start`, from where the viewer stopped or from the beginning.
@@ -79,6 +85,7 @@ pub fn start_from(
     server: &dyn MediaServer,
     target: &PlayTarget,
     from: film_page::From,
+    quality: Quality,
 ) -> Result<Started, StartError> {
     match target {
         PlayTarget::Film(film) => {
@@ -98,14 +105,19 @@ pub fn start_from(
                 subtitle: parts.join(" · "),
                 list: plan.film.clone(),
                 desktop: crate::mpris::Title::film(&detail.film),
-                opened: server.play(&plan.film, &plan.source),
+                opened: fallback::open_first(server, &plan, quality),
                 plan,
             })
         }
         PlayTarget::Series(series) => {
             let episode =
                 series_page::next_to_play(server, series)?.ok_or(StartError::NothingToPlay)?;
-            start_from(server, &PlayTarget::Episode(Box::new(episode)), from)
+            start_from(
+                server,
+                &PlayTarget::Episode(Box::new(episode)),
+                from,
+                quality,
+            )
         }
         PlayTarget::Episode(episode) => {
             let choices = Choices::new(&episode.versions);
@@ -118,7 +130,7 @@ pub fn start_from(
             // No card for the episode after: it counts down over a series page, and the Home has
             // none. The Home shows it under "Next up" when it is back.
             Ok(Started {
-                opened: server.play(&plan.film, &plan.source),
+                opened: fallback::open_first(server, &plan, quality),
                 plan,
                 title,
                 subtitle,
@@ -318,6 +330,11 @@ mod tests {
     use super::*;
     use crate::fake::{FILM, FILMS_LIBRARY, FakeServer, SERIES};
     use std::time::Duration;
+
+    /// The file as it is: the cap is the pages' business.
+    fn start(server: &dyn MediaServer, target: &PlayTarget) -> Result<Started, StartError> {
+        super::start(server, target, Quality::Original)
+    }
 
     fn server() -> FakeServer {
         FakeServer::new(40, true)

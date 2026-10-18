@@ -653,6 +653,8 @@ pub struct Playback {
     pub source: MediaSourceId,
     pub stream: StreamUrl,
     pub external_subtitles: Vec<ExternalSubtitle>,
+    /// The stream is the server's conversion, not the file as it is.
+    pub converted: bool,
 }
 
 /// What the server converts: a version, from where the viewer was, with the tracks they chose.

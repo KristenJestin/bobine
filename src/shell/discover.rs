@@ -1496,6 +1496,76 @@ pub(super) mod tests {
         assert!(visual.debug_bounds("status Pending").is_some());
     }
 
+    /// The tile the ring shows on, after the arrow keys `keys`, with its ring drawn.
+    fn ring_after(
+        window: &WindowHandle<Shell>,
+        keys: &str,
+        cx: &mut TestAppContext,
+    ) -> Option<String> {
+        cx.update(|cx| {
+            crate::input::bind_keys(cx);
+            crate::keys::bind(cx);
+        });
+        let mut visual = drawn(window, cx);
+        visual.simulate_keystrokes(keys);
+        let on = window
+            .read_with(cx, |shell, _| shell.ring.shown_on().cloned())
+            .unwrap()?;
+        let on = on.to_string();
+        let selector: &'static str = Box::leak(format!("card-ring {on}").into_boxed_str());
+        // The ring fades in with the clock of the time: draw again once it has had some.
+        std::thread::sleep(Duration::from_millis(300));
+        window.update(cx, |_, _, cx| cx.notify()).unwrap();
+        visual.run_until_parked();
+        let mut visual = drawn(window, cx);
+        assert!(visual.debug_bounds(selector).is_some(), "drawn on {on}");
+        Some(on)
+    }
+
+    #[gpui_kit::test]
+    fn discover_and_similar_tiles_get_the_focus_ring(cx: &mut TestAppContext) {
+        let seerr = FakeSeerr::default();
+        let window = on_discover(&seerr, cx);
+        ring_after(&window, "right", cx).expect("an arrow lands on a Discover tile");
+        // Enter opens the tile's page, as a click does.
+        let mut visual = drawn(&window, cx);
+        visual.simulate_keystrokes("enter");
+        visual.run_until_parked();
+        assert_ne!(screen(&window, cx), Screen::Discover);
+
+        // The "not in your library" row under a film of the library.
+        let window = configured(&seerr, cx);
+        window
+            .update(cx, |shell, _, cx| {
+                shell.open_film(bobine::provider::ItemId(crate::fake::FILM.into()), cx)
+            })
+            .unwrap();
+        cx.run_until_parked();
+        let mut visual = drawn(&window, cx);
+        assert!(visual.debug_bounds("similar-not-in-library").is_some());
+        window
+            .update(cx, |shell, _, cx| {
+                let page = shell.details.last().unwrap();
+                let bottom = page.scroll.max_offset().y;
+                page.scroll
+                    .set_offset(gpui_kit::point(gpui_kit::px(0.), -bottom));
+                cx.notify();
+            })
+            .unwrap();
+        let _ = drawn(&window, cx);
+        // The row of the library's own similar titles comes first: the arrows go down to ours.
+        let mut keys = "right".to_string();
+        let mut on = String::new();
+        for _ in 0..6 {
+            on = ring_after(&window, &keys, cx).expect("an arrow lands on a tile");
+            if on.contains("not-in-library") {
+                break;
+            }
+            keys = "down".into();
+        }
+        assert!(on.contains("not-in-library"), "{on}");
+    }
+
     #[gpui_kit::test]
     fn an_index_still_loading_when_another_user_signs_in_is_not_theirs(cx: &mut TestAppContext) {
         let seerr = FakeSeerr::default();

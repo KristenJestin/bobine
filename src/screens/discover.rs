@@ -3,6 +3,8 @@
 //! each a row that scrolls sideways. A search replaces the rows with its results. Every title
 //! wears a small pill: in the library, pending, processing, available.
 
+use std::rc::Rc;
+
 use bobine::requests::{Discovered, MediaKind};
 use gpui_kit::prelude::*;
 use gpui_kit::{
@@ -10,6 +12,7 @@ use gpui_kit::{
     SharedString, Stateful, Window, div, px, rgba,
 };
 
+use super::card::{Offer, Open, Play};
 use super::film_detail::{EDGE, ROW_POSTER, row};
 use super::library::GRID_TOP;
 use super::{note, picture};
@@ -267,38 +270,46 @@ pub(super) fn card(
         (None, MediaKind::Tv) => "Series".into(),
     };
     let selector = format!("discover-card {}", title.title);
-    div()
-        .id(ElementId::NamedInteger(name, index as u64))
-        .debug_selector(move || selector.clone())
-        .w(px(width))
-        .flex_none()
-        .flex()
-        .flex_col()
-        .gap(px(8.))
-        .cursor_pointer()
-        .on_click(cx.listener(move |shell, _, _, cx| shell.open_discovered(kind, tmdb, cx)))
-        .group("discover-card")
-        .child(
-            div()
-                .relative()
-                .w(px(width))
-                .h(px(width * 1.5))
-                .rounded(px(theme::RADIUS))
-                .overflow_hidden()
-                .bg(theme::panel())
-                .border_1()
-                .border_color(theme::line())
-                .group_hover("discover-card", |poster| {
-                    poster.border_color(theme::muted())
-                })
-                .children(picture(image, theme::RADIUS))
-                .children(label.map(|label| {
-                    div()
-                        .absolute()
-                        .top(px(8.))
-                        .left(px(8.))
-                        .child(status_pill(label))
-                })),
-        )
-        .child(super::poster_caption(title.title.clone(), caption))
+    let heading = title.title.clone();
+    let shown = image.clone();
+    let draw = move |layer: Stateful<Div>| {
+        let selector = selector.clone();
+        div()
+            .debug_selector(move || selector.clone())
+            .w(px(width))
+            .flex()
+            .flex_col()
+            .gap(px(8.))
+            .child(
+                div()
+                    .relative()
+                    .w(px(width))
+                    .h(px(width * 1.5))
+                    .rounded(px(theme::RADIUS))
+                    .overflow_hidden()
+                    .bg(theme::panel())
+                    .border_1()
+                    .border_color(theme::line())
+                    .children(picture(shown.clone(), theme::RADIUS))
+                    .children(label.clone().map(|label| {
+                        div()
+                            .absolute()
+                            .top(px(8.))
+                            .left(px(8.))
+                            .child(status_pill(label))
+                    }))
+                    .child(layer),
+            )
+            .child(super::poster_caption(heading.clone(), caption.clone()))
+    };
+    let offer = Offer {
+        open: Open::Discovered(kind, tmdb),
+        image,
+        play: Play::Nothing,
+        quick: None,
+        draw: Rc::new(draw),
+    };
+    let id = ElementId::NamedInteger(name, index as u64);
+    let view = shell.card(&id, offer, cx);
+    div().id(id).flex_none().child(view)
 }

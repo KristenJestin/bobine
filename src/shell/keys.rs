@@ -151,7 +151,10 @@ impl Shell {
     fn toggle_help(&mut self, cx: &mut Context<Self>) {
         if self.help_open {
             self.close_help(cx);
-        } else if !self.search_is_open() && !self.playlist_menu_is_open() {
+        } else if !self.search_is_open()
+            && !self.playlist_menu_is_open()
+            && !self.page_menu_is_open(self.navigator.current())
+        {
             self.help_open = true;
             self.help_fade.set(true, Instant::now());
             cx.notify();
@@ -883,6 +886,27 @@ mod tests {
             Screen::Player,
             "Escape closed the help only"
         );
+    }
+
+    #[gpui_kit::test]
+    fn help_does_not_open_over_a_page_menu(cx: &mut TestAppContext) {
+        let window = signed_in(cx);
+        let mut visual = drawn(&window, cx);
+        window
+            .update(cx, |shell, _, cx| shell.toggle_account_menu(cx))
+            .unwrap();
+        visual.simulate_keystrokes("?");
+        window
+            .read_with(cx, |shell, _| {
+                assert!(!shell.help_open, "no help over the account menu");
+            })
+            .unwrap();
+        // Once the menu is closed, the key works again.
+        window
+            .update(cx, |shell, _, cx| shell.toggle_account_menu(cx))
+            .unwrap();
+        visual.simulate_keystrokes("?");
+        assert!(window.read_with(cx, |shell, _| shell.help_open).unwrap());
     }
 
     #[gpui_kit::test]
