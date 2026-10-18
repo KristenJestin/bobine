@@ -277,9 +277,11 @@ mod tests {
             inbox.push(request);
             visual.run_until_parked();
             window
-                .update(cx, |shell, _, _| {
+                .update(cx, |shell, window, cx| {
                     assert_eq!(shell.notice, Some("Playback in progress: stop it first."));
                     assert!(shell.details.is_empty());
+                    // Said over the player, where the viewer is.
+                    assert!(shell.notice_pill(Screen::Player, window, cx).is_some());
                 })
                 .unwrap();
         }
