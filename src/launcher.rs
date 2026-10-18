@@ -289,8 +289,24 @@ fn quoted(word: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::Ordering;
+
+    use bobine::jellyfin::JellyfinConnector;
+
     use super::*;
-    use crate::fake::FakeServer;
+    use crate::fake::{FakeServer, MemoryKeyring};
+
+    /// An account file that kept a login: its token is in the keyring.
+    const KEPT_LOGIN: &str = r#"device_id = "0123456789abcdef0123456789abcdef"
+
+[login]
+address = "https://media.example.org"
+server_id = "server-1"
+server_name = "Salon"
+server_version = "10.11.0"
+user_id = "user-1"
+user_name = "camille"
+"#;
 
     fn args(line: &str) -> Vec<String> {
         line.split_whitespace().map(String::from).collect()
@@ -503,6 +519,21 @@ mod tests {
             // Enter opens the window, where one signs in.
             assert_eq!(said.entries[0]["action"]["command"], "bobine");
         }
+    }
+
+    #[test]
+    fn a_locked_keyring_is_not_signed_in() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("account.toml");
+        std::fs::write(&path, KEPT_LOGIN).unwrap();
+        let keyring = Arc::new(MemoryKeyring::default());
+        keyring.locked.store(true, Ordering::SeqCst);
+        let said = run(&Command::Home, move || {
+            let connector: Arc<dyn Connector> = Arc::new(JellyfinConnector::open(path, keyring)?);
+            Ok(connector)
+        });
+        assert_eq!(said.code, NOT_SIGNED_IN);
+        assert_eq!(said.entries[0]["name"], "Sign in to Bobine");
     }
 
     #[test]

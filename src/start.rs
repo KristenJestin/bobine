@@ -80,6 +80,7 @@ pub fn error_message(error: &ProviderError) -> &'static str {
             "The server gave an unexpected response."
         }
         ProviderError::Keyring(_) => "The system keyring cannot be reached.",
+        ProviderError::KeyringLocked => "The system keyring is locked.",
         ProviderError::Storage(_) => "The account file cannot be written.",
     }
 }

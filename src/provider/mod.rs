@@ -714,6 +714,8 @@ pub enum ProviderError {
     /// The server answered, but not what was expected.
     BadAnswer(String),
     Keyring(String),
+    /// The keyring holds the token, locked, and the caller may not ask the user to unlock it.
+    KeyringLocked,
     /// The local file that keeps the account.
     Storage(String),
 }
@@ -734,6 +736,7 @@ impl fmt::Display for ProviderError {
             Self::Server(status) => write!(f, "the server answered with HTTP status {status}"),
             Self::BadAnswer(what) => write!(f, "the server gave an unexpected answer: {what}"),
             Self::Keyring(what) => write!(f, "keyring: {what}"),
+            Self::KeyringLocked => f.write_str("the keyring is locked"),
             Self::Storage(what) => write!(f, "account file: {what}"),
         }
     }

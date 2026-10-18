@@ -46,6 +46,8 @@ pub struct MemoryKeyring {
     pub secrets: Mutex<HashMap<String, Token>>,
     /// The keyring cannot be reached: every call fails.
     pub unreachable: AtomicBool,
+    /// The keyring is locked, and may not be unlocked: a token is not read.
+    pub locked: AtomicBool,
 }
 
 impl MemoryKeyring {
@@ -78,6 +80,9 @@ impl TokenStore for MemoryKeyring {
 
     fn load(&self, account: &str) -> Result<Option<Token>, ProviderError> {
         self.reach()?;
+        if self.locked.load(Ordering::SeqCst) {
+            return Err(ProviderError::KeyringLocked);
+        }
         Ok(self.secrets.lock().unwrap().get(account).cloned())
     }
 
