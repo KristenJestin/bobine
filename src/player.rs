@@ -172,6 +172,8 @@ pub enum PlayerEvent {
     Loaded,
     /// The first picture reached the video surface: the film decodes.
     FirstFrame,
+    /// The stream waits for data to fill its cache (`true`), or has it again and plays on.
+    Buffering(bool),
     /// Seconds from the start.
     Position(f64),
     Duration(f64),

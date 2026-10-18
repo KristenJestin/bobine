@@ -79,6 +79,7 @@ icons! {
     PlayCircle => "play-circle",
     ChartBar => "chart-bar",
     Bell => "bell",
+    SpinnerGap => "spinner-gap",
 }
 
 /// The asset source of the window: the icons above and nothing else.

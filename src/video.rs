@@ -70,6 +70,7 @@ pub mod fake {
     pub struct FakeDisplay {
         pub placements: Rc<RefCell<Vec<Placement>>>,
         pub cursor: Rc<RefCell<Vec<bool>>>,
+        pub shown: Rc<RefCell<bool>>,
     }
 
     impl VideoDisplay for FakeDisplay {
@@ -80,7 +81,7 @@ pub mod fake {
             self.cursor.borrow_mut().push(visible);
         }
         fn picture_shown(&self) -> bool {
-            false
+            *self.shown.borrow()
         }
     }
 }

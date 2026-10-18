@@ -313,6 +313,8 @@ pub struct Episode {
     pub item: Film,
     pub series: ItemId,
     pub series_title: String,
+    /// The poster of its series, not its own still: what a list shows for an episode.
+    pub series_poster: Option<ImageRef>,
     pub season: ItemId,
     pub season_number: Option<u32>,
     pub number: Option<u32>,

@@ -8,8 +8,9 @@ use super::{
 };
 
 /// The properties the player follows; mpv says when one changes.
-/// `vo-configured` turns on with the first picture the video output gets.
-pub const OBSERVED: [&str; 7] = [
+/// `vo-configured` turns on with the first picture the video output gets, `paused-for-cache`
+/// while the stream waits for data.
+pub const OBSERVED: [&str; 8] = [
     "time-pos",
     "duration",
     "pause",
@@ -17,6 +18,7 @@ pub const OBSERVED: [&str; 7] = [
     "aid",
     "sid",
     "vo-configured",
+    "paused-for-cache",
 ];
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -328,6 +330,10 @@ impl<C: MpvClient> Player for MpvPlayer<C> {
                         .map(|paused| PlayerEvent::Paused(paused == "yes")),
                     "vo-configured" => (self.client.get("vo-configured").as_deref() == Some("yes"))
                         .then_some(PlayerEvent::FirstFrame),
+                    "paused-for-cache" => self
+                        .client
+                        .get("paused-for-cache")
+                        .map(|waiting| PlayerEvent::Buffering(waiting == "yes")),
                     _ => Some(PlayerEvent::Tracks(
                         tracks::from_mpv(|name| self.client.get(name))
                             .into_iter()
@@ -979,6 +985,23 @@ mod tests {
             .insert("vo-configured".into(), "yes".into());
         push(&player, &[changed("vo-configured")]);
         assert_eq!(player.events(), [PlayerEvent::FirstFrame]);
+    }
+
+    #[test]
+    fn a_cache_stall_is_told_by_paused_for_cache() {
+        let mpv = FakeMpv::with(
+            &[("paused-for-cache", "yes")],
+            &[changed("paused-for-cache")],
+        );
+        let mut player = MpvPlayer::new(mpv);
+        assert_eq!(player.events(), [PlayerEvent::Buffering(true)]);
+        player
+            .client()
+            .properties
+            .borrow_mut()
+            .insert("paused-for-cache".into(), "no".into());
+        push(&player, &[changed("paused-for-cache")]);
+        assert_eq!(player.events(), [PlayerEvent::Buffering(false)]);
     }
 
     fn push(player: &MpvPlayer<FakeMpv>, events: &[MpvEvent]) {
