@@ -13,7 +13,7 @@ use gpui_kit::{
     SharedString, Stateful, Window, anchored, canvas, deferred, div, point, px, rgba, uniform_list,
 };
 
-use super::note;
+use super::{CONTENT_WIDTH, note};
 use crate::grid::MARGIN;
 use crate::icons::{IconName, icon};
 use crate::images;
@@ -55,6 +55,7 @@ pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -
             window,
             cx,
         )
+        .debug_selector(|| "playlist-play-all".into())
         .when(busy, |button| button.opacity(0.6))
         .on_click(cx.listener(|shell, _, window, cx| shell.play_all(window, cx)))
     });
@@ -91,6 +92,8 @@ pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -
                 .justify_between()
                 .px(px(MARGIN))
                 .pb(px(24.))
+                // Ends where the rows' buttons end: the rows reach 12 px past the margin each way.
+                .max_w(px(CONTENT_WIDTH + 2. * MARGIN - 24.))
                 .child(
                     div()
                         .flex()
@@ -160,6 +163,9 @@ fn line(
     div().px(px(MARGIN - 12.)).pb(px(8.)).child(
         theme::eased(("playlist-entry", at), theme::Shades::line(), window, cx)
             .group(group)
+            .w_full()
+            .max_w(px(CONTENT_WIDTH))
+            .debug_selector(move || format!("playlist-entry {at}"))
             .h(px(LINE - 8.))
             .px(px(12.))
             .rounded(px(theme::RADIUS))
