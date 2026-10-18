@@ -981,6 +981,23 @@ mod tests {
         assert_eq!(player.events(), [PlayerEvent::FirstFrame]);
     }
 
+    #[test]
+    fn a_cache_stall_is_told_by_paused_for_cache() {
+        let mpv = FakeMpv::with(
+            &[("paused-for-cache", "yes")],
+            &[changed("paused-for-cache")],
+        );
+        let mut player = MpvPlayer::new(mpv);
+        assert_eq!(player.events(), [PlayerEvent::Buffering(true)]);
+        player
+            .client()
+            .properties
+            .borrow_mut()
+            .insert("paused-for-cache".into(), "no".into());
+        push(&player, &[changed("paused-for-cache")]);
+        assert_eq!(player.events(), [PlayerEvent::Buffering(false)]);
+    }
+
     fn push(player: &MpvPlayer<FakeMpv>, events: &[MpvEvent]) {
         player
             .client()
