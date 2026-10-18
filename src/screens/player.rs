@@ -140,63 +140,85 @@ pub fn render(
     let conversion = (shown.notice > 0.).then(|| notice("Converted by the server", shown.notice));
     let refusal =
         (shown.refusal > 0.).then(|| notice("This quality could not be started.", shown.refusal));
-    div()
-        .id("player")
-        .size_full()
-        .relative()
-        .on_mouse_move(cx.listener(|shell, event: &MouseMoveEvent, window, cx| {
-            shell.player_mouse_moved(cx);
-            shell.seek_drag(
-                f32::from(event.position.x),
-                event.pressed_button == Some(MouseButton::Left),
-                window,
-                cx,
-            );
-        }))
-        .on_mouse_up(
-            MouseButton::Left,
-            cx.listener(|shell, _: &MouseUpEvent, _, cx| shell.seek_release(cx)),
-        )
-        .on_mouse_down(
-            MouseButton::Left,
-            cx.listener(|shell, event: &MouseDownEvent, window, cx| {
-                // A button or a box over the picture keeps its clicks.
-                if event.click_count == 2 && !window.default_prevented() {
-                    shell.player_double_click(f32::from(event.position.y), window, cx);
-                }
-            }),
-        )
-        .children(controls)
-        .children(conversion)
-        .children(refusal)
-        .children(
-            shown.skip.map(|(button, level)| {
-                super::skip::button(button, level, shown.controls, window, cx)
-            }),
-        )
-        .children(outside)
-        .children(panel)
-        .children(menu)
-        .when(session.loading(), |root| root.child(spinner()))
-        .when_some(session.error(), |root, error| {
-            root.child(
-                div()
-                    .absolute()
-                    .inset_0()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .child(keeps_clicks(
-                        div()
-                            .id("player-error")
-                            .px(px(20.))
-                            .py(px(14.))
-                            .rounded(px(theme::RADIUS_LARGE))
-                            .bg(theme::panel())
-                            .child(format!("Cannot play: {error}")),
-                    )),
+    let mut root =
+        div()
+            .id("player")
+            .size_full()
+            .relative()
+            .on_mouse_move(cx.listener(|shell, event: &MouseMoveEvent, window, cx| {
+                shell.player_mouse_moved(cx);
+                shell.seek_drag(
+                    f32::from(event.position.x),
+                    event.pressed_button == Some(MouseButton::Left),
+                    window,
+                    cx,
+                );
+            }))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|shell, _: &MouseUpEvent, _, cx| shell.seek_release(cx)),
             )
-        })
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|shell, event: &MouseDownEvent, window, cx| {
+                    // A button or a box over the picture keeps its clicks.
+                    if event.click_count == 2 && !window.default_prevented() {
+                        shell.player_double_click(f32::from(event.position.y), window, cx);
+                    }
+                }),
+            )
+            .children(controls)
+            .children(conversion)
+            .children(refusal)
+            .children(shown.skip.map(|(button, level)| {
+                super::skip::button(button, level, shown.controls, window, cx)
+            }));
+    let (mut outside, mut panel, mut menu) = (outside, panel, menu);
+    for overlay in overlays(session.loading()) {
+        root = match overlay {
+            Overlay::Spinner => root.child(spinner()),
+            Overlay::Outside => root.children(outside.take()),
+            Overlay::Panel => root.children(panel.take()),
+            Overlay::Menu => root.children(menu.take()),
+        };
+    }
+    root.when_some(session.error(), |root, error| {
+        root.child(
+            div()
+                .absolute()
+                .inset_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(keeps_clicks(
+                    div()
+                        .id("player-error")
+                        .px(px(20.))
+                        .py(px(14.))
+                        .rounded(px(theme::RADIUS_LARGE))
+                        .bg(theme::panel())
+                        .child(format!("Cannot play: {error}")),
+                )),
+        )
+    })
+}
+
+/// What floats over the picture and its controls.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Overlay {
+    Spinner,
+    Outside,
+    Panel,
+    Menu,
+}
+
+/// The overlays from the bottom to the top.
+fn overlays(loading: bool) -> Vec<Overlay> {
+    let mut stack = vec![Overlay::Outside, Overlay::Panel, Overlay::Menu];
+    if loading {
+        stack.push(Overlay::Spinner);
+    }
+    stack
 }
 
 /// Centred over the picture while the player waits for it: it catches no click, so a double
@@ -1230,6 +1252,16 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn the_spinner_is_drawn_under_an_open_panel() {
+        let stack = overlays(true);
+        let at = |overlay| stack.iter().position(|o| *o == overlay).unwrap();
+        assert!(at(Overlay::Spinner) < at(Overlay::Outside));
+        assert!(at(Overlay::Spinner) < at(Overlay::Panel));
+        assert!(at(Overlay::Spinner) < at(Overlay::Menu));
+        assert!(!overlays(false).contains(&Overlay::Spinner));
     }
 
     #[test]
