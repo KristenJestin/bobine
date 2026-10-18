@@ -254,6 +254,19 @@ fn safe(id: &str) -> String {
         .collect()
 }
 
+/// The folder's name is one `safe` can give: nothing else in the account folder is ours to remove.
+fn looks_like_an_item(folder: &Path) -> bool {
+    let is_link = fs::symlink_metadata(folder).is_ok_and(|meta| meta.file_type().is_symlink());
+    !is_link
+        && folder.file_name().is_some_and(|name| {
+            let name = name.as_bytes();
+            !name.is_empty()
+                && name
+                    .iter()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'%'))
+        })
+}
+
 /// Writes the manifest through a temporary file, so a crash leaves the old one.
 fn save(folder: &Path, manifest: &Manifest) -> io::Result<()> {
     fs::create_dir_all(folder)?;
@@ -388,9 +401,11 @@ impl Downloads {
                 continue;
             }
             let Ok(text) = fs::read(folder.join(MANIFEST)) else {
-                // Cut before its manifest was written: nothing to resume from.
-                let _ = fs::remove_file(folder.join(PART));
-                let _ = fs::remove_dir(&folder);
+                // `add` writes the manifest first: a folder without one is what a crash or a
+                // removal left, never a download to resume. Only a folder named as ours are.
+                if looks_like_an_item(&folder) {
+                    let _ = fs::remove_dir_all(&folder);
+                }
                 continue;
             };
             // One this Bobine cannot read is left as it is.
