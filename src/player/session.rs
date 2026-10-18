@@ -571,7 +571,8 @@ impl Session {
     /// The view shows that it waits: from the title asked to its first frame, and while the stream
     /// fills its cache.
     pub fn loading(&self) -> bool {
-        self.error.is_none() && (self.first_frame_at.is_none() || self.buffering)
+        self.error.is_none()
+            && ((self.first_frame_at.is_none() && !self.picture_shown()) || self.buffering)
     }
 
     /// What is left and when the film ends, for the clock now; nothing before the duration is
