@@ -872,6 +872,10 @@ impl Shell {
             Reopen::Person(person) => self.open_person(person, cx),
             Reopen::List(kind, library) => self.open_list(kind, library, cx),
             Reopen::Collection(id) => self.open_collection(id, cx),
+            // Without the request server nothing opens: say so rather than do nothing.
+            Reopen::Request(..) if self.seerr.client.is_none() => {
+                self.show_notice("This request is gone.", cx);
+            }
             Reopen::Request(kind, tmdb) => self.open_request(kind, tmdb, cx),
             Reopen::SeerrCollection(id) => self.open_seerr_collection(id, cx),
             Reopen::Favorites => self.open_favorites(cx),
