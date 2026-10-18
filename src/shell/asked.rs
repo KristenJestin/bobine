@@ -130,6 +130,8 @@ mod tests {
 
     use super::*;
     use crate::fake::{FakeServer, MemoryKeyring};
+    use crate::player::PlayerEvent;
+    use crate::player::fake::FakePlayer;
 
     /// A window on `server`, hearing the commands, opened for `first`.
     fn start(
@@ -247,6 +249,58 @@ mod tests {
                 ),
             ]
         );
+    }
+
+    #[gpui_kit::test]
+    fn a_request_while_a_movie_plays_says_why_nothing_happened(cx: &mut TestAppContext) {
+        let server = FakeServer::new(6, true);
+        let (window, inbox, visual) = start(&server, None, cx);
+        let player = FakePlayer::default();
+        player.queued.borrow_mut().push(PlayerEvent::Loaded);
+        window
+            .update(cx, |shell, _, _| shell.fake_player = Some(player))
+            .unwrap();
+        inbox.push(Request::Play(ItemId("film-0".into()), From::Resume));
+        visual.run_until_parked();
+        cx.executor().advance_clock(super::super::PLAYER_TICK * 2);
+        visual.run_until_parked();
+        window
+            .update(cx, |shell, _, _| assert!(shell.playback.is_some()))
+            .unwrap();
+        for request in [
+            Request::Open(Kind::Movie, ItemId("film-4".into())),
+            Request::Play(ItemId("film-4".into()), From::Resume),
+        ] {
+            window
+                .update(cx, |shell, _, _| shell.notice = None)
+                .unwrap();
+            inbox.push(request);
+            visual.run_until_parked();
+            window
+                .update(cx, |shell, _, _| {
+                    assert_eq!(shell.notice, Some("Playback in progress: stop it first."));
+                    assert!(shell.details.is_empty());
+                })
+                .unwrap();
+        }
+        assert_eq!(planned(&window, cx).len(), 1);
+    }
+
+    #[gpui_kit::test]
+    fn a_play_asked_while_another_title_starts_says_why_nothing_happened(cx: &mut TestAppContext) {
+        let server = FakeServer::new(6, true);
+        let (window, inbox, visual) = start(&server, None, cx);
+        window
+            .update(cx, |shell, _, _| shell.home.busy = true)
+            .unwrap();
+        inbox.push(Request::Play(ItemId("film-0".into()), From::Resume));
+        visual.run_until_parked();
+        window
+            .update(cx, |shell, _, _| {
+                assert_eq!(shell.notice, Some("Another title is already starting."));
+            })
+            .unwrap();
+        assert!(planned(&window, cx).is_empty());
     }
 
     #[gpui_kit::test]
