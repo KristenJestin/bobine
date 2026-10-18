@@ -3,12 +3,14 @@
 
 use std::time::Duration;
 
+use serde::{Deserialize, Serialize};
+
 /// The width the thumbnail is shown at, about: the smallest size that is at least this wide
 /// is taken, else the largest there is.
 pub const WANTED_WIDTH: u32 = 320;
 
 /// How the thumbnails of one version of a film are laid out, at one size.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Trickplay {
     /// The size of one thumbnail.
     pub width: u32,

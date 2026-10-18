@@ -22,6 +22,8 @@ use std::fmt;
 use std::sync::Arc;
 use std::time::Duration;
 
+use serde::{Deserialize, Serialize};
+
 /// How often the player tells the server where the viewer is, besides each pause and seek.
 pub const PROGRESS_EVERY: Duration = Duration::from_secs(10);
 
@@ -198,7 +200,7 @@ pub trait MediaServer: Send + Sync {
 }
 
 /// The trailers of a film or a series, as its page learns them.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Trailers {
     /// The server holds a trailer file of its own for it.
     pub local: bool,
@@ -214,7 +216,7 @@ pub struct TmdbIndex {
 }
 
 /// What a marked stretch of a film or an episode is.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SegmentKind {
     Intro,
     /// The credits.
@@ -225,7 +227,7 @@ pub enum SegmentKind {
 }
 
 /// A stretch of a film or an episode the server marked, from `start` to `end` in its time.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Segment {
     pub kind: SegmentKind,
     pub start: Duration,
@@ -277,7 +279,7 @@ pub struct Feature {
 }
 
 /// A series as a list shows it.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Series {
     pub id: ItemId,
     pub title: String,
@@ -300,7 +302,7 @@ pub struct Series {
     pub season: Option<Season>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SeriesDetail {
     pub series: Series,
     pub overview: Option<String>,
@@ -317,7 +319,7 @@ pub struct SeriesDetail {
     pub trailers: Trailers,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Season {
     pub id: ItemId,
     pub name: String,
@@ -328,7 +330,7 @@ pub struct Season {
 
 /// An episode, with what it shares with a film in `item`: its id, title, runtime, watched state,
 /// resume point, and its still as the poster.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Episode {
     pub item: Film,
     pub series: ItemId,
@@ -400,11 +402,11 @@ pub struct ServerInfo {
 }
 
 /// The id of an item on the server: a library, a film, a person, a collection.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ItemId(pub String);
 
 /// The id of one version (file) of a film.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct MediaSourceId(pub String);
 
 /// The id that ties the reports of one playback together.
@@ -481,7 +483,7 @@ pub struct Page<T> {
     pub total: u32,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ImageKind {
     /// A film's poster, a person's photo.
     Primary,
@@ -491,7 +493,7 @@ pub enum ImageKind {
 }
 
 /// An image the server holds; the tag changes when the image does.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ImageRef {
     pub item: ItemId,
     pub kind: ImageKind,
@@ -499,7 +501,7 @@ pub struct ImageRef {
 }
 
 /// A film as a list shows it.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Film {
     pub id: ItemId,
     pub title: String,
@@ -515,7 +517,7 @@ pub struct Film {
     pub backdrop: Option<ImageRef>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FilmDetail {
     pub film: Film,
     pub overview: Option<String>,
@@ -538,7 +540,7 @@ pub struct FilmDetail {
     pub trailers: Trailers,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CastMember {
     pub id: ItemId,
     pub name: String,
@@ -606,7 +608,7 @@ pub struct PlaylistEntry {
 pub struct EntryId(pub String);
 
 /// One version of a film: one file, with its tracks.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MediaSource {
     pub id: MediaSourceId,
     pub name: String,
@@ -621,7 +623,7 @@ pub struct MediaSource {
     pub default_subtitle: Option<Option<i32>>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum VideoRange {
     Sdr,
     Hdr10,
@@ -637,7 +639,7 @@ impl VideoRange {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VideoTrack {
     pub codec: Option<String>,
     pub width: Option<u32>,
@@ -645,7 +647,7 @@ pub struct VideoTrack {
     pub range: VideoRange,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AudioTrack {
     /// The index of the stream in the file, as the reports name it.
     pub index: i32,
@@ -656,7 +658,7 @@ pub struct AudioTrack {
     pub default: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SubtitleTrack {
     /// The index of the stream in the file, as the reports name it.
     pub index: i32,
