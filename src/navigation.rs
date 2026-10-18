@@ -169,9 +169,10 @@ impl Navigator {
             .unwrap_or(self.stack[0])
     }
 
-    /// Whether the pill of `entry` is the one highlighted.
+    /// Whether the pill of `entry` is the one highlighted. The Stats page belongs to no section:
+    /// it is reached from the account menu, and no pill stands for it.
     pub fn lights(&self, entry: NavEntry) -> bool {
-        entry.is_current(self.section())
+        self.current() != Screen::Stats && entry.is_current(self.section())
     }
 
     /// Goes deeper (a film from a library, the player from a film): `back` returns here.
