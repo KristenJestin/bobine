@@ -19,7 +19,7 @@ enum Kind {
     Started,
     Progress,
     Stopped,
-    /// Stopped at the film's real end: it is watched.
+    /// Stopped at the film's real end, or past `WATCHED_FROM` of it: it is watched.
     Ended,
 }
 
@@ -141,7 +141,7 @@ impl Reporting {
             // marks the film watched by its own threshold.
             self.stopped = true;
             let position = self.position(session);
-            let kind = match reached_the_end(position, session.duration) {
+            let kind = match watched(position, session.duration) {
                 true => Kind::Ended,
                 false => Kind::Stopped,
             };
@@ -162,11 +162,24 @@ impl Reporting {
     pub fn finish(mut self, session: &Session) -> JoinHandle<()> {
         if self.started && !self.stopped {
             let position = self.position(session);
-            self.send(Kind::Stopped, position, false, Instant::now());
+            let kind = match watched(position, session.duration) {
+                true => Kind::Ended,
+                false => Kind::Stopped,
+            };
+            self.send(kind, position, false, Instant::now());
         }
         drop(self.sender);
         self.worker
     }
+}
+
+/// As Jellyfin's default `MaxResumePct`: a film stopped from this far on is watched.
+const WATCHED_FROM: f64 = 0.9;
+
+/// Whether stopping at `position` of `duration` makes the film watched: at its real end, or in
+/// its credits.
+fn watched(position: f64, duration: f64) -> bool {
+    reached_the_end(position, duration) || duration > 0. && position >= duration * WATCHED_FROM
 }
 
 /// A report as the journal keeps it: the item's last position, or watched when it ended at its
