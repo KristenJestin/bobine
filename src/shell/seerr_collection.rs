@@ -241,6 +241,14 @@ impl Shell {
             return;
         }
         self.seerr.links.insert(tmdb, None);
+        // Another movie of the collection is reading its name: this one waits for the answer.
+        if let Some(id) = collection {
+            if let Some(waiting) = self.seerr.reading.get_mut(&id) {
+                waiting.push(tmdb);
+                return;
+            }
+            self.seerr.reading.insert(id, Vec::new());
+        }
         let read = move |seerr: &dyn RequestServer| match collection {
             Some(id) => seerr.collection(id).map(|parts| {
                 Some(CollectionRef {
@@ -252,23 +260,33 @@ impl Shell {
                 .title(MediaKind::Movie, tmdb)
                 .map(|detail| detail.collection),
         };
-        self.ask_seerr(cx, read, move |shell, link, _| match link {
-            Ok(link) => {
-                if let Some(id) = collection {
-                    let name = link.as_ref().map(|link| link.name.clone());
-                    shell.seerr.names.insert(id, name);
+        self.ask_seerr(cx, read, move |shell, link, _| {
+            let waiting = collection
+                .and_then(|id| shell.seerr.reading.remove(&id))
+                .unwrap_or_default();
+            match link {
+                Ok(link) => {
+                    // Whichever way the collection was found, its name is read once a session.
+                    if let Some(found) = &link {
+                        shell.seerr.names.insert(found.id, Some(found.name.clone()));
+                    }
+                    for film in waiting {
+                        shell.seerr.links.insert(film, link.clone());
+                    }
+                    shell.seerr.links.insert(tmdb, link);
                 }
-                shell.seerr.links.insert(tmdb, link);
-            }
-            // Unknown to Seerr: asked again in the next session only.
-            Err(RequestError::NotFound) => {
-                if let Some(id) = collection {
-                    shell.seerr.names.insert(id, None);
+                // Unknown to Seerr: asked again in the next session only.
+                Err(RequestError::NotFound) => {
+                    if let Some(id) = collection {
+                        shell.seerr.names.insert(id, None);
+                    }
                 }
-            }
-            // Asked again the next time the page opens.
-            Err(_) => {
-                shell.seerr.links.remove(&tmdb);
+                // Asked again the next time the page opens.
+                Err(_) => {
+                    for film in waiting.into_iter().chain([tmdb]) {
+                        shell.seerr.links.remove(&film);
+                    }
+                }
             }
         });
     }

@@ -24,6 +24,10 @@ use crate::secret_field::{self, SecretField};
 /// How long the Discover search waits for the viewer to stop typing.
 const SEARCH_AFTER: Duration = Duration::from_millis(300);
 
+/// Said when an address over https cannot be reached.
+const HTTPS_UNREACHABLE: &str = "Seerr cannot be reached over https. If it serves plain http, \
+                                 type http:// before the address.";
+
 /// Where the keyring keeps the request server's API key, for the signed-in user.
 pub const SEERR_KEY: &str = "seerr-api-key";
 
@@ -66,7 +70,7 @@ pub struct Seerr {
     connecting: bool,
     _key_changed: Option<Subscription>,
     /// The library by TMDb id: what of the request server's titles is in it. Kept for the
-    /// session, read again with the Home; while there is none, nothing is said not in it.
+    /// session, read again with the Discover data; while there is none, nothing is said not in it.
     pub index: Option<TmdbIndex>,
     /// The index is being read.
     indexing: bool,
@@ -81,6 +85,8 @@ pub struct Seerr {
     /// The name of each TMDb collection read, `None` for one Seerr does not know: read once a
     /// session, by the link of whichever of its movies or by its page.
     pub names: HashMap<TmdbId, Option<String>>,
+    /// The collections being read for a movie's link, with the other movies waiting on each.
+    pub(super) reading: HashMap<TmdbId, Vec<TmdbId>>,
     /// What the server recommends after a title of the library, read once per title.
     similar: HashMap<(MediaKind, TmdbId), Vec<Discovered>>,
 }
@@ -241,6 +247,11 @@ impl Shell {
                 }
                 shell.seerr.connecting = false;
                 match made {
+                    // A refused key is no client: Discover hides, the Settings say why.
+                    Ok((_, check @ Err(RequestError::KeyRefused))) => {
+                        shell.seerr_gone(cx);
+                        shell.seerr_checked(check);
+                    }
                     Ok((client, check)) => {
                         shell.seerr.client = Some(client);
                         shell.seerr_checked(check);
@@ -301,6 +312,7 @@ impl Shell {
         self.seerr.similar.clear();
         self.seerr.links.clear();
         self.seerr.names.clear();
+        self.seerr.reading.clear();
         self.navigator.forget(|screen| {
             matches!(
                 screen,
@@ -422,7 +434,8 @@ impl Shell {
                 }
             },
         );
-        self.want_tmdb_index(cx);
+        // What the library holds may have changed: its index by TMDb id is read with them.
+        self.load_tmdb_index(cx);
     }
 
     /// The search field changed: the search goes out once the viewer stops typing.
@@ -566,7 +579,15 @@ impl Shell {
                 self.seerr.owner_line = owner;
             }
             Err(error) => {
-                self.seerr.check = Some(Loadable::Failed(crate::discover::error_line(&error)));
+                // The key never goes over plain http unless the viewer typed it: an address
+                // that cannot be reached over https says so, and the way out is the viewer's.
+                let https = (self.settings.seerr_address.as_deref())
+                    .is_some_and(|address| address.starts_with("https://"));
+                let said = match error {
+                    RequestError::Unreachable(_) if https => HTTPS_UNREACHABLE,
+                    error => crate::discover::error_line(&error),
+                };
+                self.seerr.check = Some(Loadable::Failed(said));
                 self.seerr.owner_line = None;
             }
         }
@@ -608,6 +629,9 @@ impl Shell {
             let check = task.await;
             this.update(cx, |shell, cx| {
                 if shell.seerr.making == making {
+                    if matches!(check, Err(RequestError::KeyRefused)) {
+                        shell.seerr_gone(cx);
+                    }
                     shell.seerr_checked(check);
                     cx.notify();
                 }
