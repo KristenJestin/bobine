@@ -938,6 +938,68 @@ mod tests {
         });
     }
 
+    /// The Home is asked of one server, then again of another before the first answered: what
+    /// the first one says comes once the second load was asked, and it is never shown.
+    #[gpui_kit::test]
+    fn a_late_answer_of_an_older_home_request_is_dropped(cx: &mut gpui_kit::TestAppContext) {
+        let (window, _visual) = home_with_a_header(cx);
+        let shell = window.root(cx).unwrap();
+        // Every title the older load is answered with is its own.
+        let old = FakeServer::new(6, true);
+        {
+            let mut state = old.state.lock().unwrap();
+            for film in &mut state.films {
+                film.id = ItemId(format!("old-{}", film.id.0));
+            }
+            for series in &mut state.series {
+                series.id = ItemId(format!("old-{}", series.id.0));
+            }
+        }
+        let is_old =
+            |shown: &[Vec<String>]| shown.iter().flatten().any(|id| id.starts_with("old-"));
+        let alone = {
+            let mut home = HomePage::default();
+            let asked = home.begin_load();
+            deliver(&mut home, asked, &read(&old));
+            shown(&home)
+        };
+        assert!(
+            is_old(&alone),
+            "the older answers must show for this test to mean anything"
+        );
+
+        // What the page shows each time the shell is notified, an answer at a time.
+        let seen = Rc::new(std::cell::RefCell::new(Vec::new()));
+        cx.update(|cx| {
+            let seen = Rc::clone(&seen);
+            cx.observe(&shell, move |shell, cx| {
+                seen.borrow_mut().push(shown(&shell.read(cx).home))
+            })
+            .detach();
+        });
+        cx.update(|cx| {
+            shell.update(cx, |shell, cx| {
+                let newer = shell.server.clone();
+                shell.server = Some(Arc::new(old.clone()));
+                shell.load_home(cx);
+                shell.server = newer;
+                shell.load_home(cx);
+            })
+        });
+        cx.run_until_parked();
+
+        let seen = seen.borrow();
+        assert!(!seen.is_empty(), "the answers never came");
+        for shown in seen.iter() {
+            assert!(!is_old(shown), "a late answer was shown: {shown:?}");
+        }
+        cx.read(|cx| {
+            let home = &shell.read(cx).home;
+            assert!(!home.featured().is_empty(), "the newer answers must show");
+            assert!(!is_old(&shown(home)));
+        });
+    }
+
     #[test]
     fn two_loads_of_the_home_answered_out_of_order_show_the_newest() {
         let server = FakeServer::new(6, false);
