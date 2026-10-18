@@ -14,6 +14,8 @@ mod playlists;
 mod posters;
 mod preview;
 mod request;
+#[cfg(test)]
+mod rows;
 mod seerr_collection;
 mod series;
 mod settings;
