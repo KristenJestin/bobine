@@ -437,7 +437,12 @@ mod tests {
             .find(|f| f.id == film)
             .and_then(|f| f.resume)
             .unwrap();
-        let started = home_page::start(&server, &PlayTarget::Film(film)).unwrap();
+        let started = home_page::start(
+            &server,
+            &PlayTarget::Film(film),
+            crate::player::settings::Quality::Original,
+        )
+        .unwrap();
         assert_eq!(started.plan.start, resume);
         assert_eq!(screen(&window, cx), Screen::Home, "the page was opened");
     }

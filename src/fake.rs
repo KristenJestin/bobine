@@ -1108,6 +1108,7 @@ impl MediaServer for FakeServer {
             source: source.clone(),
             stream: StreamUrl::new(state.stream.clone()),
             external_subtitles,
+            converted: false,
         })
     }
 
@@ -1751,6 +1752,7 @@ impl MediaServer for FakeServer {
             source: request.source.clone(),
             stream: StreamUrl::new(state.converted.clone()),
             external_subtitles,
+            converted: true,
         })
     }
 

@@ -18,7 +18,7 @@ mod request;
 pub mod search;
 mod seerr_collection;
 mod series_detail;
-mod settings;
+pub mod settings;
 pub mod skip;
 pub mod stats;
 

@@ -350,9 +350,11 @@ pub fn bar_fade() -> Div {
 /// How far down the shade behind the bar goes.
 const BAR_FADE: f32 = 140.;
 
-/// Top left of a detail page, under the pill bar: an arrow and `Movies`.
+/// Top left of a detail page, under the pill bar: an arrow and `Movies`. `scrolled` is the
+/// page's scroll offset (zero or less): the link goes with the page.
 pub fn back_link(
     label: &'static str,
+    scrolled: f32,
     window: &mut Window,
     cx: &mut Context<Shell>,
 ) -> Stateful<Div> {
@@ -363,11 +365,12 @@ pub fn back_link(
         press: rgb(0x2e2e33),
     };
     theme::eased("back-link", shades, window, cx)
+        .debug_selector(|| "back-link".into())
         .flex()
         .items_center()
         .gap(px(6.))
         .absolute()
-        .top(px(BACK_LINK_TOP))
+        .top(px(BACK_LINK_TOP + scrolled))
         .left(px(40.))
         .px(px(10.))
         .py(px(6.))

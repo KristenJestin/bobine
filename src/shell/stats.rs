@@ -395,6 +395,81 @@ mod tests {
     }
 
     #[gpui_kit::test]
+    fn the_back_link_scrolls_with_its_page(cx: &mut TestAppContext) {
+        let history = fake::watch_history(HistorySource::PlaybackReporting, NOW);
+        let (_server, window) = start(history, cx);
+        let mut visual = drawn(&window, cx);
+        click(&mut visual, "nav-account");
+        click(&mut visual, "account-stats");
+        assert_eq!(screen(&window, cx), Screen::Stats);
+        let top = |visual: &mut VisualTestContext| {
+            let link = visual.debug_bounds("back-link").expect("the back link");
+            f32::from(link.top())
+        };
+        let before = top(&mut visual);
+        let by = window
+            .update(cx, |shell, _, _| {
+                let page = &shell.stats_scrolls[0];
+                let by = f32::from(page.max_offset().y).min(120.);
+                page.set_offset(gpui_kit::point(gpui_kit::px(0.), gpui_kit::px(-by)));
+                by
+            })
+            .unwrap();
+        assert!(by > 0., "the stats page is taller than the window");
+        visual.update(|window, _| window.refresh());
+        visual.run_until_parked();
+        assert_eq!(before - top(&mut visual), by, "it went up with the page");
+    }
+
+    /// On a narrow window the bar reaches over the link's place: scrolled up under the bar,
+    /// the link catches none of the bar's clicks.
+    #[gpui_kit::test]
+    fn the_back_link_never_covers_the_top_bar(cx: &mut TestAppContext) {
+        let history = fake::watch_history(HistorySource::PlaybackReporting, NOW);
+        let (_server, window) = start(history, cx);
+        let mut visual = drawn(&window, cx);
+        visual.simulate_resize(gpui_kit::size(gpui_kit::px(640.), gpui_kit::px(900.)));
+        visual.run_until_parked();
+        click(&mut visual, "nav Lists");
+        let lists = screen(&window, cx);
+        click(&mut visual, "nav-account");
+        click(&mut visual, "account-stats");
+        assert_eq!(screen(&window, cx), Screen::Stats);
+        let link = visual.debug_bounds("back-link").expect("the back link");
+        let bar = visual.debug_bounds("pill-bar").expect("the bar");
+        // Up by as much as puts the middle of the link on the middle of the bar.
+        let by = f32::from(link.center().y - bar.center().y);
+        window
+            .update(cx, |shell, _, _| {
+                let page = &shell.stats_scrolls[0];
+                assert!(
+                    f32::from(page.max_offset().y) >= by,
+                    "the page scrolls that far"
+                );
+                page.set_offset(gpui_kit::point(gpui_kit::px(0.), gpui_kit::px(-by)));
+            })
+            .unwrap();
+        visual.update(|window, _| window.refresh());
+        visual.run_until_parked();
+        let at = visual
+            .debug_bounds("back-link")
+            .expect("the back link")
+            .center();
+        assert!(
+            bar.contains(&at),
+            "the link is under the bar: {at:?} in {bar:?}"
+        );
+        visual.simulate_mouse_move(at, None, Modifiers::none());
+        visual.simulate_click(at, Modifiers::none());
+        visual.run_until_parked();
+        assert_ne!(
+            screen(&window, cx),
+            lists,
+            "the click went to the link over the bar"
+        );
+    }
+
+    #[gpui_kit::test]
     fn the_next_user_finds_the_stats_page_at_its_top(cx: &mut TestAppContext) {
         let history = fake::watch_history(HistorySource::PlaybackReporting, NOW);
         let (_server, window) = start(history, cx);

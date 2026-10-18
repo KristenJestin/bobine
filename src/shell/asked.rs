@@ -110,9 +110,10 @@ impl Shell {
         };
         self.home.busy = true;
         self.notify_hero(cx);
+        let quality = self.settings.default_quality.for_player();
         let task = cx.background_executor().spawn(async move {
             let title = server.title(&id)?;
-            home_page::start_from(&*server, &PlayTarget::of(&title), from)
+            home_page::start_from(&*server, &PlayTarget::of(&title), from, quality)
         });
         cx.spawn_in(window, async move |this, cx| {
             let started = task.await;

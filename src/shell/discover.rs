@@ -24,6 +24,11 @@ use crate::secret_field::{self, SecretField};
 /// How long the Discover search waits for the viewer to stop typing.
 const SEARCH_AFTER: Duration = Duration::from_millis(300);
 
+/// Said when an address over https cannot be reached.
+const HTTPS_UNREACHABLE: &str = "Seerr cannot be reached over https: it may be down, or its \
+                                 certificate refused. Type http:// only for a server on your \
+                                 own network: the key then goes unencrypted.";
+
 /// Where the keyring keeps the request server's API key, for the signed-in user.
 pub const SEERR_KEY: &str = "seerr-api-key";
 
@@ -66,7 +71,7 @@ pub struct Seerr {
     connecting: bool,
     _key_changed: Option<Subscription>,
     /// The library by TMDb id: what of the request server's titles is in it. Kept for the
-    /// session, read again with the Home; while there is none, nothing is said not in it.
+    /// session, read again with the Discover data; while there is none, nothing is said not in it.
     pub index: Option<TmdbIndex>,
     /// The index is being read.
     indexing: bool,
@@ -81,6 +86,8 @@ pub struct Seerr {
     /// The name of each TMDb collection read, `None` for one Seerr does not know: read once a
     /// session, by the link of whichever of its movies or by its page.
     pub names: HashMap<TmdbId, Option<String>>,
+    /// The collections being read for a movie's link, with the other movies waiting on each.
+    pub(super) reading: HashMap<TmdbId, Vec<TmdbId>>,
     /// What the server recommends after a title of the library, read once per title.
     similar: HashMap<(MediaKind, TmdbId), Vec<Discovered>>,
 }
@@ -241,6 +248,11 @@ impl Shell {
                 }
                 shell.seerr.connecting = false;
                 match made {
+                    // A refused key is no client: Discover hides, the Settings say why.
+                    Ok((_, check @ Err(RequestError::KeyRefused))) => {
+                        shell.seerr_gone(cx);
+                        shell.seerr_checked(check);
+                    }
                     Ok((client, check)) => {
                         shell.seerr.client = Some(client);
                         shell.seerr_checked(check);
@@ -301,6 +313,7 @@ impl Shell {
         self.seerr.similar.clear();
         self.seerr.links.clear();
         self.seerr.names.clear();
+        self.seerr.reading.clear();
         self.navigator.forget(|screen| {
             matches!(
                 screen,
@@ -422,7 +435,8 @@ impl Shell {
                 }
             },
         );
-        self.want_tmdb_index(cx);
+        // What the library holds may have changed: its index by TMDb id is read with them.
+        self.load_tmdb_index(cx);
     }
 
     /// The search field changed: the search goes out once the viewer stops typing.
@@ -566,7 +580,15 @@ impl Shell {
                 self.seerr.owner_line = owner;
             }
             Err(error) => {
-                self.seerr.check = Some(Loadable::Failed(crate::discover::error_line(&error)));
+                // The key never goes over plain http unless the viewer typed it: an address
+                // that cannot be reached over https says so, and the way out is the viewer's.
+                let https = (self.settings.seerr_address.as_deref())
+                    .is_some_and(|address| address.starts_with("https://"));
+                let said = match error {
+                    RequestError::Unreachable(_) if https => HTTPS_UNREACHABLE,
+                    error => crate::discover::error_line(&error),
+                };
+                self.seerr.check = Some(Loadable::Failed(said));
                 self.seerr.owner_line = None;
             }
         }
@@ -608,6 +630,9 @@ impl Shell {
             let check = task.await;
             this.update(cx, |shell, cx| {
                 if shell.seerr.making == making {
+                    if matches!(check, Err(RequestError::KeyRefused)) {
+                        shell.seerr_gone(cx);
+                    }
                     shell.seerr_checked(check);
                     cx.notify();
                 }
@@ -1249,6 +1274,67 @@ pub(super) mod tests {
     }
 
     #[gpui_kit::test]
+    fn a_refused_key_hides_discover_and_says_so_in_settings(cx: &mut TestAppContext) {
+        let seerr = FakeSeerr::default();
+        seerr.state.lock().unwrap().failure = Some(RequestError::KeyRefused);
+        let window = configured(&seerr, cx);
+        assert!(!connected(&window, cx));
+        let mut visual = drawn(&window, cx);
+        assert!(visual.debug_bounds("nav Home").is_some());
+        assert!(visual.debug_bounds("nav Discover").is_none());
+        window
+            .update(cx, |shell, _, cx| shell.open_settings(cx))
+            .unwrap();
+        let mut visual = drawn(&window, cx);
+        assert!(visual.debug_bounds("seerr-check").is_some());
+        window
+            .update(cx, |shell, _, _| {
+                assert!(matches!(
+                    shell.seerr.check,
+                    Some(Loadable::Failed("Seerr refused the API key."))
+                ));
+            })
+            .unwrap();
+    }
+
+    #[gpui_kit::test]
+    fn an_address_with_a_port_and_no_scheme_says_which_address_failed(cx: &mut TestAppContext) {
+        let seerr = FakeSeerr::default();
+        seerr.state.lock().unwrap().failure = Some(RequestError::Unreachable("down".into()));
+        let keyring = Arc::new(MemoryKeyring::default());
+        keyring.save(ACCOUNT, &Token::new(KEY.into())).unwrap();
+        let (window, _) = start(None, &keyring, &seerr, cx);
+        let tried = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let (fake, seen) = (seerr.clone(), tried.clone());
+        window
+            .update(cx, |shell, _, cx| {
+                shell.open_seerr = Arc::new(move |address, _, _| {
+                    seen.lock().unwrap().push(address.to_string());
+                    Ok(Arc::new(fake.clone()) as Arc<dyn RequestServer>)
+                });
+                let address = shell.seerr.address.clone().unwrap();
+                address.update(cx, |field, cx| field.set_text("seerr.example:5055", cx));
+                shell.save_seerr_address(cx);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        // The key goes over https only: plain http is the viewer's to type.
+        assert_eq!(*tried.lock().unwrap(), ["https://seerr.example:5055"]);
+        window
+            .update(cx, |shell, _, _| {
+                assert!(matches!(
+                    shell.seerr.check,
+                    Some(Loadable::Failed(
+                        "Seerr cannot be reached over https: it may be down, or its \
+                         certificate refused. Type http:// only for a server on your own \
+                         network: the key then goes unencrypted."
+                    ))
+                ));
+            })
+            .unwrap();
+    }
+
+    #[gpui_kit::test]
     fn without_a_seerr_user_for_the_viewer_the_settings_say_requests_go_as_the_owner(
         cx: &mut TestAppContext,
     ) {
@@ -1352,7 +1438,7 @@ pub(super) mod tests {
     }
 
     #[gpui_kit::test]
-    fn the_tmdb_index_is_read_once_until_the_library_refreshes(cx: &mut TestAppContext) {
+    fn home_arrival_does_not_refetch_the_tmdb_index(cx: &mut TestAppContext) {
         let seerr = FakeSeerr::default();
         let server = FakeServer::new(6, true);
         let window = configured_on(server.clone(), &seerr, cx);
@@ -1360,19 +1446,32 @@ pub(super) mod tests {
         assert_eq!(indexes(), 1, "read once the client is there");
         window
             .update(cx, |shell, _, cx| {
-                shell.select(NavEntry::Discover, cx);
                 shell.open_film(ItemId(FILM.into()), cx);
-                shell.select(NavEntry::Discover, cx);
+                assert!(shell.go_back(cx));
             })
             .unwrap();
         cx.run_until_parked();
-        assert_eq!(indexes(), 1, "kept for the session");
-        // Home is the library read again: the index with it.
-        window
-            .update(cx, |shell, _, cx| shell.select(NavEntry::Home, cx))
-            .unwrap();
-        cx.run_until_parked();
-        assert_eq!(indexes(), 2);
+        assert_eq!(screen(&window, cx), Screen::Home);
+        assert_eq!(indexes(), 1, "kept for the session, not read with the Home");
+    }
+
+    #[gpui_kit::test]
+    fn each_arrival_on_discover_reads_the_tmdb_index_with_its_data(cx: &mut TestAppContext) {
+        let seerr = FakeSeerr::default();
+        let server = FakeServer::new(6, true);
+        let window = configured_on(server.clone(), &seerr, cx);
+        let indexes = || server.state.lock().unwrap().record.tmdb_indexes;
+        assert_eq!(indexes(), 1, "read once the client is there");
+        for arrivals in 1..=2 {
+            window
+                .update(cx, |shell, _, cx| {
+                    shell.select(NavEntry::Home, cx);
+                    shell.select(NavEntry::Discover, cx);
+                })
+                .unwrap();
+            cx.run_until_parked();
+            assert_eq!(indexes(), 1 + arrivals);
+        }
     }
 
     #[gpui_kit::test]
@@ -1395,6 +1494,76 @@ pub(super) mod tests {
         // A title of the library says so; one asked for says it is pending.
         assert!(visual.debug_bounds("status In library").is_some());
         assert!(visual.debug_bounds("status Pending").is_some());
+    }
+
+    /// The tile the ring shows on, after the arrow keys `keys`, with its ring drawn.
+    fn ring_after(
+        window: &WindowHandle<Shell>,
+        keys: &str,
+        cx: &mut TestAppContext,
+    ) -> Option<String> {
+        cx.update(|cx| {
+            crate::input::bind_keys(cx);
+            crate::keys::bind(cx);
+        });
+        let mut visual = drawn(window, cx);
+        visual.simulate_keystrokes(keys);
+        let on = window
+            .read_with(cx, |shell, _| shell.ring.shown_on().cloned())
+            .unwrap()?;
+        let on = on.to_string();
+        let selector: &'static str = Box::leak(format!("card-ring {on}").into_boxed_str());
+        // The ring fades in with the clock of the time: draw again once it has had some.
+        std::thread::sleep(Duration::from_millis(300));
+        window.update(cx, |_, _, cx| cx.notify()).unwrap();
+        visual.run_until_parked();
+        let mut visual = drawn(window, cx);
+        assert!(visual.debug_bounds(selector).is_some(), "drawn on {on}");
+        Some(on)
+    }
+
+    #[gpui_kit::test]
+    fn discover_and_similar_tiles_get_the_focus_ring(cx: &mut TestAppContext) {
+        let seerr = FakeSeerr::default();
+        let window = on_discover(&seerr, cx);
+        ring_after(&window, "right", cx).expect("an arrow lands on a Discover tile");
+        // Enter opens the tile's page, as a click does.
+        let mut visual = drawn(&window, cx);
+        visual.simulate_keystrokes("enter");
+        visual.run_until_parked();
+        assert_ne!(screen(&window, cx), Screen::Discover);
+
+        // The "not in your library" row under a film of the library.
+        let window = configured(&seerr, cx);
+        window
+            .update(cx, |shell, _, cx| {
+                shell.open_film(bobine::provider::ItemId(crate::fake::FILM.into()), cx)
+            })
+            .unwrap();
+        cx.run_until_parked();
+        let mut visual = drawn(&window, cx);
+        assert!(visual.debug_bounds("similar-not-in-library").is_some());
+        window
+            .update(cx, |shell, _, cx| {
+                let page = shell.details.last().unwrap();
+                let bottom = page.scroll.max_offset().y;
+                page.scroll
+                    .set_offset(gpui_kit::point(gpui_kit::px(0.), -bottom));
+                cx.notify();
+            })
+            .unwrap();
+        let _ = drawn(&window, cx);
+        // The row of the library's own similar titles comes first: the arrows go down to ours.
+        let mut keys = "right".to_string();
+        let mut on = String::new();
+        for _ in 0..6 {
+            on = ring_after(&window, &keys, cx).expect("an arrow lands on a tile");
+            if on.contains("not-in-library") {
+                break;
+            }
+            keys = "down".into();
+        }
+        assert!(on.contains("not-in-library"), "{on}");
     }
 
     #[gpui_kit::test]
