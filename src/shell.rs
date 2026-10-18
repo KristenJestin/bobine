@@ -1162,14 +1162,15 @@ impl Render for Shell {
             );
             bars.push(fade_out(shade.into_any_element()));
         }
-        if chrome.shows_pill_bar() {
-            let bar = pill_bar(highlight, account, self.seerr.client.is_some(), window, cx);
-            bars.push(fade_out(bar.into_any_element()));
-        }
+        // The link goes up with its page: drawn first, it slides under the bar, never over it.
         if let Some(label) = back_label.filter(|_| chrome.shows_back_link()) {
             bars.push(fade_out(
                 back_link(label, self.page_scrolled(chrome), window, cx).into_any_element(),
             ));
+        }
+        if chrome.shows_pill_bar() {
+            let bar = pill_bar(highlight, account, self.seerr.client.is_some(), window, cx);
+            bars.push(fade_out(bar.into_any_element()));
         }
         // Fading out, they go under the player coming in, and answer nothing.
         let (under_player, over_player) = match fading_out {
