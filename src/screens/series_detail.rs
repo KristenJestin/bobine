@@ -472,9 +472,10 @@ fn episode_row(
             rgba(0x00000000)
         })
         .cursor_pointer()
-        .on_click(
-            cx.listener(move |shell, _, window, cx| shell.play_episode(played.clone(), window, cx)),
-        )
+        .on_click(cx.listener(move |shell, _, window, cx| {
+            shell.clicked_on(("episode-still", index));
+            shell.play_episode(played.clone(), window, cx)
+        }))
         .child(still)
         .child(
             div()

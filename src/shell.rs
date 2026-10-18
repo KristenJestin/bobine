@@ -1081,11 +1081,10 @@ impl Render for Shell {
         } else {
             None
         };
-        let section = self.navigator.section();
         let now = Instant::now();
         let highlight = std::array::from_fn(|at| {
             let pill = &mut self.nav_pills[at];
-            pill.set(NavEntry::ALL[at].is_current(section), now);
+            pill.set(self.navigator.lights(NavEntry::ALL[at]), now);
             if pill.moving(now) {
                 window.request_animation_frame();
             }
@@ -1163,12 +1162,15 @@ impl Render for Shell {
             );
             bars.push(fade_out(shade.into_any_element()));
         }
+        // The link goes up with its page: drawn first, it slides under the bar, never over it.
+        if let Some(label) = back_label.filter(|_| chrome.shows_back_link()) {
+            bars.push(fade_out(
+                back_link(label, self.page_scrolled(chrome), window, cx).into_any_element(),
+            ));
+        }
         if chrome.shows_pill_bar() {
             let bar = pill_bar(highlight, account, self.seerr.client.is_some(), window, cx);
             bars.push(fade_out(bar.into_any_element()));
-        }
-        if let Some(label) = back_label.filter(|_| chrome.shows_back_link()) {
-            bars.push(fade_out(back_link(label, window, cx).into_any_element()));
         }
         // Fading out, they go under the player coming in, and answer nothing.
         let (under_player, over_player) = match fading_out {
@@ -1304,6 +1306,24 @@ impl Render for Shell {
             .children(screens::search::palette(self, window, cx))
             .children(help)
             .children(again)
+    }
+}
+
+impl Shell {
+    /// How far the page of `screen` is scrolled up, in pixels: its back link goes with it. A
+    /// page drawn as a list has its own handle and keeps the link where it is.
+    fn page_scrolled(&self, screen: Screen) -> f32 {
+        let handle = match screen {
+            Screen::FilmDetail => self.details.last().map(|page| &page.scroll),
+            Screen::SeriesDetail => self.series_pages.last().map(|page| &page.scroll),
+            Screen::Person => self.people.last().map(|page| &page.scroll),
+            Screen::CollectionDetail => self.collection_pages.last().map(|page| &page.scroll),
+            Screen::Stats => Some(&self.stats_scrolls[0]),
+            Screen::Request => self.seerr.requests.last().map(|page| &page.scroll),
+            Screen::SeerrCollection => self.seerr.collections.last().map(|page| &page.scroll),
+            _ => None,
+        };
+        handle.map_or(0., |handle| f32::from(handle.offset().y).min(0.))
     }
 }
 
