@@ -20,7 +20,9 @@ use super::film_detail::{
     EDGE, MenuState, ROW_POSTER, SERIES_TRAILER, TEXT_WIDTH, cast_row, chips_row, facts_line,
     heading, hero_frame, hero_text_under, list_button, row, trailer_button,
 };
-use super::{card, centered, note, picture, progress_bar, row_heading, series_poster};
+use super::{
+    CONTENT_WIDTH, card, centered, note, picture, progress_bar, row_heading, series_poster,
+};
 use crate::film_page::{self, Choices};
 use crate::icons::{IconName, icon};
 use crate::images;
@@ -347,6 +349,7 @@ fn seasons(shell: &mut Shell, shown: &Shown, window: &mut Window, cx: &mut Conte
         .gap(px(18.))
         .px(px(EDGE))
         .pt(px(8.))
+        .max_w(px(CONTENT_WIDTH + 2. * EDGE))
         .child(row_heading("Episodes"))
         .child(
             div()
@@ -449,12 +452,14 @@ fn episode_row(
         }
     })
     .child(icon(IconName::Check, 14.))
+    .debug_selector(move || format!("episode-watched {index}"))
     .on_click(cx.listener(move |shell, _, _, cx| {
         // The check is not the row: it marks, it does not play.
         cx.stop_propagation();
         shell.toggle_episode_watched(marked.clone(), cx);
     }));
     theme::eased(("episode", index), shades, window, cx)
+        .debug_selector(move || format!("episode {index}"))
         .flex()
         .items_center()
         .gap(px(18.))
