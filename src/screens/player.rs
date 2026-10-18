@@ -214,10 +214,12 @@ enum Overlay {
 
 /// The overlays from the bottom to the top.
 fn overlays(loading: bool) -> Vec<Overlay> {
-    let mut stack = vec![Overlay::Outside, Overlay::Panel, Overlay::Menu];
+    // The panel and the menu are opaque, and a mark of waiting is no reason to hide them.
+    let mut stack = Vec::new();
     if loading {
         stack.push(Overlay::Spinner);
     }
+    stack.extend([Overlay::Outside, Overlay::Panel, Overlay::Menu]);
     stack
 }
 
