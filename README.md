@@ -37,7 +37,7 @@ token is read from the keyring only, and never printed.
 | Exit code | Meaning | What is printed |
 | --- | --- | --- |
 | 0 | done | the entries (`[]` when there is nothing) |
-| 1 | not signed in, or the server ended the session | one entry whose action opens Bobine to sign in |
+| 1 | not signed in, the server ended the session, or the keyring is locked (never unlocked from here) | one entry whose action opens Bobine to sign in |
 | 2 | the server is unreachable | one entry, its address as subtitle |
 | 3 | another failure (the keyring, the account file, a wrong answer) | one entry that says it |
 | 4 | a usage error | one entry that says how to use it |

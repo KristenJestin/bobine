@@ -54,14 +54,19 @@ use bobine::provider::{Connector, ProviderError, SecretServiceStore, TokenStore}
 use gpui_kit::prelude::*;
 use gpui_kit::{App, Bounds, WindowBackgroundAppearance, WindowBounds, WindowOptions, px, size};
 
-/// The Jellyfin connector over the account file and the system keyring.
+/// The window's Jellyfin connector: the keyring may ask the user to unlock it.
 fn open_jellyfin() -> Result<Arc<dyn Connector>, ProviderError> {
+    open_jellyfin_with(SecretServiceStore::UNLOCKING)
+}
+
+/// The Jellyfin connector over the account file and the system keyring.
+fn open_jellyfin_with(store: SecretServiceStore) -> Result<Arc<dyn Connector>, ProviderError> {
     let path = config::account_path(
         std::env::var_os("XDG_CONFIG_HOME"),
         std::env::var_os("HOME"),
     )
     .ok_or_else(|| ProviderError::Storage("no home directory".into()))?;
-    let connector = JellyfinConnector::open(path, Arc::new(SecretServiceStore))?;
+    let connector = JellyfinConnector::open(path, Arc::new(store))?;
     Ok(Arc::new(connector))
 }
 
@@ -91,7 +96,10 @@ fn main() {
             }
             Some(request)
         }
-        Some(Ok(command)) => exit_with(launcher::run(&command, open_jellyfin)),
+        // A locked keyring is no dialog for the launcher: not signed in.
+        Some(Ok(command)) => exit_with(launcher::run(&command, || {
+            open_jellyfin_with(SecretServiceStore::WITHOUT_PROMPT)
+        })),
     };
     #[cfg(feature = "harness")]
     let harness = harness::Harness::from_args();
@@ -136,10 +144,10 @@ fn main() {
             let secrets: Arc<dyn TokenStore> = if harness.connector().is_some() {
                 Arc::new(fake::MemoryKeyring::default())
             } else {
-                Arc::new(SecretServiceStore)
+                Arc::new(SecretServiceStore::UNLOCKING)
             };
             #[cfg(not(feature = "harness"))]
-            let secrets: Arc<dyn TokenStore> = Arc::new(SecretServiceStore);
+            let secrets: Arc<dyn TokenStore> = Arc::new(SecretServiceStore::UNLOCKING);
             let opened = cx.open_window(options, move |window, cx| {
                 let shell = cx.new(|cx| {
                     let mut shell = shell::Shell::new(font, open, settings, secrets, cx);

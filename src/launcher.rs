@@ -153,7 +153,10 @@ fn not_signed_in() -> Outcome {
 
 fn failure(error: &ProviderError, connector: Option<&dyn Connector>) -> Outcome {
     match error {
-        ProviderError::SessionExpired | ProviderError::WrongCredentials => not_signed_in(),
+        // A locked keyring hides the token as well as no login does.
+        ProviderError::SessionExpired
+        | ProviderError::WrongCredentials
+        | ProviderError::KeyringLocked => not_signed_in(),
         ProviderError::Unreachable(_) => {
             let address = connector.and_then(|connector| connector.last_address());
             Outcome::message(UNREACHABLE, "Server unreachable", address.as_deref(), None)
