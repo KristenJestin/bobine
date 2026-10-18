@@ -611,6 +611,10 @@ impl Downloads {
         let manifest = {
             let mut table = self.table();
             let manifest = table.items.get_mut(id).ok_or(State::Done)?;
+            // Paused or removed since `next` picked it: not ours to start.
+            if manifest.state != State::Queued {
+                return Err(State::Done);
+            }
             manifest.state = State::Downloading;
             let kept = manifest.clone();
             save(&self.folder(kept.item()), &kept).map_err(written)?;
