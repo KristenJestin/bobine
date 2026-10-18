@@ -1,0 +1,10 @@
+{
+  "Items": [
+    { "Name": "The Quiet Harbour", "Id": "f0000000000000000000000000000001", "Type": "Movie", "ProviderIds": { "Tmdb": "9001", "Imdb": "tt0000001" } },
+    { "Name": "Salt Roads", "Id": "f0000000000000000000000000000002", "Type": "Movie", "ProviderIds": { "Tmdb": "9002" } },
+    { "Name": "A Home Video", "Id": "f0000000000000000000000000000009", "Type": "Movie", "ProviderIds": {} },
+    { "Name": "Tidewater", "Id": "50000000000000000000000000000001", "Type": "Series", "ProviderIds": { "Tmdb": "7001", "Tvdb": "123456" } }
+  ],
+  "TotalRecordCount": 4,
+  "StartIndex": 0
+}

@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Bobine
+GenericName=Film and series player
+Comment=Browse your media server and play its films and series
+Exec=bobine
+Icon=bobine
+Terminal=false
+Categories=AudioVideo;Video;Player;
+StartupWMClass=bobine
+Keywords=film;films;movie;movies;series;tv;media;jellyfin;

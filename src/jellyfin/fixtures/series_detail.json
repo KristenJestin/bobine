@@ -1,0 +1,21 @@
+{
+  "Name": "Tidewater",
+  "Id": "50000000000000000000000000000001",
+  "Type": "Series",
+  "ProviderIds": { "Tvdb": "123456", "Tmdb": "7001" },
+  "ProductionYear": 2021,
+  "EndDate": "2024-05-12T00:00:00.0000000Z",
+  "Status": "Ended",
+  "CommunityRating": 8.4,
+  "OfficialRating": "TV-14",
+  "Overview": "A ferry crew keeps a drowned town's secrets.",
+  "Genres": ["Drama", "Mystery"],
+  "UserData": { "UnplayedItemCount": 7, "PlaybackPositionTicks": 0, "Played": false },
+  "ImageTags": { "Primary": "poster-tw", "Logo": "logo-tw" },
+  "BackdropImageTags": ["backdrop-tw"],
+  "People": [
+    { "Name": "Mara Quill", "Id": "p0000000000000000000000000000011", "Role": "Captain Rook", "Type": "Actor", "PrimaryImageTag": "photo-mq" },
+    { "Name": "Jon Ashby", "Id": "p0000000000000000000000000000012", "Role": "Deckhand", "Type": "Actor" },
+    { "Name": "Ruth Penn", "Id": "p0000000000000000000000000000013", "Type": "Director" }
+  ]
+}

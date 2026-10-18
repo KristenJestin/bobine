@@ -1,0 +1,211 @@
+//! What a person took part in, reached from a search: their photo and name, then the films and
+//! the series, as posters.
+
+use bobine::provider::SeriesHit;
+use gpui_kit::prelude::*;
+use std::rc::Rc;
+
+use gpui_kit::{Context, Div, FontWeight, IntoElement, Stateful, Window, div, px};
+
+use super::card::{Offer, Open, Play, Quick};
+use super::{UNDER_POSTER, card, note, picture, poster, poster_caption, row_heading};
+use crate::film_page;
+use crate::home_page::PlayTarget;
+use crate::images;
+use crate::lists::plural;
+use crate::shell::{Loadable, Shell};
+use crate::theme;
+
+const EDGE: f32 = 40.;
+const POSTER: f32 = 160.;
+const PHOTO: f32 = 88.;
+
+pub fn render(shell: &mut Shell, _: &mut Window, cx: &mut Context<Shell>) -> impl IntoElement {
+    let Some(page) = shell.people.last() else {
+        return div().into_any_element();
+    };
+    let (name, photo_ref, scroll) = (page.name.clone(), page.photo.clone(), page.scroll.clone());
+    let titles = match &page.titles {
+        Loadable::Ready(titles) => Ok(titles.clone()),
+        Loadable::Failed(why) => Err(*why),
+        Loadable::Loading => Err("Loading…"),
+    };
+    shell.scrolls.push(scroll.clone());
+    let photo = shell.image(photo_ref.as_ref(), images::PHOTO, cx);
+
+    let (counts, body) = match titles {
+        Ok(titles) => {
+            let mut sections: Vec<Div> = Vec::new();
+            let counts = counts(titles.films.len(), titles.series.len());
+            if !titles.films.is_empty() {
+                let cards: Vec<_> = titles
+                    .films
+                    .iter()
+                    .enumerate()
+                    .map(|(index, film)| {
+                        poster(shell, film, POSTER, ("person-film", index), false, cx)
+                            .into_any_element()
+                    })
+                    .collect();
+                sections.push(section("Movies", cards));
+            }
+            if !titles.series.is_empty() {
+                let cards: Vec<_> = titles
+                    .series
+                    .iter()
+                    .enumerate()
+                    .map(|(index, series)| series_card(shell, series, index, cx).into_any_element())
+                    .collect();
+                sections.push(section("Series", cards));
+            }
+            if sections.is_empty() {
+                sections.push(div().child(note("No titles for this person.")));
+            }
+            (Some(counts), sections)
+        }
+        Err(why) => (None, vec![div().child(note(why))]),
+    };
+
+    div()
+        .id("person-page")
+        .size_full()
+        .overflow_y_scroll()
+        .track_scroll(&scroll)
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(32.))
+                // Under the back link, itself under the pill bar.
+                .pt(px(120.))
+                .px(px(EDGE))
+                .pb(px(64.))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(20.))
+                        .child(
+                            div()
+                                .relative()
+                                .flex_none()
+                                .size(px(PHOTO))
+                                .rounded_full()
+                                .overflow_hidden()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .bg(theme::line())
+                                .text_size(px(26.))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(theme::muted())
+                                .child(film_page::initials(&name))
+                                .children(picture(photo, PHOTO / 2.)),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap(px(6.))
+                                .child(
+                                    div()
+                                        .text_size(px(28.))
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .child(name),
+                                )
+                                .children(counts.map(|counts| {
+                                    div()
+                                        .text_size(px(14.))
+                                        .text_color(theme::dim())
+                                        .child(counts)
+                                })),
+                        ),
+                )
+                .children(body),
+        )
+        .into_any_element()
+}
+
+/// A heading and its titles, wrapping onto as many lines as they need.
+/// `2 movies · 1 series`, under the person's name.
+fn counts(films: usize, series: usize) -> String {
+    format!(
+        "{} · {}",
+        plural(films, "movie", "movies"),
+        plural(series, "series", "series")
+    )
+}
+
+fn section(title: &'static str, cards: Vec<gpui_kit::AnyElement>) -> Div {
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(16.))
+        .child(row_heading(title))
+        .child(
+            div()
+                .flex()
+                .flex_wrap()
+                .gap_x(px(16.))
+                .gap_y(px(24.))
+                .children(cards),
+        )
+}
+
+/// A series as a poster: it opens the series page, its layer plays its next episode. A person's
+/// titles do not say whether they are in the list or watched: the layer has no other button.
+fn series_card(
+    shell: &mut Shell,
+    series: &SeriesHit,
+    index: usize,
+    cx: &mut Context<Shell>,
+) -> Stateful<Div> {
+    let image = shell.image(series.poster.as_ref(), images::POSTER, cx);
+    let (title, year) = (
+        series.title.clone(),
+        series.year.map(|year| year.to_string()).unwrap_or_default(),
+    );
+    let shown = image.clone();
+    let draw = move |layer: Stateful<Div>| {
+        div()
+            .w(px(POSTER))
+            .flex()
+            .flex_col()
+            .gap(px(UNDER_POSTER))
+            .child(
+                div()
+                    .relative()
+                    .w(px(POSTER))
+                    .h(px(POSTER * 1.5))
+                    .rounded(px(theme::RADIUS))
+                    .overflow_hidden()
+                    .bg(theme::panel())
+                    .children(picture(image.clone(), theme::RADIUS))
+                    .child(layer),
+            )
+            .child(poster_caption(title.clone(), year.clone()))
+    };
+    let offer = Offer {
+        open: Open::Series(series.id.clone(), None),
+        image: shown,
+        play: Play::Target(PlayTarget::Series(series.id.clone())),
+        // A series found through one of the person's episodes says nothing of its state.
+        quick: series
+            .favourite
+            .zip(series.watched)
+            .map(|(in_list, watched)| Quick::new(&shell.marks, &series.id, true, in_list, watched)),
+        draw: Rc::new(draw),
+    };
+    card(shell, ("person-series", index).into(), offer, cx)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_count_of_a_person_page_says_2_movies() {
+        assert_eq!(counts(2, 1), "2 movies · 1 series");
+        assert_eq!(counts(1, 0), "1 movie · 0 series");
+    }
+}

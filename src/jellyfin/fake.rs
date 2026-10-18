@@ -1,0 +1,948 @@
+//! A fake Jellyfin server for the tests, on a local port: it answers the routes Bobine uses with
+//! the fixtures beside this file (written from the API description, every name in them invented)
+//! and keeps every request it gets.
+
+use serde_json::{Value, json};
+use std::sync::{Arc, Mutex};
+use std::thread::JoinHandle;
+use tiny_http::{Header, Response, Server};
+
+/// A letter beyond `f`: no device id, which is hex, can hold it by chance.
+pub const USER: &str = "zoe";
+pub const PASSWORD: &str = "correct horse battery staple";
+pub const USER_ID: &str = "0f1e2d3c4b5a69788796a5b4c3d2e1f0";
+pub const SERVER_ID: &str = "a1b2c3d4e5f60718293a4b5c6d7e8f90";
+pub const TOKEN: &str = "fa4e70ce0b5e4f2c9d1a7b3e8c6d2f10";
+pub const FILMS_LIBRARY: &str = "11111111111111111111111111111111";
+pub const FILM: &str = "f0000000000000000000000000000001";
+pub const SOURCE: &str = "5a000000000000000000000000000001";
+pub const PLAY_SESSION: &str = "9c0ffee09c0ffee09c0ffee09c0ffee0";
+/// The play session of a playback the server converts.
+pub const TRANSCODE_SESSION: &str = "7e57c0de7e57c0de7e57c0de7e57c0de";
+pub const IMAGE: &[u8] = b"\x89PNG fake image";
+/// What a trickplay tile answers: a JPEG's first bytes, then nothing a decoder reads.
+pub const TILE: &[u8] = b"\xff\xd8\xff fake tile";
+pub const LETTERS_LIBRARY: &str = "33333333333333333333333333333333";
+pub const SERIES_LIBRARY: &str = "22222222222222222222222222222222";
+pub const SERIES: &str = "50000000000000000000000000000001";
+pub const SEASON: &str = "5e000000000000000000000000000002";
+pub const EPISODE: &str = "e0000000000000000000000000000021";
+/// The playlist that holds titles; the others hold none, or music.
+pub const PLAYLIST: &str = "p0000000000000000000000000000001";
+/// The id the server gives the playlist it makes.
+pub const NEW_PLAYLIST: &str = "p0000000000000000000000000000009";
+/// The trailer file the server holds for the film and for the series.
+pub const TRAILER: &str = "7a000000000000000000000000000001";
+/// The version of that file: not its id, as it is on a real server for some files.
+pub const TRAILER_SOURCE: &str = "7b000000000000000000000000000001";
+/// A trailer hosted elsewhere.
+pub const REMOTE_TRAILER: &str = "https://www.youtube.com/watch?v=aBcDeFgHiJk";
+pub const OTHER_REMOTE_TRAILER: &str = "https://www.youtube.com/watch?v=zYxWvUtSrQp";
+
+fn fixture(name: &str) -> Value {
+    let text = match name {
+        "system_info_public" => include_str!("fixtures/system_info_public.json"),
+        "authenticate_by_name" => include_str!("fixtures/authenticate_by_name.json"),
+        "user_views" => include_str!("fixtures/user_views.json"),
+        "films" => include_str!("fixtures/films.json"),
+        "letters" => include_str!("fixtures/letters.json"),
+        "film_detail" => include_str!("fixtures/film_detail.json"),
+        "boxsets" => include_str!("fixtures/boxsets.json"),
+        "favourites" => include_str!("fixtures/favourites.json"),
+        "boxset_sea_stories" => include_str!("fixtures/boxset_sea_stories.json"),
+        "boxset_lone_wolves" => include_str!("fixtures/boxset_lone_wolves.json"),
+        "boxset_harbour_trilogy" => include_str!("fixtures/boxset_harbour_trilogy.json"),
+        "boxset_tide_tales" => include_str!("fixtures/boxset_tide_tales.json"),
+        "similar" => include_str!("fixtures/similar.json"),
+        "resume" => include_str!("fixtures/resume.json"),
+        "search_series" => include_str!("fixtures/search_series.json"),
+        "persons" => include_str!("fixtures/persons.json"),
+        "person_titles" => include_str!("fixtures/person_titles.json"),
+        "person_episodes" => include_str!("fixtures/person_episodes.json"),
+        "playback_info" => include_str!("fixtures/playback_info.json"),
+        "series" => include_str!("fixtures/series.json"),
+        "latest_series" => include_str!("fixtures/latest_series.json"),
+        "new_episodes" => include_str!("fixtures/new_episodes.json"),
+        "series_detail" => include_str!("fixtures/series_detail.json"),
+        "series_similar" => include_str!("fixtures/series_similar.json"),
+        "seasons" => include_str!("fixtures/seasons.json"),
+        "episodes" => include_str!("fixtures/episodes.json"),
+        "next_up" => include_str!("fixtures/next_up.json"),
+        "next_up_across" => include_str!("fixtures/next_up_across.json"),
+        "featured" => include_str!("fixtures/featured.json"),
+        "media_segments" => include_str!("fixtures/media_segments.json"),
+        "tmdb_index" => include_str!("fixtures/tmdb_index.json"),
+        "playlists" => include_str!("fixtures/playlists.json"),
+        "playlist_items" => include_str!("fixtures/playlist_items.json"),
+        "played_items" => include_str!("fixtures/played_items.json"),
+        "watched_titles" => include_str!("fixtures/watched_titles.json"),
+        _ => panic!("no fixture {name}"),
+    };
+    serde_json::from_str(text).unwrap()
+}
+
+/// A request as the fake server got it.
+#[derive(Debug, Clone)]
+pub struct Seen {
+    pub method: String,
+    pub path: String,
+    pub query: Vec<(String, String)>,
+    pub authorization: Option<String>,
+    pub body: String,
+}
+
+impl Seen {
+    pub fn param(&self, key: &str) -> Option<&str> {
+        self.query
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(key))
+            .map(|(_, v)| v.as_str())
+    }
+
+    pub fn json(&self) -> Value {
+        serde_json::from_str(&self.body).unwrap()
+    }
+}
+
+#[derive(Default)]
+pub struct State {
+    pub seen: Vec<Seen>,
+    /// Answers every route like a web server that is not Jellyfin.
+    pub not_jellyfin: bool,
+    /// The token was revoked: every authenticated route answers 401.
+    pub revoked: bool,
+    /// The user may not see what is asked (parental control, access schedule): every
+    /// authenticated route answers 403.
+    pub forbidden: bool,
+    /// Routes that answer a status of their own, whatever the request: (path, status).
+    pub broken: Vec<(String, u16)>,
+    /// The films of this collection cannot be listed: asking for them answers 500.
+    pub broken_parent: Option<String>,
+    /// The account is disabled: the login answers 403.
+    pub account_disabled: bool,
+    /// How long an image takes to be answered (a server converting a person's photo).
+    pub image_delay: std::time::Duration,
+    /// The server made no trickplay images: its items carry no `Trickplay`.
+    pub no_trickplay: bool,
+    /// Every episode of every series is watched: Next Up has nothing.
+    pub all_watched: bool,
+    /// The films and series the user put in their list: the film and the series of the pages
+    /// start out of it.
+    pub favourites: Vec<String>,
+    /// How many search requests are held until they have all arrived (0: none held), to tell
+    /// requests sent at the same time from requests sent one after another.
+    pub search_gate: usize,
+    /// Search requests arrived at the gate so far.
+    gate_arrivals: usize,
+    /// For each held search request, whether all the others had arrived when it was let go.
+    pub gate_met: Vec<bool>,
+    /// The film's version cannot be played as it is: the server only offers to convert it.
+    pub transcode_only: bool,
+    /// The server converts nothing: no transcoding address in its answer.
+    pub no_transcoding: bool,
+    /// The extracted subtitle comes from another host, as an absolute address.
+    pub absolute_delivery: bool,
+    /// The entries put in the playlist that holds titles so far: a series goes in as its
+    /// episodes, as Jellyfin 10.9 and later do.
+    pub playlist_added: usize,
+    /// The entries the playlist made last holds.
+    pub playlist_made: usize,
+    /// The film and the series have a trailer file of their own.
+    pub local_trailer: bool,
+    /// The trailers hosted elsewhere that the film and the series list, in order.
+    pub remote_trailers: Vec<String>,
+    /// The rows the Playback Reporting plugin answers a query with, every user's, whatever the
+    /// query: `DateCreated, UserId, ItemId, ItemType, ItemName, PlayDuration`. None: the plugin
+    /// is not installed, its routes answer 404.
+    pub reporting: Option<Vec<[&'static str; 6]>>,
+    /// How many seconds each row of `reporting` is ahead of UTC, as its query's `ServerOffset`
+    /// cell says (`"7200.0000001"`; an empty text is a row the server could not date). None:
+    /// the column is missing from its answer.
+    pub reporting_offsets: Option<Vec<&'static str>>,
+    /// The user has played nothing.
+    pub nothing_played: bool,
+    /// A request for episodes by id that names this one answers 500.
+    pub broken_episode: Option<&'static str>,
+    /// Episodes the library holds beside `EPISODE`, with their series: (episode, series).
+    pub episodes: Vec<(&'static str, &'static str)>,
+}
+
+/// How many episodes the series of the pages puts in a playlist.
+pub const SERIES_EPISODES: usize = 3;
+
+/// How long a held search request waits for the others before it is let go anyway.
+const GATE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// A person with more titles than one page holds.
+pub const PERSON_WITH_MANY_TITLES: &str = "9e000000000000000000000000000004";
+/// A person with more titles than the program ever asks for.
+pub const PERSON_WITH_ENDLESS_TITLES: &str = "9e000000000000000000000000000005";
+/// A person seen only in episodes.
+pub const PERSON_IN_EPISODES: &str = "9e000000000000000000000000000002";
+
+pub struct FakeServer {
+    pub url: String,
+    pub state: Arc<Mutex<State>>,
+    server: Arc<Server>,
+    thread: Option<JoinHandle<()>>,
+}
+
+impl Drop for FakeServer {
+    fn drop(&mut self) {
+        self.server.unblock();
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+fn decode(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'+' => out.push(b' '),
+            b'%' if i + 2 < bytes.len() => {
+                out.push(u8::from_str_radix(&value[i + 1..i + 3], 16).unwrap());
+                i += 2;
+            }
+            b => out.push(b),
+        }
+        i += 1;
+    }
+    String::from_utf8(out).unwrap()
+}
+
+fn split(url: &str) -> (String, Vec<(String, String)>) {
+    let (path, query) = url.split_once('?').unwrap_or((url, ""));
+    let query = query
+        .split('&')
+        .filter(|p| !p.is_empty())
+        .map(|p| {
+            let (k, v) = p.split_once('=').unwrap_or((p, ""));
+            (decode(k), decode(v))
+        })
+        .collect();
+    (path.to_string(), query)
+}
+
+enum Answer {
+    Json(u16, Value),
+    Bytes(Vec<u8>),
+    Empty(u16),
+}
+
+/// What an item is ordered by for one `SortBy` field: nothing sorts before everything.
+fn sort_key(item: &Value, field: &str) -> (bool, f64, String) {
+    match &item[field] {
+        Value::Null => (false, 0., String::new()),
+        Value::Number(n) => (true, n.as_f64().unwrap(), String::new()),
+        Value::String(text) => (true, 0., text.clone()),
+        other => (true, 0., other.to_string()),
+    }
+}
+
+/// Whether the item passes the filters of the request, as Jellyfin reads them.
+fn passes(item: &Value, seen: &Seen) -> bool {
+    let genres = seen
+        .param("Genres")
+        .map(|g| g.split('|').collect::<Vec<_>>());
+    if let Some(wanted) = genres
+        && !item["Genres"]
+            .as_array()
+            .is_some_and(|have| have.iter().any(|g| wanted.iter().any(|w| g == w)))
+    {
+        return false;
+    }
+    if let Some(years) = seen.param("Years")
+        && !years
+            .split(',')
+            .any(|y| item["ProductionYear"].as_i64() == y.parse().ok())
+    {
+        return false;
+    }
+    if seen.param("IsPlayed") == Some("false") && item["UserData"]["Played"] == true {
+        return false;
+    }
+    if let Some(before) = seen.param("NameLessThan")
+        // The raw strings: SortName is stored lowercase and accents stay, so "éclipse" sorts
+        // after "z", and a letter sent in uppercase sorts before every title.
+        && item["SortName"].as_str().unwrap() >= before
+    {
+        return false;
+    }
+    true
+}
+
+/// The films (or series) of the library that pass the filters, in the order asked, one page.
+/// `Limit=0` means no limit, as on Jellyfin.
+fn films(seen: &Seen, fixture_name: &str) -> Value {
+    let mut films = fixture(fixture_name).as_array().unwrap().clone();
+    films.retain(|item| passes(item, seen));
+    let by = seen.param("SortBy").unwrap_or("SortName");
+    let fields: Vec<&str> = by.split(',').collect();
+    // One order per field, the way Jellyfin reads them; a field without one goes up.
+    let orders: Vec<&str> = seen.param("SortOrder").unwrap_or("").split(',').collect();
+    films.sort_by(|a, b| {
+        fields
+            .iter()
+            .enumerate()
+            .fold(std::cmp::Ordering::Equal, |order, (index, field)| {
+                order.then_with(|| {
+                    let (ka, kb) = (sort_key(a, field), sort_key(b, field));
+                    let by = ka.partial_cmp(&kb).unwrap();
+                    if orders.get(index) == Some(&"Descending") {
+                        by.reverse()
+                    } else {
+                        by
+                    }
+                })
+            })
+    });
+    let total = films.len();
+    let start: usize = seen.param("StartIndex").map_or(0, |s| s.parse().unwrap());
+    let limit = seen
+        .param("Limit")
+        .map(|s| s.parse::<usize>().unwrap())
+        .filter(|limit| *limit > 0)
+        .unwrap_or(total);
+    let page: Vec<Value> = films.into_iter().skip(start).take(limit).collect();
+    json!({ "Items": page, "TotalRecordCount": total, "StartIndex": start })
+}
+
+/// The genres of a library's titles, as `/Genres` lists them.
+fn genres(fixture_name: &str) -> Value {
+    let mut names: Vec<String> = fixture(fixture_name)
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|item| item["Genres"].as_array().unwrap().clone())
+        .map(|g| g.as_str().unwrap().to_string())
+        .collect();
+    names.sort();
+    names.dedup();
+    let items: Vec<Value> = names
+        .iter()
+        .map(|n| json!({ "Name": n, "Id": n }))
+        .collect();
+    json!({ "Items": items, "TotalRecordCount": items.len() })
+}
+
+/// The years of a library's titles, as `/Items/Filters` lists them.
+fn years(fixture_name: &str) -> Value {
+    let mut years: Vec<i64> = fixture(fixture_name)
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|item| item["ProductionYear"].as_i64())
+        .collect();
+    years.sort();
+    years.dedup();
+    json!({ "Genres": [], "Tags": [], "OfficialRatings": [], "Years": years })
+}
+
+/// The fixture a library holds.
+fn library_fixture(seen: &Seen) -> &'static str {
+    match seen.param("ParentId") {
+        Some(SERIES_LIBRARY) => "series",
+        Some(LETTERS_LIBRARY) => "letters",
+        _ => "films",
+    }
+}
+
+/// The items of a fixture whose name holds the search term, at most `Limit` of them.
+fn matching(fixture_name: &str, seen: &Seen) -> Value {
+    let term = seen.param("SearchTerm").unwrap_or_default().to_lowercase();
+    let limit: usize = seen
+        .param("Limit")
+        .map_or(usize::MAX, |s| s.parse().unwrap());
+    let found: Vec<Value> = fixture(fixture_name)
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|item| {
+            item["Name"]
+                .as_str()
+                .unwrap()
+                .to_lowercase()
+                .contains(&term)
+        })
+        .take(limit)
+        .cloned()
+        .collect();
+    json!({ "Items": found, "TotalRecordCount": found.len() })
+}
+
+/// The items of `list` of the types asked, as the server keeps only those; all when none asked.
+fn of_types(mut list: Value, seen: &Seen) -> Value {
+    if let Some(types) = seen.param("IncludeItemTypes") {
+        let items = list["Items"].as_array_mut().unwrap();
+        items.retain(|item| types.split(',').any(|t| item["Type"] == t));
+        list["TotalRecordCount"] = json!(items.len());
+    }
+    list
+}
+
+/// The items that have an image of each type in `ImageTypes`, as the server filters them.
+fn with_images(mut list: Value, seen: &Seen) -> Value {
+    if let Some(types) = seen.param("ImageTypes") {
+        let items = list["Items"].as_array_mut().unwrap();
+        items.retain(|item| types.split(',').all(|t| item["ImageTags"].get(t).is_some()));
+        list["TotalRecordCount"] = json!(items.len());
+    }
+    list
+}
+
+/// What a person took part in, as the server pages it: only the types asked, `Limit` of them
+/// from `StartIndex`, and the total of them all.
+fn person_titles(seen: &Seen) -> Value {
+    let person = seen.param("PersonIds").unwrap();
+    let mut items: Vec<Value> = match person {
+        PERSON_WITH_MANY_TITLES => generated_films(250),
+        PERSON_WITH_ENDLESS_TITLES => generated_films(2500),
+        PERSON_IN_EPISODES => fixture("person_episodes").as_array().unwrap().clone(),
+        _ => fixture("person_titles").as_array().unwrap().clone(),
+    };
+    let types = seen.param("IncludeItemTypes").unwrap_or_default();
+    items.retain(|item| types.split(',').any(|t| item["Type"] == t));
+    let total = items.len();
+    let start: usize = seen.param("StartIndex").map_or(0, |s| s.parse().unwrap());
+    let limit: usize = seen.param("Limit").map_or(total, |s| s.parse().unwrap());
+    let page: Vec<Value> = items.into_iter().skip(start).take(limit).collect();
+    json!({ "Items": page, "TotalRecordCount": total, "StartIndex": start })
+}
+
+/// The episodes not played, the newest added first, as the server pages them. The fixture keeps
+/// a played one and one whose date cannot be read, to show what the client makes of them, and
+/// one not aired yet that only "show missing episodes" lists, which `IsMissing=false` leaves out.
+fn new_episodes(seen: &Seen) -> Value {
+    let items: Vec<Value> = fixture("new_episodes")
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|item| {
+            seen.param("IsMissing") != Some("false") || item["LocationType"] != "Virtual"
+        })
+        .cloned()
+        .collect();
+    let total = items.len();
+    let start: usize = seen.param("StartIndex").map_or(0, |s| s.parse().unwrap());
+    let limit: usize = seen.param("Limit").map_or(total, |s| s.parse().unwrap());
+    let page: Vec<Value> = items.into_iter().skip(start).take(limit).collect();
+    json!({ "Items": page, "TotalRecordCount": total, "StartIndex": start })
+}
+
+fn generated_films(count: usize) -> Vec<Value> {
+    (0..count)
+        .map(|i| {
+            json!({
+                "Name": format!("Reel {i:04}"),
+                "Id": format!("f1{i:030}"),
+                "Type": "Movie",
+                "ProductionYear": 1950 + i % 70,
+            })
+        })
+        .collect()
+}
+
+/// An item list cut to the `Limit` asked.
+fn limited(mut list: Value, seen: &Seen) -> Value {
+    if let Some(limit) = seen.param("Limit") {
+        list["Items"]
+            .as_array_mut()
+            .unwrap()
+            .truncate(limit.parse().unwrap());
+    }
+    list
+}
+
+/// An item as the server shows it to a user whose list holds `state.favourites`.
+fn favourite_of(state: &State, id: &str, mut item: Value) -> Value {
+    item["UserData"]["IsFavorite"] = json!(state.favourites.iter().any(|f| f == id));
+    item
+}
+
+/// The trailers the state gives a film or a series, as the server lists them on the item.
+fn trailers_of(state: &State, mut item: Value) -> Value {
+    item["LocalTrailerCount"] = json!(u32::from(state.local_trailer));
+    item["RemoteTrailers"] = state
+        .remote_trailers
+        .iter()
+        .map(|url| json!({ "Url": url }))
+        .collect();
+    item
+}
+
+/// What `/Items/{id}/LocalTrailers` answers: a bare array of the trailer items.
+fn local_trailers(state: &State) -> Value {
+    if !state.local_trailer {
+        return json!([]);
+    }
+    json!([{
+        "Id": TRAILER,
+        "Name": "Trailer",
+        "Type": "Trailer",
+        "MediaSources": [{ "Id": TRAILER_SOURCE, "Container": "mp4" }],
+    }])
+}
+
+fn answer(state: &State, seen: &Seen) -> Answer {
+    if state.not_jellyfin {
+        return Answer::Json(404, json!({ "error": "not here" }));
+    }
+    let route = (seen.method.as_str(), seen.path.as_str());
+    match route {
+        ("GET", "/System/Info/Public") => return Answer::Json(200, fixture("system_info_public")),
+        ("POST", "/Users/AuthenticateByName") => {
+            if state.account_disabled {
+                return Answer::Json(403, json!("User is disabled."));
+            }
+            let body = seen.json();
+            return if body["Username"] == USER && body["Pw"] == PASSWORD {
+                Answer::Json(200, fixture("authenticate_by_name"))
+            } else {
+                Answer::Json(401, json!("Error processing request."))
+            };
+        }
+        _ => {}
+    }
+    let token = format!("Token=\"{TOKEN}\"");
+    let signed_in = seen
+        .authorization
+        .as_deref()
+        .is_some_and(|a| a.starts_with("MediaBrowser ") && a.contains(&token));
+    if !signed_in || state.revoked {
+        return Answer::Empty(401);
+    }
+    if state.forbidden {
+        return Answer::Empty(403);
+    }
+    if let Some((_, status)) = state.broken.iter().find(|(path, _)| *path == seen.path) {
+        return Answer::Empty(*status);
+    }
+    if seen.path == "/Items"
+        && state.broken_parent.is_some()
+        && seen.param("ParentId") == state.broken_parent.as_deref()
+    {
+        return Answer::Empty(500);
+    }
+    if seen.path == "/Items"
+        && state
+            .broken_episode
+            .is_some_and(|id| seen.param("Ids").is_some_and(|ids| ids.contains(id)))
+    {
+        return Answer::Empty(500);
+    }
+    let images = format!("/Items/{FILM}/Images/");
+    match route {
+        ("POST", "/Sessions/Logout") => Answer::Empty(204),
+        ("GET", "/UserViews") => Answer::Json(200, fixture("user_views")),
+        ("GET", "/UserItems/Resume") => Answer::Json(200, fixture("resume")),
+        ("GET", "/Genres") => Answer::Json(200, genres(library_fixture(seen))),
+        ("GET", "/Items/Filters") => Answer::Json(200, years(library_fixture(seen))),
+        ("GET", "/Persons") => Answer::Json(200, matching("persons", seen)),
+        ("POST", "/user_usage_stats/submit_custom_query") if state.reporting.is_some() => {
+            let rows = state.reporting.as_ref().unwrap();
+            let mut names = vec![
+                "DateCreated",
+                "UserId",
+                "ItemId",
+                "ItemType",
+                "ItemName",
+                "PlayDuration",
+            ];
+            names.extend(state.reporting_offsets.as_ref().map(|_| "ServerOffset"));
+            let columns = if rows.is_empty() {
+                json!([])
+            } else {
+                json!(names)
+            };
+            let results: Vec<Vec<&str>> = rows
+                .iter()
+                .enumerate()
+                .map(|(at, row)| {
+                    let offset = state.reporting_offsets.as_ref().map(|offsets| offsets[at]);
+                    row.iter().copied().chain(offset).collect()
+                })
+                .collect();
+            let message = if rows.is_empty() {
+                "Query executed, no data returned.</br>Number of rows effected : 0"
+            } else {
+                ""
+            };
+            Answer::Json(
+                200,
+                json!({ "colums": columns, "results": results, "message": message }),
+            )
+        }
+        ("GET", "/Items") if seen.param("Ids").is_some() => {
+            let held: Vec<_> = std::iter::once((EPISODE, SERIES))
+                .chain(state.episodes.iter().copied())
+                .collect();
+            let items: Vec<Value> = seen
+                .param("Ids")
+                .unwrap()
+                .split(',')
+                .filter_map(|id| held.iter().find(|(episode, _)| *episode == id))
+                .map(|(episode, series)| {
+                    json!({ "Id": episode, "Name": "An episode", "Type": "Episode", "SeriesId": series })
+                })
+                .collect();
+            Answer::Json(
+                200,
+                json!({ "Items": items, "TotalRecordCount": items.len() }),
+            )
+        }
+        ("GET", "/Items") if seen.param("IsPlayed") == Some("true") => {
+            if state.nothing_played {
+                Answer::Json(200, json!({ "Items": [], "TotalRecordCount": 0 }))
+            } else {
+                Answer::Json(200, fixture("played_items"))
+            }
+        }
+        ("GET", "/Items") if seen.param("Fields") == Some("Genres") => {
+            Answer::Json(200, fixture("watched_titles"))
+        }
+        ("GET", "/Items") if seen.param("HasTmdbId") == Some("true") => {
+            Answer::Json(200, of_types(fixture("tmdb_index"), seen))
+        }
+        ("GET", "/Items") if seen.param("Filters") == Some("IsFavorite") => {
+            Answer::Json(200, fixture("favourites"))
+        }
+        ("GET", "/Items") => match (seen.param("ParentId"), seen.param("IncludeItemTypes")) {
+            (_, Some("Movie")) if seen.param("SearchTerm").is_some() => {
+                Answer::Json(200, matching("films", seen))
+            }
+            (_, Some("Series")) if seen.param("SearchTerm").is_some() => {
+                Answer::Json(200, matching("search_series", seen))
+            }
+            _ if seen.param("PersonIds").is_some() => Answer::Json(200, person_titles(seen)),
+            (Some(FILMS_LIBRARY), _) => Answer::Json(200, films(seen, "films")),
+            (Some(LETTERS_LIBRARY), _) => Answer::Json(200, films(seen, "letters")),
+            (Some(SERIES_LIBRARY), Some("Series")) => Answer::Json(200, films(seen, "series")),
+            (None, Some("Episode")) if seen.param("IsPlayed") == Some("false") => {
+                Answer::Json(200, new_episodes(seen))
+            }
+            (None, Some("BoxSet")) => Answer::Json(200, fixture("boxsets")),
+            (None, Some("Playlist")) => Answer::Json(200, fixture("playlists")),
+            (None, Some("Movie,Series")) => Answer::Json(200, limited(fixture("featured"), seen)),
+            (Some("b0000000000000000000000000000001"), _) => {
+                Answer::Json(200, of_types(fixture("boxset_sea_stories"), seen))
+            }
+            (Some("b0000000000000000000000000000002"), _) => {
+                Answer::Json(200, of_types(fixture("boxset_harbour_trilogy"), seen))
+            }
+            (Some("b0000000000000000000000000000003"), _) => Answer::Json(
+                200,
+                limited(
+                    with_images(of_types(fixture("boxset_lone_wolves"), seen), seen),
+                    seen,
+                ),
+            ),
+            (Some("b0000000000000000000000000000005"), _) => Answer::Json(
+                200,
+                limited(
+                    with_images(of_types(fixture("boxset_tide_tales"), seen), seen),
+                    seen,
+                ),
+            ),
+            _ => Answer::Json(200, json!({ "Items": [], "TotalRecordCount": 0 })),
+        },
+        ("GET", path) if path == format!("/Items/{FILM}") => {
+            let mut item = trailers_of(state, favourite_of(state, FILM, fixture("film_detail")));
+            if state.no_trickplay {
+                item.as_object_mut().unwrap().remove("Trickplay");
+            }
+            Answer::Json(200, item)
+        }
+        ("GET", path) if path.starts_with(&format!("/Videos/{FILM}/Trickplay/320/")) => {
+            Answer::Bytes(TILE.to_vec())
+        }
+        ("GET", path) if path.starts_with("/Items/b000") => fixture("boxsets")["Items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|boxset| path == format!("/Items/{}", boxset["Id"].as_str().unwrap()))
+            .map_or(Answer::Empty(404), |boxset| {
+                Answer::Json(200, boxset.clone())
+            }),
+        ("POST" | "DELETE", path) if path.starts_with("/UserFavoriteItems/") => Answer::Json(
+            200,
+            json!({ "IsFavorite": seen.method == "POST", "PlaybackPositionTicks": 0 }),
+        ),
+        ("GET", path) if path == format!("/Items/{FILM}/Similar") => {
+            Answer::Json(200, fixture("similar"))
+        }
+        ("POST", path) if path == format!("/Items/{FILM}/PlaybackInfo") => {
+            Answer::Json(200, playback_info(state, seen))
+        }
+        ("DELETE", "/Videos/ActiveEncodings") => Answer::Empty(204),
+        ("POST", path) if path == format!("/Items/{EPISODE}/PlaybackInfo") => {
+            let episode = &fixture("episodes")["Items"][0];
+            Answer::Json(
+                200,
+                json!({ "MediaSources": episode["MediaSources"], "PlaySessionId": PLAY_SESSION }),
+            )
+        }
+        (
+            "POST",
+            "/Sessions/Playing" | "/Sessions/Playing/Progress" | "/Sessions/Playing/Stopped",
+        ) => Answer::Empty(204),
+        ("GET", path) if path == format!("/Items/{SERIES}") => Answer::Json(
+            200,
+            trailers_of(state, favourite_of(state, SERIES, fixture("series_detail"))),
+        ),
+        ("GET", path)
+            if [FILM, SERIES]
+                .iter()
+                .any(|id| path == format!("/Items/{id}/LocalTrailers")) =>
+        {
+            Answer::Json(200, local_trailers(state))
+        }
+        ("GET", path) if path == format!("/Items/{SERIES}/Similar") => {
+            Answer::Json(200, fixture("series_similar"))
+        }
+        ("GET", path) if path == format!("/Shows/{SERIES}/Seasons") => {
+            Answer::Json(200, fixture("seasons"))
+        }
+        ("GET", path) if path == format!("/Shows/{SERIES}/Episodes") => {
+            match seen.param("SeasonId") {
+                Some(SEASON) => Answer::Json(200, fixture("episodes")),
+                _ => Answer::Json(200, json!({ "Items": [], "TotalRecordCount": 0 })),
+            }
+        }
+        ("GET", "/Shows/NextUp") => match seen.param("SeriesId") {
+            Some(SERIES) if !state.all_watched => Answer::Json(200, fixture("next_up")),
+            None if !state.all_watched => {
+                Answer::Json(200, limited(fixture("next_up_across"), seen))
+            }
+            _ => Answer::Json(200, json!({ "Items": [], "TotalRecordCount": 0 })),
+        },
+        // Not an item list: the newest of a library, as a bare array, `Limit` of them.
+        ("GET", path) if path.starts_with("/MediaSegments/") => {
+            if path == format!("/MediaSegments/{FILM}") {
+                Answer::Json(200, fixture("media_segments"))
+            } else {
+                Answer::Json(200, json!({ "Items": [], "TotalRecordCount": 0 }))
+            }
+        }
+        ("GET", "/Items/Latest") => {
+            let name = match seen.param("ParentId") {
+                Some(FILMS_LIBRARY) => "films",
+                Some(SERIES_LIBRARY) => "latest_series",
+                _ => return Answer::Empty(404),
+            };
+            let limit: usize = seen
+                .param("Limit")
+                .map_or(usize::MAX, |s| s.parse().unwrap());
+            let items: Vec<Value> = fixture(name)
+                .as_array()
+                .unwrap()
+                .iter()
+                .take(limit)
+                .cloned()
+                .collect();
+            Answer::Json(200, Value::Array(items))
+        }
+        ("POST" | "DELETE", path)
+            if [FILM, SERIES, SEASON, EPISODE]
+                .iter()
+                .any(|id| path == format!("/UserPlayedItems/{id}")) =>
+        {
+            Answer::Json(
+                200,
+                json!({ "Played": seen.method == "POST", "PlaybackPositionTicks": 0 }),
+            )
+        }
+        ("GET", path) if path.starts_with(&images) => Answer::Bytes(IMAGE.to_vec()),
+        ("GET", path) if path == format!("/Playlists/{PLAYLIST}/Items") => {
+            let mut items = limited(fixture("playlist_items"), seen);
+            let total = items["TotalRecordCount"].as_u64().unwrap() as usize;
+            items["TotalRecordCount"] = json!(total + state.playlist_added);
+            Answer::Json(200, items)
+        }
+        ("GET", path) if path == format!("/Playlists/{NEW_PLAYLIST}/Items") => Answer::Json(
+            200,
+            json!({ "Items": [], "TotalRecordCount": state.playlist_made }),
+        ),
+        ("GET", path) if path.starts_with("/Playlists/") && path.ends_with("/Items") => {
+            Answer::Json(200, json!({ "Items": [], "TotalRecordCount": 0 }))
+        }
+        ("POST", "/Playlists") => Answer::Json(200, json!({ "Id": NEW_PLAYLIST })),
+        ("POST", path) if path == format!("/Playlists/{PLAYLIST}/Items") => Answer::Empty(204),
+        ("DELETE", path) if path == format!("/Playlists/{PLAYLIST}/Items") => Answer::Empty(204),
+        _ => Answer::Empty(404),
+    }
+}
+
+/// The film's playback info: direct play, unless it is turned off by the request or the
+/// version only converts; then the transcoding address, unless the server converts nothing.
+fn playback_info(state: &State, seen: &Seen) -> Value {
+    let mut info = fixture("playback_info");
+    let direct = seen.json()["EnableDirectPlay"] != false && !state.transcode_only;
+    if direct {
+        return info;
+    }
+    info["PlaySessionId"] = json!(TRANSCODE_SESSION);
+    let source = &mut info["MediaSources"][0];
+    source["SupportsDirectPlay"] = json!(false);
+    source["SupportsDirectStream"] = json!(false);
+    if !state.no_transcoding {
+        source["TranscodingUrl"] = json!(format!(
+            "/videos/{FILM}/master.m3u8?DeviceId=d&MediaSourceId={SOURCE}\
+             &VideoCodec=h264&AudioCodec=aac&PlaySessionId={TRANSCODE_SESSION}\
+             &SegmentContainer=ts&ApiKey={TOKEN}"
+        ));
+        source["TranscodingSubProtocol"] = json!("hls");
+    }
+    // In a conversion, an embedded text subtitle is extracted into a file; a picture one is
+    // drawn into the picture.
+    for stream in source["MediaStreams"].as_array_mut().unwrap() {
+        if stream["Type"] != "Subtitle" || stream["IsExternal"] == true {
+            continue;
+        }
+        if stream["Codec"] == "subrip" {
+            let index = stream["Index"].clone();
+            stream["DeliveryMethod"] = json!("External");
+            stream["DeliveryUrl"] = if state.absolute_delivery {
+                json!(format!(
+                    "https://subtitles.example.test/{index}.srt?lang=en"
+                ))
+            } else {
+                json!(format!(
+                    "/Videos/{FILM}/{SOURCE}/Subtitles/{index}/0/Stream.srt?ApiKey={TOKEN}"
+                ))
+            };
+        } else {
+            stream["DeliveryMethod"] = json!("Encode");
+        }
+    }
+    info
+}
+
+/// Waits until every held search request has arrived; false if they did not all come in time.
+fn wait_at_gate(state: &Mutex<State>) -> bool {
+    let started = std::time::Instant::now();
+    loop {
+        {
+            let state = state.lock().unwrap();
+            if state.gate_arrivals >= state.search_gate {
+                return true;
+            }
+        }
+        if started.elapsed() > GATE_TIMEOUT {
+            return false;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
+fn respond(request: tiny_http::Request, answer: Answer, delay: std::time::Duration) {
+    let json = Header::from_bytes("Content-Type", "application/json").unwrap();
+    let _ = match answer {
+        Answer::Json(code, value) => request.respond(
+            Response::from_string(value.to_string())
+                .with_status_code(code)
+                .with_header(json),
+        ),
+        Answer::Bytes(bytes) => {
+            std::thread::sleep(delay);
+            request.respond(Response::from_data(bytes))
+        }
+        Answer::Empty(code) => request.respond(Response::empty(code)),
+    };
+}
+
+impl FakeServer {
+    pub fn start() -> Self {
+        let server = Arc::new(Server::http("127.0.0.1:0").unwrap());
+        let port = server.server_addr().to_ip().unwrap().port();
+        let state = Arc::new(Mutex::new(State::default()));
+        let thread = {
+            let server = Arc::clone(&server);
+            let state = Arc::clone(&state);
+            std::thread::spawn(move || {
+                for mut request in server.incoming_requests() {
+                    let (path, query) = split(request.url());
+                    let mut body = String::new();
+                    request.as_reader().read_to_string(&mut body).unwrap();
+                    let authorization = request
+                        .headers()
+                        .iter()
+                        .find(|h| h.field.equiv("Authorization"))
+                        .map(|h| h.value.as_str().to_string());
+                    let seen = Seen {
+                        method: request.method().as_str().to_string(),
+                        path,
+                        query,
+                        authorization,
+                        body,
+                    };
+                    let (answer, delay, gated) = {
+                        let mut state = state.lock().unwrap();
+                        state.seen.push(seen.clone());
+                        if let Some(id) = seen.path.strip_prefix("/UserFavoriteItems/") {
+                            state.favourites.retain(|f| f != id);
+                            if seen.method == "POST" {
+                                state.favourites.push(id.to_string());
+                            }
+                        }
+                        let gated = state.search_gate > 0
+                            && (seen.path == "/Persons" || seen.param("SearchTerm").is_some());
+                        if gated {
+                            state.gate_arrivals += 1;
+                        }
+                        let answer = answer(&state, &seen);
+                        if seen.method == "POST"
+                            && seen.path == format!("/Playlists/{PLAYLIST}/Items")
+                            && matches!(answer, Answer::Empty(204))
+                        {
+                            state.playlist_added += match seen.param("ids") {
+                                Some(SERIES) => SERIES_EPISODES,
+                                _ => 1,
+                            };
+                        }
+                        if seen.method == "POST" && seen.path == "/Playlists" {
+                            state.playlist_made = match seen.json()["Ids"][0].as_str() {
+                                Some(SERIES) => SERIES_EPISODES,
+                                _ => 1,
+                            };
+                        }
+                        (answer, state.image_delay, gated)
+                    };
+                    if gated {
+                        let state = Arc::clone(&state);
+                        std::thread::spawn(move || {
+                            let met = wait_at_gate(&state);
+                            state.lock().unwrap().gate_met.push(met);
+                            respond(request, answer, delay);
+                        });
+                    } else {
+                        respond(request, answer, delay);
+                    }
+                }
+            })
+        };
+        Self {
+            url: format!("http://127.0.0.1:{port}"),
+            state,
+            server,
+            thread: Some(thread),
+        }
+    }
+
+    /// The requests so far, oldest first.
+    pub fn seen(&self) -> Vec<Seen> {
+        self.state.lock().unwrap().seen.clone()
+    }
+
+    /// The last request to this path.
+    pub fn last(&self, method: &str, path: &str) -> Seen {
+        self.seen()
+            .into_iter()
+            .rev()
+            .find(|s| s.method == method && s.path == path)
+            .unwrap_or_else(|| panic!("no {method} {path}"))
+    }
+}

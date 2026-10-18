@@ -1,0 +1,5 @@
+[
+  { "Name": "Pilot", "SortName": "pilot", "Id": "e0000000000000000000000000000001", "Type": "Episode", "ProductionYear": 2016, "SeriesId": "5e000000000000000000000000000001", "SeriesName": "Harbour Lights", "SeriesPrimaryImageTag": "poster-hl", "UserData": { "PlaybackPositionTicks": 0, "Played": false }, "ImageTags": {}, "BackdropImageTags": [] },
+  { "Name": "Low Tide", "SortName": "low tide", "Id": "e0000000000000000000000000000002", "Type": "Episode", "ProductionYear": 2016, "SeriesId": "5e000000000000000000000000000001", "SeriesName": "Harbour Lights", "SeriesPrimaryImageTag": "poster-hl", "UserData": { "PlaybackPositionTicks": 0, "Played": false }, "ImageTags": {}, "BackdropImageTags": [] },
+  { "Name": "North Wind", "SortName": "north wind", "Id": "e0000000000000000000000000000003", "Type": "Episode", "ProductionYear": 2010, "SeriesId": "5e000000000000000000000000000003", "SeriesName": "Northern Tide", "UserData": { "PlaybackPositionTicks": 0, "Played": false }, "ImageTags": {}, "BackdropImageTags": [] }
+]

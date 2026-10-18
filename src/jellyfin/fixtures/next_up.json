@@ -1,0 +1,17 @@
+{
+  "Items": [
+    {
+      "Name": "Low Water", "Id": "e0000000000000000000000000000021", "Type": "Episode",
+      "IndexNumber": 1, "ParentIndexNumber": 2,
+      "SeasonId": "5e000000000000000000000000000002", "SeriesId": "50000000000000000000000000000001", "SeriesName": "Tidewater",
+      "Overview": "The ferry runs aground on a road that should not be there.",
+      "RunTimeTicks": 31200000000,
+      "UserData": { "PlaybackPositionTicks": 7200000000, "Played": false },
+      "ImageTags": { "Primary": "still-lw" },
+      "MediaSources": [
+        { "Id": "5a000000000000000000000000000021", "Name": "Tidewater S02E01", "Container": "mkv", "MediaStreams": [] }
+      ]
+    }
+  ],
+  "TotalRecordCount": 1
+}

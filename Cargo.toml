@@ -2,4 +2,46 @@
 name = "bobine"
 version = "0.0.0"
 edition = "2024"
+license = "Apache-2.0"
 publish = false
+
+[dependencies]
+getrandom = "0.3"
+secret-service = { version = "5", default-features = false, features = ["rt-async-io-crypto-rust"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "1"
+ureq = { version = "3", features = ["json"] }
+# The window (#3). Pinned: gpui-kit pins its own GPUI snapshot, so a bump is a deliberate act.
+# The icons are Phosphor SVGs under `assets/icons/` (see `src/icons.rs`), no icon feature needed.
+gpui-kit = { version = "=0.7.3", default-features = false }
+# The player (#5): libmpv draws with OpenGL into a Wayland subsurface under the window.
+khronos-egl = { version = "6", features = ["dynamic"] }
+libc = "0.2"
+libmpv2-sys = "4.0.1"
+raw-window-handle = "0.6"
+wayland-backend = { version = "0.3", features = ["client_system"] }
+wayland-client = "0.31"
+wayland-egl = "0.32"
+wayland-protocols = { version = "0.32", features = ["client", "staging", "unstable"] }
+# The other monitors turn black during a fullscreen film (#13): a layer-shell surface on each, and
+# GPUI's id for the window's monitor, a v5 UUID of its name. Both already come with GPUI.
+uuid = { version = "1", features = ["v5"] }
+wayland-protocols-wlr = { version = "0.3", features = ["client"] }
+# The desktop's media controls (MPRIS, #64). Already in the tree through GPUI, on the async-io
+# executor its other users run: no second async runtime.
+zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"] }
+
+[features]
+default = ["fast"]
+# GPUI Fast (a GPUI fork that redraws only what changed). `--no-default-features` is the rollback
+# to plain GPUI: both must keep building.
+fast = ["gpui-kit/gpui-fast"]
+# A startup path for the headless checks only (play a file, show the controls or the panel, go
+# fullscreen, measure): never part of the application a user runs.
+harness = []
+
+[dev-dependencies]
+tempfile = "3"
+tiny_http = "0.12"
+gpui-kit = { version = "=0.7.3", default-features = false, features = ["test-support"] }

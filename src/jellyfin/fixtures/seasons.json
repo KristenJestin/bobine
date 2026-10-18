@@ -1,0 +1,7 @@
+{
+  "Items": [
+    { "Name": "Season 1", "Id": "5e000000000000000000000000000001", "Type": "Season", "IndexNumber": 1, "SeriesId": "50000000000000000000000000000001", "UserData": { "UnplayedItemCount": 0, "Played": true }, "ImageTags": {} },
+    { "Name": "Season 2", "Id": "5e000000000000000000000000000002", "Type": "Season", "IndexNumber": 2, "SeriesId": "50000000000000000000000000000001", "UserData": { "UnplayedItemCount": 7, "Played": false }, "ImageTags": {} }
+  ],
+  "TotalRecordCount": 2
+}

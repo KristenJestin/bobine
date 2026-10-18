@@ -1,0 +1,32 @@
+{
+  "Items": [
+    {
+      "Name": "Low Water", "Id": "e0000000000000000000000000000021", "Type": "Episode",
+      "IndexNumber": 1, "ParentIndexNumber": 2,
+      "SeasonId": "5e000000000000000000000000000002", "SeriesId": "50000000000000000000000000000001", "SeriesName": "Tidewater",
+      "Overview": "The ferry runs aground on a road that should not be there.",
+      "RunTimeTicks": 31200000000,
+      "UserData": { "PlaybackPositionTicks": 7200000000, "Played": false },
+      "ImageTags": { "Primary": "still-lw" },
+      "MediaSources": [
+        { "Id": "5a000000000000000000000000000021", "Name": "Tidewater S02E01", "Container": "mkv",
+          "DefaultAudioStreamIndex": 1, "DefaultSubtitleStreamIndex": -1,
+          "MediaStreams": [
+            { "Type": "Video", "Index": 0, "Codec": "h264", "Width": 1920, "Height": 1080, "VideoRangeType": "SDR" },
+            { "Type": "Audio", "Index": 1, "Codec": "aac", "Language": "eng", "Channels": 2, "IsDefault": true },
+            { "Type": "Subtitle", "Index": 2, "Codec": "subrip", "Language": "fre", "IsExternal": true }
+          ] }
+      ]
+    },
+    {
+      "Name": "Bell Tower", "Id": "e0000000000000000000000000000022", "Type": "Episode",
+      "IndexNumber": 2, "ParentIndexNumber": 2,
+      "SeasonId": "5e000000000000000000000000000002", "SeriesId": "50000000000000000000000000000001", "SeriesName": "Tidewater",
+      "RunTimeTicks": 29400000000,
+      "UserData": { "PlaybackPositionTicks": 0, "Played": false },
+      "ImageTags": {},
+      "MediaSources": []
+    }
+  ],
+  "TotalRecordCount": 2
+}
