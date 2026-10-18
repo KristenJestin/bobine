@@ -616,8 +616,9 @@ mod tests {
     fn a_settings_page_that_fits_does_not_move_when_scrolled(cx: &mut TestAppContext) {
         let (first, last, first_after, last_after) = scrolled_page(4000., cx);
         assert!(last.bottom() < gpui_kit::px(4000.), "{last:?} does not fit");
-        assert_eq!(first_after, first);
-        assert_eq!(last_after, last);
+        // Only the height is compared: the page is still sliding in sideways when first drawn.
+        assert_eq!(first_after.top(), first.top());
+        assert_eq!(last_after.bottom(), last.bottom());
     }
 
     #[test]
