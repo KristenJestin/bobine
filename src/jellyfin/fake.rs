@@ -37,6 +37,18 @@ pub const TRAILER: &str = "7a000000000000000000000000000001";
 pub const TRAILER_SOURCE: &str = "7b000000000000000000000000000001";
 /// A trailer hosted elsewhere.
 pub const REMOTE_TRAILER: &str = "https://www.youtube.com/watch?v=aBcDeFgHiJk";
+/// The file of the film's first version, as `/Items/{SOURCE}/Download` serves it.
+pub const MEDIA: &[u8] = b"\x1aE\xdf\xa3 the quiet harbour, every byte of it, from first to last";
+/// What the server's HTTP answers mark that file with.
+pub const MEDIA_ETAG: &str = "\"1d9c3a2b7e4f\"";
+/// The same version's file once replaced on the server, and its mark.
+pub const CHANGED_MEDIA: &[u8] =
+    b"\x1aE\xdf\xa3 the quiet harbour, remastered, and longer than it was before";
+pub const CHANGED_MEDIA_ETAG: &str = "\"2e0d4b3c8f50\"";
+/// What the version says of its file: what changes when the file does.
+pub const MEDIA_VERSION: &str = "c0ffee0000000000000000000000beef";
+/// What an external subtitle file answers.
+pub const SUBTITLE: &[u8] = b"1\n00:00:01,000 --> 00:00:02,000\nAhoy.\n";
 pub const OTHER_REMOTE_TRAILER: &str = "https://www.youtube.com/watch?v=zYxWvUtSrQp";
 
 fn fixture(name: &str) -> Value {
@@ -88,6 +100,8 @@ pub struct Seen {
     pub path: String,
     pub query: Vec<(String, String)>,
     pub authorization: Option<String>,
+    pub range: Option<String>,
+    pub if_range: Option<String>,
     pub body: String,
 }
 
@@ -165,6 +179,13 @@ pub struct State {
     pub broken_episode: Option<&'static str>,
     /// Episodes the library holds beside `EPISODE`, with their series: (episode, series).
     pub episodes: Vec<(&'static str, &'static str)>,
+    /// The film's file was replaced on the server since it was first fetched.
+    pub media_changed: bool,
+    /// The user's policy refuses downloads: no item can be downloaded, and the file route
+    /// answers 403.
+    pub downloads_refused: bool,
+    /// The film and the episode cannot be downloaded, though the user may download.
+    pub not_downloadable: bool,
 }
 
 /// How many episodes the series of the pages puts in a playlist.
@@ -231,6 +252,55 @@ enum Answer {
     Json(u16, Value),
     Bytes(Vec<u8>),
     Empty(u16),
+    /// A file as ASP.NET serves it with ranges: its status, its headers, its bytes.
+    File(u16, Vec<(&'static str, String)>, Vec<u8>),
+}
+
+/// An item as the server shows it: whether it can be downloaded, and its first version's file
+/// size and mark.
+fn downloadable(state: &State, mut item: Value) -> Value {
+    item["CanDownload"] = json!(!state.downloads_refused && !state.not_downloadable);
+    if let Some(first) = item["MediaSources"].get_mut(0) {
+        first["Size"] = json!(media(state).0.len());
+        first["ETag"] = json!(MEDIA_VERSION);
+    }
+    item
+}
+
+/// The film's file and its HTTP mark.
+fn media(state: &State) -> (&'static [u8], &'static str) {
+    if state.media_changed {
+        (CHANGED_MEDIA, CHANGED_MEDIA_ETAG)
+    } else {
+        (MEDIA, MEDIA_ETAG)
+    }
+}
+
+/// A file answered as `PhysicalFile(…, enableRangeProcessing: true)` does: from the byte a
+/// `Range: bytes=N-` asks, unless an `If-Range` no longer matches the file, then all of it.
+fn ranged(seen: &Seen, bytes: &[u8], etag: &str) -> Answer {
+    let headers = vec![
+        ("ETag", etag.to_string()),
+        ("Accept-Ranges", "bytes".to_string()),
+    ];
+    let from = seen
+        .range
+        .as_deref()
+        .and_then(|r| r.strip_prefix("bytes="))
+        .and_then(|r| r.strip_suffix('-'))
+        .map(|n| n.parse::<usize>().unwrap());
+    let still = seen.if_range.as_deref().is_none_or(|v| v == etag);
+    match from {
+        Some(from) if still => {
+            let mut headers = headers;
+            headers.push((
+                "Content-Range",
+                format!("bytes {from}-{}/{}", bytes.len() - 1, bytes.len()),
+            ));
+            Answer::File(206, headers, bytes[from..].to_vec())
+        }
+        _ => Answer::File(200, headers, bytes.to_vec()),
+    }
 }
 
 /// What an item is ordered by for one `SortBy` field: nothing sorts before everything.
@@ -649,8 +719,19 @@ fn answer(state: &State, seen: &Seen) -> Answer {
             ),
             _ => Answer::Json(200, json!({ "Items": [], "TotalRecordCount": 0 })),
         },
+        ("GET", path) if path == format!("/Items/{SOURCE}/Download") => {
+            if state.downloads_refused {
+                return Answer::Empty(403);
+            }
+            let (bytes, etag) = media(state);
+            ranged(seen, bytes, etag)
+        }
+        ("GET", path) if path.starts_with(&format!("/Videos/{FILM}/{SOURCE}/Subtitles/")) => {
+            ranged(seen, SUBTITLE, "\"5b7e1e5b7e1e\"")
+        }
         ("GET", path) if path == format!("/Items/{FILM}") => {
-            let mut item = trailers_of(state, favourite_of(state, FILM, fixture("film_detail")));
+            let item = trailers_of(state, favourite_of(state, FILM, fixture("film_detail")));
+            let mut item = downloadable(state, item);
             if state.no_trickplay {
                 item.as_object_mut().unwrap().remove("Trickplay");
             }
@@ -689,9 +770,10 @@ fn answer(state: &State, seen: &Seen) -> Answer {
             "POST",
             "/Sessions/Playing" | "/Sessions/Playing/Progress" | "/Sessions/Playing/Stopped",
         ) => Answer::Empty(204),
-        ("GET", path) if path == format!("/Items/{EPISODE}") => {
-            Answer::Json(200, fixture("episodes")["Items"][0].clone())
-        }
+        ("GET", path) if path == format!("/Items/{EPISODE}") => Answer::Json(
+            200,
+            downloadable(state, fixture("episodes")["Items"][0].clone()),
+        ),
         ("GET", path) if path == format!("/Items/{SERIES}") => Answer::Json(
             200,
             trailers_of(state, favourite_of(state, SERIES, fixture("series_detail"))),
@@ -711,7 +793,19 @@ fn answer(state: &State, seen: &Seen) -> Answer {
         }
         ("GET", path) if path == format!("/Shows/{SERIES}/Episodes") => {
             match seen.param("SeasonId") {
-                Some(SEASON) => Answer::Json(200, fixture("episodes")),
+                Some(SEASON) => {
+                    let mut episodes = fixture("episodes");
+                    // A list gives what an item can do only when asked.
+                    if seen
+                        .param("Fields")
+                        .is_some_and(|f| f.contains("CanDownload"))
+                    {
+                        for item in episodes["Items"].as_array_mut().unwrap() {
+                            *item = downloadable(state, item.take());
+                        }
+                    }
+                    Answer::Json(200, episodes)
+                }
                 _ => Answer::Json(200, json!({ "Items": [], "TotalRecordCount": 0 })),
             }
         }
@@ -854,6 +948,13 @@ fn respond(request: tiny_http::Request, answer: Answer, delay: std::time::Durati
             request.respond(Response::from_data(bytes))
         }
         Answer::Empty(code) => request.respond(Response::empty(code)),
+        Answer::File(code, headers, bytes) => {
+            let mut response = Response::from_data(bytes).with_status_code(code);
+            for (name, value) in headers {
+                response.add_header(Header::from_bytes(name, value).unwrap());
+            }
+            request.respond(response)
+        }
     };
 }
 
@@ -870,16 +971,23 @@ impl FakeServer {
                     let (path, query) = split(request.url());
                     let mut body = String::new();
                     request.as_reader().read_to_string(&mut body).unwrap();
-                    let authorization = request
-                        .headers()
-                        .iter()
-                        .find(|h| h.field.equiv("Authorization"))
-                        .map(|h| h.value.as_str().to_string());
+                    let header = |name: &'static str| {
+                        request
+                            .headers()
+                            .iter()
+                            .find(|h| h.field.equiv(name))
+                            .map(|h| h.value.as_str().to_string())
+                    };
+                    let authorization = header("Authorization");
+                    let range = header("Range");
+                    let if_range = header("If-Range");
                     let seen = Seen {
                         method: request.method().as_str().to_string(),
                         path,
                         query,
                         authorization,
+                        range,
+                        if_range,
                         body,
                     };
                     let (answer, delay, gated) = {

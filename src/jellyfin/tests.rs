@@ -4185,3 +4185,289 @@ fn a_malformed_date_is_not_read() {
         assert_eq!(date_ticks(date), None, "{date}");
     }
 }
+
+/// A `.part` file in memory: the bytes a fetch wrote, how each fetch told it to start, and the
+/// room left before a write fails as a full disk does.
+#[derive(Default)]
+struct Part {
+    bytes: Vec<u8>,
+    started: Vec<Fetched>,
+    room: Option<usize>,
+}
+
+impl std::io::Write for Part {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let n = buf.len().min(self.room.unwrap_or(usize::MAX));
+        if n == 0 && !buf.is_empty() {
+            return Err(std::io::ErrorKind::StorageFull.into());
+        }
+        self.room = self.room.map(|room| room - n);
+        self.bytes.extend_from_slice(&buf[..n]);
+        Ok(n)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl Sink for Part {
+    fn start(&mut self, fetched: &Fetched) -> std::io::Result<()> {
+        if !fetched.resumed {
+            self.bytes.clear();
+        }
+        self.started.push(fetched.clone());
+        Ok(())
+    }
+}
+
+fn plan_of_the_film(server: &dyn MediaServer) -> DownloadPlan {
+    server.download_plan(&film(), &source(SOURCE)).unwrap()
+}
+
+#[test]
+fn a_film_downloads_its_original_file() {
+    let s = Setup::new();
+    let server = s.signed_in();
+    let plan = plan_of_the_film(&*server);
+    assert_eq!(plan.size, Some(MEDIA.len() as u64));
+    assert_eq!(plan.version, MEDIA_VERSION);
+    assert_eq!(plan.container.as_deref(), Some("mkv"));
+    assert_eq!(plan.files[0].kind, DownloadKind::Media);
+
+    let mut part = Part::default();
+    let fetched = server.fetch(&plan.files[0], 0, None, &mut part).unwrap();
+    assert_eq!(part.bytes, MEDIA);
+    let whole = Fetched {
+        resumed: false,
+        validator: Some(MEDIA_ETAG.into()),
+        length: Some(MEDIA.len() as u64),
+    };
+    assert_eq!(fetched, whole);
+    assert_eq!(part.started, vec![whole]);
+    // The original file, by the version's own id, all of it.
+    let asked = s.fake.last("GET", &format!("/Items/{SOURCE}/Download"));
+    assert_eq!(asked.range, None);
+    assert_eq!(asked.if_range, None);
+}
+
+#[test]
+fn an_interrupted_download_resumes_from_its_last_byte() {
+    let s = Setup::new();
+    let server = s.signed_in();
+    let plan = plan_of_the_film(&*server);
+    let mut part = Part {
+        room: Some(20),
+        ..Part::default()
+    };
+    assert_eq!(
+        server.fetch(&plan.files[0], 0, None, &mut part),
+        Err(ProviderError::Write(std::io::ErrorKind::StorageFull))
+    );
+    assert_eq!(part.bytes, &MEDIA[..20]);
+    // The sink learnt what to resume with before the transfer was cut.
+    let validator = part.started[0].validator.clone().unwrap();
+    assert_eq!(validator, MEDIA_ETAG);
+
+    part.room = None;
+    let fetched = server
+        .fetch(&plan.files[0], 20, Some(&validator), &mut part)
+        .unwrap();
+    assert_eq!(part.bytes, MEDIA);
+    assert_eq!(
+        fetched,
+        Fetched {
+            resumed: true,
+            validator: Some(MEDIA_ETAG.into()),
+            length: Some(MEDIA.len() as u64),
+        }
+    );
+    let asked = s.fake.last("GET", &format!("/Items/{SOURCE}/Download"));
+    assert_eq!(asked.range.as_deref(), Some("bytes=20-"));
+    assert_eq!(asked.if_range.as_deref(), Some(MEDIA_ETAG));
+}
+
+#[test]
+fn a_file_changed_on_the_server_starts_again_from_zero() {
+    let s = Setup::new();
+    let server = s.signed_in();
+    let plan = plan_of_the_film(&*server);
+    let mut part = Part {
+        bytes: MEDIA[..20].to_vec(),
+        ..Part::default()
+    };
+    s.fake.state.lock().unwrap().media_changed = true;
+    let fetched = server
+        .fetch(&plan.files[0], 20, Some(MEDIA_ETAG), &mut part)
+        .unwrap();
+    assert_eq!(part.bytes, CHANGED_MEDIA, "no byte of the old file is kept");
+    assert_eq!(
+        fetched,
+        Fetched {
+            resumed: false,
+            validator: Some(CHANGED_MEDIA_ETAG.into()),
+            length: Some(CHANGED_MEDIA.len() as u64),
+        }
+    );
+    assert!(!part.started[0].resumed);
+}
+
+#[test]
+fn a_user_refused_downloads_gets_forbidden() {
+    let s = Setup::new();
+    let server = s.signed_in();
+    // A plan made before the server refused it.
+    let plan = plan_of_the_film(&*server);
+    s.fake.state.lock().unwrap().downloads_refused = true;
+    assert_eq!(
+        server.download_plan(&film(), &source(SOURCE)),
+        Err(ProviderError::Forbidden)
+    );
+    let mut part = Part::default();
+    assert_eq!(
+        server.fetch(&plan.files[0], 0, None, &mut part),
+        Err(ProviderError::Forbidden)
+    );
+    assert!(part.bytes.is_empty());
+    assert!(part.started.is_empty());
+}
+
+#[test]
+fn an_item_that_cannot_be_downloaded_says_so() {
+    let s = Setup::new();
+    let server = s.signed_in();
+    let season = ItemId(SEASON.into());
+    assert!(server.film(&film()).unwrap().downloadable);
+    assert!(server.episodes(&series(), &season).unwrap()[0].downloadable);
+
+    s.fake.state.lock().unwrap().not_downloadable = true;
+    assert!(!server.film(&film()).unwrap().downloadable);
+    assert!(!server.episodes(&series(), &season).unwrap()[0].downloadable);
+    assert_eq!(
+        server.download_plan(&film(), &source(SOURCE)),
+        Err(ProviderError::Forbidden)
+    );
+}
+
+#[test]
+fn the_plan_lists_the_external_subtitles() {
+    let s = Setup::new();
+    let server = s.signed_in();
+    let plan = plan_of_the_film(&*server);
+    let kinds: Vec<DownloadKind> = plan.files.iter().map(|f| f.kind.clone()).collect();
+    // The embedded tracks are inside the file: only the external ones come apart.
+    assert_eq!(
+        kinds,
+        vec![
+            DownloadKind::Media,
+            DownloadKind::Subtitle {
+                index: 5,
+                format: "srt".into()
+            },
+            DownloadKind::Subtitle {
+                index: 6,
+                format: "ass".into()
+            },
+        ]
+    );
+    let mut part = Part::default();
+    server.fetch(&plan.files[1], 0, None, &mut part).unwrap();
+    assert_eq!(part.bytes, SUBTITLE);
+    s.fake.last(
+        "GET",
+        &format!("/Videos/{FILM}/{SOURCE}/Subtitles/5/Stream.srt"),
+    );
+}
+
+#[test]
+fn no_download_request_carries_the_token_in_its_url() {
+    let s = Setup::new();
+    let server = s.signed_in();
+    let signed_in = s.fake.seen().len();
+    let plan = plan_of_the_film(&*server);
+    for file in &plan.files {
+        let mut part = Part::default();
+        let fetched = server.fetch(file, 0, None, &mut part).unwrap();
+        let mut part = Part {
+            bytes: part.bytes[..4].to_vec(),
+            ..Part::default()
+        };
+        server
+            .fetch(file, 4, fetched.validator.as_deref(), &mut part)
+            .unwrap();
+    }
+    let asked = &s.fake.seen()[signed_in..];
+    assert_eq!(asked.len(), 1 + 2 * plan.files.len());
+    for request in asked {
+        assert!(!request.path.contains(TOKEN), "{}", request.path);
+        assert!(
+            request
+                .query
+                .iter()
+                .all(|(key, value)| !value.contains(TOKEN)
+                    && !key.eq_ignore_ascii_case("ApiKey")
+                    && !key.eq_ignore_ascii_case("api_key")),
+            "{:?}",
+            request.query
+        );
+        assert!(request.authorization.as_ref().unwrap().contains(TOKEN));
+    }
+    // The plan names its files by handles, never by an address.
+    let shown = format!("{plan:?}");
+    assert!(!shown.contains(TOKEN), "{shown}");
+    assert!(!shown.contains(&s.fake.url), "{shown}");
+}
+
+#[test]
+fn a_download_error_never_shows_the_address() {
+    let s = Setup::new();
+    let server = s.signed_in();
+    let plan = plan_of_the_film(&*server);
+    let mut shown = String::new();
+    s.fake
+        .state
+        .lock()
+        .unwrap()
+        .broken
+        .push((format!("/Items/{SOURCE}/Download"), 500));
+    let broken = server
+        .fetch(&plan.files[0], 0, None, &mut Part::default())
+        .unwrap_err();
+    assert_eq!(broken, ProviderError::Server(500));
+    shown += &format!("{broken} {broken:?}");
+    let full = server
+        .fetch(
+            &plan.files[1],
+            0,
+            None,
+            &mut Part {
+                room: Some(0),
+                ..Part::default()
+            },
+        )
+        .unwrap_err();
+    shown += &format!("{full} {full:?}");
+
+    // A new start, so no connection to the stopped server is left open to wait on.
+    let address = s.fake.url.clone();
+    let server = s.restart().restore().unwrap().unwrap();
+    drop(s.fake);
+    for e in [
+        server.download_plan(&film(), &source(SOURCE)).unwrap_err(),
+        server
+            .fetch(&plan.files[0], 0, None, &mut Part::default())
+            .unwrap_err(),
+        server
+            .fetch(&plan.files[1], 3, Some(MEDIA_ETAG), &mut Part::default())
+            .unwrap_err(),
+    ] {
+        assert!(matches!(e, ProviderError::Unreachable(_)), "{e:?}");
+        shown += &format!("{e} {e:?}");
+    }
+    assert!(!shown.contains(TOKEN), "{shown}");
+    assert!(
+        !shown.contains(&address),
+        "the address stays out of errors: {shown}"
+    );
+    assert!(!shown.contains("127.0.0.1"), "{shown}");
+}
