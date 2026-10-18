@@ -1288,8 +1288,6 @@ impl MediaServer for FakeServer {
             .collect())
     }
 
-    /// Like Jellyfin's Next Up: the episode started, else the one after the last watched, across
-    /// seasons; the first when none was watched; none once the last was. Specials are left out.
     fn title(&self, item: &ItemId) -> Result<Title, ProviderError> {
         self.state().reachable()?;
         if let Some(episode) = self.episode(item) {
@@ -1305,6 +1303,8 @@ impl MediaServer for FakeServer {
             .ok_or(ProviderError::NotFound)
     }
 
+    /// Like Jellyfin's Next Up: the episode started, else the one after the last watched, across
+    /// seasons; the first when none was watched; none once the last was. Specials are left out.
     fn next_up(&self, series: &ItemId) -> Result<Option<Episode>, ProviderError> {
         let state = self.state();
         let episodes: Vec<&Episode> = state
