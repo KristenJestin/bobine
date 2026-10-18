@@ -25,8 +25,9 @@ use crate::secret_field::{self, SecretField};
 const SEARCH_AFTER: Duration = Duration::from_millis(300);
 
 /// Said when an address over https cannot be reached.
-const HTTPS_UNREACHABLE: &str = "Seerr cannot be reached over https. If it serves plain http, \
-                                 type http:// before the address.";
+const HTTPS_UNREACHABLE: &str = "Seerr cannot be reached over https: it may be down, or its \
+                                 certificate refused. Type http:// only for a server on your \
+                                 own network: the key then goes unencrypted.";
 
 /// Where the keyring keeps the request server's API key, for the signed-in user.
 pub const SEERR_KEY: &str = "seerr-api-key";
@@ -1324,8 +1325,9 @@ pub(super) mod tests {
                 assert!(matches!(
                     shell.seerr.check,
                     Some(Loadable::Failed(
-                        "Seerr cannot be reached over https. If it serves plain http, \
-                         type http:// before the address."
+                        "Seerr cannot be reached over https: it may be down, or its \
+                         certificate refused. Type http:// only for a server on your own \
+                         network: the key then goes unencrypted."
                     ))
                 ));
             })
