@@ -6,11 +6,13 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use bobine::provider::{
-    Episode, ItemId, MediaServer, MediaSourceId, Playback, PlaylistEntry, ProviderError, Season,
-    Series, SeriesDetail,
+    Episode, ItemId, MediaServer, Playback, PlaylistEntry, ProviderError, Season, Series,
+    SeriesDetail,
 };
 
+use crate::fallback;
 use crate::film_page::{self, Carried, Choices, Fact};
+use crate::player::settings::Quality;
 use crate::shell::Loadable;
 
 /// How long the "Next episode" card counts down before the next episode plays.
@@ -246,9 +248,10 @@ pub fn choices_for(
 pub fn open_episode(
     server: &dyn MediaServer,
     episode: &Episode,
-    source: &MediaSourceId,
+    plan: &film_page::Plan,
+    quality: Quality,
 ) -> (Result<Playback, ProviderError>, Option<Episode>) {
-    let opened = server.play(&episode.item.id, source);
+    let opened = fallback::open_first(server, plan, quality);
     (opened, following(server, episode).ok().flatten())
 }
 
@@ -1046,10 +1049,21 @@ mod tests {
     fn playing_an_episode_keeps_the_next_one_for_its_end() {
         let server = FakeServer::new(1, true);
         let playing = episode(&server, 2, 6);
-        let (opened, next) = open_episode(&server, &playing, &playing.versions[0].id);
+        let planned = |episode: &Episode| {
+            let choices = Choices::new(&episode.versions);
+            film_page::plan(
+                &episode.item,
+                &episode.versions,
+                &choices,
+                film_page::From::Resume,
+            )
+            .unwrap()
+        };
+        let (opened, next) = open_episode(&server, &playing, &planned(&playing), Quality::Original);
         assert_eq!(opened.unwrap().film, id(2, 6));
         assert_eq!(next.unwrap().item.id, id(3, 1));
-        let (_, none) = open_episode(&server, &episode(&server, 3, 5), &playing.versions[0].id);
+        let last = episode(&server, 3, 5);
+        let (_, none) = open_episode(&server, &last, &planned(&last), Quality::Original);
         assert_eq!(none, None);
     }
 

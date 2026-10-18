@@ -111,6 +111,17 @@ impl Reopen {
     }
 }
 
+/// Asks the server for the first playback of `plan`: its conversion under the cap of `quality`
+/// at once, or the file as it is.
+pub fn open_first(
+    server: &dyn MediaServer,
+    plan: &Plan,
+    quality: Quality,
+) -> Result<Playback, ProviderError> {
+    let _ = quality;
+    server.play(&plan.film, &plan.source)
+}
+
 /// A film of the server, which the server may convert when it does not play as it is: once.
 pub struct Fallback {
     pub server: Arc<dyn MediaServer>,

@@ -436,10 +436,11 @@ impl Shell {
             list: Some(page.id.clone()),
             desktop: Some(crate::mpris::Title::episode(&episode)),
         };
-        let source = plan.source.clone();
+        let quality = self.settings.default_quality.for_player();
+        let asked = plan.clone();
         let task = cx
             .background_executor()
-            .spawn(async move { series_page::open_episode(&*server, &episode, &source) });
+            .spawn(async move { series_page::open_episode(&*server, &episode, &asked, quality) });
         cx.spawn_in(window, async move |this, cx| {
             let (opened, after) = task.await;
             this.update_in(cx, |shell, window, cx| {
