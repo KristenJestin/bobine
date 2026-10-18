@@ -36,7 +36,8 @@ pub fn status_label(availability: Availability, in_library: bool) -> Option<&'st
     match availability {
         Availability::Missing => None,
         Availability::Pending => Some("Pending"),
-        Availability::Processing => Some("Processing"),
+        // Nothing is processing until a download shows: a card says what the request is.
+        Availability::Processing => Some("Requested"),
         Availability::PartiallyAvailable => Some("Partially available"),
         Availability::Available => Some("Available"),
         Availability::Blocked => Some("Blocked"),
@@ -400,6 +401,42 @@ mod tests {
     }
 
     #[test]
+    fn a_processing_title_without_a_download_is_called_requested() {
+        assert_eq!(
+            status_label(Availability::Processing, false),
+            Some("Requested")
+        );
+        // The request page keeps its longer sentence.
+        assert_eq!(
+            page_status(MediaKind::Movie, Availability::Processing, false, &[]).as_deref(),
+            Some("Approved, waiting for a download")
+        );
+    }
+
+    #[test]
+    fn a_requested_title_is_called_the_same_in_my_requests_and_in_the_rows() {
+        let request = MyRequest {
+            title: titled(7, "Glass Rivers", Availability::Processing),
+            status: RequestStatus::Approved,
+            downloads: Vec::new(),
+        };
+        assert_eq!(
+            Some(my_request_label(&request, false).as_str()),
+            status_label(request.title.availability, false)
+        );
+    }
+
+    #[test]
+    fn a_processing_title_that_downloads_keeps_its_download_status() {
+        let request = MyRequest {
+            title: titled(7, "Glass Rivers", Availability::Processing),
+            status: RequestStatus::Approved,
+            downloads: vec![download("a", 1000, 420, Some(120))],
+        };
+        assert_eq!(my_request_label(&request, false), "Downloading · 58%");
+    }
+
+    #[test]
     fn a_pill_says_in_library_requested_or_available_and_nothing_for_a_missing_title() {
         assert_eq!(
             status_label(Availability::Missing, true),
@@ -409,7 +446,7 @@ mod tests {
         assert_eq!(status_label(Availability::Pending, false), Some("Pending"));
         assert_eq!(
             status_label(Availability::Processing, false),
-            Some("Processing")
+            Some("Requested")
         );
         assert_eq!(
             status_label(Availability::PartiallyAvailable, false),

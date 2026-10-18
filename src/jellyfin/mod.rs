@@ -32,8 +32,9 @@ use std::sync::Arc;
 /// How many similar titles a film's or a series' page shows.
 const SIMILAR: u32 = 12;
 
-/// What an episode is asked with: its synopsis, and its versions for the chips.
-const EPISODE_FIELDS: &str = "Overview,MediaSources";
+/// What an episode is asked with: its synopsis, its versions for the chips, and its series' poster
+/// tag.
+const EPISODE_FIELDS: &str = "Overview,MediaSources,SeriesPrimaryImage";
 
 /// Signs in to Jellyfin servers. The account file keeps the device id and the last login; the
 /// store keeps the token.
@@ -524,7 +525,7 @@ impl MediaServer for Jellyfin {
                 ("mediaTypes", "Video".into()),
                 // An episode started from the Home plays without its page: it needs its
                 // versions now.
-                ("fields", "MediaSources".into()),
+                ("fields", "MediaSources,SeriesPrimaryImage".into()),
                 ("imageTypeLimit", "1".into()),
                 ("enableImageTypes", "Primary,Backdrop".into()),
             ],
