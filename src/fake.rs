@@ -3,7 +3,9 @@
 //! watched marks) and never touches a network, a keyring or a file.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+#[cfg(test)]
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -40,14 +42,17 @@ pub const OTHER_LIBRARY_FILM: u64 = 9002;
 pub const IN_LIBRARY_SERIES: u64 = 7001;
 
 /// A disk with as many bytes free as a test says: the tests never fill the real one.
+#[cfg(test)]
 pub struct FakeDisk(pub AtomicU64);
 
+#[cfg(test)]
 impl FakeDisk {
     pub fn with(free: u64) -> std::sync::Arc<FakeDisk> {
         std::sync::Arc::new(FakeDisk(AtomicU64::new(free)))
     }
 }
 
+#[cfg(test)]
 impl crate::downloads::Disk for FakeDisk {
     fn free(&self, _path: &std::path::Path) -> std::io::Result<u64> {
         Ok(self.0.load(Ordering::SeqCst))

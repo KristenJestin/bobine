@@ -11,7 +11,7 @@
 //!
 //! `bobine --screen login|home|home-rows|home-list-resume|home-list-next|home-list-latest|home-list-empty|library|detail|
 //! detail-rows|detail-cast|playing|series|series-page|series-rows|up-next|collections|collection-page|
-//! my-list|my-list-empty|lists|playlist|film-list|series-list|discover|request|seasons|seerr-collection|similar|settings-seerr|settings-seerr-long|stats|stats-played [--films N]
+//! my-list|my-list-empty|lists|playlist|film-list|series-list|discover|request|seasons|seerr-collection|similar|settings-seerr|settings-seerr-long|stats|stats-played|downloads [--films N]
 //! [--media FILE] [--segments SECONDS] [--direct-fails] [--trailer] [--image-delay-ms N] [--photos-fail-once] [--scenario detail-play|menu|scroll|select|panel|blackout|search|search-slow|search-keys|help|ring|ring-wheel|tools|tools-keys|home-rotate|home-hover|home-jump|home-scroll|home-lists|home-play|home-poster-hover|grid-poster-hover|playlist-menu|cast-hover|genre-hover|episode-hover|skip|settings|settings-screen|long-tracks|segment-marks|stats-scroll]
 //! [--stats plugin|played] [--search-delay-ms N] [--favourite-delay-ms N] [--logout-delay-ms N] [--favourite-fails] [--slower N] --quit-at S`
 //!
@@ -481,6 +481,7 @@ fn show_screen(
     let (series_rows, up_next) = (wants(&["series-rows"]), wants(&["up-next"]));
     let home_rows = wants(&["home-rows"]);
     let to_stats = wants(&["stats", "stats-played"]);
+    let to_downloads = wants(&["downloads"]);
     // The request server's screens, with the fake one configured as a user would.
     let seerr = wants(&[
         "discover",
@@ -563,6 +564,10 @@ fn show_screen(
                                 }
                                 if seerr {
                                     configure_seerr(shell, screen == "settings-seerr-long", cx);
+                                }
+                                if to_downloads {
+                                    shell.harness_downloads(cx);
+                                    shell.select(NavEntry::Downloads, cx);
                                 }
                                 true
                             }

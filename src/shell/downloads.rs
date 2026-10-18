@@ -7,14 +7,18 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use bobine::provider::{Episode, ItemId, Title};
 use gpui_kit::{Context, ScrollHandle};
 
 use super::Shell;
-use crate::downloads::{Disk, Download, Downloads};
+use crate::downloads::{Disk, Download, DownloadError, Downloads, Snapshot, State};
 use crate::motion::Glide;
+use crate::navigation::NavEntry;
+
+/// How often the downloads are read while one is queued or coming.
+const POLL: Duration = Duration::from_millis(500);
 
 /// What the window holds of the account's downloads.
 pub struct DownloadsState {
@@ -34,7 +38,9 @@ pub struct DownloadsState {
     pub titles: Rc<[Title]>,
     /// Each coming download's bytes at the last read, when, and its speed in bytes a second.
     speeds: HashMap<ItemId, (u64, Instant, Option<f64>)>,
+    /// A run is on the background executor.
     running: bool,
+    /// The timer that reads the downloads again is set.
     polling: bool,
     pub scroll: ScrollHandle,
     /// The rows' bars ease to each new share.
@@ -61,6 +67,39 @@ impl DownloadsState {
             leaving: Vec::new(),
         }
     }
+
+    /// The download of `item`, if there is one.
+    pub fn of(&self, item: &ItemId) -> Option<&Download> {
+        self.listed.iter().find(|download| &download.item == item)
+    }
+
+    /// How fast `item` comes, in bytes a second, once two reads have measured it.
+    pub fn speed(&self, item: &ItemId) -> Option<f64> {
+        self.speeds.get(item).and_then(|(_, _, speed)| *speed)
+    }
+
+    /// Something is queued or coming: the list is read again until nothing is.
+    fn active(&self) -> bool {
+        self.listed
+            .iter()
+            .any(|download| matches!(download.manifest.state, State::Queued | State::Downloading))
+    }
+}
+
+/// The Home's "Downloaded" row: each film downloaded, and the series of each episode
+/// downloaded, once, in the order of the queue.
+pub fn downloaded_titles(listed: &[Download]) -> Vec<Title> {
+    let mut titles: Vec<Title> = Vec::new();
+    for download in listed.iter().filter(|d| d.manifest.state == State::Done) {
+        let title = match &download.manifest.title {
+            Snapshot::Film(film) => Title::Film(film.film.clone()),
+            Snapshot::Episode(_, series) => Title::Series(series.series.clone()),
+        };
+        if !titles.iter().any(|kept| kept.id() == title.id()) {
+            titles.push(title);
+        }
+    }
+    titles
 }
 
 impl Shell {
@@ -70,27 +109,275 @@ impl Shell {
         self.downloads = DownloadsState::new(Some(root), disk);
     }
 
-    /// The downloads of the account signed in.
-    pub(super) fn open_downloads(&mut self, _cx: &mut Context<Self>) {}
+    /// Some downloads of the fake server for the harness (`--screen downloads`): two films and
+    /// a season downloaded, a film paused. Under the harness's own data folder.
+    #[cfg(feature = "harness")]
+    pub fn harness_downloads(&mut self, cx: &mut Context<Self>) {
+        let (Some(store), Some(server)) = (self.downloads.store.clone(), self.server.clone())
+        else {
+            return;
+        };
+        let film = |id: &str| server.film(&ItemId(id.into())).ok();
+        for id in ["film-1", "film-2"] {
+            if let Some(film) = film(id) {
+                let _ = store.queue_film(&film, &film.versions[0].id);
+            }
+        }
+        let series = ItemId(crate::fake::SERIES.into());
+        let _ = store.queue_season(&series, &ItemId("series-0-s1".into()));
+        store.run();
+        if let Some(film) = film("film-3") {
+            let _ = store.queue_film(&film, &film.versions[0].id);
+            let _ = store.pause(&film.film.id);
+        }
+        self.refresh_downloads(cx);
+    }
 
-    /// The film page's Download.
-    pub fn download_film(&mut self, _cx: &mut Context<Self>) {}
+    /// The downloads of the account signed in: what a crash cut short comes again.
+    pub(super) fn open_downloads(&mut self, cx: &mut Context<Self>) {
+        let state = &mut self.downloads;
+        let fresh = DownloadsState::new(state.root.clone(), state.disk.clone());
+        *state = fresh;
+        let (Some(root), Some(server)) = (&state.root, self.server.clone()) else {
+            return;
+        };
+        // Unreadable, nothing is offered: the rest of the window goes on without it.
+        state.store = Downloads::open(root, server, state.disk.clone())
+            .ok()
+            .map(Arc::new);
+        self.refresh_downloads(cx);
+        self.run_downloads(cx);
+    }
 
-    /// An episode's Download.
-    pub fn download_episode(&mut self, _episode: Episode, _cx: &mut Context<Self>) {}
+    /// The Downloads page, from the pill bar or Alt+7.
+    pub fn open_downloads_page(&mut self, cx: &mut Context<Self>) {
+        self.select(NavEntry::Downloads, cx);
+    }
 
-    /// "Download season" on the series page.
-    pub fn download_season(&mut self, _cx: &mut Context<Self>) {}
+    /// The film page's Download: the version chosen on its chip. Once queued, the button opens
+    /// the Downloads page.
+    pub fn download_film(&mut self, cx: &mut Context<Self>) {
+        let Some((detail, choices)) = self.details.last().and_then(|page| page.ready()) else {
+            return;
+        };
+        if self.downloads.of(&detail.film.id).is_some() {
+            self.open_downloads_page(cx);
+            return;
+        }
+        let Some(source) = choices.source(&detail.versions).map(|s| s.id.clone()) else {
+            return;
+        };
+        let (on, detail) = (detail.film.id.clone(), detail.clone());
+        self.queue_download(on, move |store| store.queue_film(&detail, &source), cx);
+    }
 
-    pub fn pause_download(&mut self, _item: ItemId, _cx: &mut Context<Self>) {}
+    /// An episode's Download: its first version, as "Download season" takes.
+    pub fn download_episode(&mut self, episode: Episode, cx: &mut Context<Self>) {
+        if self.downloads.of(&episode.item.id).is_some() {
+            self.open_downloads_page(cx);
+            return;
+        }
+        let Some(source) = episode.versions.first().map(|s| s.id.clone()) else {
+            return;
+        };
+        let on = episode.series.clone();
+        self.queue_download(on, move |store| store.queue_episode(&episode, &source), cx);
+    }
 
-    pub fn resume_download(&mut self, _item: ItemId, _cx: &mut Context<Self>) {}
+    /// "Download season" on the series page: each of its episodes not downloaded yet.
+    pub fn download_season(&mut self, cx: &mut Context<Self>) {
+        let Some(page) = self.series_pages.last() else {
+            return;
+        };
+        let Some(season) = page.seasons.get(page.season).map(|s| s.id.clone()) else {
+            return;
+        };
+        let series = page.id.clone();
+        let on = series.clone();
+        self.queue_download(
+            on,
+            move |store| store.queue_season(&series, &season).map(|_| ()),
+            cx,
+        );
+    }
 
-    /// Remove, and Cancel for a download not complete: its folder goes.
-    pub fn remove_download(&mut self, _item: ItemId, _cx: &mut Context<Self>) {}
+    /// Queues off the window's thread (it asks the server), then starts the queue. A refusal
+    /// is said on the page of `on`.
+    fn queue_download(
+        &mut self,
+        on: ItemId,
+        queue: impl FnOnce(&Downloads) -> Result<(), DownloadError> + Send + 'static,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(store) = self.downloads.store.clone() else {
+            return;
+        };
+        self.downloads.refused = None;
+        let task = cx.background_executor().spawn(async move { queue(&store) });
+        cx.spawn(async move |this, cx| {
+            let queued = task.await;
+            this.update(cx, |shell, cx| {
+                match queued {
+                    Ok(()) => shell.run_downloads(cx),
+                    Err(why) => shell.downloads.refused = Some((on, why.to_string())),
+                }
+                shell.refresh_downloads(cx);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+        cx.notify();
+    }
 
-    /// Reads the downloads again; the views are told only when something changed.
-    pub fn refresh_downloads(&mut self, _cx: &mut Context<Self>) {}
+    /// Runs the queue on the background executor, once at a time; a download queued as a run
+    /// ends starts the next one.
+    fn run_downloads(&mut self, cx: &mut Context<Self>) {
+        let Some(store) = self.downloads.store.clone() else {
+            return;
+        };
+        if self.downloads.running {
+            return;
+        }
+        self.downloads.running = true;
+        let ran = store.clone();
+        let task = cx.background_executor().spawn(async move { ran.run() });
+        cx.spawn(async move |this, cx| {
+            task.await;
+            this.update(cx, |shell, cx| {
+                // Another account's run, ended after a sign out, is not this one's.
+                if !shell
+                    .downloads
+                    .store
+                    .as_ref()
+                    .is_some_and(|s| Arc::ptr_eq(s, &store))
+                {
+                    return;
+                }
+                shell.downloads.running = false;
+                shell.refresh_downloads(cx);
+                let queued = store
+                    .list()
+                    .iter()
+                    .any(|d| d.manifest.state == State::Queued);
+                if queued {
+                    shell.run_downloads(cx);
+                }
+            })
+            .ok();
+        })
+        .detach();
+        self.watch_downloads(cx);
+    }
+
+    pub fn pause_download(&mut self, item: ItemId, cx: &mut Context<Self>) {
+        self.change_download(move |store| store.pause(&item), false, cx);
+    }
+
+    pub fn resume_download(&mut self, item: ItemId, cx: &mut Context<Self>) {
+        self.change_download(move |store| store.resume(&item), true, cx);
+    }
+
+    /// Remove, and Cancel for a download not complete: its folder goes, its row fades and
+    /// collapses.
+    pub fn remove_download(&mut self, item: ItemId, cx: &mut Context<Self>) {
+        if let Some(download) = self.downloads.of(&item) {
+            let gone = (download.clone(), Instant::now());
+            self.downloads.leaving.push(gone);
+        }
+        self.change_download(move |store| store.remove(&item), false, cx);
+    }
+
+    /// Changes a download on disk off the window's thread, then reads them again; `run`: the
+    /// queue goes on after.
+    fn change_download(
+        &mut self,
+        change: impl FnOnce(&Downloads) -> std::io::Result<()> + Send + 'static,
+        run: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(store) = self.downloads.store.clone() else {
+            return;
+        };
+        let task = cx
+            .background_executor()
+            .spawn(async move { change(&store) });
+        cx.spawn(async move |this, cx| {
+            let changed = task.await;
+            this.update(cx, |shell, cx| {
+                if changed.is_err() {
+                    shell.show_notice("The download could not be changed on disk.", cx);
+                }
+                if run {
+                    shell.run_downloads(cx);
+                }
+                shell.refresh_downloads(cx);
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Reads the downloads and the free space again; the views are told only when something
+    /// changed. The timer is set while something is queued or coming.
+    pub fn refresh_downloads(&mut self, cx: &mut Context<Self>) {
+        let state = &mut self.downloads;
+        let Some(store) = &state.store else {
+            return;
+        };
+        let listed = store.list();
+        let free = state
+            .root
+            .as_ref()
+            .and_then(|root| state.disk.free(root).ok());
+        let now = Instant::now();
+        let mut speeds = HashMap::new();
+        for download in listed
+            .iter()
+            .filter(|d| d.manifest.state == State::Downloading)
+        {
+            let speed = match state.speeds.get(&download.item) {
+                Some((bytes, at, speed)) if *bytes == download.received => *speed,
+                Some((bytes, at, _)) if now > *at => {
+                    let seconds = now.duration_since(*at).as_secs_f64();
+                    Some(download.received.saturating_sub(*bytes) as f64 / seconds)
+                }
+                _ => None,
+            };
+            speeds.insert(download.item.clone(), (download.received, now, speed));
+        }
+        state.speeds = speeds;
+        if *state.listed != *listed || state.free != free {
+            state.titles = downloaded_titles(&listed).into();
+            state.listed = listed.into();
+            state.free = free;
+            cx.notify();
+        }
+        self.watch_downloads(cx);
+    }
+
+    /// Sets the timer that reads the downloads again, while something is queued or coming.
+    fn watch_downloads(&mut self, cx: &mut Context<Self>) {
+        if self.downloads.polling || !self.downloads.active() {
+            return;
+        }
+        self.downloads.polling = true;
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(POLL).await;
+                let again = this.update(cx, |shell, cx| {
+                    shell.refresh_downloads(cx);
+                    let again = shell.downloads.active();
+                    shell.downloads.polling = again;
+                    again
+                });
+                if !matches!(again, Ok(true)) {
+                    break;
+                }
+            }
+        })
+        .detach();
+    }
 }
 
 #[cfg(test)]

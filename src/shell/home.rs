@@ -589,6 +589,10 @@ impl Shell {
 
     /// "See all" on a row.
     pub fn open_list(&mut self, kind: ListKind, library: Option<String>, cx: &mut Context<Self>) {
+        if kind == ListKind::Downloaded {
+            self.open_downloads_page(cx);
+            return;
+        }
         self.forward.clear();
         self.list = Some(ListPage {
             kind,

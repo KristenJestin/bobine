@@ -80,6 +80,8 @@ icons! {
     ChartBar => "chart-bar",
     Bell => "bell",
     SpinnerGap => "spinner-gap",
+    Download => "download-simple",
+    Trash => "trash",
 }
 
 /// The asset source of the window: the icons above and nothing else.

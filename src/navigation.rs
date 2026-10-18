@@ -600,7 +600,8 @@ mod tests {
                 "Series",
                 "Collections",
                 "Lists",
-                "Discover"
+                "Discover",
+                "Downloads"
             ]
         );
     }

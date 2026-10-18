@@ -104,7 +104,15 @@ pub fn pill_bar(
             .text_size(px(13.))
             .text_color(nav_text(rest, level))
             .bg(nav_fill(level))
-            .child(entry.label());
+            // Downloads is its arrow: the bar keeps its width in a narrow window.
+            .map(|item| match entry {
+                NavEntry::Downloads => item
+                    .px(px(9.))
+                    .flex()
+                    .items_center()
+                    .child(icon(IconName::Download, 15.)),
+                _ => item.child(entry.label()),
+            });
         if live {
             item.cursor_pointer()
                 .on_click(cx.listener(move |app, _, _, cx| app.select(entry, cx)))
