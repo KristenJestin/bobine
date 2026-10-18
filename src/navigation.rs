@@ -169,6 +169,11 @@ impl Navigator {
             .unwrap_or(self.stack[0])
     }
 
+    /// Whether the pill of `entry` is the one highlighted.
+    pub fn lights(&self, entry: NavEntry) -> bool {
+        entry.is_current(self.section())
+    }
+
     /// Goes deeper (a film from a library, the player from a film): `back` returns here.
     pub fn open(&mut self, screen: Screen) {
         self.stack.push(screen);
@@ -310,6 +315,17 @@ mod tests {
         nav.switch_root(Screen::Home);
         nav.open(Screen::HomeList);
         assert_eq!(nav.section(), Screen::Home);
+    }
+
+    #[test]
+    fn the_stats_page_highlights_no_top_bar_pill() {
+        let mut nav = Navigator::new();
+        nav.switch_root(Screen::Home);
+        nav.open(Screen::Stats);
+        assert!(NavEntry::ALL.into_iter().all(|entry| !nav.lights(entry)));
+        // Back on the Home, its pill is lit again.
+        assert!(nav.back());
+        assert!(nav.lights(NavEntry::Home));
     }
 
     #[test]

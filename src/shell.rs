@@ -1081,11 +1081,10 @@ impl Render for Shell {
         } else {
             None
         };
-        let section = self.navigator.section();
         let now = Instant::now();
         let highlight = std::array::from_fn(|at| {
             let pill = &mut self.nav_pills[at];
-            pill.set(NavEntry::ALL[at].is_current(section), now);
+            pill.set(self.navigator.lights(NavEntry::ALL[at]), now);
             if pill.moving(now) {
                 window.request_animation_frame();
             }

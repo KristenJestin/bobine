@@ -363,6 +363,7 @@ pub fn back_link(
         press: rgb(0x2e2e33),
     };
     theme::eased("back-link", shades, window, cx)
+        .debug_selector(|| "back-link".into())
         .flex()
         .items_center()
         .gap(px(6.))
