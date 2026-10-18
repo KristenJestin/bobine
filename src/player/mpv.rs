@@ -8,8 +8,9 @@ use super::{
 };
 
 /// The properties the player follows; mpv says when one changes.
-/// `vo-configured` turns on with the first picture the video output gets.
-pub const OBSERVED: [&str; 7] = [
+/// `vo-configured` turns on with the first picture the video output gets, `paused-for-cache`
+/// while the stream waits for data.
+pub const OBSERVED: [&str; 8] = [
     "time-pos",
     "duration",
     "pause",
@@ -17,6 +18,7 @@ pub const OBSERVED: [&str; 7] = [
     "aid",
     "sid",
     "vo-configured",
+    "paused-for-cache",
 ];
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -328,6 +330,10 @@ impl<C: MpvClient> Player for MpvPlayer<C> {
                         .map(|paused| PlayerEvent::Paused(paused == "yes")),
                     "vo-configured" => (self.client.get("vo-configured").as_deref() == Some("yes"))
                         .then_some(PlayerEvent::FirstFrame),
+                    "paused-for-cache" => self
+                        .client
+                        .get("paused-for-cache")
+                        .map(|waiting| PlayerEvent::Buffering(waiting == "yes")),
                     _ => Some(PlayerEvent::Tracks(
                         tracks::from_mpv(|name| self.client.get(name))
                             .into_iter()

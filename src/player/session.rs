@@ -10,7 +10,8 @@ use super::controls::{Controls, KeyAction, on_picture, subtitle_position};
 use super::segments::{Button, Label, Press, Prompt, button_at};
 use super::settings::{self, Page, Quality, SPEEDS};
 use super::{
-    Aspect, Media, PlaybackInfo, Player, PlayerError, PlayerEvent, Seek, Track, TrackKind, tracks,
+    Aspect, Media, PlaybackInfo, Player, PlayerError, PlayerEvent, Seek, Track, TrackKind, time,
+    tracks,
 };
 use crate::video::{Rect, VideoDisplay, placement};
 
@@ -94,6 +95,8 @@ pub struct Session {
     opened_at: Option<Instant>,
     loaded_at: Option<Instant>,
     first_frame_at: Option<Instant>,
+    /// The stream waits for data to fill its cache.
+    buffering: bool,
     /// How many seeks the viewer asked for, so a seek can be told to the server.
     seeks: u64,
     /// What the server marked as skippable, by start, and whether an episode follows this one.
@@ -150,6 +153,7 @@ impl Session {
             opened_at: None,
             loaded_at: None,
             first_frame_at: None,
+            buffering: false,
             seeks: 0,
             segments: Vec::new(),
             has_next: false,
@@ -168,6 +172,7 @@ impl Session {
         self.opened_at = None;
         self.loaded_at = None;
         self.first_frame_at = None;
+        self.buffering = false;
         self.ended = false;
         self.tracks.clear();
         self.player.load(media)
@@ -565,16 +570,17 @@ impl Session {
 
     /// The view shows that it waits: from the title asked to its first frame, and while the stream
     /// fills its cache.
-    #[allow(dead_code, reason = "wired in the view by the next commit")]
     pub fn loading(&self) -> bool {
-        false
+        self.error.is_none() && (self.first_frame_at.is_none() || self.buffering)
     }
 
     /// What is left and when the film ends, for the clock now; nothing before the duration is
     /// known.
-    #[allow(dead_code, reason = "wired in the view by the next commit")]
-    pub fn time_left(&self, _now: (u32, u32)) -> Option<String> {
-        Some(String::new())
+    pub fn time_left(&self, now: (u32, u32)) -> Option<String> {
+        (self.duration > 0.).then(|| {
+            let left = (self.duration - self.position).max(0.);
+            format!("{} · {}", time::remaining(left), time::end_clock(now, left))
+        })
     }
 
     /// Reads what the player says and shows or hides the cursor with the controls. Returns
@@ -600,7 +606,7 @@ impl Session {
                 PlayerEvent::FirstFrame => {
                     self.first_frame_at.get_or_insert(now);
                 }
-                PlayerEvent::Buffering(_) => {}
+                PlayerEvent::Buffering(waiting) => self.buffering = waiting,
                 // The film plays; a refused subtitle is simply not in the panel.
                 PlayerEvent::SubtitleFailed(_) => {}
             }

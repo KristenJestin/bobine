@@ -173,7 +173,6 @@ pub enum PlayerEvent {
     /// The first picture reached the video surface: the film decodes.
     FirstFrame,
     /// The stream waits for data to fill its cache (`true`), or has it again and plays on.
-    #[allow(dead_code, reason = "told by mpv in the next commit")]
     Buffering(bool),
     /// Seconds from the start.
     Position(f64),
