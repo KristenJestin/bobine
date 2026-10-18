@@ -886,6 +886,27 @@ mod tests {
     }
 
     #[gpui_kit::test]
+    fn help_does_not_open_over_a_page_menu(cx: &mut TestAppContext) {
+        let window = signed_in(cx);
+        let mut visual = drawn(&window, cx);
+        window
+            .update(cx, |shell, _, cx| shell.toggle_account_menu(cx))
+            .unwrap();
+        visual.simulate_keystrokes("?");
+        window
+            .read_with(cx, |shell, _| {
+                assert!(!shell.help_open, "no help over the account menu");
+            })
+            .unwrap();
+        // Once the menu is closed, the key works again.
+        window
+            .update(cx, |shell, _, cx| shell.toggle_account_menu(cx))
+            .unwrap();
+        visual.simulate_keystrokes("?");
+        assert!(window.read_with(cx, |shell, _| shell.help_open).unwrap());
+    }
+
+    #[gpui_kit::test]
     fn the_help_closes_when_the_film_ends_under_it(cx: &mut TestAppContext) {
         let window = signed_in(cx);
         let player = FakePlayer::default();
