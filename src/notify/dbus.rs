@@ -184,7 +184,7 @@ fn listen(signals: MessageIterator, shown: &Mutex<Shown>, clicks: &Clicks) {
                     continue;
                 }
                 if let Some(open) = shown.lock().unwrap().remove(id) {
-                    let _ = (open, clicks);
+                    clicks.push(open);
                 }
             }
             Some("NotificationClosed") => {
