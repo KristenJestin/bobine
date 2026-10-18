@@ -6,9 +6,10 @@
 //! `NOT_SIGNED_IN`, `UNREACHABLE`, `FAILED` (the keyring, the account file, an answer the server
 //! should not have given) and `USAGE`.
 
-use std::path::PathBuf;
-use std::sync::Arc;
-use std::time::Duration;
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, mpsc};
+use std::time::{Duration, Instant};
 
 use bobine::provider::{
     Connector, Episode, Film, ImageRef, ItemId, MediaServer, ProviderError, SeriesHit, Title,
@@ -17,7 +18,9 @@ use serde_json::{Value, json};
 
 use crate::film_page::{self, From};
 use crate::home_page;
+use crate::images;
 use crate::instance::{Kind, Request, valid_id};
+use crate::mpris;
 use crate::series_page;
 use crate::start;
 
@@ -37,11 +40,13 @@ const ICON: &str = "bobine";
 /// every keystroke, and a list without some posters is better than a list that comes late.
 const POSTER_BUDGET: Duration = Duration::from_secs(1);
 
+/// How many posters are fetched at once.
+const POSTER_FETCHES: usize = 8;
+
 /// An entry, with the poster its icon is made of.
 type Listed = (Option<ImageRef>, Value);
 
 /// Where the posters are kept, and how long the entries wait for those not kept yet.
-#[allow(dead_code)] // red commit only
 pub struct Posters {
     pub dir: PathBuf,
     pub budget: Duration,
@@ -336,13 +341,93 @@ fn entry(
     (poster, entry)
 }
 
-/// The entries, each with the path of its poster for an icon when there is one.
+/// The entries, each with the path of its poster for an icon when it has one in the end.
 fn with_icons(
     listed: Vec<Listed>,
-    _server: &Arc<dyn MediaServer>,
-    _posters: Option<&Posters>,
+    server: &Arc<dyn MediaServer>,
+    posters: Option<&Posters>,
 ) -> Vec<Value> {
-    listed.into_iter().map(|(_, entry)| entry).collect()
+    let kept = posters.map_or_else(HashMap::new, |posters| {
+        keep_posters(
+            server,
+            posters,
+            listed.iter().filter_map(|(poster, _)| poster.as_ref()),
+        )
+    });
+    listed
+        .into_iter()
+        .map(|(poster, mut entry)| {
+            let path = poster.and_then(|poster| kept.get(&(poster.item.0, poster.tag)).cloned());
+            if let Some(path) = path.as_deref().and_then(Path::to_str) {
+                entry["icon"] = path.into();
+            }
+            entry
+        })
+        .collect()
+}
+
+/// The path of each poster, by item and tag: those already kept, then those fetched in time.
+/// Whatever is late is left out, and its fetch ends with the process.
+fn keep_posters<'a>(
+    server: &Arc<dyn MediaServer>,
+    posters: &Posters,
+    wanted: impl Iterator<Item = &'a ImageRef>,
+) -> HashMap<(String, String), PathBuf> {
+    let mut kept = HashMap::new();
+    let mut missing = VecDeque::new();
+    let mut seen = HashSet::new();
+    for image in wanted {
+        let key = (image.item.0.clone(), image.tag.clone());
+        if !seen.insert(key.clone()) {
+            continue;
+        }
+        match mpris::cached_art(&posters.dir, &key.0, &key.1) {
+            Some(path) => {
+                kept.insert(key, path);
+            }
+            None => missing.push_back(image.clone()),
+        }
+    }
+    if missing.is_empty() {
+        return kept;
+    }
+    let workers = missing.len().min(POSTER_FETCHES);
+    let queue = Arc::new(Mutex::new(missing));
+    let (sender, receiver) = mpsc::channel();
+    for _ in 0..workers {
+        let (server, queue, sender, dir) = (
+            server.clone(),
+            queue.clone(),
+            sender.clone(),
+            posters.dir.clone(),
+        );
+        std::thread::spawn(move || {
+            while let Some(image) = queue.lock().ok().and_then(|mut queue| queue.pop_front()) {
+                if let Some(path) = fetch_poster(&*server, &dir, &image) {
+                    let _ = sender.send(((image.item.0, image.tag), path));
+                }
+            }
+        });
+    }
+    drop(sender);
+    let deadline = Instant::now() + posters.budget;
+    while let Some(left) = deadline.checked_duration_since(Instant::now()) {
+        match receiver.recv_timeout(left) {
+            Ok((key, path)) => {
+                kept.insert(key, path);
+            }
+            Err(_) => break,
+        }
+    }
+    kept
+}
+
+/// The poster, as small as the window asks it, kept as the server sent it. An answer that is not
+/// an image is not kept: it would be served as the icon for good.
+fn fetch_poster(server: &dyn MediaServer, dir: &Path, image: &ImageRef) -> Option<PathBuf> {
+    let bytes = server.image(image, images::POSTER).ok()?;
+    images::format(&bytes)?;
+    mpris::store_art(dir, &image.item.0, &image.tag, &bytes).ok()
 }
 
 fn command(line: String) -> Value {
