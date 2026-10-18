@@ -630,6 +630,23 @@ mod tests {
     }
 
     #[gpui_kit::test]
+    fn an_episode_row_press_is_recorded(cx: &mut TestAppContext) {
+        let (_server, window) = signed_in(cx);
+        series_episodes(&window, cx);
+        let visual = drawn(&window, cx);
+        arm(&window, visual);
+        // A click on the row, off its still and its check: the playback grows from the still.
+        let still = ElementId::from(("episode-still", 0usize));
+        let picture = bounds(visual, format!("card-hover {still}"));
+        let at = bounds(visual, "episode 0".into()).center();
+        visual.simulate_mouse_move(at, None, Modifiers::none());
+        visual.simulate_click(at, Modifiers::none());
+        visual.run_until_parked();
+        assert_eq!(screen(&window, visual), Screen::Player);
+        assert_eq!(grown_from(&window, visual), Some(picture));
+    }
+
+    #[gpui_kit::test]
     fn leaving_the_player_fades_the_picture_out_when_its_card_is_out_of_sight(
         cx: &mut TestAppContext,
     ) {

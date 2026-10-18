@@ -97,9 +97,16 @@ fn main() {
             Some(request)
         }
         // A locked keyring is no dialog for the launcher: not signed in.
-        Some(Ok(command)) => exit_with(launcher::run(&command, || {
-            open_jellyfin_with(SecretServiceStore::WITHOUT_PROMPT)
-        })),
+        Some(Ok(command)) => {
+            let posters =
+                launcher::poster_dir(std::env::var_os("XDG_CACHE_HOME"), std::env::var_os("HOME"))
+                    .map(launcher::Posters::new);
+            exit_with(launcher::run(
+                &command,
+                || open_jellyfin_with(SecretServiceStore::WITHOUT_PROMPT),
+                posters.as_ref(),
+            ))
+        }
     };
     #[cfg(feature = "harness")]
     let harness = harness::Harness::from_args();
