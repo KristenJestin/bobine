@@ -669,6 +669,7 @@ pub fn episodes() -> Vec<Episode> {
                     series: ItemId(format!("series-{n}")),
                     series_title: (*title).into(),
                     season: ItemId(format!("series-{n}-s{season}")),
+                    series_poster: image(&format!("series-{n}"), ImageKind::Primary),
                     season_number: Some(season),
                     number: Some(number),
                     overview: Some(
