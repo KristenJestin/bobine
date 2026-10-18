@@ -449,12 +449,14 @@ fn episode_row(
         }
     })
     .child(icon(IconName::Check, 14.))
+    .debug_selector(move || format!("episode-watched {index}"))
     .on_click(cx.listener(move |shell, _, _, cx| {
         // The check is not the row: it marks, it does not play.
         cx.stop_propagation();
         shell.toggle_episode_watched(marked.clone(), cx);
     }));
     theme::eased(("episode", index), shades, window, cx)
+        .debug_selector(move || format!("episode {index}"))
         .flex()
         .items_center()
         .gap(px(18.))

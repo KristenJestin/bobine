@@ -55,6 +55,7 @@ pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -
             window,
             cx,
         )
+        .debug_selector(|| "playlist-play-all".into())
         .when(busy, |button| button.opacity(0.6))
         .on_click(cx.listener(|shell, _, window, cx| shell.play_all(window, cx)))
     });
@@ -160,6 +161,7 @@ fn line(
     div().px(px(MARGIN - 12.)).pb(px(8.)).child(
         theme::eased(("playlist-entry", at), theme::Shades::line(), window, cx)
             .group(group)
+            .debug_selector(move || format!("playlist-entry {at}"))
             .h(px(LINE - 8.))
             .px(px(12.))
             .rounded(px(theme::RADIUS))
