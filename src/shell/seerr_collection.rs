@@ -302,7 +302,7 @@ mod tests {
 
     use super::super::discover::tests::{change_address, click, configured, configured_on, drawn};
     use super::*;
-    use crate::fake::{FILM, FakeServer, IN_LIBRARY_FILM};
+    use crate::fake::{FILM, FakeServer, IN_LIBRARY_FILM, OTHER_LIBRARY_FILM};
     use crate::fake_seerr::{COLLECTION, FakeSeerr, WINTER_LIGHT, WINTERS_END};
     use crate::navigation::NavEntry;
 
@@ -882,6 +882,49 @@ mod tests {
         let mut visual = drawn(&window, cx);
         assert!(visual.debug_bounds("part-of-collection").is_some());
         assert_eq!(collection_reads(&seerr, COLLECTION), 1);
+    }
+
+    #[gpui_kit::test]
+    fn a_title_request_fills_its_names(cx: &mut TestAppContext) {
+        let seerr = FakeSeerr::default();
+        let window = configured(&seerr, cx);
+        // Jellyfin knows no collection of the film: Seerr's page of the film gives it.
+        window
+            .update(cx, |shell, _, cx| shell.open_film(ItemId(FILM.into()), cx))
+            .unwrap();
+        cx.run_until_parked();
+        window
+            .update(cx, |shell, _, _| {
+                assert_eq!(
+                    shell.seerr.names.get(&COLLECTION),
+                    Some(&Some("Winter Saga".to_string()))
+                );
+            })
+            .unwrap();
+    }
+
+    #[gpui_kit::test]
+    fn two_movies_of_one_collection_read_its_name_once(cx: &mut TestAppContext) {
+        let seerr = FakeSeerr::default();
+        let window = configured(&seerr, cx);
+        window
+            .update(cx, |shell, _, cx| {
+                shell.load_collection_link(Some(IN_LIBRARY_FILM), Some(COLLECTION), cx);
+                shell.load_collection_link(Some(OTHER_LIBRARY_FILM), Some(COLLECTION), cx);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        assert_eq!(collection_reads(&seerr, COLLECTION), 1);
+        window
+            .update(cx, |shell, _, _| {
+                for film in [IN_LIBRARY_FILM, OTHER_LIBRARY_FILM] {
+                    assert_eq!(
+                        shell.collection_link(Some(film)).map(|link| link.id),
+                        Some(COLLECTION)
+                    );
+                }
+            })
+            .unwrap();
     }
 
     #[gpui_kit::test]

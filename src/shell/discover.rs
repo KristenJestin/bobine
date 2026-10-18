@@ -1249,6 +1249,66 @@ pub(super) mod tests {
     }
 
     #[gpui_kit::test]
+    fn a_refused_key_hides_discover_and_says_so_in_settings(cx: &mut TestAppContext) {
+        let seerr = FakeSeerr::default();
+        seerr.state.lock().unwrap().failure = Some(RequestError::KeyRefused);
+        let window = configured(&seerr, cx);
+        assert!(!connected(&window, cx));
+        let mut visual = drawn(&window, cx);
+        assert!(visual.debug_bounds("nav Home").is_some());
+        assert!(visual.debug_bounds("nav Discover").is_none());
+        window
+            .update(cx, |shell, _, cx| shell.open_settings(cx))
+            .unwrap();
+        let mut visual = drawn(&window, cx);
+        assert!(visual.debug_bounds("seerr-check").is_some());
+        window
+            .update(cx, |shell, _, _| {
+                assert!(matches!(
+                    shell.seerr.check,
+                    Some(Loadable::Failed("Seerr refused the API key."))
+                ));
+            })
+            .unwrap();
+    }
+
+    #[gpui_kit::test]
+    fn an_address_with_a_port_and_no_scheme_says_which_address_failed(cx: &mut TestAppContext) {
+        let seerr = FakeSeerr::default();
+        seerr.state.lock().unwrap().failure = Some(RequestError::Unreachable("down".into()));
+        let keyring = Arc::new(MemoryKeyring::default());
+        keyring.save(ACCOUNT, &Token::new(KEY.into())).unwrap();
+        let (window, _) = start(None, &keyring, &seerr, cx);
+        let tried = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let (fake, seen) = (seerr.clone(), tried.clone());
+        window
+            .update(cx, |shell, _, cx| {
+                shell.open_seerr = Arc::new(move |address, _, _| {
+                    seen.lock().unwrap().push(address.to_string());
+                    Ok(Arc::new(fake.clone()) as Arc<dyn RequestServer>)
+                });
+                let address = shell.seerr.address.clone().unwrap();
+                address.update(cx, |field, cx| field.set_text("seerr.example:5055", cx));
+                shell.save_seerr_address(cx);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        // The key goes over https only: plain http is the viewer's to type.
+        assert_eq!(*tried.lock().unwrap(), ["https://seerr.example:5055"]);
+        window
+            .update(cx, |shell, _, _| {
+                assert!(matches!(
+                    shell.seerr.check,
+                    Some(Loadable::Failed(
+                        "Seerr cannot be reached over https. If it serves plain http, \
+                         type http:// before the address."
+                    ))
+                ));
+            })
+            .unwrap();
+    }
+
+    #[gpui_kit::test]
     fn without_a_seerr_user_for_the_viewer_the_settings_say_requests_go_as_the_owner(
         cx: &mut TestAppContext,
     ) {
@@ -1352,7 +1412,7 @@ pub(super) mod tests {
     }
 
     #[gpui_kit::test]
-    fn the_tmdb_index_is_read_once_until_the_library_refreshes(cx: &mut TestAppContext) {
+    fn home_arrival_does_not_refetch_the_tmdb_index(cx: &mut TestAppContext) {
         let seerr = FakeSeerr::default();
         let server = FakeServer::new(6, true);
         let window = configured_on(server.clone(), &seerr, cx);
@@ -1360,19 +1420,32 @@ pub(super) mod tests {
         assert_eq!(indexes(), 1, "read once the client is there");
         window
             .update(cx, |shell, _, cx| {
-                shell.select(NavEntry::Discover, cx);
                 shell.open_film(ItemId(FILM.into()), cx);
-                shell.select(NavEntry::Discover, cx);
+                assert!(shell.go_back(cx));
             })
             .unwrap();
         cx.run_until_parked();
-        assert_eq!(indexes(), 1, "kept for the session");
-        // Home is the library read again: the index with it.
-        window
-            .update(cx, |shell, _, cx| shell.select(NavEntry::Home, cx))
-            .unwrap();
-        cx.run_until_parked();
-        assert_eq!(indexes(), 2);
+        assert_eq!(screen(&window, cx), Screen::Home);
+        assert_eq!(indexes(), 1, "kept for the session, not read with the Home");
+    }
+
+    #[gpui_kit::test]
+    fn each_arrival_on_discover_reads_the_tmdb_index_with_its_data(cx: &mut TestAppContext) {
+        let seerr = FakeSeerr::default();
+        let server = FakeServer::new(6, true);
+        let window = configured_on(server.clone(), &seerr, cx);
+        let indexes = || server.state.lock().unwrap().record.tmdb_indexes;
+        assert_eq!(indexes(), 1, "read once the client is there");
+        for arrivals in 1..=2 {
+            window
+                .update(cx, |shell, _, cx| {
+                    shell.select(NavEntry::Home, cx);
+                    shell.select(NavEntry::Discover, cx);
+                })
+                .unwrap();
+            cx.run_until_parked();
+            assert_eq!(indexes(), 1 + arrivals);
+        }
     }
 
     #[gpui_kit::test]
