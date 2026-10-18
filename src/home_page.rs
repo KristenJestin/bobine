@@ -7,15 +7,16 @@ use std::sync::Arc;
 
 use bobine::provider::{
     Episode, Feature, FeatureKind, FilmQuery, FilmSort, ItemId, LibraryKind, MediaServer, Page,
-    Playback, ProviderError, Title,
+    PlaySessionId, Playback, ProviderError, Title,
 };
 
-use crate::downloads::{Downloads, Local};
+use crate::downloads::{Downloads, Local, Snapshot};
 use crate::fallback;
 use crate::film_page::{self, Choices, Plan};
 use crate::grid;
 use crate::library_tools::Tools;
 use crate::player::settings::Quality;
+use crate::reports::To;
 use crate::series_page;
 
 /// What a play button of the Home starts.
@@ -145,6 +146,10 @@ pub fn start_from(
     }
 }
 
+/// The playback session of a download played while the server cannot be reached: the journal
+/// does not keep it.
+const OFFLINE_SESSION: &str = "offline";
+
 /// Whether the server can be reached for the playback of a download.
 #[allow(
     dead_code,
@@ -164,7 +169,7 @@ pub enum Reach {
 )]
 pub struct StartedDownload {
     pub started: Started,
-    pub reports: crate::reports::To,
+    pub reports: To,
     pub local: Local,
 }
 
@@ -180,8 +185,76 @@ pub fn start_download(
     reach: Reach,
     from: film_page::From,
 ) -> Result<StartedDownload, StartError> {
-    let _ = (downloads, item, reach, from);
-    Err(StartError::NothingToPlay)
+    let local = downloads.local(item).ok_or(StartError::NothingToPlay)?;
+    let (film, versions) = match &local.manifest.title {
+        Snapshot::Film(detail) => (&detail.film, &detail.versions),
+        Snapshot::Episode(episode, _) => (&episode.item, &episode.versions),
+    };
+    // Where the viewer stopped: as the server holds it, else as the last offline play left it,
+    // else as it was when downloaded.
+    let mut film = film.clone();
+    if let Some(play) = downloads.journal().plays().iter().find(|p| &p.item == item) {
+        film.resume = Some(play.position).filter(|position| !position.is_zero());
+    }
+    if let Reach::Online(server) = &reach {
+        match server.title(item) {
+            Ok(Title::Film(fresh)) => film.resume = fresh.resume,
+            Ok(Title::Episode(fresh)) => film.resume = fresh.item.resume,
+            _ => {}
+        }
+    }
+    let mut choices = Choices::new(versions);
+    if let Some(version) = versions.iter().position(|v| v.id == local.manifest.source) {
+        choices.set_version(versions, version);
+    }
+    let plan = film_page::plan(&film, versions, &choices, from).ok_or(StartError::NothingToPlay)?;
+    let version = choices.source(versions).map(film_page::version_label);
+    let (title, subtitle, list, desktop) = match &local.manifest.title {
+        Snapshot::Film(detail) => {
+            let mut parts: Vec<String> = film.year.iter().map(i32::to_string).collect();
+            parts.extend(version);
+            parts.push("downloaded".into());
+            let desktop = crate::mpris::Title::film(&detail.film);
+            (
+                plan.title.clone(),
+                parts.join(" · "),
+                film.id.clone(),
+                desktop,
+            )
+        }
+        Snapshot::Episode(episode, _) => {
+            let (title, mut subtitle) = series_page::player_title(episode);
+            if let Some(version) = version {
+                subtitle.push_str(&format!(" · {version}"));
+            }
+            let desktop = crate::mpris::Title::episode(episode);
+            (title, subtitle, episode.series.clone(), desktop)
+        }
+    };
+    let (opened, reports) = match reach {
+        Reach::Online(server) => (
+            server
+                .play(item, &local.manifest.source)
+                .map(|opened| local.playback(opened.session)),
+            To::Server(server),
+        ),
+        Reach::Offline => (
+            Ok(local.playback(PlaySessionId(OFFLINE_SESSION.into()))),
+            To::Journal(downloads.journal()),
+        ),
+    };
+    Ok(StartedDownload {
+        started: Started {
+            plan,
+            title,
+            subtitle,
+            list,
+            desktop,
+            opened,
+        },
+        reports,
+        local,
+    })
 }
 
 /// The rows of the Home that list titles, and so have a full grid behind "See all".

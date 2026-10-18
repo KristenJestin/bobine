@@ -227,6 +227,10 @@ impl Fallback {
             return None;
         }
         match step(self.method, session, self.plan.start, now) {
+            Step::Convert { .. } if self.local => {
+                session.fail(PlayerError(DOWNLOAD_CANNOT_PLAY.into()));
+                None
+            }
             Step::Convert { from } => {
                 self.method = PlayMethod::Transcode;
                 self.asking = Some(from);
@@ -314,7 +318,7 @@ impl Fallback {
     /// The viewer chose `quality` in the settings: what to ask the server, from where the film
     /// is. Nothing while the server is already asked.
     pub fn choose(&mut self, quality: Quality, session: &mut Session) -> Option<Reopen> {
-        if self.asking.is_some() {
+        if self.asking.is_some() || self.local {
             return None;
         }
         let from = if session.position_known() {

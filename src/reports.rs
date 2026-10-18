@@ -6,11 +6,11 @@
 use std::sync::Arc;
 use std::sync::mpsc::{Sender, channel};
 use std::thread::JoinHandle;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use bobine::provider::{MediaServer, PROGRESS_EVERY, PlaybackReport, ProviderError};
 
-use crate::downloads::Journal;
+use crate::downloads::{Journal, OfflinePlay};
 use crate::player::session::Session;
 use crate::series_page::reached_the_end;
 
@@ -172,8 +172,20 @@ impl Reporting {
 /// A report as the journal keeps it: the item's last position, or watched when it ended at its
 /// end.
 fn write(journal: &Journal, kind: Kind, report: &PlaybackReport) -> Result<(), ProviderError> {
-    let _ = (journal, kind, report);
-    Ok(())
+    let played = kind == Kind::Ended;
+    journal
+        .record(OfflinePlay {
+            item: report.film.clone(),
+            // As the server keeps it: a film watched has no resume point.
+            position: if played {
+                Duration::ZERO
+            } else {
+                report.position
+            },
+            played,
+            at: SystemTime::now(),
+        })
+        .map_err(|error| ProviderError::Write(error.kind()))
 }
 
 /// What ends the reports of a playback the viewer leaves: the handle of its own reports, or,

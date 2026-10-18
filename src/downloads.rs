@@ -185,7 +185,9 @@ impl Manifest {
 
     /// The complete file's name in the item's folder.
     pub fn media_name(&self) -> String {
-        format!("media.{}", safe(self.container.as_deref().unwrap_or("bin")))
+        // A container may come as a list (`mov,mp4,m4a`): its first name is the file's.
+        let container = self.container.as_deref().and_then(|c| c.split(',').next());
+        format!("media.{}", safe(container.unwrap_or("bin")))
     }
 }
 
@@ -254,8 +256,8 @@ impl Local {
 
     /// One downloaded tile of thumbnails, as the server gave it.
     pub fn tile(&self, tile: u32) -> io::Result<Vec<u8>> {
-        let _ = tile;
-        Err(io::ErrorKind::Unsupported.into())
+        let trickplay = self.manifest.trickplay.ok_or(io::ErrorKind::NotFound)?;
+        fs::read(self.folder.join(tile_name(&trickplay, tile)))
     }
 }
 
@@ -279,13 +281,22 @@ pub struct Journal {
 
 impl Journal {
     pub fn plays(&self) -> Vec<OfflinePlay> {
-        Vec::new()
+        fs::read(&self.path)
+            .ok()
+            .and_then(|text| serde_json::from_slice(&text).ok())
+            .unwrap_or_default()
     }
 
     /// Keeps `play` as its item's last, after every other.
     pub fn record(&self, play: OfflinePlay) -> io::Result<()> {
-        let _ = (play, &self.path);
-        Ok(())
+        let mut plays = self.plays();
+        plays.retain(|kept| kept.item != play.item);
+        plays.push(play);
+        let text = serde_json::to_vec_pretty(&plays).map_err(io::Error::other)?;
+        // Through a temporary file, so a crash leaves the plays as they were.
+        let tmp = self.path.with_extension("json.tmp");
+        write_file(&tmp, &text)?;
+        fs::rename(tmp, &self.path)
     }
 }
 
@@ -1330,6 +1341,19 @@ mod tests {
             panic!("a film")
         };
         assert_eq!(*detail, film(&server, FILM));
+    }
+
+    #[test]
+    fn a_container_list_names_the_file_by_its_first_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        let server = fake();
+        let downloads = open(dir.path(), &server, roomy());
+        downloads
+            .queue_film(&film(&server, FILM), &source("source-4k"))
+            .unwrap();
+        let mut kept = manifest(dir.path(), FILM);
+        kept.container = Some("mov,mp4,m4a".into());
+        assert_eq!(kept.media_name(), "media.mov");
     }
 
     #[test]
