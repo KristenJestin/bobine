@@ -23,6 +23,8 @@ use crate::theme;
 /// The widest the column goes: the sections stay readable on a wide window.
 const COLUMN: f32 = 680.;
 const MENU_WIDTH: f32 = 200.;
+/// Under the last section, so that the page stops with room below it.
+pub const PAGE_BOTTOM: f32 = 48.;
 
 pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -> impl IntoElement {
     let now = Instant::now();
@@ -147,7 +149,7 @@ pub fn render(shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>) -
                 .max_w(px(COLUMN))
                 .px(px(24.))
                 .pt(px(GRID_TOP + 24.))
-                .pb(px(48.))
+                .pb(px(PAGE_BOTTOM))
                 .flex()
                 .flex_col()
                 .gap(px(16.))
