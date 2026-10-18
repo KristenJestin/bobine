@@ -325,7 +325,10 @@ fn interrupted(state: &State, answer: Answer) -> Answer {
 /// size and mark.
 fn downloadable(state: &State, mut item: Value) -> Value {
     item["CanDownload"] = json!(!state.downloads_refused && !state.not_downloadable);
-    if let Some(first) = item["MediaSources"].get_mut(0) {
+    if let Some(first) = item
+        .get_mut("MediaSources")
+        .and_then(|sources| sources.get_mut(0))
+    {
         first["Size"] = json!(media(state).0.len());
         first["ETag"] = json!(MEDIA_VERSION);
     }

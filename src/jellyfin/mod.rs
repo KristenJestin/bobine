@@ -525,7 +525,10 @@ impl MediaServer for Jellyfin {
                 ("mediaTypes", "Video".into()),
                 // An episode started from the Home plays without its page: it needs its
                 // versions now.
-                ("fields", "MediaSources,SeriesPrimaryImage".into()),
+                (
+                    "fields",
+                    "MediaSources,SeriesPrimaryImage,CanDownload".into(),
+                ),
                 ("imageTypeLimit", "1".into()),
                 ("enableImageTypes", "Primary,Backdrop".into()),
             ],
@@ -904,7 +907,7 @@ impl MediaServer for Jellyfin {
                 ("enableImageTypes", "Primary,Backdrop".into()),
                 // An episode or a season that comes alone is listed as its series, with the series
                 // poster.
-                ("fields", "SeriesPrimaryImage".into()),
+                ("fields", "SeriesPrimaryImage,CanDownload".into()),
             ],
         )?;
         // Two episodes of one series, or one episode beside its series, are one entry.

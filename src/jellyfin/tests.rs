@@ -1129,9 +1129,12 @@ fn the_latest_asks_for_the_series_picture_of_a_lone_new_episode() {
         .latest(&ItemId(SERIES_LIBRARY.into()), 10)
         .unwrap();
     // Without it Jellyfin may leave the series poster out of an episode that comes alone.
-    assert_eq!(
-        s.fake.last("GET", "/Items/Latest").param("Fields"),
-        Some("SeriesPrimaryImage")
+    assert!(
+        s.fake
+            .last("GET", "/Items/Latest")
+            .param("Fields")
+            .unwrap()
+            .contains("SeriesPrimaryImage")
     );
 }
 
