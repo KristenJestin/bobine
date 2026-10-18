@@ -490,6 +490,7 @@ impl Item {
                 .into_iter()
                 .map(MediaSourceInfo::into_source)
                 .collect(),
+            downloadable: false,
         }
     }
 

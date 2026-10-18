@@ -175,6 +175,24 @@ pub trait MediaServer: Send + Sync {
     /// What the signed-in user watched, and only they: each play the server recorded, or, when
     /// it records none, each title marked played. Empty when there is neither.
     fn watch_history(&self) -> Result<WatchHistory, ProviderError>;
+
+    /// What downloading one version of a film or an episode takes. `Forbidden` when the server
+    /// refuses this user downloads, or this item; `NotFound` when the item or the version is gone.
+    fn download_plan(
+        &self,
+        item: &ItemId,
+        source: &MediaSourceId,
+    ) -> Result<DownloadPlan, ProviderError>;
+    /// Writes the bytes of one file of a plan into `sink`, from byte `from` when `validator`
+    /// (from an earlier answer) still matches, else from zero: the sink is told which before the
+    /// first byte. Blocks until done or failed.
+    fn fetch(
+        &self,
+        file: &DownloadFile,
+        from: u64,
+        validator: Option<&str>,
+        sink: &mut dyn Sink,
+    ) -> Result<Fetched, ProviderError>;
 }
 
 /// The trailers of a film or a series, as its page learns them.
@@ -320,6 +338,8 @@ pub struct Episode {
     pub number: Option<u32>,
     pub overview: Option<String>,
     pub versions: Vec<MediaSource>,
+    /// The server lets the user download it.
+    pub downloadable: bool,
 }
 
 /// An episode the server added, and when.
@@ -504,6 +524,8 @@ pub struct FilmDetail {
     pub cast: Vec<CastMember>,
     pub similar: Vec<Film>,
     pub versions: Vec<MediaSource>,
+    /// The server lets the user download it.
+    pub downloadable: bool,
     /// The title drawn as an image, when the server has one.
     pub logo: Option<ImageRef>,
     /// In the user's list.
@@ -655,6 +677,48 @@ pub struct Playback {
     pub external_subtitles: Vec<ExternalSubtitle>,
 }
 
+/// What downloading one version takes: its weight, what tells it changed, and its files.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DownloadPlan {
+    pub size: Option<u64>,
+    /// Changes when the server's file does: what a later check compares.
+    pub version: String,
+    pub container: Option<String>,
+    /// The file first, then its external subtitles.
+    pub files: Vec<DownloadFile>,
+}
+
+/// One file to fetch: an opaque handle, no URL (the provider builds the request itself).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DownloadFile {
+    pub kind: DownloadKind,
+    pub handle: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DownloadKind {
+    Media,
+    Subtitle { index: i32, format: String },
+}
+
+/// How the server answered a fetch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Fetched {
+    /// The bytes continue the ones already kept; else they start again from zero.
+    pub resumed: bool,
+    /// What a later fetch resumes with, when the server gave one.
+    pub validator: Option<String>,
+    /// The whole file's length, when the server said it.
+    pub length: Option<u64>,
+}
+
+/// Where a fetch writes. Told how the server answered before the first byte: when the bytes
+/// start again from zero, it drops what it held; it keeps the validator, which a transfer cut
+/// halfway would otherwise lose.
+pub trait Sink: std::io::Write {
+    fn start(&mut self, fetched: &Fetched) -> std::io::Result<()>;
+}
+
 /// What the server converts: a version, from where the viewer was, with the tracks they chose.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TranscodeRequest {
@@ -720,6 +784,8 @@ pub enum ProviderError {
     KeyringLocked,
     /// The local file that keeps the account.
     Storage(String),
+    /// What a download fetched could not be written where it goes.
+    Write(std::io::ErrorKind),
 }
 
 impl fmt::Display for ProviderError {
@@ -740,6 +806,7 @@ impl fmt::Display for ProviderError {
             Self::Keyring(what) => write!(f, "keyring: {what}"),
             Self::KeyringLocked => f.write_str("the keyring is locked"),
             Self::Storage(what) => write!(f, "account file: {what}"),
+            Self::Write(kind) => write!(f, "the download could not be written: {kind}"),
         }
     }
 }

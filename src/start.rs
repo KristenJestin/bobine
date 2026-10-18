@@ -82,6 +82,7 @@ pub fn error_message(error: &ProviderError) -> &'static str {
         ProviderError::Keyring(_) => "The system keyring cannot be reached.",
         ProviderError::KeyringLocked => "The system keyring is locked.",
         ProviderError::Storage(_) => "The account file cannot be written.",
+        ProviderError::Write(_) => "The download cannot be written to disk.",
     }
 }
 

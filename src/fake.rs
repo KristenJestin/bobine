@@ -8,14 +8,14 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use bobine::provider::{
-    AudioTrack, CastMember, Collection, CollectionCard, CollectionDetail, Connector, EntryId,
-    Episode, ExternalSubtitle, Favourite, Feature, FeatureKind, Film, FilmDetail, FilmQuery,
-    FilmSort, FilterChoices, HistorySource, ImageKind, ImageRef, ItemId, Library, LibraryKind,
-    LocalTime, MediaServer, MediaSource, MediaSourceId, NewEpisode, Page, PersonHit, PersonTitles,
-    Play, PlaySessionId, Playback, PlaybackReport, Playlist, PlaylistEntry, ProviderError,
-    SearchResults, Season, Segment, Series, SeriesDetail, SeriesHit, ServerInfo, StreamUrl,
-    SubtitleTrack, Title, TmdbIndex, Token, TokenStore, Trailers, TranscodeRequest, Trickplay,
-    VideoRange, VideoTrack, WatchHistory, Watched, WatchedKind,
+    AudioTrack, CastMember, Collection, CollectionCard, CollectionDetail, Connector, DownloadFile,
+    DownloadPlan, EntryId, Episode, ExternalSubtitle, Favourite, Feature, FeatureKind, Fetched,
+    Film, FilmDetail, FilmQuery, FilmSort, FilterChoices, HistorySource, ImageKind, ImageRef,
+    ItemId, Library, LibraryKind, LocalTime, MediaServer, MediaSource, MediaSourceId, NewEpisode,
+    Page, PersonHit, PersonTitles, Play, PlaySessionId, Playback, PlaybackReport, Playlist,
+    PlaylistEntry, ProviderError, SearchResults, Season, Segment, Series, SeriesDetail, SeriesHit,
+    ServerInfo, Sink, StreamUrl, SubtitleTrack, Title, TmdbIndex, Token, TokenStore, Trailers,
+    TranscodeRequest, Trickplay, VideoRange, VideoTrack, WatchHistory, Watched, WatchedKind,
 };
 
 pub const USER: &str = "camille";
@@ -680,6 +680,7 @@ pub fn episodes() -> Vec<Episode> {
                             .into(),
                     ),
                     versions: versions().split_off(1),
+                    downloadable: true,
                 });
             }
         }
@@ -1071,6 +1072,7 @@ impl MediaServer for FakeServer {
             } else {
                 versions().split_off(1)
             },
+            downloadable: true,
             favourite: self.state().favourites.contains(&found.id),
             trailers,
             // The first film of the tests is a logo, the others are written, as on the Home.
@@ -1791,6 +1793,24 @@ impl MediaServer for FakeServer {
             return Err(error);
         }
         Ok(state.history.clone())
+    }
+
+    fn download_plan(
+        &self,
+        _item: &ItemId,
+        _source: &MediaSourceId,
+    ) -> Result<DownloadPlan, ProviderError> {
+        Err(ProviderError::NotFound)
+    }
+
+    fn fetch(
+        &self,
+        _file: &DownloadFile,
+        _from: u64,
+        _validator: Option<&str>,
+        _sink: &mut dyn Sink,
+    ) -> Result<Fetched, ProviderError> {
+        Err(ProviderError::NotFound)
     }
 }
 

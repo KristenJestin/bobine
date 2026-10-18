@@ -10,13 +10,13 @@ mod fake;
 mod tests;
 
 use crate::provider::{
-    Collection, CollectionCard, CollectionDetail, Connector, EntryId, Episode, ExternalSubtitle,
-    Favourite, Feature, Film, FilmDetail, FilmQuery, FilmSort, FilterChoices, HistorySource,
-    ImageKind, ImageRef, ItemId, Library, LocalTime, MediaServer, MediaSourceId, NewEpisode, Page,
-    PersonTitles, Play, PlayMethod, PlaySessionId, Playback, PlaybackReport, Playlist,
-    PlaylistEntry, ProviderError, SearchResults, Season, Segment, Series, SeriesDetail, ServerInfo,
-    StreamUrl, Title, TmdbIndex, Token, TokenStore, TranscodeRequest, Trickplay, WatchHistory,
-    Watched, WatchedKind,
+    Collection, CollectionCard, CollectionDetail, Connector, DownloadFile, DownloadPlan, EntryId,
+    Episode, ExternalSubtitle, Favourite, Feature, Fetched, Film, FilmDetail, FilmQuery, FilmSort,
+    FilterChoices, HistorySource, ImageKind, ImageRef, ItemId, Library, LocalTime, MediaServer,
+    MediaSourceId, NewEpisode, Page, PersonTitles, Play, PlayMethod, PlaySessionId, Playback,
+    PlaybackReport, Playlist, PlaylistEntry, ProviderError, SearchResults, Season, Segment, Series,
+    SeriesDetail, ServerInfo, Sink, StreamUrl, Title, TmdbIndex, Token, TokenStore,
+    TranscodeRequest, Trickplay, WatchHistory, Watched, WatchedKind,
 };
 use account::{AccountFile, Login};
 use dto::{
@@ -557,6 +557,7 @@ impl MediaServer for Jellyfin {
             genres: item.genres,
             official_rating: item.official_rating,
             favourite: item.user_data.as_ref().is_some_and(|u| u.is_favorite),
+            downloadable: false,
             versions: item
                 .media_sources
                 .into_iter()
@@ -1334,6 +1335,24 @@ impl MediaServer for Jellyfin {
                 .flat_map(|item| played_item(item, &titles))
                 .collect(),
         })
+    }
+
+    fn download_plan(
+        &self,
+        _item: &ItemId,
+        _source: &MediaSourceId,
+    ) -> Result<DownloadPlan, ProviderError> {
+        Err(ProviderError::NotFound)
+    }
+
+    fn fetch(
+        &self,
+        _file: &DownloadFile,
+        _from: u64,
+        _validator: Option<&str>,
+        _sink: &mut dyn Sink,
+    ) -> Result<Fetched, ProviderError> {
+        Err(ProviderError::NotFound)
     }
 }
 
