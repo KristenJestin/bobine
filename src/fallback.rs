@@ -1,7 +1,8 @@
 //! Direct play first; when the file does not play, once, the server's conversion. A file does
 //! not play when its load ends with an error, or when no picture comes within a few seconds of
 //! its opening, or when it never opens within a longer limit. A file that showed a picture
-//! plays: an error later is not one a conversion mends, and is shown as it is.
+//! plays: an error later is not one a conversion mends, and is shown as it is. A downloaded file
+//! is never converted: it does not play, and that is said.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -32,6 +33,13 @@ pub const OPEN_WAIT: Duration = Duration::from_secs(60);
 /// The same for a conversion: the server answers the playlist once it has started to encode, and
 /// the verdict that follows is final (the film cannot play), so it is given more room.
 pub const OPEN_CONVERTED_WAIT: Duration = Duration::from_secs(90);
+
+/// What the player says of a downloaded file that does not play.
+#[allow(
+    dead_code,
+    reason = "played from the shell once offline mode (#137) wires downloads in"
+)]
+pub const DOWNLOAD_CANNOT_PLAY: &str = "this download cannot be played";
 
 /// How long the conversion notice stays once the converted picture shows.
 pub const NOTICE_FOR: Duration = Duration::from_secs(5);
@@ -111,6 +119,27 @@ impl Reopen {
     }
 }
 
+/// Asks the server for the first playback of `plan`: its conversion under the cap of `quality`
+/// at once, or the file as it is. A server that gives no conversion leaves the film playing as it
+/// is, which the player's menu then says could not be had at that quality.
+pub fn open_first(
+    server: &dyn MediaServer,
+    plan: &Plan,
+    quality: Quality,
+) -> Result<Playback, ProviderError> {
+    if let Quality::Cap(bits) = quality {
+        let request = TranscodeRequest {
+            max_bitrate: Some(bits),
+            ..plan.transcode_request(plan.start)
+        };
+        match server.transcode(&request) {
+            Ok(opened) => return Ok(opened),
+            Err(error) => eprintln!("bobine: the server does not give the quality asked: {error}"),
+        }
+    }
+    server.play(&plan.film, &plan.source)
+}
+
 /// A film of the server, which the server may convert when it does not play as it is: once.
 pub struct Fallback {
     pub server: Arc<dyn MediaServer>,
@@ -132,28 +161,63 @@ pub struct Fallback {
     refused_at: Option<Instant>,
     /// Names this playback, so an answer for one the viewer left is told apart.
     id: u64,
+    /// A downloaded file: the server never converts it.
+    local: bool,
 }
 
 impl Fallback {
-    /// `opened`: what the server gave for `plan`, which plays.
+    /// `opened`: what the server gave for `plan`, which plays; the conversion [`open_first`] asked
+    /// for plays from the start as one, `plan` being the file as it is.
     pub fn new(server: Arc<dyn MediaServer>, plan: Plan, opened: &Playback) -> Self {
         static PLAYBACKS: AtomicU64 = AtomicU64::new(0);
+        let (method, played) = if opened.converted {
+            (PlayMethod::Transcode, plan.converted(plan.start, opened))
+        } else {
+            (PlayMethod::DirectPlay, plan.clone())
+        };
         Self {
             server,
-            original: plan.clone(),
-            plan,
-            method: PlayMethod::DirectPlay,
+            original: plan,
+            plan: played,
+            method,
             asking: None,
             chosen: None,
             direct_failed: false,
             externals: opened.external_subtitles.iter().map(|e| e.index).collect(),
             refused_at: None,
             id: PLAYBACKS.fetch_add(1, Ordering::Relaxed),
+            local: false,
+        }
+    }
+
+    #[allow(
+        dead_code,
+        reason = "played from the shell once offline mode (#137) wires downloads in"
+    )]
+    /// A downloaded file `opened` (`Local::playback`) of `plan`, which nothing replaces.
+    pub fn local(server: Arc<dyn MediaServer>, plan: Plan, opened: &Playback) -> Self {
+        Self {
+            local: true,
+            ..Self::new(server, plan, opened)
         }
     }
 
     pub fn id(&self) -> u64 {
         self.id
+    }
+
+    /// How the film plays now.
+    pub fn method(&self) -> PlayMethod {
+        self.method
+    }
+
+    /// A film that began as the server's conversion at `quality`: the session says so, as it
+    /// does once a conversion answers.
+    pub fn announce(&self, session: &mut Session, quality: Quality) {
+        if self.method == PlayMethod::Transcode {
+            session.playing_as(quality, true);
+            session.subtitle = said(session.subtitle.take(), self.method);
+        }
     }
 
     /// At each tick: what to ask the server when the file does not play. The conversion is
@@ -163,6 +227,10 @@ impl Fallback {
             return None;
         }
         match step(self.method, session, self.plan.start, now) {
+            Step::Convert { .. } if self.local => {
+                session.fail(PlayerError(DOWNLOAD_CANNOT_PLAY.into()));
+                None
+            }
             Step::Convert { from } => {
                 self.method = PlayMethod::Transcode;
                 self.asking = Some(from);
@@ -250,7 +318,7 @@ impl Fallback {
     /// The viewer chose `quality` in the settings: what to ask the server, from where the film
     /// is. Nothing while the server is already asked.
     pub fn choose(&mut self, quality: Quality, session: &mut Session) -> Option<Reopen> {
-        if self.asking.is_some() {
+        if self.asking.is_some() || self.local {
             return None;
         }
         let from = if session.position_known() {

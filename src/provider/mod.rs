@@ -22,6 +22,8 @@ use std::fmt;
 use std::sync::Arc;
 use std::time::Duration;
 
+use serde::{Deserialize, Serialize};
+
 /// How often the player tells the server where the viewer is, besides each pause and seek.
 pub const PROGRESS_EVERY: Duration = Duration::from_secs(10);
 
@@ -95,6 +97,9 @@ pub trait MediaServer: Send + Sync {
     /// The episode the user would watch next: the one started, else the one after the last
     /// watched, across seasons; the first when none was watched; none when all were.
     fn next_up(&self, series: &ItemId) -> Result<Option<Episode>, ProviderError>;
+    /// A film, a series or an episode named by its id alone, whichever it is: what the
+    /// launcher's commands ask for. An episode comes with its versions, to play.
+    fn title(&self, item: &ItemId) -> Result<Title, ProviderError>;
     /// The films, series and people whose name matches `query`, at most `per_group` of each.
     fn search(&self, query: &str, per_group: u32) -> Result<SearchResults, ProviderError>;
     /// The films and series a person took part in, the newest first.
@@ -172,10 +177,30 @@ pub trait MediaServer: Send + Sync {
     /// What the signed-in user watched, and only they: each play the server recorded, or, when
     /// it records none, each title marked played. Empty when there is neither.
     fn watch_history(&self) -> Result<WatchHistory, ProviderError>;
+
+    /// What downloading one version of a film or an episode takes. `Forbidden` when the server
+    /// refuses this user downloads, or this item; `NotFound` when the item or the version is gone.
+    fn download_plan(
+        &self,
+        item: &ItemId,
+        source: &MediaSourceId,
+    ) -> Result<DownloadPlan, ProviderError>;
+    /// Writes the bytes of one file of a plan into `sink`, from byte `from` when `validator`
+    /// (from an earlier answer) still matches, else from zero: the sink is told which before the
+    /// first byte. Blocks until done or failed. `Ok` means every byte of the file arrived and was
+    /// written: a body that ends before its length is an error (`Unreachable`), whatever was
+    /// written stays in the sink for a resume from there.
+    fn fetch(
+        &self,
+        file: &DownloadFile,
+        from: u64,
+        validator: Option<&str>,
+        sink: &mut dyn Sink,
+    ) -> Result<Fetched, ProviderError>;
 }
 
 /// The trailers of a film or a series, as its page learns them.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Trailers {
     /// The server holds a trailer file of its own for it.
     pub local: bool,
@@ -191,7 +216,7 @@ pub struct TmdbIndex {
 }
 
 /// What a marked stretch of a film or an episode is.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SegmentKind {
     Intro,
     /// The credits.
@@ -202,7 +227,7 @@ pub enum SegmentKind {
 }
 
 /// A stretch of a film or an episode the server marked, from `start` to `end` in its time.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Segment {
     pub kind: SegmentKind,
     pub start: Duration,
@@ -254,7 +279,7 @@ pub struct Feature {
 }
 
 /// A series as a list shows it.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Series {
     pub id: ItemId,
     pub title: String,
@@ -277,7 +302,7 @@ pub struct Series {
     pub season: Option<Season>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SeriesDetail {
     pub series: Series,
     pub overview: Option<String>,
@@ -294,7 +319,7 @@ pub struct SeriesDetail {
     pub trailers: Trailers,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Season {
     pub id: ItemId,
     pub name: String,
@@ -305,16 +330,20 @@ pub struct Season {
 
 /// An episode, with what it shares with a film in `item`: its id, title, runtime, watched state,
 /// resume point, and its still as the poster.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Episode {
     pub item: Film,
     pub series: ItemId,
     pub series_title: String,
+    /// The poster of its series, not its own still: what a list shows for an episode.
+    pub series_poster: Option<ImageRef>,
     pub season: ItemId,
     pub season_number: Option<u32>,
     pub number: Option<u32>,
     pub overview: Option<String>,
     pub versions: Vec<MediaSource>,
+    /// The server lets the user download it.
+    pub downloadable: bool,
 }
 
 /// An episode the server added, and when.
@@ -373,11 +402,11 @@ pub struct ServerInfo {
 }
 
 /// The id of an item on the server: a library, a film, a person, a collection.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ItemId(pub String);
 
 /// The id of one version (file) of a film.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct MediaSourceId(pub String);
 
 /// The id that ties the reports of one playback together.
@@ -454,7 +483,7 @@ pub struct Page<T> {
     pub total: u32,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ImageKind {
     /// A film's poster, a person's photo.
     Primary,
@@ -464,7 +493,7 @@ pub enum ImageKind {
 }
 
 /// An image the server holds; the tag changes when the image does.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ImageRef {
     pub item: ItemId,
     pub kind: ImageKind,
@@ -472,7 +501,7 @@ pub struct ImageRef {
 }
 
 /// A film as a list shows it.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Film {
     pub id: ItemId,
     pub title: String,
@@ -488,7 +517,7 @@ pub struct Film {
     pub backdrop: Option<ImageRef>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FilmDetail {
     pub film: Film,
     pub overview: Option<String>,
@@ -499,6 +528,8 @@ pub struct FilmDetail {
     pub cast: Vec<CastMember>,
     pub similar: Vec<Film>,
     pub versions: Vec<MediaSource>,
+    /// The server lets the user download it.
+    pub downloadable: bool,
     /// The title drawn as an image, when the server has one.
     pub logo: Option<ImageRef>,
     /// In the user's list.
@@ -509,7 +540,7 @@ pub struct FilmDetail {
     pub trailers: Trailers,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CastMember {
     pub id: ItemId,
     pub name: String,
@@ -577,7 +608,7 @@ pub struct PlaylistEntry {
 pub struct EntryId(pub String);
 
 /// One version of a film: one file, with its tracks.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MediaSource {
     pub id: MediaSourceId,
     pub name: String,
@@ -592,7 +623,7 @@ pub struct MediaSource {
     pub default_subtitle: Option<Option<i32>>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum VideoRange {
     Sdr,
     Hdr10,
@@ -608,7 +639,7 @@ impl VideoRange {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VideoTrack {
     pub codec: Option<String>,
     pub width: Option<u32>,
@@ -616,7 +647,7 @@ pub struct VideoTrack {
     pub range: VideoRange,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AudioTrack {
     /// The index of the stream in the file, as the reports name it.
     pub index: i32,
@@ -627,7 +658,7 @@ pub struct AudioTrack {
     pub default: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SubtitleTrack {
     /// The index of the stream in the file, as the reports name it.
     pub index: i32,
@@ -648,6 +679,50 @@ pub struct Playback {
     pub source: MediaSourceId,
     pub stream: StreamUrl,
     pub external_subtitles: Vec<ExternalSubtitle>,
+    /// The stream is the server's conversion, not the file as it is.
+    pub converted: bool,
+}
+
+/// What downloading one version takes: its weight, what tells it changed, and its files.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DownloadPlan {
+    pub size: Option<u64>,
+    /// Changes when the server's file does: what a later check compares.
+    pub version: String,
+    pub container: Option<String>,
+    /// The file first, then its external subtitles.
+    pub files: Vec<DownloadFile>,
+}
+
+/// One file to fetch: an opaque handle, no URL (the provider builds the request itself).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DownloadFile {
+    pub kind: DownloadKind,
+    pub handle: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DownloadKind {
+    Media,
+    Subtitle { index: i32, format: String },
+}
+
+/// How the server answered a fetch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Fetched {
+    /// The bytes continue the ones already kept; else they start again from zero.
+    pub resumed: bool,
+    /// What a later fetch resumes with, when the server gave one.
+    pub validator: Option<String>,
+    /// The whole file's length, when the server said it.
+    pub length: Option<u64>,
+}
+
+/// Where a fetch writes. Told how the server answered before the first byte: when the bytes
+/// start again from zero, it drops what it held; it keeps the validator, which a transfer cut
+/// halfway would otherwise lose.
+pub trait Sink: std::io::Write {
+    fn start(&mut self, fetched: &Fetched) -> std::io::Result<()>;
 }
 
 /// What the server converts: a version, from where the viewer was, with the tracks they chose.
@@ -711,8 +786,12 @@ pub enum ProviderError {
     /// The server answered, but not what was expected.
     BadAnswer(String),
     Keyring(String),
+    /// The keyring holds the token, locked, and the caller may not ask the user to unlock it.
+    KeyringLocked,
     /// The local file that keeps the account.
     Storage(String),
+    /// What a download fetched could not be written where it goes.
+    Write(std::io::ErrorKind),
 }
 
 impl fmt::Display for ProviderError {
@@ -731,7 +810,9 @@ impl fmt::Display for ProviderError {
             Self::Server(status) => write!(f, "the server answered with HTTP status {status}"),
             Self::BadAnswer(what) => write!(f, "the server gave an unexpected answer: {what}"),
             Self::Keyring(what) => write!(f, "keyring: {what}"),
+            Self::KeyringLocked => f.write_str("the keyring is locked"),
             Self::Storage(what) => write!(f, "account file: {what}"),
+            Self::Write(kind) => write!(f, "the download could not be written: {kind}"),
         }
     }
 }

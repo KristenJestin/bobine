@@ -10,7 +10,8 @@ use super::controls::{Controls, KeyAction, on_picture, subtitle_position};
 use super::segments::{Button, Label, Press, Prompt, button_at};
 use super::settings::{self, Page, Quality, SPEEDS};
 use super::{
-    Aspect, Media, PlaybackInfo, Player, PlayerError, PlayerEvent, Seek, Track, TrackKind, tracks,
+    Aspect, Media, PlaybackInfo, Player, PlayerError, PlayerEvent, Seek, Track, TrackKind, time,
+    tracks,
 };
 use crate::video::{Rect, VideoDisplay, placement};
 
@@ -94,6 +95,8 @@ pub struct Session {
     opened_at: Option<Instant>,
     loaded_at: Option<Instant>,
     first_frame_at: Option<Instant>,
+    /// The stream waits for data to fill its cache.
+    buffering: bool,
     /// How many seeks the viewer asked for, so a seek can be told to the server.
     seeks: u64,
     /// What the server marked as skippable, by start, and whether an episode follows this one.
@@ -150,6 +153,7 @@ impl Session {
             opened_at: None,
             loaded_at: None,
             first_frame_at: None,
+            buffering: false,
             seeks: 0,
             segments: Vec::new(),
             has_next: false,
@@ -168,6 +172,7 @@ impl Session {
         self.opened_at = None;
         self.loaded_at = None;
         self.first_frame_at = None;
+        self.buffering = false;
         self.ended = false;
         self.tracks.clear();
         self.player.load(media)
@@ -563,6 +568,22 @@ impl Session {
         self.error.as_ref()
     }
 
+    /// The view shows that it waits: from the title asked to its first frame, and while the stream
+    /// fills its cache.
+    pub fn loading(&self) -> bool {
+        self.error.is_none()
+            && ((self.first_frame_at.is_none() && !self.picture_shown()) || self.buffering)
+    }
+
+    /// What is left and when the film ends, for the clock now; nothing before the duration is
+    /// known.
+    pub fn time_left(&self, now: (u32, u32)) -> Option<String> {
+        (self.duration > 0.).then(|| {
+            let left = (self.duration - self.position).max(0.);
+            format!("{} · {}", time::remaining(left), time::end_clock(now, left))
+        })
+    }
+
     /// Reads what the player says and shows or hides the cursor with the controls. Returns
     /// whether the film reached its end, now or at an earlier update.
     pub fn update(&mut self, now: Instant) -> bool {
@@ -586,6 +607,7 @@ impl Session {
                 PlayerEvent::FirstFrame => {
                     self.first_frame_at.get_or_insert(now);
                 }
+                PlayerEvent::Buffering(waiting) => self.buffering = waiting,
                 // The film plays; a refused subtitle is simply not in the panel.
                 PlayerEvent::SubtitleFailed(_) => {}
             }
@@ -651,6 +673,7 @@ mod tests {
 
     use super::*;
     use crate::player::fake::{Call, FakePlayer};
+    use crate::player::{FirstSubtitle, Stream};
     use crate::video::Placement;
     use crate::video::fake::FakeDisplay;
 
@@ -683,6 +706,7 @@ mod tests {
             Box::new(FakeDisplay {
                 placements: display.placements.clone(),
                 cursor: display.cursor.clone(),
+                shown: display.shown.clone(),
             }),
             "Le Dernier Hiver".into(),
             None,
@@ -1357,6 +1381,92 @@ mod tests {
             f.session.error().map(|e| e.0.as_str()),
             Some("loading failed")
         );
+    }
+
+    #[test]
+    fn a_title_asked_shows_loading_until_its_first_frame() {
+        let mut f = fixture();
+        assert!(f.session.loading(), "asked, nothing heard yet");
+        f.queue(vec![PlayerEvent::Loaded]);
+        f.session.update(Instant::now());
+        assert!(f.session.loading(), "open, no picture yet");
+        f.queue(vec![PlayerEvent::FirstFrame]);
+        f.session.update(Instant::now());
+        assert!(!f.session.loading());
+    }
+
+    #[test]
+    fn a_picture_the_display_shows_drops_the_loading_mark_before_the_player_tells_it() {
+        let mut f = fixture();
+        f.queue(vec![PlayerEvent::Loaded]);
+        f.session.update(Instant::now());
+        *f.display.shown.borrow_mut() = true;
+        assert!(!f.session.loading(), "the display already shows a frame");
+    }
+
+    #[test]
+    fn a_stream_waiting_for_its_cache_shows_loading_until_it_plays_again() {
+        let mut f = fixture();
+        f.queue(vec![PlayerEvent::Loaded, PlayerEvent::FirstFrame]);
+        f.session.update(Instant::now());
+        assert!(!f.session.loading());
+        f.queue(vec![PlayerEvent::Buffering(true)]);
+        f.session.update(Instant::now());
+        assert!(f.session.loading());
+        f.queue(vec![PlayerEvent::Buffering(false)]);
+        f.session.update(Instant::now());
+        assert!(!f.session.loading());
+    }
+
+    #[test]
+    fn a_restart_clears_the_cache_stall() {
+        let mut f = fixture();
+        f.queue(vec![
+            PlayerEvent::Loaded,
+            PlayerEvent::FirstFrame,
+            PlayerEvent::Buffering(true),
+        ]);
+        f.session.update(Instant::now());
+        assert!(f.session.loading(), "stalled on the cache");
+        let media = Media {
+            stream: Stream {
+                url: "file:///converted.mkv",
+                headers: &[],
+            },
+            start: 0.,
+            audio: None,
+            subtitle: FirstSubtitle::Default,
+            external_subtitles: &[],
+        };
+        f.session.restart(media).unwrap();
+        // The conversion shows its first picture without ever saying that the stall ended.
+        f.queue(vec![PlayerEvent::Loaded, PlayerEvent::FirstFrame]);
+        f.session.update(Instant::now());
+        assert!(!f.session.loading(), "the old stall does not come along");
+    }
+
+    #[test]
+    fn the_time_left_and_end_are_hidden_until_the_duration_is_known() {
+        let mut f = fixture();
+        f.queue(vec![PlayerEvent::Position(0.)]);
+        f.session.update(Instant::now());
+        assert_eq!(f.session.time_left((22, 0)), None);
+        f.queue(vec![PlayerEvent::Duration(5400.)]);
+        f.session.update(Instant::now());
+        assert_eq!(
+            f.session.time_left((22, 0)).as_deref(),
+            Some("−1:30:00 · ends at 23:30")
+        );
+    }
+
+    #[test]
+    fn a_stream_that_fails_to_open_drops_the_loading_mark_for_the_error() {
+        let mut f = fixture();
+        assert!(f.session.loading());
+        f.queue(vec![PlayerEvent::Error(PlayerError("404".into()))]);
+        f.session.update(Instant::now());
+        assert!(!f.session.loading());
+        assert!(f.session.error().is_some());
     }
 
     /// An episode of 47 minutes: a recap, an intro, then the credits.

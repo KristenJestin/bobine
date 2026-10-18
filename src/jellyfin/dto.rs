@@ -243,6 +243,9 @@ pub struct Item {
     pub local_trailer_count: Option<u32>,
     #[serde(default)]
     pub remote_trailers: Vec<RemoteTrailer>,
+    /// Whether this user may download it: a list says so only when asked (`fields=CanDownload`).
+    #[serde(default)]
+    pub can_download: bool,
 }
 
 #[derive(Deserialize, Default)]
@@ -303,6 +306,11 @@ pub struct MediaSourceInfo {
     pub id: String,
     pub name: Option<String>,
     pub container: Option<String>,
+    /// The file's size in bytes.
+    pub size: Option<u64>,
+    /// Changes when the file does.
+    #[serde(rename = "ETag")]
+    pub e_tag: Option<String>,
     #[serde(default)]
     pub media_streams: Vec<MediaStream>,
     /// Relative to the server, with its own play session and token.
@@ -475,8 +483,10 @@ impl Item {
     }
 
     pub fn episode(self) -> Episode {
+        let series_poster = self.series_primary();
         Episode {
             item: self.film(),
+            series_poster,
             series: ItemId(self.series_id.unwrap_or_default()),
             series_title: self.series_name.unwrap_or_default(),
             season: ItemId(self.season_id.unwrap_or_default()),
@@ -488,6 +498,7 @@ impl Item {
                 .into_iter()
                 .map(MediaSourceInfo::into_source)
                 .collect(),
+            downloadable: self.can_download,
         }
     }
 
@@ -572,6 +583,10 @@ impl Item {
         if self.kind.as_deref() != Some("Episode") {
             return self.primary();
         }
+        self.series_primary()
+    }
+
+    fn series_primary(&self) -> Option<ImageRef> {
         Some(ImageRef {
             item: ItemId(self.series_id.clone()?),
             kind: ImageKind::Primary,

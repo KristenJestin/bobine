@@ -14,7 +14,19 @@ pub trait TokenStore: Send + Sync {
 }
 
 /// The keyring of the session (GNOME Keyring, KWallet…) through the Secret Service D-Bus API.
-pub struct SecretServiceStore;
+pub struct SecretServiceStore {
+    /// A locked token is unlocked: the keyring shows its dialog, and the call waits for the
+    /// user. Without, a locked token is `KeyringLocked`, at once.
+    unlock: bool,
+}
+
+impl SecretServiceStore {
+    /// The window's: it may ask the user to unlock the keyring.
+    pub const UNLOCKING: Self = Self { unlock: true };
+    /// The command line's: run at each keystroke of the launcher, it never shows a dialog nor
+    /// waits for one.
+    pub const WITHOUT_PROMPT: Self = Self { unlock: false };
+}
 
 const APPLICATION: &str = "bobine";
 
@@ -48,10 +60,11 @@ impl TokenStore for SecretServiceStore {
         let found = ss.search_items(attributes(account)).map_err(failed)?;
         let item = match (found.unlocked.first(), found.locked.first()) {
             (Some(item), _) => item,
-            (None, Some(item)) => {
+            (None, Some(item)) if self.unlock => {
                 item.unlock().map_err(failed)?;
                 item
             }
+            (None, Some(_)) => return Err(ProviderError::KeyringLocked),
             (None, None) => return Ok(None),
         };
         let raw = item.get_secret().map_err(failed)?;

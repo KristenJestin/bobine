@@ -115,9 +115,8 @@ impl Shell {
     ) -> Option<AnyElement> {
         // The executor's clock, which the tests drive with `advance_clock`.
         let now = cx.background_executor().now();
-        let wanted = self
-            .notice
-            .filter(|_| !matches!(screen, Screen::Login | Screen::Player));
+        // Over the player too: a command of the launcher may be refused while a movie plays.
+        let wanted = self.notice.filter(|_| screen != Screen::Login);
         let drawn = self.notice_fade.follow(wanted, now);
         if self.notice_fade.moving(now) {
             window.request_animation_frame();
@@ -438,7 +437,12 @@ mod tests {
             .find(|f| f.id == film)
             .and_then(|f| f.resume)
             .unwrap();
-        let started = home_page::start(&server, &PlayTarget::Film(film)).unwrap();
+        let started = home_page::start(
+            &server,
+            &PlayTarget::Film(film),
+            crate::player::settings::Quality::Original,
+        )
+        .unwrap();
         assert_eq!(started.plan.start, resume);
         assert_eq!(screen(&window, cx), Screen::Home, "the page was opened");
     }

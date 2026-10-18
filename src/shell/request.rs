@@ -694,6 +694,33 @@ mod tests {
     }
 
     #[gpui_kit::test]
+    fn a_reopened_request_that_is_gone_says_so(cx: &mut TestAppContext) {
+        let seerr = FakeSeerr::default();
+        let window = on_request(&seerr, MediaKind::Movie, NORTHERN_LIGHTS, cx);
+        window
+            .update(cx, |shell, _, cx| assert!(shell.go_back(cx)))
+            .unwrap();
+        // The address is emptied in the Settings: the request server is gone when the viewer
+        // goes forward again.
+        window
+            .update(cx, |shell, _, cx| {
+                let address = shell.seerr.address.clone().unwrap();
+                address.update(cx, |field, cx| field.set_text("", cx));
+                shell.save_seerr_address(cx);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        window
+            .update(cx, |shell, _, cx| {
+                shell.go_forward(cx);
+                assert_eq!(shell.notice, Some("This request is gone."));
+                assert!(shell.seerr.requests.is_empty());
+            })
+            .unwrap();
+        assert_ne!(screen(&window, cx), Screen::Request);
+    }
+
+    #[gpui_kit::test]
     fn a_library_film_shows_similar_titles_not_in_the_library(cx: &mut TestAppContext) {
         let seerr = FakeSeerr::default();
         let window = configured(&seerr, cx);

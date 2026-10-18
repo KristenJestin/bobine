@@ -6,11 +6,17 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::time::Duration;
 use ureq::http::Response;
+use ureq::unversioned::resolver::DefaultResolver;
+use ureq::unversioned::transport::{
+    Buffers, ConnectionDetails, Connector, DefaultConnector, NextTimeout, Transport,
+};
 
 const TIMEOUT: Duration = Duration::from_secs(15);
 /// The server may convert an image before answering (a person's photo): it gets longer than an
 /// API call, which must stay quick to report an unreachable server.
 const IMAGE_TIMEOUT: Duration = Duration::from_secs(60);
+/// How long a download may receive nothing before it is given up.
+const IDLE_LIMIT: Duration = Duration::from_secs(30);
 const CLIENT: &str = "Bobine";
 
 /// The device this installation is to the server.
@@ -21,9 +27,67 @@ pub struct Device {
     pub name: String,
 }
 
+/// Bounds every wait for the server's bytes to `.0`, whatever the request's own timeouts leave.
+#[derive(Debug)]
+struct IdleLimit(Duration);
+
+impl<In: Transport> Connector<In> for IdleLimit {
+    type Out = Idle<In>;
+
+    fn connect(
+        &self,
+        _: &ConnectionDetails,
+        chained: Option<In>,
+    ) -> Result<Option<Self::Out>, ureq::Error> {
+        Ok(chained.map(|inner| Idle {
+            inner,
+            limit: self.0,
+        }))
+    }
+}
+
+#[derive(Debug)]
+struct Idle<T> {
+    inner: T,
+    limit: Duration,
+}
+
+impl<T: Transport> Transport for Idle<T> {
+    fn buffers(&mut self) -> &mut dyn Buffers {
+        self.inner.buffers()
+    }
+
+    fn transmit_output(&mut self, amount: usize, timeout: NextTimeout) -> Result<(), ureq::Error> {
+        self.inner.transmit_output(amount, timeout)
+    }
+
+    fn await_input(&mut self, timeout: NextTimeout) -> Result<bool, ureq::Error> {
+        let limit = NextTimeout {
+            after: self.limit.into(),
+            reason: ureq::Timeout::RecvBody,
+        };
+        let sooner = if timeout.after < limit.after {
+            timeout
+        } else {
+            limit
+        };
+        self.inner.await_input(sooner)
+    }
+
+    fn is_open(&mut self) -> bool {
+        self.inner.is_open()
+    }
+
+    fn is_tls(&self) -> bool {
+        self.inner.is_tls()
+    }
+}
+
 /// A Jellyfin server at one address, with or without a token.
 pub struct Http {
     agent: ureq::Agent,
+    /// Gives up on a wait for the server's bytes that lasts too long, which `agent` does not.
+    downloads: ureq::Agent,
     image_timeout: Duration,
     base: String,
     device: Device,
@@ -82,7 +146,7 @@ fn status(code: u16) -> ProviderError {
 
 impl Http {
     pub fn new(base: String, device: Device, token: Option<Token>) -> Self {
-        Self::with_timeouts(base, device, token, TIMEOUT, IMAGE_TIMEOUT)
+        Self::with_timeouts(base, device, token, TIMEOUT, IMAGE_TIMEOUT, IDLE_LIMIT)
     }
 
     fn with_timeouts(
@@ -91,15 +155,23 @@ impl Http {
         token: Option<Token>,
         timeout: Duration,
         image_timeout: Duration,
+        idle_limit: Duration,
     ) -> Self {
-        let agent = ureq::Agent::config_builder()
+        let config = ureq::Agent::config_builder()
             .timeout_global(Some(timeout))
             .http_status_as_error(false)
             .user_agent(format!("{CLIENT}/{}", crate::VERSION))
-            .build()
-            .into();
+            .build();
+        // ureq's timeouts are per phase, a body's one is on the whole of it: a body that stalls
+        // is bounded only by a limit on each wait for input.
+        let downloads = ureq::Agent::with_parts(
+            config.clone(),
+            DefaultConnector::new().chain(IdleLimit(idle_limit)),
+            DefaultResolver::default(),
+        );
         Self {
-            agent,
+            agent: config.into(),
+            downloads,
             image_timeout,
             base,
             device,
@@ -205,6 +277,34 @@ impl Http {
             .map_err(|e| transport(what, e))
     }
 
+    /// A file to download, from the headers given (`Range`, `If-Range`): its answer, the body
+    /// not read yet. No time limit on the whole, a film takes what it takes; only on the wait for
+    /// the server's answer, and on each wait for the next bytes of the body.
+    pub fn download(
+        &self,
+        what: &str,
+        path: &str,
+        headers: &[(&str, &str)],
+    ) -> Result<Response<ureq::Body>, ProviderError> {
+        let mut request = self
+            .downloads
+            .get(&self.url(path, &[]))
+            .header("Authorization", &self.authorization())
+            // The file as it is, not compressed on the way: its length is then the bytes written.
+            .header("Accept-Encoding", "identity");
+        for (name, value) in headers {
+            request = request.header(*name, *value);
+        }
+        let sent = request
+            .config()
+            .timeout_global(None)
+            .timeout_connect(Some(TIMEOUT))
+            .timeout_recv_response(Some(TIMEOUT))
+            .build()
+            .call();
+        Self::checked(what, sent)
+    }
+
     /// Posts a JSON body; the answer is read as JSON.
     pub fn post<B: Serialize, T: DeserializeOwned>(
         &self,
@@ -293,6 +393,7 @@ mod tests {
             token.clone(),
             Duration::from_secs(1),
             Duration::from_secs(10),
+            IDLE_LIMIT,
         );
         assert_eq!(http.get_bytes("image", path, &[]).unwrap(), IMAGE);
         // Not forever: an image still takes at most its own timeout.
@@ -302,11 +403,43 @@ mod tests {
             token,
             Duration::from_secs(10),
             Duration::from_secs(1),
+            IDLE_LIMIT,
         );
         assert!(matches!(
             http.get_bytes("image", path, &[]),
             Err(ProviderError::Unreachable(_))
         ));
+    }
+
+    #[test]
+    fn a_body_that_stalls_fails_instead_of_hanging() {
+        use crate::jellyfin::fake::{FakeServer, SOURCE, TOKEN};
+        use std::io::Read;
+        let fake = FakeServer::start();
+        fake.state.lock().unwrap().stall_body = true;
+        let device = Device {
+            id: "device".into(),
+            name: "Test".into(),
+        };
+        let http = Http::with_timeouts(
+            fake.url.clone(),
+            device,
+            Some(Token::new(TOKEN.into())),
+            TIMEOUT,
+            IMAGE_TIMEOUT,
+            Duration::from_millis(300),
+        );
+        let path = &format!("/Items/{SOURCE}/Download");
+        let started = std::time::Instant::now();
+        let mut response = http.download("download", path, &[]).unwrap();
+        let mut body = Vec::new();
+        let read = response.body_mut().as_reader().read_to_end(&mut body);
+        assert!(read.is_err(), "a stalled body is not a whole one");
+        assert!(
+            started.elapsed() < Duration::from_millis(1500),
+            "given up after the idle limit, not when the server lets go: {:?}",
+            started.elapsed()
+        );
     }
 
     #[test]

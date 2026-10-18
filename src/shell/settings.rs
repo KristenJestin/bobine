@@ -550,6 +550,84 @@ mod tests {
         assert!(Settings::read(&path).notify_new_episodes);
     }
 
+    /// The settings page on a window `height` tall, then the wheel turned far down over it:
+    /// where the first and the last section stand before, then after.
+    fn scrolled_page(
+        height: f32,
+        cx: &mut TestAppContext,
+    ) -> (
+        gpui_kit::Bounds<gpui_kit::Pixels>,
+        gpui_kit::Bounds<gpui_kit::Pixels>,
+        gpui_kit::Bounds<gpui_kit::Pixels>,
+        gpui_kit::Bounds<gpui_kit::Pixels>,
+    ) {
+        let window = start(None, &Arc::new(MemoryKeyring::default()), cx);
+        window
+            .update(cx, |shell, _, cx| shell.open_settings(cx))
+            .unwrap();
+        let mut visual = drawn(&window, cx);
+        visual.simulate_resize(gpui_kit::size(gpui_kit::px(1280.), gpui_kit::px(height)));
+        visual.run_until_parked();
+        let bounds = |visual: &mut VisualTestContext, selector: &'static str| {
+            visual
+                .debug_bounds(selector)
+                .unwrap_or_else(|| panic!("{selector} was not drawn"))
+        };
+        let (first, last) = (
+            bounds(&mut visual, "settings-playback"),
+            bounds(&mut visual, "settings-about"),
+        );
+        let position = bounds(&mut visual, "settings-page").center();
+        visual.simulate_event(gpui_kit::ScrollWheelEvent {
+            position,
+            delta: gpui_kit::ScrollDelta::Pixels(gpui_kit::point(
+                gpui_kit::px(0.),
+                gpui_kit::px(-5000.),
+            )),
+            modifiers: Modifiers::none(),
+            touch_phase: gpui_kit::TouchPhase::Moved,
+        });
+        visual.run_until_parked();
+        (
+            first,
+            last,
+            bounds(&mut visual, "settings-playback"),
+            bounds(&mut visual, "settings-about"),
+        )
+    }
+
+    #[gpui_kit::test]
+    fn the_settings_page_scrolls_down_to_its_last_section(cx: &mut TestAppContext) {
+        let height = gpui_kit::px(400.);
+        let (first, last, first_after, last_after) = scrolled_page(400., cx);
+        // The page is taller than the window: the About section starts out of sight.
+        assert!(last.bottom() > height, "{last:?} fits in the window");
+        assert!(
+            first_after.top() < first.top(),
+            "{first_after:?} did not move"
+        );
+        assert!(
+            last_after.bottom() <= height,
+            "{last_after:?} is still below the window"
+        );
+        // And it stops there: the last section ends the page's padding above the window's bottom,
+        // not further up.
+        let end = f32::from(height) - crate::screens::settings::PAGE_BOTTOM;
+        assert!(
+            (f32::from(last_after.bottom()) - end).abs() < 1.,
+            "{last_after:?} does not end at {end}"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn a_settings_page_that_fits_does_not_move_when_scrolled(cx: &mut TestAppContext) {
+        let (first, last, first_after, last_after) = scrolled_page(4000., cx);
+        assert!(last.bottom() < gpui_kit::px(4000.), "{last:?} does not fit");
+        // Only the height is compared: the page is still sliding in sideways when first drawn.
+        assert_eq!(first_after.top(), first.top());
+        assert_eq!(last_after.bottom(), last.bottom());
+    }
+
     #[test]
     fn the_about_says_the_app_version_and_the_server_and_its_version() {
         let server = bobine::provider::ServerInfo {

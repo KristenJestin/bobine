@@ -8,14 +8,15 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use bobine::provider::{
-    AudioTrack, CastMember, Collection, CollectionCard, CollectionDetail, Connector, EntryId,
-    Episode, ExternalSubtitle, Favourite, Feature, FeatureKind, Film, FilmDetail, FilmQuery,
-    FilmSort, FilterChoices, HistorySource, ImageKind, ImageRef, ItemId, Library, LibraryKind,
-    LocalTime, MediaServer, MediaSource, MediaSourceId, NewEpisode, Page, PersonHit, PersonTitles,
-    Play, PlaySessionId, Playback, PlaybackReport, Playlist, PlaylistEntry, ProviderError,
-    SearchResults, Season, Segment, Series, SeriesDetail, SeriesHit, ServerInfo, StreamUrl,
-    SubtitleTrack, Title, TmdbIndex, Token, TokenStore, Trailers, TranscodeRequest, Trickplay,
-    VideoRange, VideoTrack, WatchHistory, Watched, WatchedKind,
+    AudioTrack, CastMember, Collection, CollectionCard, CollectionDetail, Connector, DownloadFile,
+    DownloadKind, DownloadPlan, EntryId, Episode, ExternalSubtitle, Favourite, Feature,
+    FeatureKind, Fetched, Film, FilmDetail, FilmQuery, FilmSort, FilterChoices, HistorySource,
+    ImageKind, ImageRef, ItemId, Library, LibraryKind, LocalTime, MediaServer, MediaSource,
+    MediaSourceId, NewEpisode, Page, PersonHit, PersonTitles, Play, PlaySessionId, Playback,
+    PlaybackReport, Playlist, PlaylistEntry, ProviderError, SearchResults, Season, Segment, Series,
+    SeriesDetail, SeriesHit, ServerInfo, Sink, StreamUrl, SubtitleTrack, Title, TmdbIndex, Token,
+    TokenStore, Trailers, TranscodeRequest, Trickplay, VideoRange, VideoTrack, WatchHistory,
+    Watched, WatchedKind,
 };
 
 pub const USER: &str = "camille";
@@ -46,6 +47,8 @@ pub struct MemoryKeyring {
     pub secrets: Mutex<HashMap<String, Token>>,
     /// The keyring cannot be reached: every call fails.
     pub unreachable: AtomicBool,
+    /// The keyring is locked, and may not be unlocked: a token is not read.
+    pub locked: AtomicBool,
 }
 
 impl MemoryKeyring {
@@ -78,6 +81,9 @@ impl TokenStore for MemoryKeyring {
 
     fn load(&self, account: &str) -> Result<Option<Token>, ProviderError> {
         self.reach()?;
+        if self.locked.load(Ordering::SeqCst) {
+            return Err(ProviderError::KeyringLocked);
+        }
         Ok(self.secrets.lock().unwrap().get(account).cloned())
     }
 
@@ -104,6 +110,8 @@ pub struct Record {
     pub plays: Vec<(ItemId, MediaSourceId)>,
     pub images: Vec<(ImageRef, u32)>,
     pub film_pages: Vec<ItemId>,
+    /// The items whose title was asked, in order.
+    pub titles: Vec<ItemId>,
     /// The queries searched, in the order they came.
     pub searches: Vec<String>,
     /// Every call that put an item in the list (`true`) or took it out, answered or failed.
@@ -132,6 +140,10 @@ pub struct Record {
     pub histories: u32,
     /// How many times the episodes added lately were asked.
     pub new_episode_asks: u32,
+    /// Every file fetched, from which byte and with which validator, in the order asked.
+    pub fetches: Vec<(DownloadFile, u64, Option<String>)>,
+    /// The most fetches that ran at once.
+    pub most_fetches_at_once: usize,
 }
 
 /// A change asked of a playlist.
@@ -199,6 +211,8 @@ pub struct State {
     pub record: Record,
     /// How long an image takes to come: a real server makes the fetches overlap.
     pub image_delay: std::time::Duration,
+    /// No image comes: the list loads, the pictures fail as unreachable.
+    pub images_fail: bool,
     /// The first time each person's photo is asked, the server fails (as a busy server that
     /// times out while it fetches the photo from elsewhere).
     pub photos_fail_once: bool,
@@ -263,6 +277,31 @@ pub struct State {
     pub added: Vec<(ItemId, i64)>,
     /// What changes on the server once the first page of new episodes is read, before the next.
     pub between_pages: Option<Change>,
+    /// No answer comes: the Home's lists, the search and the titles fail as unreachable.
+    pub unreachable: bool,
+    /// How many bytes each downloaded file is.
+    pub download_size: u64,
+    /// What the server's files are now: a new one is a file replaced, which a resume does not
+    /// continue.
+    pub download_version: String,
+    /// Once a media file reached this many bytes, the hook runs, then the transfer goes on: a
+    /// test sees the disk in the middle of a download. Once.
+    pub mid_download: Option<(u64, Box<dyn FnOnce() + Send>)>,
+    /// Once a media file reached this many bytes, the sink's disk is full. Once.
+    pub disk_full_after: Option<u64>,
+    /// How long each piece of a file takes to come, so that two downloads would overlap.
+    pub fetch_delay: std::time::Duration,
+    /// How many fetches run now.
+    pub fetching: usize,
+}
+
+impl State {
+    fn reachable(&self) -> Result<(), ProviderError> {
+        if self.unreachable {
+            return Err(ProviderError::Unreachable("timed out".into()));
+        }
+        Ok(())
+    }
 }
 
 /// The TMDb id `tmdb` gives `id`.
@@ -651,6 +690,7 @@ pub fn episodes() -> Vec<Episode> {
                         id: ItemId(id),
                     },
                     series: ItemId(format!("series-{n}")),
+                    series_poster: image(&format!("series-{n}"), ImageKind::Primary),
                     series_title: (*title).into(),
                     season: ItemId(format!("series-{n}-s{season}")),
                     season_number: Some(season),
@@ -661,6 +701,7 @@ pub fn episodes() -> Vec<Episode> {
                             .into(),
                     ),
                     versions: versions().split_off(1),
+                    downloadable: true,
                 });
             }
         }
@@ -738,6 +779,7 @@ impl FakeServer {
                 play_error: None,
                 record: Record::default(),
                 image_delay: std::time::Duration::ZERO,
+                images_fail: false,
                 photos_fail_once: false,
                 collection_poster_error: None,
                 collection_posters_asked: Vec::new(),
@@ -777,6 +819,13 @@ impl FakeServer {
                 history_error: None,
                 added: Vec::new(),
                 between_pages: None,
+                unreachable: false,
+                download_size: 64,
+                download_version: "v1".into(),
+                mid_download: None,
+                disk_full_after: None,
+                fetch_delay: std::time::Duration::ZERO,
+                fetching: 0,
             })),
             info: ServerInfo {
                 id: "server-1".into(),
@@ -1003,6 +1052,7 @@ impl MediaServer for FakeServer {
 
     fn continue_watching(&self) -> Result<Vec<Title>, ProviderError> {
         let state = self.state();
+        state.reachable()?;
         let films = state.films.iter().filter(|f| f.resume.is_some());
         let episodes = state.episodes.iter().filter(|e| e.item.resume.is_some());
         Ok(films
@@ -1049,6 +1099,7 @@ impl MediaServer for FakeServer {
             } else {
                 versions().split_off(1)
             },
+            downloadable: true,
             favourite: self.state().favourites.contains(&found.id),
             trailers,
             // The first film of the tests is a logo, the others are written, as on the Home.
@@ -1084,6 +1135,7 @@ impl MediaServer for FakeServer {
             source: source.clone(),
             stream: StreamUrl::new(state.stream.clone()),
             external_subtitles,
+            converted: false,
         })
     }
 
@@ -1156,8 +1208,8 @@ impl MediaServer for FakeServer {
             let mut state = self.state();
             let asked_before = state.record.images.iter().any(|(i, _)| i == image);
             state.record.images.push((image.clone(), width));
-            let fails =
-                state.photos_fail_once && image.item.0.starts_with("person-") && !asked_before;
+            let fails = state.images_fail
+                || (state.photos_fail_once && image.item.0.starts_with("person-") && !asked_before);
             (state.image_delay, fails)
         };
         std::thread::sleep(delay);
@@ -1270,6 +1322,22 @@ impl MediaServer for FakeServer {
             .collect())
     }
 
+    fn title(&self, item: &ItemId) -> Result<Title, ProviderError> {
+        self.state().record.titles.push(item.clone());
+        self.state().reachable()?;
+        if let Some(episode) = self.episode(item) {
+            return Ok(Title::Episode(episode));
+        }
+        let state = self.state();
+        if let Some(series) = state.series.iter().find(|series| &series.id == item) {
+            return Ok(Title::Series(Self::counted(&state, series)));
+        }
+        let film = state.films.iter().find(|film| &film.id == item);
+        film.cloned()
+            .map(Title::Film)
+            .ok_or(ProviderError::NotFound)
+    }
+
     /// Like Jellyfin's Next Up: the episode started, else the one after the last watched, across
     /// seasons; the first when none was watched; none once the last was. Specials are left out.
     fn next_up(&self, series: &ItemId) -> Result<Option<Episode>, ProviderError> {
@@ -1299,6 +1367,7 @@ impl MediaServer for FakeServer {
         };
         std::thread::sleep(delay);
         let state = self.state();
+        state.reachable()?;
         let needle = query.to_lowercase();
         let matching = |name: &str| name.to_lowercase().contains(&needle);
         let limit = per_group as usize;
@@ -1332,6 +1401,7 @@ impl MediaServer for FakeServer {
     fn next_episodes(&self, limit: u32) -> Result<Vec<Episode>, ProviderError> {
         let begun: Vec<ItemId> = {
             let state = self.state();
+            state.reachable()?;
             state
                 .series
                 .iter()
@@ -1710,6 +1780,7 @@ impl MediaServer for FakeServer {
             source: request.source.clone(),
             stream: StreamUrl::new(state.converted.clone()),
             external_subtitles,
+            converted: true,
         })
     }
 
@@ -1753,6 +1824,117 @@ impl MediaServer for FakeServer {
         }
         Ok(state.history.clone())
     }
+
+    fn download_plan(
+        &self,
+        item: &ItemId,
+        source: &MediaSourceId,
+    ) -> Result<DownloadPlan, ProviderError> {
+        let versions = match self.episode(item) {
+            Some(episode) => episode.versions,
+            None => self.film(item)?.versions,
+        };
+        let version = versions
+            .iter()
+            .find(|s| &s.id == source)
+            .ok_or(ProviderError::NotFound)?;
+        let handle = format!("{}/{}", item.0, source.0);
+        let media = DownloadFile {
+            kind: DownloadKind::Media,
+            handle: handle.clone(),
+        };
+        let subtitles = version
+            .subtitles
+            .iter()
+            .filter(|s| s.external)
+            .map(|s| DownloadFile {
+                kind: DownloadKind::Subtitle {
+                    index: s.index,
+                    format: "srt".into(),
+                },
+                handle: handle.clone(),
+            });
+        let state = self.state();
+        Ok(DownloadPlan {
+            size: Some(state.download_size),
+            version: state.download_version.clone(),
+            container: version.container.clone(),
+            files: std::iter::once(media).chain(subtitles).collect(),
+        })
+    }
+
+    /// Serves the bytes `download_bytes` gives, from `from` when `validator` is the file's own.
+    fn fetch(
+        &self,
+        file: &DownloadFile,
+        from: u64,
+        validator: Option<&str>,
+        sink: &mut dyn Sink,
+    ) -> Result<Fetched, ProviderError> {
+        let (bytes, etag, delay) = {
+            let mut state = self.state();
+            state
+                .record
+                .fetches
+                .push((file.clone(), from, validator.map(str::to_string)));
+            state.fetching += 1;
+            state.record.most_fetches_at_once =
+                state.record.most_fetches_at_once.max(state.fetching);
+            let bytes = match &file.kind {
+                DownloadKind::Media => download_bytes(&file.handle, state.download_size),
+                DownloadKind::Subtitle { index, .. } => {
+                    format!("{index}\n00:00:01,000 --> 00:00:02,000\nBonjour\n").into_bytes()
+                }
+            };
+            (
+                bytes,
+                format!("\"{}\"", state.download_version),
+                state.fetch_delay,
+            )
+        };
+        let resumed = from > 0 && validator == Some(etag.as_str());
+        let fetched = Fetched {
+            resumed,
+            validator: Some(etag),
+            length: Some(bytes.len() as u64),
+        };
+        let media = file.kind == DownloadKind::Media;
+        let written = |e: std::io::Error| ProviderError::Write(e.kind());
+        let sent = (|| {
+            sink.start(&fetched).map_err(written)?;
+            let mut at = if resumed { from as usize } else { 0 };
+            for piece in bytes[at.min(bytes.len())..].chunks(4) {
+                if media {
+                    let full = self
+                        .state()
+                        .disk_full_after
+                        .take_if(|after| at as u64 >= *after);
+                    if full.is_some() {
+                        return Err(ProviderError::Write(std::io::ErrorKind::StorageFull));
+                    }
+                    let hook = self
+                        .state()
+                        .mid_download
+                        .take_if(|(after, _)| at as u64 >= *after);
+                    if let Some((_, hook)) = hook {
+                        hook();
+                    }
+                }
+                std::thread::sleep(delay);
+                sink.write_all(piece).map_err(written)?;
+                at += piece.len();
+            }
+            sink.flush().map_err(written)?;
+            Ok(fetched.clone())
+        })();
+        self.state().fetching -= 1;
+        sent
+    }
+}
+
+/// The bytes of the media file of a download handle, `size` of them: a test compares them.
+pub fn download_bytes(handle: &str, size: u64) -> Vec<u8> {
+    handle.bytes().cycle().take(size as usize).collect()
 }
 
 const COLLECTION_NAMES: [&str; 10] = [

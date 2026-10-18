@@ -1,5 +1,6 @@
 //! The root view: the screen the navigator points at, framed by the pill bar or the back link.
 
+mod asked;
 mod curtain;
 mod desktop;
 mod discover;
@@ -13,6 +14,8 @@ mod playlists;
 mod posters;
 mod preview;
 mod request;
+#[cfg(test)]
+mod rows;
 mod seerr_collection;
 mod series;
 mod settings;
@@ -301,6 +304,11 @@ pub struct Shell {
     episode_checks: Option<Task<()>>,
     episode_checking: std::rc::Rc<std::cell::Cell<bool>>,
     notification_clicks: Option<Task<()>>,
+    /// What the launcher's commands ask (`None`: they cannot reach this window), heard from the
+    /// first draw on, and what was asked before a session was there to answer it.
+    commands: Option<crate::instance::Inbox>,
+    commands_heard: Option<Task<()>>,
+    request_waiting: Option<crate::instance::Request>,
 }
 
 /// When the shell and its header were drawn, and, for the harness, when the shell was notified.
@@ -508,6 +516,9 @@ impl Shell {
             episode_checks: None,
             episode_checking: Default::default(),
             notification_clicks: None,
+            commands: None,
+            commands_heard: None,
+            request_waiting: None,
         };
         shell.begin(open, cx);
         shell
@@ -1030,6 +1041,7 @@ impl Render for Shell {
         }
         self.follow_playlist_menu(window);
         self.listen_to_notifications(window, cx);
+        self.listen_to_commands(window, cx);
         #[cfg(feature = "harness")]
         self.note_frame();
         #[cfg(any(test, feature = "harness"))]
@@ -1069,11 +1081,10 @@ impl Render for Shell {
         } else {
             None
         };
-        let section = self.navigator.section();
         let now = Instant::now();
         let highlight = std::array::from_fn(|at| {
             let pill = &mut self.nav_pills[at];
-            pill.set(NavEntry::ALL[at].is_current(section), now);
+            pill.set(self.navigator.lights(NavEntry::ALL[at]), now);
             if pill.moving(now) {
                 window.request_animation_frame();
             }
@@ -1151,12 +1162,15 @@ impl Render for Shell {
             );
             bars.push(fade_out(shade.into_any_element()));
         }
+        // The link goes up with its page: drawn first, it slides under the bar, never over it.
+        if let Some(label) = back_label.filter(|_| chrome.shows_back_link()) {
+            bars.push(fade_out(
+                back_link(label, self.page_scrolled(chrome), window, cx).into_any_element(),
+            ));
+        }
         if chrome.shows_pill_bar() {
             let bar = pill_bar(highlight, account, self.seerr.client.is_some(), window, cx);
             bars.push(fade_out(bar.into_any_element()));
-        }
-        if let Some(label) = back_label.filter(|_| chrome.shows_back_link()) {
-            bars.push(fade_out(back_link(label, window, cx).into_any_element()));
         }
         // Fading out, they go under the player coming in, and answer nothing.
         let (under_player, over_player) = match fading_out {
@@ -1292,6 +1306,24 @@ impl Render for Shell {
             .children(screens::search::palette(self, window, cx))
             .children(help)
             .children(again)
+    }
+}
+
+impl Shell {
+    /// How far the page of `screen` is scrolled up, in pixels: its back link goes with it. A
+    /// page drawn as a list has its own handle and keeps the link where it is.
+    fn page_scrolled(&self, screen: Screen) -> f32 {
+        let handle = match screen {
+            Screen::FilmDetail => self.details.last().map(|page| &page.scroll),
+            Screen::SeriesDetail => self.series_pages.last().map(|page| &page.scroll),
+            Screen::Person => self.people.last().map(|page| &page.scroll),
+            Screen::CollectionDetail => self.collection_pages.last().map(|page| &page.scroll),
+            Screen::Stats => Some(&self.stats_scrolls[0]),
+            Screen::Request => self.seerr.requests.last().map(|page| &page.scroll),
+            Screen::SeerrCollection => self.seerr.collections.last().map(|page| &page.scroll),
+            _ => None,
+        };
+        handle.map_or(0., |handle| f32::from(handle.offset().y).min(0.))
     }
 }
 

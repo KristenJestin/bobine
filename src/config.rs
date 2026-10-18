@@ -22,6 +22,18 @@ pub fn settings_path(xdg_config_home: Option<OsString>, home: Option<OsString>) 
     Some(account_path(xdg_config_home, home)?.with_file_name("settings.toml"))
 }
 
+/// `$XDG_DATA_HOME/bobine/downloads`, else `~/.local/share/bobine/downloads`: data, not cache,
+/// which the system may clear. A relative `XDG_DATA_HOME` is ignored, as the XDG specification
+/// says.
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn downloads_path(xdg_data_home: Option<OsString>, home: Option<OsString>) -> Option<PathBuf> {
+    let data = xdg_data_home
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .or_else(|| home.map(|home| PathBuf::from(home).join(".local/share")))?;
+    Some(data.join("bobine").join("downloads"))
+}
+
 /// What the viewer chose, kept between two starts. A setting the file lacks keeps its default.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -339,6 +351,18 @@ mod tests {
     fn a_quality_is_said_in_words() {
         assert_eq!(Quality::Original.label(), "Original");
         assert_eq!(Quality::Cap(8).label(), "8 Mbps");
+    }
+
+    #[test]
+    fn a_relative_xdg_data_home_is_ignored() {
+        assert_eq!(
+            downloads_path(Some("relative".into()), Some("/home/ada".into())),
+            Some(PathBuf::from("/home/ada/.local/share/bobine/downloads"))
+        );
+        assert_eq!(
+            downloads_path(None, Some("/home/ada".into())),
+            Some(PathBuf::from("/home/ada/.local/share/bobine/downloads"))
+        );
     }
 
     #[test]

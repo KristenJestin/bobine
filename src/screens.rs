@@ -18,7 +18,7 @@ mod request;
 pub mod search;
 mod seerr_collection;
 mod series_detail;
-mod settings;
+pub mod settings;
 pub mod skip;
 pub mod stats;
 
@@ -50,6 +50,10 @@ use crate::poster_actions::Marks;
 use crate::series_page;
 use crate::shell::Shell;
 use crate::theme;
+
+/// The widest a row of a list or an episode may be: past it, a title and its buttons would be a
+/// whole screen apart.
+pub(crate) const CONTENT_WIDTH: f32 = 1000.;
 
 pub fn render(
     shell: &mut Shell,
