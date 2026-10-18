@@ -4,7 +4,7 @@
 //!
 //! ```text
 //! <item id>/
-//!   item.json                     the manifest
+//!   item.json                       the manifest
 //!   media.part | media.<container>  the file, while it comes | once complete
 //!   subtitles/<index>.<format>
 //!   trickplay/<width>/<tile>.jpg
@@ -20,22 +20,31 @@
 #![allow(dead_code)]
 
 use std::collections::BTreeMap;
+use std::ffi::CString;
 use std::fmt;
-use std::io;
+use std::fs::{self, File};
+use std::io::{self, Write};
+use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, TryLockError};
 
 use bobine::provider::{
-    Episode, FilmDetail, ItemId, MediaServer, MediaSourceId, ProviderError, Segment, SeriesDetail,
-    Trickplay,
+    DownloadKind, DownloadPlan, Episode, Fetched, FilmDetail, ImageKind, ImageRef, ItemId,
+    MediaServer, MediaSourceId, ProviderError, Segment, SeriesDetail, Sink, Trailers, Trickplay,
 };
 use serde::{Deserialize, Serialize};
+
+use crate::images;
 
 /// What must stay free on the disk beyond a download's size.
 pub const MARGIN: u64 = 2 << 30;
 
 /// The manifest's format: a change that an older Bobine cannot read raises it.
 pub const FORMAT: u32 = 1;
+
+const MANIFEST: &str = "item.json";
+const PART: &str = "media.part";
 
 /// The free space of a disk.
 pub trait Disk: Send + Sync {
@@ -47,8 +56,25 @@ pub trait Disk: Send + Sync {
 pub struct Statvfs;
 
 impl Disk for Statvfs {
-    fn free(&self, _path: &Path) -> io::Result<u64> {
-        todo!("#133")
+    fn free(&self, path: &Path) -> io::Result<u64> {
+        // The folder may not exist yet: its nearest parent that does is on the same disk.
+        let existing = path
+            .ancestors()
+            .find(|path| path.exists())
+            .unwrap_or(Path::new("/"));
+        let path = CString::new(existing.as_os_str().as_bytes())
+            .map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))?;
+        let mut stat = std::mem::MaybeUninit::<libc::statvfs>::uninit();
+        // SAFETY: `path` is a C string and `stat` room for the answer, which is read only when
+        // the call succeeded.
+        let stat = unsafe {
+            if libc::statvfs(path.as_ptr(), stat.as_mut_ptr()) != 0 {
+                return Err(io::Error::last_os_error());
+            }
+            stat.assume_init()
+        };
+        #[allow(clippy::unnecessary_cast)] // Both are not u64 on every target.
+        Ok((stat.f_bavail as u64).saturating_mul(stat.f_frsize as u64))
     }
 }
 
@@ -58,6 +84,36 @@ pub enum Snapshot {
     Film(Box<FilmDetail>),
     /// An episode, and its series as its page shows it.
     Episode(Box<Episode>, Box<SeriesDetail>),
+}
+
+impl Snapshot {
+    pub fn item(&self) -> &ItemId {
+        match self {
+            Snapshot::Film(film) => &film.film.id,
+            Snapshot::Episode(episode, _) => &episode.item.id,
+        }
+    }
+
+    /// The images kept with the title, at the width each page draws them.
+    fn images(&self) -> Vec<(ImageRef, u32)> {
+        let wanted = match self {
+            Snapshot::Film(film) => vec![
+                (&film.film.poster, images::POSTER),
+                (&film.film.backdrop, images::BACKDROP),
+                (&film.logo, images::LOGO),
+            ],
+            Snapshot::Episode(episode, series) => vec![
+                (&episode.item.poster, images::CARD),
+                (&series.series.poster, images::POSTER),
+                (&series.series.backdrop, images::BACKDROP),
+                (&series.logo, images::LOGO),
+            ],
+        };
+        wanted
+            .into_iter()
+            .filter_map(|(image, width)| Some((image.clone()?, width)))
+            .collect()
+    }
 }
 
 /// Where a download is.
@@ -116,6 +172,39 @@ pub struct Manifest {
     pub update: bool,
 }
 
+impl Manifest {
+    pub fn item(&self) -> &ItemId {
+        self.title.item()
+    }
+
+    /// The complete file's name in the item's folder.
+    pub fn media_name(&self) -> String {
+        format!("media.{}", safe(self.container.as_deref().unwrap_or("bin")))
+    }
+}
+
+/// A subtitle's file in the item's folder.
+pub fn subtitle_name(subtitle: &SubtitleFile) -> PathBuf {
+    Path::new("subtitles").join(format!("{}.{}", subtitle.index, safe(&subtitle.format)))
+}
+
+/// A trickplay tile's file in the item's folder.
+pub fn tile_name(trickplay: &Trickplay, tile: u32) -> PathBuf {
+    Path::new("trickplay")
+        .join(trickplay.width.to_string())
+        .join(format!("{tile}.jpg"))
+}
+
+/// An image's file in the item's folder.
+pub fn image_name(image: &ImageRef, width: u32) -> PathBuf {
+    let kind = match image.kind {
+        ImageKind::Primary => "primary",
+        ImageKind::Backdrop => "backdrop",
+        ImageKind::Logo => "logo",
+    };
+    Path::new("images").join(format!("{}-{kind}-{width}.jpg", safe(&image.item.0)))
+}
+
 /// A download as the Downloads page lists it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Download {
@@ -139,9 +228,134 @@ pub enum DownloadError {
 }
 
 impl fmt::Display for DownloadError {
-    fn fmt(&self, _f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        todo!("#133")
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let gb = |bytes: u64| format!("{:.1} GB", bytes as f64 / 1e9);
+        match self {
+            Self::Server(error) => error.fmt(f),
+            Self::NoRoom { needed, free } => write!(
+                f,
+                "Not enough space: {} needed, {} free.",
+                gb(*needed),
+                gb(*free)
+            ),
+            Self::Disk(kind) => write!(f, "The download cannot be written to disk: {kind}"),
+        }
     }
+}
+
+/// An id as a file name: letters, digits, `-` and `_` kept, every other byte as `%XX`, so that
+/// no id names a folder above it.
+fn safe(id: &str) -> String {
+    id.bytes()
+        .map(|byte| match byte {
+            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'_' => (byte as char).to_string(),
+            _ => format!("%{byte:02X}"),
+        })
+        .collect()
+}
+
+/// Writes the manifest through a temporary file, so a crash leaves the old one.
+fn save(folder: &Path, manifest: &Manifest) -> io::Result<()> {
+    fs::create_dir_all(folder)?;
+    let text = serde_json::to_vec_pretty(manifest).map_err(io::Error::other)?;
+    let tmp = folder.join("item.json.tmp");
+    fs::write(&tmp, text)?;
+    fs::rename(tmp, folder.join(MANIFEST))
+}
+
+fn write_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(path, bytes)
+}
+
+/// What a write that failed leaves the download in.
+fn written(error: io::Error) -> State {
+    match error.kind() {
+        io::ErrorKind::StorageFull => State::Paused(Halt::DiskFull),
+        kind => State::Failed(ProviderError::Write(kind).to_string()),
+    }
+}
+
+/// The page shows a title offline without what needs the server: not even a trailer's address.
+fn offline(mut title: Snapshot) -> Snapshot {
+    match &mut title {
+        Snapshot::Film(film) => film.trailers = Trailers::default(),
+        Snapshot::Episode(_, series) => series.trailers = Trailers::default(),
+    }
+    title
+}
+
+fn subtitles_of(plan: &DownloadPlan) -> Vec<SubtitleFile> {
+    plan.files
+        .iter()
+        .filter_map(|file| match &file.kind {
+            DownloadKind::Subtitle { index, format } => Some(SubtitleFile {
+                index: *index,
+                format: format.clone(),
+            }),
+            DownloadKind::Media => None,
+        })
+        .collect()
+}
+
+/// The `.part` file as a fetch's sink: it stops the transfer once the download is stopped, and
+/// keeps the validator in the manifest before the first byte.
+struct Part<'a> {
+    file: File,
+    stop: &'a AtomicBool,
+    started: &'a dyn Fn(Option<String>) -> io::Result<()>,
+}
+
+impl Write for Part<'_> {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        if self.stop.load(Ordering::SeqCst) {
+            return Err(io::Error::other("stopped"));
+        }
+        self.file.write(bytes)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.file.flush()
+    }
+}
+
+impl Sink for Part<'_> {
+    fn start(&mut self, fetched: &Fetched) -> io::Result<()> {
+        if !fetched.resumed {
+            self.file.set_len(0)?;
+        }
+        (self.started)(fetched.validator.clone())
+    }
+}
+
+/// A small file fetched whole into memory.
+struct Memory(Vec<u8>);
+
+impl Write for Memory {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.0.write(bytes)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+impl Sink for Memory {
+    fn start(&mut self, _fetched: &Fetched) -> io::Result<()> {
+        self.0.clear();
+        Ok(())
+    }
+}
+
+#[derive(Default)]
+struct Table {
+    /// By item id.
+    items: BTreeMap<String, Manifest>,
+    /// The item downloading now.
+    current: Option<String>,
 }
 
 /// One account's downloads, and the queue that brings them.
@@ -149,72 +363,436 @@ pub struct Downloads {
     root: PathBuf,
     server: Arc<dyn MediaServer>,
     disk: Arc<dyn Disk>,
-    items: BTreeMap<String, Manifest>,
+    table: Mutex<Table>,
+    /// Held while downloads run: one at a time.
+    running: Mutex<()>,
+    /// The running download is to stop: paused or removed.
+    stop: AtomicBool,
 }
 
 impl Downloads {
     /// The downloads of the session's account under `downloads` (`config::downloads_path`): a
     /// download cut by a crash is queued again, a part without a manifest removed.
     pub fn open(
-        _downloads: &Path,
-        _server: Arc<dyn MediaServer>,
-        _disk: Arc<dyn Disk>,
+        downloads: &Path,
+        server: Arc<dyn MediaServer>,
+        disk: Arc<dyn Disk>,
     ) -> io::Result<Downloads> {
-        todo!("#133")
+        let root = downloads
+            .join(safe(&server.server().id))
+            .join(safe(server.user_id()));
+        let mut items = BTreeMap::new();
+        for entry in fs::read_dir(&root).into_iter().flatten() {
+            let folder = entry?.path();
+            if !folder.is_dir() {
+                continue;
+            }
+            let Ok(text) = fs::read(folder.join(MANIFEST)) else {
+                // Cut before its manifest was written: nothing to resume from.
+                let _ = fs::remove_file(folder.join(PART));
+                let _ = fs::remove_dir(&folder);
+                continue;
+            };
+            // One this Bobine cannot read is left as it is.
+            let Ok(mut manifest) = serde_json::from_slice::<Manifest>(&text) else {
+                continue;
+            };
+            if manifest.state == State::Downloading {
+                manifest.state = State::Queued;
+                save(&folder, &manifest)?;
+            }
+            items.insert(manifest.item().0.clone(), manifest);
+        }
+        Ok(Downloads {
+            root,
+            server,
+            disk,
+            table: Mutex::new(Table {
+                items,
+                current: None,
+            }),
+            running: Mutex::new(()),
+            stop: AtomicBool::new(false),
+        })
     }
 
     /// The folder of an item's download.
-    pub fn folder(&self, _item: &ItemId) -> PathBuf {
-        todo!("#133")
+    pub fn folder(&self, item: &ItemId) -> PathBuf {
+        self.root.join(safe(&item.0))
+    }
+
+    fn table(&self) -> MutexGuard<'_, Table> {
+        self.table.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn has(&self, item: &ItemId) -> bool {
+        self.table().items.contains_key(&item.0)
     }
 
     /// Queues one version of a film, when the disk has room for it. Already queued: nothing.
     pub fn queue_film(
         &self,
-        _film: &FilmDetail,
-        _source: &MediaSourceId,
+        film: &FilmDetail,
+        source: &MediaSourceId,
     ) -> Result<(), DownloadError> {
-        todo!("#133")
+        if self.has(&film.film.id) {
+            return Ok(());
+        }
+        let plan = self
+            .server
+            .download_plan(&film.film.id, source)
+            .map_err(DownloadError::Server)?;
+        self.room(plan.size.unwrap_or(0))?;
+        self.add(Snapshot::Film(Box::new(film.clone())), source, &plan)
     }
 
     /// Queues one version of an episode, like a film.
     pub fn queue_episode(
         &self,
-        _episode: &Episode,
-        _source: &MediaSourceId,
+        episode: &Episode,
+        source: &MediaSourceId,
     ) -> Result<(), DownloadError> {
-        todo!("#133")
+        if self.has(&episode.item.id) {
+            return Ok(());
+        }
+        let plan = self
+            .server
+            .download_plan(&episode.item.id, source)
+            .map_err(DownloadError::Server)?;
+        self.room(plan.size.unwrap_or(0))?;
+        let series = self
+            .server
+            .series_detail(&episode.series)
+            .map_err(DownloadError::Server)?;
+        let title = Snapshot::Episode(Box::new(episode.clone()), Box::new(series));
+        self.add(title, source, &plan)
     }
 
     /// Queues each episode of a season the server lets download, in order, its first version,
     /// when the disk has room for them all: how many it queued.
-    pub fn queue_season(&self, _series: &ItemId, _season: &ItemId) -> Result<usize, DownloadError> {
-        todo!("#133")
+    pub fn queue_season(&self, series: &ItemId, season: &ItemId) -> Result<usize, DownloadError> {
+        let wanted: Vec<(Episode, MediaSourceId)> = self
+            .server
+            .episodes(series, season)
+            .map_err(DownloadError::Server)?
+            .into_iter()
+            .filter(|episode| episode.downloadable && !self.has(&episode.item.id))
+            .filter_map(|episode| {
+                let source = episode.versions.first()?.id.clone();
+                Some((episode, source))
+            })
+            .collect();
+        if wanted.is_empty() {
+            return Ok(0);
+        }
+        let plans = wanted
+            .iter()
+            .map(|(episode, source)| self.server.download_plan(&episode.item.id, source))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(DownloadError::Server)?;
+        self.room(plans.iter().map(|plan| plan.size.unwrap_or(0)).sum())?;
+        let detail = self
+            .server
+            .series_detail(series)
+            .map_err(DownloadError::Server)?;
+        let queued = wanted.len();
+        for ((episode, source), plan) in wanted.into_iter().zip(plans) {
+            let title = Snapshot::Episode(Box::new(episode), Box::new(detail.clone()));
+            self.add(title, &source, &plan)?;
+        }
+        Ok(queued)
+    }
+
+    /// The disk holds `size` and the margin.
+    fn room(&self, size: u64) -> Result<(), DownloadError> {
+        let free = self
+            .disk
+            .free(&self.root)
+            .map_err(|e| DownloadError::Disk(e.kind()))?;
+        let needed = size.saturating_add(MARGIN);
+        if free < needed {
+            return Err(DownloadError::NoRoom { needed, free });
+        }
+        Ok(())
+    }
+
+    /// Writes the manifest of a new download, last in the queue.
+    fn add(
+        &self,
+        title: Snapshot,
+        source: &MediaSourceId,
+        plan: &DownloadPlan,
+    ) -> Result<(), DownloadError> {
+        let mut table = self.table();
+        let id = title.item().0.clone();
+        if table.items.contains_key(&id) {
+            return Ok(());
+        }
+        let order = table.items.values().map(|m| m.order + 1).max().unwrap_or(0);
+        let manifest = Manifest {
+            format: FORMAT,
+            order,
+            title: offline(title),
+            source: source.clone(),
+            size: plan.size,
+            version: plan.version.clone(),
+            container: plan.container.clone(),
+            validator: None,
+            subtitles: subtitles_of(plan),
+            segments: Vec::new(),
+            trickplay: None,
+            state: State::Queued,
+            gone: false,
+            update: false,
+        };
+        save(&self.folder(manifest.item()), &manifest)
+            .map_err(|e| DownloadError::Disk(e.kind()))?;
+        table.items.insert(id, manifest);
+        Ok(())
+    }
+
+    /// Changes a download's manifest and writes it; nothing when it was removed.
+    fn update(&self, id: &str, change: impl FnOnce(&mut Manifest)) -> io::Result<()> {
+        let mut table = self.table();
+        let Some(manifest) = table.items.get_mut(id) else {
+            return Ok(());
+        };
+        change(manifest);
+        save(&self.folder(manifest.item()), manifest)
     }
 
     /// Does the queued downloads, one at a time, in order, until none is left.
     pub fn run(&self) {
-        todo!("#133")
+        loop {
+            let running = match self.running.try_lock() {
+                Ok(running) => running,
+                Err(TryLockError::Poisoned(running)) => running.into_inner(),
+                Err(TryLockError::WouldBlock) => return,
+            };
+            while let Some(id) = self.next() {
+                self.download(&id);
+            }
+            drop(running);
+            // One queued as this run ended found it still running.
+            if self.next().is_none() {
+                return;
+            }
+        }
+    }
+
+    fn next(&self) -> Option<String> {
+        let table = self.table();
+        table
+            .items
+            .iter()
+            .filter(|(_, manifest)| manifest.state == State::Queued)
+            .min_by_key(|(_, manifest)| manifest.order)
+            .map(|(id, _)| id.clone())
+    }
+
+    fn download(&self, id: &str) {
+        let outcome = self.bring(id);
+        let mut table = self.table();
+        table.current = None;
+        let Some(manifest) = table.items.get_mut(id) else {
+            // Removed while it ran: what it wrote since goes too.
+            let _ = fs::remove_dir_all(self.root.join(safe(id)));
+            return;
+        };
+        // Paused or queued again meanwhile, it stays so.
+        if manifest.state == State::Downloading {
+            manifest.state = outcome.err().unwrap_or(State::Done);
+        }
+        let _ = save(&self.folder(manifest.item()), manifest);
+    }
+
+    /// Brings the file, its subtitles and its extras: what the download is left in otherwise.
+    fn bring(&self, id: &str) -> Result<(), State> {
+        let manifest = {
+            let mut table = self.table();
+            let manifest = table.items.get_mut(id).ok_or(State::Done)?;
+            manifest.state = State::Downloading;
+            let kept = manifest.clone();
+            save(&self.folder(kept.item()), &kept).map_err(written)?;
+            table.current = Some(id.to_string());
+            self.stop.store(false, Ordering::SeqCst);
+            kept
+        };
+        let item = manifest.item().clone();
+        let folder = self.folder(&item);
+        let failed = |error: ProviderError| match error {
+            _ if self.stop.load(Ordering::SeqCst) => State::Paused(Halt::Asked),
+            ProviderError::Write(io::ErrorKind::StorageFull) => State::Paused(Halt::DiskFull),
+            error => State::Failed(error.to_string()),
+        };
+        let plan = self
+            .server
+            .download_plan(&item, &manifest.source)
+            .map_err(failed)?;
+        let media = folder.join(manifest.media_name());
+        if !media.exists() {
+            let part = folder.join(PART);
+            let mut validator = manifest.validator.clone();
+            if plan.version != manifest.version {
+                // Another file than the part's: start again.
+                let _ = fs::remove_file(&part);
+                validator = None;
+            }
+            let have = fs::metadata(&part).map_or(0, |part| part.len());
+            if self
+                .room(plan.size.unwrap_or(0).saturating_sub(have))
+                .is_err()
+            {
+                return Err(State::Paused(Halt::NoRoom));
+            }
+            self.update(id, |kept| {
+                kept.size = plan.size;
+                kept.version = plan.version.clone();
+                kept.container = plan.container.clone();
+                kept.subtitles = subtitles_of(&plan);
+            })
+            .map_err(written)?;
+            let media = {
+                let table = self.table();
+                let kept = table.items.get(id).ok_or(State::Done)?;
+                folder.join(kept.media_name())
+            };
+            let file = fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&part)
+                .map_err(written)?;
+            let started =
+                |validator: Option<String>| self.update(id, |kept| kept.validator = validator);
+            let mut sink = Part {
+                file,
+                stop: &self.stop,
+                started: &started,
+            };
+            let file = plan
+                .files
+                .iter()
+                .find(|file| file.kind == DownloadKind::Media)
+                .ok_or(State::Failed(ProviderError::NotFound.to_string()))?;
+            self.server
+                .fetch(file, have, validator.as_deref(), &mut sink)
+                .map_err(failed)?;
+            fs::rename(&part, media).map_err(written)?;
+        }
+        for file in &plan.files {
+            let DownloadKind::Subtitle { index, format } = &file.kind else {
+                continue;
+            };
+            self.halted()?;
+            let mut sink = Memory(Vec::new());
+            self.server
+                .fetch(file, 0, None, &mut sink)
+                .map_err(failed)?;
+            let name = subtitle_name(&SubtitleFile {
+                index: *index,
+                format: format.clone(),
+            });
+            write_file(&folder.join(name), &sink.0).map_err(written)?;
+        }
+        self.halted()?;
+        let segments = self.server.media_segments(&item).map_err(failed)?;
+        let trickplay = self
+            .server
+            .trickplay(&item, &manifest.source)
+            .map_err(failed)?;
+        for tile in trickplay.iter().flat_map(|trickplay| 0..trickplay.tiles()) {
+            self.halted()?;
+            let trickplay = trickplay.as_ref().expect("tiles come from a layout");
+            let bytes = self
+                .server
+                .trickplay_tile(&item, &manifest.source, trickplay, tile)
+                .map_err(failed)?;
+            write_file(&folder.join(tile_name(trickplay, tile)), &bytes).map_err(written)?;
+        }
+        for (image, width) in manifest.title.images() {
+            self.halted()?;
+            let bytes = self.server.image(&image, width).map_err(failed)?;
+            write_file(&folder.join(image_name(&image, width)), &bytes).map_err(written)?;
+        }
+        self.update(id, |kept| {
+            kept.segments = segments;
+            kept.trickplay = trickplay;
+        })
+        .map_err(written)
+    }
+
+    /// The download was stopped between two files.
+    fn halted(&self) -> Result<(), State> {
+        match self.stop.load(Ordering::SeqCst) {
+            true => Err(State::Paused(Halt::Asked)),
+            false => Ok(()),
+        }
     }
 
     /// Pauses a download, the one running included: its part and its place are kept.
-    pub fn pause(&self, _item: &ItemId) -> io::Result<()> {
-        todo!("#133")
+    pub fn pause(&self, item: &ItemId) -> io::Result<()> {
+        let mut table = self.table();
+        if table.current.as_deref() == Some(item.0.as_str()) {
+            self.stop.store(true, Ordering::SeqCst);
+        }
+        let Some(manifest) = table.items.get_mut(&item.0) else {
+            return Ok(());
+        };
+        if matches!(manifest.state, State::Queued | State::Downloading) {
+            manifest.state = State::Paused(Halt::Asked);
+            save(&self.folder(item), manifest)?;
+        }
+        Ok(())
     }
 
     /// Queues a paused or failed download again, at its place.
-    pub fn resume(&self, _item: &ItemId) -> io::Result<()> {
-        todo!("#133")
+    pub fn resume(&self, item: &ItemId) -> io::Result<()> {
+        let mut table = self.table();
+        let Some(manifest) = table.items.get_mut(&item.0) else {
+            return Ok(());
+        };
+        if matches!(manifest.state, State::Paused(_) | State::Failed(_)) {
+            manifest.state = State::Queued;
+            save(&self.folder(item), manifest)?;
+        }
+        Ok(())
     }
 
     /// Stops a download if it runs and deletes its folder.
-    pub fn remove(&self, _item: &ItemId) -> io::Result<()> {
-        todo!("#133")
+    pub fn remove(&self, item: &ItemId) -> io::Result<()> {
+        let mut table = self.table();
+        table.items.remove(&item.0);
+        let running = table.current.as_deref() == Some(item.0.as_str());
+        if running {
+            self.stop.store(true, Ordering::SeqCst);
+        }
+        match fs::remove_dir_all(self.folder(item)) {
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+            // The run, still writing, removes what is left once it stops.
+            Err(_) if running => Ok(()),
+            removed => removed,
+        }
     }
 
     /// Every download, in the order of the queue.
     pub fn list(&self) -> Vec<Download> {
-        todo!("#133")
+        let table = self.table();
+        let mut all: Vec<&Manifest> = table.items.values().collect();
+        all.sort_by_key(|manifest| manifest.order);
+        all.into_iter()
+            .map(|manifest| {
+                let folder = self.folder(manifest.item());
+                let received = [folder.join(PART), folder.join(manifest.media_name())]
+                    .iter()
+                    .find_map(|file| fs::metadata(file).ok())
+                    .map_or(0, |file| file.len());
+                Download {
+                    item: manifest.item().clone(),
+                    manifest: manifest.clone(),
+                    received,
+                }
+            })
+            .collect()
     }
 }
 
@@ -300,6 +878,13 @@ mod tests {
             }
         }
         found
+    }
+
+    #[test]
+    fn the_free_space_of_a_folder_not_made_yet_is_its_disk_s() {
+        let dir = tempfile::tempdir().unwrap();
+        let free = Statvfs.free(&dir.path().join("server-1/user-1")).unwrap();
+        assert!(free > 0);
     }
 
     #[test]
@@ -602,6 +1187,11 @@ mod tests {
             interval: Duration::from_secs(10),
         });
         server.state.lock().unwrap().tiles = vec![b"tile".to_vec()];
+        // A trailer hosted elsewhere is an address too: the offline page shows none.
+        server.state.lock().unwrap().trailers = bobine::provider::Trailers {
+            local: true,
+            remote: Some("https://video.example.org/watch?v=tide".into()),
+        };
         let downloads = open(dir.path(), &server, roomy());
         downloads
             .queue_film(&film(&server, FILM), &source("source-4k"))

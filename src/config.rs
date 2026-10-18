@@ -26,11 +26,12 @@ pub fn settings_path(xdg_config_home: Option<OsString>, home: Option<OsString>) 
 /// which the system may clear. A relative `XDG_DATA_HOME` is ignored, as the XDG specification
 /// says.
 #[cfg_attr(not(test), allow(dead_code))]
-pub fn downloads_path(
-    _xdg_data_home: Option<OsString>,
-    _home: Option<OsString>,
-) -> Option<PathBuf> {
-    todo!("#133")
+pub fn downloads_path(xdg_data_home: Option<OsString>, home: Option<OsString>) -> Option<PathBuf> {
+    let data = xdg_data_home
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .or_else(|| home.map(|home| PathBuf::from(home).join(".local/share")))?;
+    Some(data.join("bobine").join("downloads"))
 }
 
 /// What the viewer chose, kept between two starts. A setting the file lacks keeps its default.
