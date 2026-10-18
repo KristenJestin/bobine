@@ -565,12 +565,14 @@ impl Session {
 
     /// The view shows that it waits: from the title asked to its first frame, and while the stream
     /// fills its cache.
+    #[allow(dead_code, reason = "wired in the view by the next commit")]
     pub fn loading(&self) -> bool {
         false
     }
 
     /// What is left and when the film ends, for the clock now; nothing before the duration is
     /// known.
+    #[allow(dead_code, reason = "wired in the view by the next commit")]
     pub fn time_left(&self, _now: (u32, u32)) -> Option<String> {
         Some(String::new())
     }
