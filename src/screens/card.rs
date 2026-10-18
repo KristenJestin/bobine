@@ -12,6 +12,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use bobine::provider::{Episode, ItemId};
+use bobine::requests::{MediaKind, TmdbId};
 use gpui_kit::prelude::*;
 use gpui_kit::{
     AnyElement, App, Bounds, Context, Div, ElementId, Entity, IntoElement, Pixels, Render,
@@ -38,6 +39,8 @@ pub enum Open {
     /// The row around the card takes the click: nothing opens here. The episode tells this card
     /// from the one before it in the same place.
     Row(ItemId),
+    /// A title of the request server: its page, in the library or to request.
+    Discovered(MediaKind, TmdbId),
 }
 
 impl Open {
@@ -49,6 +52,7 @@ impl Open {
             | Open::Row(id)
             | Open::Pick(Pick::Listed(_, id)) => Some(id),
             Open::Pick(Pick::Row(titles, at)) => titles.get(*at).map(|title| title.id()),
+            Open::Discovered(..) => None,
         }
     }
 }
@@ -61,6 +65,8 @@ pub enum Play {
     Target(PlayTarget),
     /// An episode of the series page, which plays as the page does and comes back to it.
     Episode(Box<Episode>),
+    /// The title cannot be played: the card has no play button.
+    Nothing,
 }
 
 /// A button of the corner: what the title's list says, and what the button shows now.
@@ -246,6 +252,7 @@ pub fn open_card(shell: &mut Shell, open: Open, cx: &mut Context<Shell>) {
             }
         }
         Open::Row(_) => {}
+        Open::Discovered(kind, tmdb) => shell.open_discovered(kind, tmdb, cx),
     }
 }
 
@@ -259,6 +266,7 @@ pub fn play_card(
 ) {
     shell.clicked_on(at.clone());
     let target = match play {
+        Play::Nothing => None,
         Play::Episode(episode) => return shell.play_episode(*episode, window, cx),
         Play::Target(target) => Some(target),
         Play::Pick(pick) => pick
@@ -314,7 +322,8 @@ impl Render for Card {
         // The buttons come with the pointer: unseen, they would take the clicks that open the
         // page.
         let shown = self.fade.visible(now);
-        let play = shown.then(|| self.play_button(offer.play, window, cx));
+        let play = (shown && !matches!(offer.play, Play::Nothing))
+            .then(|| self.play_button(offer.play, window, cx));
         let quick = (offer.quick)
             .filter(|_| shown)
             .map(|quick| self.corner(quick, window, cx));
