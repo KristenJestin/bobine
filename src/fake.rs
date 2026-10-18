@@ -46,6 +46,8 @@ pub struct MemoryKeyring {
     pub secrets: Mutex<HashMap<String, Token>>,
     /// The keyring cannot be reached: every call fails.
     pub unreachable: AtomicBool,
+    /// The keyring is locked, and may not be unlocked: a token is not read.
+    pub locked: AtomicBool,
 }
 
 impl MemoryKeyring {
@@ -78,6 +80,9 @@ impl TokenStore for MemoryKeyring {
 
     fn load(&self, account: &str) -> Result<Option<Token>, ProviderError> {
         self.reach()?;
+        if self.locked.load(Ordering::SeqCst) {
+            return Err(ProviderError::KeyringLocked);
+        }
         Ok(self.secrets.lock().unwrap().get(account).cloned())
     }
 
@@ -263,6 +268,17 @@ pub struct State {
     pub added: Vec<(ItemId, i64)>,
     /// What changes on the server once the first page of new episodes is read, before the next.
     pub between_pages: Option<Change>,
+    /// No answer comes: the Home's lists, the search and the titles fail as unreachable.
+    pub unreachable: bool,
+}
+
+impl State {
+    fn reachable(&self) -> Result<(), ProviderError> {
+        if self.unreachable {
+            return Err(ProviderError::Unreachable("timed out".into()));
+        }
+        Ok(())
+    }
 }
 
 /// The TMDb id `tmdb` gives `id`.
@@ -777,6 +793,7 @@ impl FakeServer {
                 history_error: None,
                 added: Vec::new(),
                 between_pages: None,
+                unreachable: false,
             })),
             info: ServerInfo {
                 id: "server-1".into(),
@@ -1003,6 +1020,7 @@ impl MediaServer for FakeServer {
 
     fn continue_watching(&self) -> Result<Vec<Title>, ProviderError> {
         let state = self.state();
+        state.reachable()?;
         let films = state.films.iter().filter(|f| f.resume.is_some());
         let episodes = state.episodes.iter().filter(|e| e.item.resume.is_some());
         Ok(films
@@ -1270,6 +1288,21 @@ impl MediaServer for FakeServer {
             .collect())
     }
 
+    fn title(&self, item: &ItemId) -> Result<Title, ProviderError> {
+        self.state().reachable()?;
+        if let Some(episode) = self.episode(item) {
+            return Ok(Title::Episode(episode));
+        }
+        let state = self.state();
+        if let Some(series) = state.series.iter().find(|series| &series.id == item) {
+            return Ok(Title::Series(Self::counted(&state, series)));
+        }
+        let film = state.films.iter().find(|film| &film.id == item);
+        film.cloned()
+            .map(Title::Film)
+            .ok_or(ProviderError::NotFound)
+    }
+
     /// Like Jellyfin's Next Up: the episode started, else the one after the last watched, across
     /// seasons; the first when none was watched; none once the last was. Specials are left out.
     fn next_up(&self, series: &ItemId) -> Result<Option<Episode>, ProviderError> {
@@ -1299,6 +1332,7 @@ impl MediaServer for FakeServer {
         };
         std::thread::sleep(delay);
         let state = self.state();
+        state.reachable()?;
         let needle = query.to_lowercase();
         let matching = |name: &str| name.to_lowercase().contains(&needle);
         let limit = per_group as usize;
@@ -1332,6 +1366,7 @@ impl MediaServer for FakeServer {
     fn next_episodes(&self, limit: u32) -> Result<Vec<Episode>, ProviderError> {
         let begun: Vec<ItemId> = {
             let state = self.state();
+            state.reachable()?;
             state
                 .series
                 .iter()

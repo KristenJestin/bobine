@@ -1,5 +1,6 @@
 //! The root view: the screen the navigator points at, framed by the pill bar or the back link.
 
+mod asked;
 mod curtain;
 mod desktop;
 mod discover;
@@ -301,6 +302,11 @@ pub struct Shell {
     episode_checks: Option<Task<()>>,
     episode_checking: std::rc::Rc<std::cell::Cell<bool>>,
     notification_clicks: Option<Task<()>>,
+    /// What the launcher's commands ask (`None`: they cannot reach this window), heard from the
+    /// first draw on, and what was asked before a session was there to answer it.
+    commands: Option<crate::instance::Inbox>,
+    commands_heard: Option<Task<()>>,
+    request_waiting: Option<crate::instance::Request>,
 }
 
 /// When the shell and its header were drawn, and, for the harness, when the shell was notified.
@@ -508,6 +514,9 @@ impl Shell {
             episode_checks: None,
             episode_checking: Default::default(),
             notification_clicks: None,
+            commands: None,
+            commands_heard: None,
+            request_waiting: None,
         };
         shell.begin(open, cx);
         shell
@@ -1030,6 +1039,7 @@ impl Render for Shell {
         }
         self.follow_playlist_menu(window);
         self.listen_to_notifications(window, cx);
+        self.listen_to_commands(window, cx);
         #[cfg(feature = "harness")]
         self.note_frame();
         #[cfg(any(test, feature = "harness"))]

@@ -71,17 +71,21 @@ pub struct Started {
 
 /// Opens the playback of `target`, off the window's thread: it blocks on the server.
 pub fn start(server: &dyn MediaServer, target: &PlayTarget) -> Result<Started, StartError> {
+    start_from(server, target, film_page::From::Resume)
+}
+
+/// `start`, from where the viewer stopped or from the beginning.
+pub fn start_from(
+    server: &dyn MediaServer,
+    target: &PlayTarget,
+    from: film_page::From,
+) -> Result<Started, StartError> {
     match target {
         PlayTarget::Film(film) => {
             let detail = server.film(film)?;
             let choices = Choices::new(&detail.versions);
-            let plan = film_page::plan(
-                &detail.film,
-                &detail.versions,
-                &choices,
-                film_page::From::Resume,
-            )
-            .ok_or(StartError::NothingToPlay)?;
+            let plan = film_page::plan(&detail.film, &detail.versions, &choices, from)
+                .ok_or(StartError::NothingToPlay)?;
             let mut parts: Vec<String> = detail.film.year.iter().map(i32::to_string).collect();
             parts.extend(
                 choices
@@ -101,17 +105,12 @@ pub fn start(server: &dyn MediaServer, target: &PlayTarget) -> Result<Started, S
         PlayTarget::Series(series) => {
             let episode =
                 series_page::next_to_play(server, series)?.ok_or(StartError::NothingToPlay)?;
-            start(server, &PlayTarget::Episode(Box::new(episode)))
+            start_from(server, &PlayTarget::Episode(Box::new(episode)), from)
         }
         PlayTarget::Episode(episode) => {
             let choices = Choices::new(&episode.versions);
-            let plan = film_page::plan(
-                &episode.item,
-                &episode.versions,
-                &choices,
-                film_page::From::Resume,
-            )
-            .ok_or(StartError::NothingToPlay)?;
+            let plan = film_page::plan(&episode.item, &episode.versions, &choices, from)
+                .ok_or(StartError::NothingToPlay)?;
             let (title, mut subtitle) = series_page::player_title(episode);
             if let Some(source) = choices.source(&episode.versions) {
                 subtitle.push_str(&format!(" · {}", film_page::version_label(source)));

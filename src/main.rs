@@ -20,7 +20,9 @@ mod home_page;
 mod icons;
 mod images;
 mod input;
+mod instance;
 mod keys;
+mod launcher;
 mod library_tools;
 mod lists;
 mod menu;
@@ -52,24 +54,59 @@ use bobine::provider::{Connector, ProviderError, SecretServiceStore, TokenStore}
 use gpui_kit::prelude::*;
 use gpui_kit::{App, Bounds, WindowBackgroundAppearance, WindowBounds, WindowOptions, px, size};
 
-/// The Jellyfin connector over the account file and the system keyring.
+/// The window's Jellyfin connector: the keyring may ask the user to unlock it.
 fn open_jellyfin() -> Result<Arc<dyn Connector>, ProviderError> {
+    open_jellyfin_with(SecretServiceStore::UNLOCKING)
+}
+
+/// The Jellyfin connector over the account file and the system keyring.
+fn open_jellyfin_with(store: SecretServiceStore) -> Result<Arc<dyn Connector>, ProviderError> {
     let path = config::account_path(
         std::env::var_os("XDG_CONFIG_HOME"),
         std::env::var_os("HOME"),
     )
     .ok_or_else(|| ProviderError::Storage("no home directory".into()))?;
-    let connector = JellyfinConnector::open(path, Arc::new(SecretServiceStore))?;
+    let connector = JellyfinConnector::open(path, Arc::new(store))?;
     Ok(Arc::new(connector))
 }
 
+/// What a command of the launcher prints, and its exit code.
+fn exit_with(outcome: launcher::Outcome) -> ! {
+    println!("{}", outcome.json());
+    std::process::exit(outcome.code);
+}
+
 fn main() {
-    if std::env::args().nth(1).as_deref() == Some("--version") {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().map(String::as_str) == Some("--version") {
         println!("bobine {}", bobine::VERSION);
         return;
     }
+    let socket = instance::socket_path(std::env::var_os("XDG_RUNTIME_DIR"));
+    // `open` and `play` go to the window running, else open one for themselves.
+    let first = match launcher::parse(&args) {
+        None => None,
+        Some(Err(said)) => exit_with(launcher::Outcome::usage(&said)),
+        Some(Ok(launcher::Command::Ask(request))) => {
+            if socket
+                .as_deref()
+                .is_some_and(|path| instance::hand_off(path, &request))
+            {
+                return;
+            }
+            Some(request)
+        }
+        // A locked keyring is no dialog for the launcher: not signed in.
+        Some(Ok(command)) => exit_with(launcher::run(&command, || {
+            open_jellyfin_with(SecretServiceStore::WITHOUT_PROMPT)
+        })),
+    };
     #[cfg(feature = "harness")]
     let harness = harness::Harness::from_args();
+    // The headless harness on its fake server never takes the commands of the real one.
+    #[cfg(feature = "harness")]
+    let socket = socket.filter(|_| harness.connector().is_none());
+    let commands = socket.as_deref().and_then(instance::listen);
     gpui_kit::application()
         .with_assets(icons::Icons)
         .run(move |cx: &mut App| {
@@ -107,12 +144,16 @@ fn main() {
             let secrets: Arc<dyn TokenStore> = if harness.connector().is_some() {
                 Arc::new(fake::MemoryKeyring::default())
             } else {
-                Arc::new(SecretServiceStore)
+                Arc::new(SecretServiceStore::UNLOCKING)
             };
             #[cfg(not(feature = "harness"))]
-            let secrets: Arc<dyn TokenStore> = Arc::new(SecretServiceStore);
+            let secrets: Arc<dyn TokenStore> = Arc::new(SecretServiceStore::UNLOCKING);
             let opened = cx.open_window(options, move |window, cx| {
-                let shell = cx.new(|cx| shell::Shell::new(font, open, settings, secrets, cx));
+                let shell = cx.new(|cx| {
+                    let mut shell = shell::Shell::new(font, open, settings, secrets, cx);
+                    shell.hear_commands(commands, first);
+                    shell
+                });
                 // The video surface and mpv go before the window's surface does.
                 let closing = shell.downgrade();
                 window.on_window_should_close(cx, move |_, cx| {
