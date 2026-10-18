@@ -1167,7 +1167,9 @@ impl Render for Shell {
             bars.push(fade_out(bar.into_any_element()));
         }
         if let Some(label) = back_label.filter(|_| chrome.shows_back_link()) {
-            bars.push(fade_out(back_link(label, window, cx).into_any_element()));
+            bars.push(fade_out(
+                back_link(label, self.page_scrolled(chrome), window, cx).into_any_element(),
+            ));
         }
         // Fading out, they go under the player coming in, and answer nothing.
         let (under_player, over_player) = match fading_out {
@@ -1303,6 +1305,24 @@ impl Render for Shell {
             .children(screens::search::palette(self, window, cx))
             .children(help)
             .children(again)
+    }
+}
+
+impl Shell {
+    /// How far the page of `screen` is scrolled up, in pixels: its back link goes with it. A
+    /// page drawn as a list has its own handle and keeps the link where it is.
+    fn page_scrolled(&self, screen: Screen) -> f32 {
+        let handle = match screen {
+            Screen::FilmDetail => self.details.last().map(|page| &page.scroll),
+            Screen::SeriesDetail => self.series_pages.last().map(|page| &page.scroll),
+            Screen::Person => self.people.last().map(|page| &page.scroll),
+            Screen::CollectionDetail => self.collection_pages.last().map(|page| &page.scroll),
+            Screen::Stats => Some(&self.stats_scrolls[0]),
+            Screen::Request => self.seerr.requests.last().map(|page| &page.scroll),
+            Screen::SeerrCollection => self.seerr.collections.last().map(|page| &page.scroll),
+            _ => None,
+        };
+        handle.map_or(0., |handle| f32::from(handle.offset().y).min(0.))
     }
 }
 
