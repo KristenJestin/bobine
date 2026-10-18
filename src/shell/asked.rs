@@ -283,11 +283,12 @@ mod tests {
             inbox.push(request);
             visual.run_until_parked();
             window
-                .update(cx, |shell, window, cx| {
+                .update(cx, |shell, _, cx| {
                     assert_eq!(shell.notice, Some("Playback in progress: stop it first."));
                     assert!(shell.details.is_empty());
-                    // Said over the player, where the viewer is.
-                    assert!(shell.notice_pill(Screen::Player, window, cx).is_some());
+                    // Drawn over the player, where the viewer is: the draw started its fade in.
+                    assert_eq!(shell.navigator.current(), Screen::Player);
+                    assert!(shell.notice_fade.moving(cx.background_executor().now()));
                 })
                 .unwrap();
         }
