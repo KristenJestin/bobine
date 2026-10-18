@@ -1033,6 +1033,80 @@ mod tests {
     }
 
     #[test]
+    fn a_folder_left_without_its_manifest_is_removed_at_start() {
+        let dir = tempfile::tempdir().unwrap();
+        let server = fake();
+        let downloads = open(dir.path(), &server, roomy());
+        downloads
+            .queue_film(&film(&server, FILM), &source("source-4k"))
+            .unwrap();
+        // A crash after the file was complete, before anything else was kept.
+        let left = account(dir.path()).join("film-3");
+        std::fs::create_dir_all(left.join("subtitles")).unwrap();
+        std::fs::write(left.join("media.mkv"), b"whole").unwrap();
+        std::fs::write(left.join("subtitles/5.srt"), b"text").unwrap();
+        // Not an item folder: left alone.
+        let foreign = account(dir.path()).join("not an item");
+        std::fs::create_dir_all(&foreign).unwrap();
+        std::fs::write(foreign.join("media.mkv"), b"mine").unwrap();
+
+        let reopened = open(dir.path(), &server, roomy());
+        assert!(!left.exists());
+        assert!(foreign.join("media.mkv").exists());
+        assert!(account(dir.path()).join(FILM).join("item.json").exists());
+        assert_eq!(reopened.list().len(), 1);
+    }
+
+    #[test]
+    fn an_empty_id_never_names_the_account_folder() {
+        assert!(!safe("").is_empty());
+        assert_ne!(safe(""), safe("a"));
+        let dir = tempfile::tempdir().unwrap();
+        let server = fake();
+        let downloads = open(dir.path(), &server, roomy());
+        downloads
+            .queue_film(&film(&server, FILM), &source("source-4k"))
+            .unwrap();
+        assert_ne!(downloads.folder(&item("")), account(dir.path()));
+        assert!(downloads.folder(&item("")).starts_with(account(dir.path())));
+        downloads.remove(&item("")).unwrap();
+        assert!(account(dir.path()).join(FILM).join("item.json").exists());
+        assert_eq!(downloads.list().len(), 1);
+
+        // An empty server id is not the downloads folder itself either.
+        let nameless = open(dir.path(), &server.clone().on_server(""), roomy());
+        assert_ne!(
+            nameless.folder(&item(FILM)),
+            dir.path().join("user-1").join(FILM)
+        );
+        assert!(
+            nameless
+                .folder(&item(FILM))
+                .starts_with(dir.path().join("%"))
+        );
+    }
+
+    #[test]
+    fn a_pause_between_picking_and_starting_keeps_the_download_paused() {
+        let dir = tempfile::tempdir().unwrap();
+        let server = fake();
+        let downloads = open(dir.path(), &server, roomy());
+        downloads
+            .queue_film(&film(&server, FILM), &source("source-4k"))
+            .unwrap();
+        // `run` picked it, then the viewer paused it before it started.
+        let picked = downloads.next().unwrap();
+        downloads.pause(&item(FILM)).unwrap();
+        downloads.download(&picked);
+        assert_eq!(manifest(dir.path(), FILM).state, State::Paused(Halt::Asked));
+        assert_eq!(
+            downloads.list()[0].manifest.state,
+            State::Paused(Halt::Asked)
+        );
+        assert!(server.state.lock().unwrap().record.fetches.is_empty());
+    }
+
+    #[test]
     fn downloads_run_one_at_a_time_in_order() {
         let dir = tempfile::tempdir().unwrap();
         let server = fake();
