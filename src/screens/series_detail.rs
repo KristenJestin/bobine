@@ -20,7 +20,9 @@ use super::film_detail::{
     EDGE, MenuState, ROW_POSTER, SERIES_TRAILER, TEXT_WIDTH, cast_row, chips_row, facts_line,
     heading, hero_frame, hero_text_under, list_button, row, trailer_button,
 };
-use super::{card, centered, note, picture, progress_bar, row_heading, series_poster};
+use super::{
+    CONTENT_WIDTH, card, centered, note, picture, progress_bar, row_heading, series_poster,
+};
 use crate::film_page::{self, Choices};
 use crate::icons::{IconName, icon};
 use crate::images;
@@ -347,6 +349,7 @@ fn seasons(shell: &mut Shell, shown: &Shown, window: &mut Window, cx: &mut Conte
         .gap(px(18.))
         .px(px(EDGE))
         .pt(px(8.))
+        .max_w(px(CONTENT_WIDTH + 2. * EDGE))
         .child(row_heading("Episodes"))
         .child(
             div()

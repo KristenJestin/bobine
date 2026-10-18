@@ -53,7 +53,6 @@ use crate::theme;
 
 /// The widest a row of a list or an episode may be: past it, a title and its buttons would be a
 /// whole screen apart.
-#[allow(dead_code)]
 pub(crate) const CONTENT_WIDTH: f32 = 1000.;
 
 pub fn render(
