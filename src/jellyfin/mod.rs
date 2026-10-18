@@ -10,13 +10,13 @@ mod fake;
 mod tests;
 
 use crate::provider::{
-    Collection, CollectionCard, CollectionDetail, Connector, EntryId, Episode, ExternalSubtitle,
-    Favourite, Feature, Film, FilmDetail, FilmQuery, FilmSort, FilterChoices, HistorySource,
-    ImageKind, ImageRef, ItemId, Library, LocalTime, MediaServer, MediaSourceId, NewEpisode, Page,
-    PersonTitles, Play, PlayMethod, PlaySessionId, Playback, PlaybackReport, Playlist,
-    PlaylistEntry, ProviderError, SearchResults, Season, Segment, Series, SeriesDetail, ServerInfo,
-    StreamUrl, Title, TmdbIndex, Token, TokenStore, TranscodeRequest, Trickplay, WatchHistory,
-    Watched, WatchedKind,
+    Collection, CollectionCard, CollectionDetail, Connector, DownloadFile, DownloadKind,
+    DownloadPlan, EntryId, Episode, ExternalSubtitle, Favourite, Feature, Fetched, Film,
+    FilmDetail, FilmQuery, FilmSort, FilterChoices, HistorySource, ImageKind, ImageRef, ItemId,
+    Library, LocalTime, MediaServer, MediaSourceId, NewEpisode, Page, PersonTitles, Play,
+    PlayMethod, PlaySessionId, Playback, PlaybackReport, Playlist, PlaylistEntry, ProviderError,
+    SearchResults, Season, Segment, Series, SeriesDetail, ServerInfo, Sink, StreamUrl, Title,
+    TmdbIndex, Token, TokenStore, TranscodeRequest, Trickplay, WatchHistory, Watched, WatchedKind,
 };
 use account::{AccountFile, Login};
 use dto::{
@@ -32,9 +32,9 @@ use std::sync::Arc;
 /// How many similar titles a film's or a series' page shows.
 const SIMILAR: u32 = 12;
 
-/// What an episode is asked with: its synopsis, its versions for the chips, and its series' poster
-/// tag.
-const EPISODE_FIELDS: &str = "Overview,MediaSources,SeriesPrimaryImage";
+/// What an episode is asked with: its synopsis, its versions for the chips, its series' poster
+/// tag, and whether it can be downloaded.
+const EPISODE_FIELDS: &str = "Overview,MediaSources,SeriesPrimaryImage,CanDownload";
 
 /// Signs in to Jellyfin servers. The account file keeps the device id and the last login; the
 /// store keeps the token.
@@ -526,7 +526,10 @@ impl MediaServer for Jellyfin {
                 ("mediaTypes", "Video".into()),
                 // An episode started from the Home plays without its page: it needs its
                 // versions now.
-                ("fields", "MediaSources,SeriesPrimaryImage".into()),
+                (
+                    "fields",
+                    "MediaSources,SeriesPrimaryImage,CanDownload".into(),
+                ),
                 ("imageTypeLimit", "1".into()),
                 ("enableImageTypes", "Primary,Backdrop".into()),
             ],
@@ -558,6 +561,7 @@ impl MediaServer for Jellyfin {
             genres: item.genres,
             official_rating: item.official_rating,
             favourite: item.user_data.as_ref().is_some_and(|u| u.is_favorite),
+            downloadable: item.can_download,
             versions: item
                 .media_sources
                 .into_iter()
@@ -904,7 +908,7 @@ impl MediaServer for Jellyfin {
                 ("enableImageTypes", "Primary,Backdrop".into()),
                 // An episode or a season that comes alone is listed as its series, with the series
                 // poster.
-                ("fields", "SeriesPrimaryImage".into()),
+                ("fields", "SeriesPrimaryImage,CanDownload".into()),
             ],
         )?;
         // Two episodes of one series, or one episode beside its series, are one entry.
@@ -1336,6 +1340,156 @@ impl MediaServer for Jellyfin {
                 .flat_map(|item| played_item(item, &titles))
                 .collect(),
         })
+    }
+
+    /// The handle of each file is `<item>/<version>`: the media file is asked by the version's
+    /// own id (an alternate version is an item of its own), a subtitle by both.
+    fn download_plan(
+        &self,
+        item: &ItemId,
+        source: &MediaSourceId,
+    ) -> Result<DownloadPlan, ProviderError> {
+        let found: Item = self.http.get(
+            "download",
+            &format!("/Items/{}", encode(&item.0)),
+            &[self.user()],
+        )?;
+        if !found.can_download {
+            return Err(ProviderError::Forbidden);
+        }
+        let version = found
+            .media_sources
+            .into_iter()
+            .find(|s| s.id == source.0)
+            .ok_or(ProviderError::NotFound)?;
+        let handle = format!("{}/{}", item.0, source.0);
+        let media = DownloadFile {
+            kind: DownloadKind::Media,
+            handle: handle.clone(),
+        };
+        let subtitles = version
+            .media_streams
+            .iter()
+            .filter(|s| s.kind == "Subtitle" && s.is_external)
+            .map(|s| DownloadFile {
+                kind: DownloadKind::Subtitle {
+                    index: s.index,
+                    format: subtitle_format(s.codec.as_deref()),
+                },
+                handle: handle.clone(),
+            });
+        Ok(DownloadPlan {
+            size: version.size,
+            version: version
+                .e_tag
+                .clone()
+                .unwrap_or_else(|| format!("{}:{}", source.0, version.size.unwrap_or_default())),
+            container: version.container.clone(),
+            files: std::iter::once(media).chain(subtitles).collect(),
+        })
+    }
+
+    /// The token goes in the header, never in the address. A resume asks `Range: bytes=<from>-`
+    /// with `If-Range: <validator>`: the server answers 206 from there while the file is the
+    /// same, 200 with all of it once it changed. An answer that says otherwise (a 206 with another
+    /// mark: a proxy that dropped `If-Range`; a 416: the kept bytes already are the whole file)
+    /// is asked again without a range, so the sink starts again from zero.
+    fn fetch(
+        &self,
+        file: &DownloadFile,
+        from: u64,
+        validator: Option<&str>,
+        sink: &mut dyn Sink,
+    ) -> Result<Fetched, ProviderError> {
+        const WHAT: &str = "download";
+        let (item, source) = file.handle.split_once('/').ok_or(ProviderError::NotFound)?;
+        let path = match &file.kind {
+            DownloadKind::Media => format!("/Items/{}/Download", encode(source)),
+            DownloadKind::Subtitle { index, format } => format!(
+                "/Videos/{}/{}/Subtitles/{index}/Stream.{}",
+                encode(item),
+                encode(source),
+                encode(format)
+            ),
+        };
+        let range = format!("bytes={from}-");
+        let resume = validator.filter(|_| from > 0);
+        let headers: Vec<(&str, &str)> = resume
+            .map(|validator| vec![("Range", range.as_str()), ("If-Range", validator)])
+            .unwrap_or_default();
+        let mut response = match self.http.download(WHAT, &path, &headers) {
+            Err(ProviderError::Server(416)) if resume.is_some() => {
+                return self.fetch(file, 0, None, sink);
+            }
+            sent => sent?,
+        };
+        let header = |name: &str| {
+            response
+                .headers()
+                .get(name)
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_string)
+        };
+        let validator = header("ETag").or_else(|| header("Last-Modified"));
+        let fetched = if response.status().as_u16() == 206 {
+            // `bytes <first>-<last>/<length>`: the bytes must start where the kept ones end.
+            let content_range = header("Content-Range").unwrap_or_default();
+            let (span, length) = content_range
+                .strip_prefix("bytes ")
+                .and_then(|range| range.split_once('/'))
+                .unwrap_or_default();
+            let first = span
+                .split_once('-')
+                .and_then(|(first, _)| first.parse().ok());
+            if first != Some(from) {
+                return Err(ProviderError::BadAnswer(format!(
+                    "{WHAT}: not the bytes asked for"
+                )));
+            }
+            // The file was replaced and the answer ignored `If-Range`: these bytes belong to
+            // another file than the kept ones.
+            if validator.is_some() && validator.as_deref() != resume {
+                return self.fetch(file, 0, None, sink);
+            }
+            Fetched {
+                resumed: true,
+                validator,
+                length: length.parse().ok(),
+            }
+        } else {
+            Fetched {
+                resumed: false,
+                validator,
+                length: header("Content-Length").and_then(|length| length.parse().ok()),
+            }
+        };
+        let written = |e: std::io::Error| ProviderError::Write(e.kind());
+        sink.start(&fetched).map_err(written)?;
+        let mut body = response.body_mut().as_reader();
+        let mut buffer = vec![0; 256 * 1024];
+        let mut received = 0u64;
+        loop {
+            let read = match std::io::Read::read(&mut body, &mut buffer) {
+                Ok(0) => break,
+                Ok(read) => read,
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                // Its kind only: the message of an error from the connection may name the address.
+                Err(e) => return Err(ProviderError::Unreachable(format!("{WHAT}: {}", e.kind()))),
+            };
+            sink.write_all(&buffer[..read]).map_err(written)?;
+            received += read as u64;
+        }
+        // A body that ends before its length is a cut transfer to resume, not a whole file.
+        let expected = fetched
+            .length
+            .map(|length| length.saturating_sub(if fetched.resumed { from } else { 0 }));
+        sink.flush().map_err(written)?;
+        if expected.is_some_and(|expected| expected != received) {
+            return Err(ProviderError::Unreachable(format!(
+                "{WHAT}: the body ended early"
+            )));
+        }
+        Ok(fetched)
     }
 }
 
