@@ -32,6 +32,8 @@ pub enum Screen {
     Request,
     /// A TMDb collection on the request server, its movies and their request.
     SeerrCollection,
+    /// What is kept on disk to watch away from the server, and what is coming.
+    Downloads,
 }
 
 impl Screen {
@@ -90,6 +92,7 @@ impl Screen {
             Screen::Settings => "Settings",
             Screen::Stats => "Stats",
             Screen::Discover => "Discover",
+            Screen::Downloads => "Downloads",
         }
     }
 }
@@ -104,15 +107,29 @@ pub enum NavEntry {
     MyList,
     /// Only while a request server is configured.
     Discover,
+    Downloads,
 }
 
 impl NavEntry {
-    pub const ALL: [NavEntry; 6] = [
+    /// In the order of their keys: Discover keeps Alt+6, Downloads takes Alt+7.
+    pub const ALL: [NavEntry; 7] = [
         NavEntry::Home,
         NavEntry::Films,
         NavEntry::Series,
         NavEntry::Collections,
         NavEntry::MyList,
+        NavEntry::Discover,
+        NavEntry::Downloads,
+    ];
+
+    /// In the order of the pill bar: Downloads beside Lists.
+    pub const BAR: [NavEntry; 7] = [
+        NavEntry::Home,
+        NavEntry::Films,
+        NavEntry::Series,
+        NavEntry::Collections,
+        NavEntry::MyList,
+        NavEntry::Downloads,
         NavEntry::Discover,
     ];
 
@@ -124,6 +141,7 @@ impl NavEntry {
             NavEntry::Collections => "Collections",
             NavEntry::MyList => "Lists",
             NavEntry::Discover => "Discover",
+            NavEntry::Downloads => "Downloads",
         }
     }
 
@@ -135,6 +153,7 @@ impl NavEntry {
             NavEntry::Collections => Some(Screen::Collections),
             NavEntry::MyList => Some(Screen::MyList),
             NavEntry::Discover => Some(Screen::Discover),
+            NavEntry::Downloads => Some(Screen::Downloads),
         }
     }
 
@@ -581,7 +600,8 @@ mod tests {
                 "Series",
                 "Collections",
                 "Lists",
-                "Discover"
+                "Discover",
+                "Downloads"
             ]
         );
     }

@@ -12,7 +12,7 @@ use bobine::requests::MediaKind;
 use gpui_kit::prelude::*;
 use gpui_kit::{
     Animation, AnimationExt, AnyElement, Bounds, Context, Div, FontWeight, IntoElement, Pixels,
-    ScrollHandle, Stateful, Window, canvas, div, point, px, rgb, rgba,
+    ScrollHandle, SharedString, Stateful, Window, canvas, div, point, px, rgb, rgba,
 };
 
 use super::card::{Offer, Open, Play};
@@ -310,6 +310,33 @@ fn seasons(shell: &mut Shell, shown: &Shown, window: &mut Window, cx: &mut Conte
             .when(shown.busy, |button| button.opacity(0.6))
             .on_click(cx.listener(|shell, _, _, cx| shell.toggle_season_watched(cx)))
     });
+    // Offered while one of the season's episodes can be downloaded.
+    let offered = shell.downloads.store.is_some()
+        && matches!(&shown.episodes, Some(Ok(episodes)) if episodes.iter().any(|e| e.downloadable));
+    let season_download = offered.then(|| {
+        theme::ghost_button(
+            "season-download",
+            Some(IconName::Download),
+            "Download season",
+            window,
+            cx,
+        )
+        .debug_selector(|| "season-download".into())
+        .px(px(14.))
+        .py(px(7.))
+        .text_size(px(13.))
+        .on_click(cx.listener(|shell, _, _, cx| shell.download_season(cx)))
+        .with_animation(
+            "season-download-in",
+            Animation::new(motion::quick()).with_easing(motion::ease_out),
+            |button, t| button.opacity(t),
+        )
+    });
+    let refused = shell
+        .series_pages
+        .last()
+        .map(|page| page.id.clone())
+        .and_then(|id| super::film_detail::refusal(shell, &id));
 
     let list: AnyElement = match &shown.episodes {
         None => note("Loading…").into_any_element(),
@@ -358,8 +385,15 @@ fn seasons(shell: &mut Shell, shown: &Shown, window: &mut Window, cx: &mut Conte
                 .justify_between()
                 .gap(px(12.))
                 .child(div().flex().flex_wrap().gap(px(6.)).children(tabs))
-                .children(season_check),
+                .child(
+                    div()
+                        .flex()
+                        .gap(px(8.))
+                        .children(season_download)
+                        .children(season_check),
+                ),
         )
+        .children(refused)
         .child(list)
 }
 
@@ -458,6 +492,10 @@ fn episode_row(
         cx.stop_propagation();
         shell.toggle_episode_watched(marked.clone(), cx);
     }));
+    let download = (episode.downloadable && shell.downloads.store.is_some()).then(|| {
+        let label = super::downloads::button_label(shell.downloads.of(&item.id));
+        episode_download(index, label, episode.clone(), window, cx)
+    });
     theme::eased(("episode", index), shades, window, cx)
         .debug_selector(move || format!("episode {index}"))
         .flex()
@@ -511,6 +549,7 @@ fn episode_row(
                         .child(overview)
                 })),
         )
+        .children(download)
         .child(check)
         .when_some(in_view, |row, (wanted, scroll)| {
             row.relative().child(
@@ -522,6 +561,61 @@ fn episode_row(
                 .inset_0(),
             )
         })
+}
+
+/// An episode's Download, round like its check beside it: the arrow, how much has come while it
+/// comes, then a check. It does not play the row it is on.
+fn episode_download(
+    index: usize,
+    label: String,
+    episode: Episode,
+    window: &mut Window,
+    cx: &mut Context<Shell>,
+) -> Stateful<Div> {
+    let inner: AnyElement = match label.as_str() {
+        "Download" => icon(IconName::Download, 14.).into_any_element(),
+        "Downloaded" => icon(IconName::CheckCircle, 14.).into_any_element(),
+        _ => div()
+            .text_size(px(10.))
+            .font_weight(FontWeight::SEMIBOLD)
+            .child(label.clone())
+            .into_any_element(),
+    };
+    theme::eased(
+        ("episode-download", index),
+        theme::Shades::veil(),
+        window,
+        cx,
+    )
+    .flex_none()
+    .size(px(30.))
+    .rounded_full()
+    .flex()
+    .items_center()
+    .justify_center()
+    .border_1()
+    .border_color(rgb(0x3a3a40))
+    .text_color(if label == "Downloaded" {
+        theme::text()
+    } else {
+        theme::dim()
+    })
+    .cursor_pointer()
+    .child(
+        div()
+            .id(("episode-download-state", index))
+            .child(inner)
+            .with_animation(
+                SharedString::from(format!("episode-download-{index}-{label}")),
+                Animation::new(motion::quick()).with_easing(motion::ease_out),
+                |state, t| state.opacity(t),
+            ),
+    )
+    .debug_selector(move || format!("episode-download {index}"))
+    .on_click(cx.listener(move |shell, _, _, cx| {
+        cx.stop_propagation();
+        shell.download_episode(episode.clone(), cx);
+    }))
 }
 
 /// How many frames a page not laid out yet is waited for before the row is no longer wanted in

@@ -102,9 +102,17 @@ fn rows(shell: &Shell) -> Vec<RowSpec> {
             body: Body::Wide(Rc::clone(&shell.home.next_row)),
         });
     }
+    if !shell.downloads.titles.is_empty() {
+        rows.push(RowSpec {
+            slot: 2,
+            list: ListKind::Downloaded,
+            caption: None,
+            body: Body::Posters(Rc::clone(&shell.downloads.titles)),
+        });
+    }
     if let Some(Loadable::Ready(latest)) = &shell.home.latest {
         for (at, row) in latest.iter().enumerate() {
-            let slot = 2 + at;
+            let slot = 3 + at;
             let list = ListKind::Latest(row.library.id.clone(), row.library.kind);
             let caption = Some(row.library.name.clone());
             match &row.titles {
@@ -681,18 +689,21 @@ fn titles_row(
         Body::Posters(titles) => {
             let range = near_cards(scroll, width, ROW_POSTER, titles.len(), near);
             let name = SharedString::from(format!("home-poster-{index}"));
+            let fresh = matches!(spec.list, ListKind::Latest(..));
             let cards: Vec<AnyElement> = titles
                 .iter()
                 .enumerate()
                 .map(|(at, title)| {
                     let id = (name.clone(), at);
-                    poster_card(shell, title, id, range.contains(&at), cx)
+                    poster_card(shell, title, id, range.contains(&at), fresh, cx)
                 })
                 .collect();
             cards_row(index, scroll, ROW_POSTER * 1.5 + POSTER_CAPTION, cards).into_any_element()
         }
     };
+    let named = spec.list.heading();
     div()
+        .debug_selector(move || format!("home-row {named}"))
         .flex()
         .flex_col()
         .gap(px(UNDER_HEADING))
@@ -766,6 +777,7 @@ fn poster_card(
     title: &Title,
     id: (SharedString, usize),
     near: bool,
+    fresh: bool,
     cx: &mut Context<Shell>,
 ) -> AnyElement {
     if !near {
@@ -779,10 +791,10 @@ fn poster_card(
     match title {
         Title::Film(film) => poster(shell, film, ROW_POSTER, id, false, cx).into_any_element(),
         Title::Series(series) => {
-            // The posters of the Home are the rows of Recently added.
-            series_card(shell, series, ROW_POSTER, true, id, cx).into_any_element()
+            // `fresh`: a row of Recently added.
+            series_card(shell, series, ROW_POSTER, fresh, id, cx).into_any_element()
         }
-        // Posters are for what a library gained: an episode never comes here.
+        // Posters are for what a library gained or what is downloaded: never an episode.
         Title::Episode(_) => div().into_any_element(),
     }
 }

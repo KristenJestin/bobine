@@ -235,16 +235,23 @@ fn hero(
         .on_click(cx.listener(|shell, _, _, cx| shell.toggle_watched(cx)));
     let in_list = list_button("film-list", favourite, window, cx);
     let add = super::playlist::playlist_button("film-playlist", film.id.clone(), false, window, cx);
+    let download = (detail.downloadable && shell.downloads.store.is_some()).then(|| {
+        let label = super::downloads::button_label(shell.downloads.of(&film.id));
+        download_button("film-download", label, window, cx)
+            .on_click(cx.listener(|shell, _, _, cx| shell.download_film(cx)))
+    });
     let buttons = div()
         .flex()
         .gap(px(10.))
         .when(busy, |row| row.opacity(0.6))
         .child(play)
         .children(from_start)
+        .children(download)
         .children(trailer)
         .child(watched)
         .child(in_list)
         .child(add);
+    let refused = refusal(shell, &film.id);
 
     let chips = chips_row(&detail.versions, choices, menu, chips, window, cx);
 
@@ -303,6 +310,7 @@ fn hero(
                     .text_color(theme::danger())
                     .child(why)
             }))
+            .children(refused)
             .child(chips),
     )
 }
@@ -352,6 +360,69 @@ pub(super) fn list_button(
     .text_color(motion::mix(theme::text(), theme::accent(), level))
     .border_color(motion::mix(rgb(0x3a3a40), theme::accent(), level))
     .on_click(cx.listener(|shell, _, _, cx| shell.toggle_favourite(cx)))
+}
+
+/// Download, beside Play: how much has come while it comes, then Downloaded. It fades in the
+/// first time the page draws it; its icon eases to a check once the download is complete.
+pub(super) fn download_button(
+    id: &'static str,
+    label: String,
+    window: &mut Window,
+    cx: &mut Context<Shell>,
+) -> Stateful<Div> {
+    let done = label == "Downloaded";
+    let now = Instant::now();
+    let shown = window.use_keyed_state(SharedString::from(format!("{id}-fade")), cx, |_, _| {
+        Fade::new(motion::quick())
+    });
+    shown.update(cx, |fade, _| fade.set(true, now));
+    let check = window.use_keyed_state(SharedString::from(format!("{id}-done")), cx, |_, _| {
+        Fade::starting_at(motion::quick(), done)
+    });
+    check.update(cx, |fade, _| fade.set(done, now));
+    let (shown, check) = (*shown.read(cx), *check.read(cx));
+    if shown.moving(now) || check.moving(now) {
+        window.request_animation_frame();
+    }
+    let level = check.level(now);
+    let size = theme::BUTTON_ICON;
+    let icons = div()
+        .relative()
+        .flex_none()
+        .size(px(size))
+        .child(
+            icon(IconName::Download, size)
+                .absolute()
+                .inset_0()
+                .opacity(1. - level),
+        )
+        .child(
+            icon(IconName::CheckCircle, size)
+                .absolute()
+                .inset_0()
+                .opacity(level),
+        );
+    let named = format!("{id} {label}");
+    div()
+        .id(SharedString::from(format!("{id}-frame")))
+        .debug_selector(move || named.clone())
+        .opacity(shown.level(now))
+        .child(
+            theme::ghost_button_with(id, Some(icons.into_any_element()), label, window, cx)
+                .debug_selector(move || id.to_string()),
+        )
+}
+
+/// Why the download asked on this page was not queued.
+pub(super) fn refusal(shell: &Shell, on: &ItemId) -> Option<Div> {
+    let (asked_on, why) = shell.downloads.refused.as_ref()?;
+    (asked_on == on).then(|| {
+        div()
+            .debug_selector(|| "download-refused".into())
+            .text_size(px(13.))
+            .text_color(theme::danger())
+            .child(why.clone())
+    })
 }
 
 /// The Trailer buttons, by page: their ids, which are also the selectors every button carries.

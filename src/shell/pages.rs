@@ -273,6 +273,8 @@ pub enum Arrival {
     Library(LibraryKind),
     /// Discover: the viewer's requests are asked again each time.
     Discover,
+    /// The downloads are read again.
+    Downloads,
     /// A library already known is not asked again: its tools and its list stay as they were.
     Nothing,
 }
@@ -287,6 +289,7 @@ pub fn arrival(screen: Screen, films_known: bool, series_known: bool) -> Arrival
         Screen::Collections => Arrival::Collections,
         Screen::CollectionDetail => Arrival::Collection,
         Screen::Discover => Arrival::Discover,
+        Screen::Downloads => Arrival::Downloads,
         Screen::Library if !films_known => Arrival::Library(LibraryKind::Films),
         Screen::Series if !series_known => Arrival::Library(LibraryKind::Series),
         _ => Arrival::Nothing,
@@ -639,6 +642,7 @@ impl Shell {
         self.set_up_seerr(cx);
         self.start_episode_checks(cx);
         self.navigator.switch_root(Screen::Home);
+        self.open_downloads(cx);
         self.load_home(cx);
         self.load_stats(cx);
     }
@@ -927,6 +931,7 @@ impl Shell {
             Arrival::Collection => self.reload_collection(cx),
             Arrival::Library(kind) => self.load_library(kind, cx),
             Arrival::Discover => self.load_discover(cx),
+            Arrival::Downloads => self.refresh_downloads(cx),
             Arrival::Nothing => {}
         }
     }

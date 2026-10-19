@@ -84,10 +84,13 @@ pub fn pill_bar(
     cx: &mut Context<Shell>,
 ) -> impl IntoElement {
     // Discover is there only while a request server is configured.
-    let shown = NavEntry::ALL
+    let shown = NavEntry::BAR
         .into_iter()
-        .enumerate()
-        .filter(move |(_, entry)| discover || *entry != NavEntry::Discover);
+        .filter(move |entry| discover || *entry != NavEntry::Discover)
+        .map(|entry| {
+            let index = NavEntry::ALL.iter().position(|e| *e == entry);
+            (index.expect("every entry of the bar is in ALL"), entry)
+        });
     let entries = shown.map(|(index, entry)| {
         let level = highlight[index];
         let live = entry.target().is_some();
@@ -101,7 +104,15 @@ pub fn pill_bar(
             .text_size(px(13.))
             .text_color(nav_text(rest, level))
             .bg(nav_fill(level))
-            .child(entry.label());
+            // Downloads is its arrow: the bar keeps its width in a narrow window.
+            .map(|item| match entry {
+                NavEntry::Downloads => item
+                    .px(px(9.))
+                    .flex()
+                    .items_center()
+                    .child(icon(IconName::Download, 15.)),
+                _ => item.child(entry.label()),
+            });
         if live {
             item.cursor_pointer()
                 .on_click(cx.listener(move |app, _, _, cx| app.select(entry, cx)))

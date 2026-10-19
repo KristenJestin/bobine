@@ -272,6 +272,8 @@ pub enum ListKind {
     NextUp,
     /// What was added to one library lately.
     Latest(ItemId, LibraryKind),
+    /// What is kept on disk: its "See all" is the Downloads page.
+    Downloaded,
 }
 
 impl ListKind {
@@ -280,6 +282,7 @@ impl ListKind {
             Self::Resume => "Continue watching",
             Self::NextUp => "Next up",
             Self::Latest(..) => "Recently added",
+            Self::Downloaded => "Downloaded",
         }
     }
 
@@ -289,6 +292,7 @@ impl ListKind {
             Self::Resume => "Nothing started yet.",
             Self::NextUp => "No series in progress, so no next episode yet.",
             Self::Latest(..) => "Nothing was added to this library lately.",
+            Self::Downloaded => "Nothing is downloaded yet.",
         }
     }
 }
@@ -362,6 +366,8 @@ pub fn fetch(
                 total: found.total,
             })
         }
+        // Never asked: "See all" on that row opens the Downloads page instead.
+        ListKind::Downloaded => Ok(whole(Vec::new())),
     }
 }
 
