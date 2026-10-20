@@ -4,7 +4,7 @@ A native client for films and series on Linux (Wayland), written in Rust: browse
 libraries, then play in a fast native player instead of a browser tab. Jellyfin is the first
 provider; others can follow behind the same interface.
 
-[Install a release or the beta](docs/install.md); [what a version promises](docs/versions.md). Licensed under Apache-2.0.
+[Install a release or the beta](docs/install.md); [what a version promises](docs/versions.md). Free software under the [AGPL-3.0](LICENSE).
 
 Agents read `AGENTS.md`. Work in progress: see the issues.
 
